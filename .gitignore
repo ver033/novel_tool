@@ -1,0 +1,81 @@
+# Environment and local secrets
+.env
+.env.*
+!.env.example
+.envrc
+.npmrc.local
+AGENTS.md
+.github/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# Dependencies
+node_modules/
+
+# Build, cache, and test output
+docs/
+dist/
+out/
+release/
+artifacts/
+.vite/
+.cache/
+.pytest_cache/
+.ruff_cache/
+coverage/
+playwright-report/
+test-results/
+blob-report/
+tmp/
+*.tsbuildinfo
+*.tgz
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Local novel projects and SQLite/runtime data
+test_novel/
+*.novelproj/
+*.novelproj/**
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+cache/
+logs/
+exports/
+backups/
+originals/
+
+# Provider keys, signing certificates, and encrypted secret blobs
+secrets/
+*.key
+*.pem
+*.p12
+*.pfx
+*.crt
+*.cer
+*.csr
+*.mobileprovision
+*.jks
+*.keystore
+*.asc
+*.gpg
+*.age
+*.kdbx
+
+# Local packaged artifacts
+*.dmg
+*.pkg
+*.exe
+*.msi
+*.AppImage
