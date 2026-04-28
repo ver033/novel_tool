@@ -1,0 +1,51 @@
+# Dependencies
+node_modules/
+
+# Build and packaging output
+.vite/
+dist/
+out/
+release/
+make/
+*.asar
+*.dmg
+*.zip
+
+# Tests and local QA artifacts
+tests/
+coverage/
+test-results/
+playwright-report/
+manual-test-import.txt
+
+# Project planning, design references, and prototypes
+docs/
+
+# Local app data and user project files
+*.noveltool
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Environment and local secrets
+.env
+.env.*
+!.env.example
+
+# TypeScript and tool caches
+*.tsbuildinfo
+.eslintcache
+.stylelintcache
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

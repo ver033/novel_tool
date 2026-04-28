@@ -1,0 +1,325 @@
+import { z } from "zod";
+
+const nonEmptyString = z.string().trim().min(1);
+const idSchema = nonEmptyString.max(128);
+const optionalIdSchema = idSchema.optional();
+
+const tiptapJsonSchema = z
+  .object({
+    type: z.string().min(1)
+  })
+  .passthrough();
+
+export const taskTypeSchema = z.enum(["polish", "expand", "proofread", "continue"]);
+
+export const selectionSnapshotSchema = z
+  .object({
+    chapterId: idSchema,
+    from: z.number().int().nonnegative(),
+    to: z.number().int().positive(),
+    text: nonEmptyString,
+    paragraphIds: z.array(idSchema).min(1),
+    createdAt: nonEmptyString,
+    selectionHash: nonEmptyString
+  })
+  .strict()
+  .refine((value) => value.to > value.from, {
+    message: "selection.to must be greater than selection.from",
+    path: ["to"]
+  });
+
+export const projectCreateInputSchema = z
+  .object({
+    name: nonEmptyString.max(120),
+    rootPath: z.string().trim().min(1).optional()
+  })
+  .strict();
+
+export const projectOpenInputSchema = z
+  .object({
+    projectId: optionalIdSchema,
+    rootPath: z.string().trim().min(1).optional()
+  })
+  .strict()
+  .refine((value) => Boolean(value.projectId ?? value.rootPath), {
+    message: "projectId or rootPath is required"
+  });
+
+export const projectOpenFileInputSchema = z
+  .object({
+    filePath: nonEmptyString.max(4096)
+  })
+  .strict();
+
+export const projectRenameInputSchema = z
+  .object({
+    projectId: idSchema,
+    name: nonEmptyString.max(120)
+  })
+  .strict();
+
+export const projectDeleteInputSchema = z
+  .object({
+    projectId: idSchema
+  })
+  .strict();
+
+export const chapterCreateInputSchema = z
+  .object({
+    projectId: idSchema,
+    title: nonEmptyString.max(160),
+    volumeTitle: z.string().trim().min(1).max(160).optional(),
+    sortOrder: z.number().int().nonnegative().optional()
+  })
+  .strict();
+
+export const chapterRenameInputSchema = z
+  .object({
+    chapterId: idSchema,
+    title: nonEmptyString.max(160)
+  })
+  .strict();
+
+export const chapterListInputSchema = z
+  .object({
+    projectId: idSchema
+  })
+  .strict();
+
+export const chapterDeleteInputSchema = z
+  .object({
+    chapterId: idSchema
+  })
+  .strict();
+
+export const chapterGetContentInputSchema = chapterDeleteInputSchema;
+
+export const chapterSaveContentInputSchema = z
+  .object({
+    chapterId: idSchema,
+    contentJson: tiptapJsonSchema,
+    plainText: z.string(),
+    wordCount: z.number().int().nonnegative().optional()
+  })
+  .strict();
+
+export const chapterCreateSnapshotInputSchema = z
+  .object({
+    chapterId: idSchema,
+    reason: nonEmptyString.max(120)
+  })
+  .strict();
+
+export const editorSettingsSchema = z
+  .object({
+    fontSize: z.number().int().min(12).max(28).optional(),
+    lineHeight: z.number().min(1.4).max(2.6).optional(),
+    autosaveMs: z.number().int().min(800).max(5000).optional()
+  })
+  .strict();
+
+export const aiProviderSettingsSchema = z
+  .object({
+    providerType: z.enum(["openrouter"]),
+    baseUrl: nonEmptyString.max(2048),
+    modelName: nonEmptyString.max(160),
+    apiKey: z.string().min(1).max(4096).optional()
+  })
+  .strict();
+
+export const settingsSaveInputSchema = z
+  .object({
+    editor: editorSettingsSchema.optional(),
+    aiProvider: aiProviderSettingsSchema.optional(),
+    projectPath: z.string().trim().min(1).optional()
+  })
+  .strict()
+  .refine((value) => Boolean(value.editor ?? value.aiProvider ?? value.projectPath), {
+    message: "at least one settings section is required"
+  });
+
+export const settingsTestConnectionInputSchema = z
+  .object({
+    aiProvider: aiProviderSettingsSchema.optional()
+  })
+  .strict()
+  .optional();
+
+export const settingsListModelsInputSchema = z
+  .object({
+    query: z.string().trim().max(160).optional()
+  })
+  .strict()
+  .optional();
+
+export const aiCreateTaskInputSchema = z
+  .object({
+    projectId: idSchema,
+    chapterId: optionalIdSchema,
+    taskType: taskTypeSchema,
+    inputText: nonEmptyString,
+    instruction: z.string().max(4000).optional(),
+    presetId: optionalIdSchema,
+    selection: selectionSnapshotSchema.optional()
+  })
+  .strict();
+
+export const aiTaskStatusSchema = z.enum(["empty", "configured", "generating", "preview_ready", "failed", "applied", "inserted", "saved_to_scratchpad"]);
+
+export const aiUpdateTaskInputSchema = z
+  .object({
+    taskId: idSchema,
+    patch: z
+      .object({
+        status: aiTaskStatusSchema.optional(),
+        instruction: z.string().max(4000).optional(),
+        presetId: optionalIdSchema,
+        error: z.string().max(4000).optional()
+      })
+      .strict()
+      .refine((value) => Object.keys(value).length > 0, {
+        message: "patch must include at least one field"
+      })
+  })
+  .strict();
+
+export const aiGeneratePreviewInputSchema = z
+  .object({
+    taskId: idSchema
+  })
+  .strict();
+
+export const aiApplyCandidateInputSchema = z
+  .object({
+    candidateId: idSchema,
+    applyMode: z.enum(["replace_selection", "insert_below", "insert_at_cursor", "apply_proofread_suggestion"]),
+    selectionHash: z.string().trim().min(1).optional(),
+    writebackConfirmed: z.literal(true)
+  })
+  .strict();
+
+export const aiSaveCandidateToScratchpadInputSchema = z
+  .object({
+    candidateId: idSchema
+  })
+  .strict();
+
+export const aiSendChatMessageInputSchema = z
+  .object({
+    message: nonEmptyString.max(8000),
+    currentChapterTitle: z.string().trim().min(1).max(160).optional(),
+    selectionText: z.string().trim().min(1).max(20000).optional(),
+    chapterExcerpt: z.string().trim().min(1).max(20000).optional()
+  })
+  .strict();
+
+export const aiRejectCandidateInputSchema = z
+  .object({
+    candidateId: idSchema
+  })
+  .strict();
+
+export const scratchListInputSchema = z
+  .object({
+    projectId: idSchema,
+    chapterId: optionalIdSchema
+  })
+  .strict();
+
+export const scratchCreateInputSchema = z
+  .object({
+    projectId: idSchema,
+    chapterId: optionalIdSchema,
+    content: nonEmptyString.max(20000),
+    sourceTaskId: optionalIdSchema,
+    pinned: z.boolean().optional()
+  })
+  .strict();
+
+export const scratchUpdateInputSchema = z
+  .object({
+    noteId: idSchema,
+    patch: z
+      .object({
+        content: nonEmptyString.max(20000).optional(),
+        pinned: z.boolean().optional()
+      })
+      .strict()
+      .refine((value) => Object.keys(value).length > 0, {
+        message: "patch must include at least one field"
+      })
+  })
+  .strict();
+
+export const scratchDeleteInputSchema = z
+  .object({
+    noteId: idSchema
+  })
+  .strict();
+
+export const importPreviewTxtInputSchema = z
+  .object({
+    filePath: nonEmptyString
+  })
+  .strict();
+
+const importPreviewOperationSchema = z.discriminatedUnion("type", [
+  z
+    .object({
+      type: z.literal("merge_with_previous"),
+      chapterIndex: z.number().int().positive()
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("split_from_line"),
+      chapterIndex: z.number().int().nonnegative(),
+      lineNumber: z.number().int().positive()
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("rename_chapter"),
+      chapterIndex: z.number().int().nonnegative(),
+      title: nonEmptyString.max(160)
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("redetect")
+    })
+    .strict()
+]);
+
+export const importUpdatePreviewInputSchema = z
+  .object({
+    importJobId: idSchema,
+    operations: z.array(importPreviewOperationSchema).min(1)
+  })
+  .strict();
+
+export const importConfirmTxtInputSchema = z
+  .object({
+    importJobId: idSchema,
+    mode: z.enum(["create_new_project", "import_into_current_project"]),
+    projectId: optionalIdSchema,
+    projectName: z.string().trim().min(1).max(120).optional()
+  })
+  .strict();
+
+export class IpcPayloadValidationError extends Error {
+  constructor(readonly issues: z.ZodIssue[]) {
+    super("IPC payload validation failed");
+    this.name = "IpcPayloadValidationError";
+  }
+}
+
+export function parseIpcPayload<TSchema extends z.ZodType>(schema: TSchema, payload: unknown): z.output<TSchema> {
+  const result = schema.safeParse(payload);
+
+  if (!result.success) {
+    throw new IpcPayloadValidationError(result.error.issues);
+  }
+
+  return result.data;
+}

@@ -1,0 +1,187 @@
+import "./styles/globals.css";
+import { useCallback, useState } from "react";
+import { AppShell } from "./layout/AppShell";
+import type { SidebarTab, TaskType } from "./layout/RightUtilitySidebar";
+import { ImportWizardPage } from "./routes/ImportWizardPage";
+import { SettingsPage, type SettingsCategory } from "./routes/SettingsPage";
+import { WelcomePage } from "./routes/WelcomePage";
+import { WritingPage } from "./routes/WritingPage";
+import { useAppStore } from "./state/app-store";
+import type { ImportConfirmResult, SelectionSnapshot } from "../main/shared/types";
+
+type Page = "welcome" | "writing" | "settings" | "import";
+type ImportReturnPage = "welcome" | "writing";
+type SettingsReturnPage = "welcome" | "writing";
+
+export function App() {
+  const [page, setPage] = useState<Page>("welcome");
+  const [importReturnPage, setImportReturnPage] = useState<ImportReturnPage>("welcome");
+  const [settingsReturnPage, setSettingsReturnPage] = useState<SettingsReturnPage>("welcome");
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarTab, setSidebarTab] = useState<SidebarTab>("task");
+  const [taskType, setTaskType] = useState<TaskType>("polish");
+  const [selectionSnapshot, setSelectionSnapshot] = useState<SelectionSnapshot | null>(null);
+  const [settingsCategory, setSettingsCategory] = useState<SettingsCategory>("通用");
+  const [importStep, setImportStep] = useState(1);
+  const [welcomeNotice, setWelcomeNotice] = useState<string | null>(null);
+  const appStore = useAppStore();
+
+  const openWriting = useCallback(() => {
+    setSidebarOpen(false);
+    setPage("writing");
+  }, []);
+  const openWelcome = useCallback(() => {
+    setWelcomeNotice(null);
+    void appStore.refreshRecentProjects();
+    setPage("welcome");
+  }, [appStore]);
+  const openSettings = useCallback((category?: SettingsCategory) => {
+    if (category) {
+      setSettingsCategory(category);
+    }
+    setSettingsReturnPage(page === "writing" ? "writing" : "welcome");
+    setPage("settings");
+  }, [page]);
+  const returnFromSettings = useCallback(() => {
+    setPage(settingsReturnPage);
+  }, [settingsReturnPage]);
+  const openImport = useCallback(() => {
+    setImportStep(1);
+    setImportReturnPage(page === "writing" ? "writing" : "welcome");
+    setPage("import");
+  }, [page]);
+  const returnFromImport = useCallback(() => {
+    setPage(importReturnPage);
+  }, [importReturnPage]);
+  const continueWriting = useCallback(() => {
+    void appStore.openProjectFile()
+      .then((opened) => {
+        if (opened) {
+          setWelcomeNotice(null);
+          openWriting();
+          return;
+        }
+        setWelcomeNotice("已取消打开项目文件。也可以从下方最近项目继续写作。");
+      })
+      .catch((reason: unknown) => {
+        setWelcomeNotice(reason instanceof Error ? reason.message : String(reason));
+      });
+  }, [appStore, openWriting]);
+  const createProject = useCallback(() => {
+    setWelcomeNotice(null);
+    void appStore.createProject().then(openWriting);
+  }, [appStore, openWriting]);
+  const openProject = useCallback((projectId: string) => {
+    setWelcomeNotice(null);
+    void appStore.openProject(projectId).then(openWriting);
+  }, [appStore, openWriting]);
+  const renameProject = useCallback((projectId: string, name: string) => {
+    void appStore.renameProject(projectId, name).catch((reason: unknown) => {
+      setWelcomeNotice(reason instanceof Error ? reason.message : String(reason));
+    });
+  }, [appStore]);
+  const deleteProject = useCallback((projectId: string, currentName: string) => {
+    void appStore.deleteProject(projectId, currentName).catch((reason: unknown) => {
+      setWelcomeNotice(reason instanceof Error ? reason.message : String(reason));
+    });
+  }, [appStore]);
+  const createChapter = useCallback(() => {
+    void appStore.createChapter();
+  }, [appStore]);
+  const renameChapter = useCallback((chapterId: string, title: string) => {
+    void appStore.renameChapter(chapterId, title);
+  }, [appStore]);
+  const deleteChapter = useCallback((chapterId: string) => {
+    void appStore.deleteChapter(chapterId);
+  }, [appStore]);
+  const openAiChat = useCallback(() => {
+    setSidebarOpen(true);
+    setSidebarTab("chat");
+  }, []);
+  const runTask = useCallback((task: TaskType, snapshot?: SelectionSnapshot | null) => {
+    setTaskType(task);
+    setSelectionSnapshot(snapshot ?? null);
+    setSidebarOpen(true);
+    setSidebarTab("task");
+  }, []);
+  const nextImportStep = useCallback(() => setImportStep((current) => Math.min(current + 1, 4)), []);
+  const previousImportStep = useCallback(() => setImportStep((current) => Math.max(current - 1, 1)), []);
+  const finishImport = useCallback(
+    (result: ImportConfirmResult | null) => {
+      if (result) {
+        appStore.acceptImportedProject(result);
+      }
+      setWelcomeNotice(null);
+      openWriting();
+    },
+    [appStore, openWriting]
+  );
+
+  if (page === "settings") {
+    return (
+      <AppShell>
+        <SettingsPage activeCategory={settingsCategory} onCategoryChange={setSettingsCategory} onClose={returnFromSettings} onWelcome={openWelcome} />
+      </AppShell>
+    );
+  }
+
+  if (page === "import") {
+    return (
+      <AppShell>
+        <ImportWizardPage
+          currentProjectId={appStore.currentProject?.id ?? null}
+          step={importStep}
+          onBack={previousImportStep}
+          onCancel={returnFromImport}
+          onFinish={finishImport}
+          onNext={nextImportStep}
+          onStepChange={setImportStep}
+        />
+      </AppShell>
+    );
+  }
+
+  if (page === "writing") {
+    return (
+      <AppShell>
+        <WritingPage
+          activeChapter={appStore.activeChapter}
+          activeChapterId={appStore.activeChapterId}
+          chapters={appStore.chapters}
+          currentProject={appStore.currentProject}
+          sidebarOpen={sidebarOpen}
+          sidebarTab={sidebarTab}
+          selectionSnapshot={selectionSnapshot}
+          taskType={taskType}
+          onCreateChapter={createChapter}
+          onDeleteChapter={deleteChapter}
+          onCloseSidebar={() => setSidebarOpen(false)}
+          onImport={openImport}
+          onOpenAiChat={openAiChat}
+          onRenameChapter={renameChapter}
+          onSelectChapter={appStore.selectChapter}
+          onSettings={openSettings}
+          onSidebarTabChange={setSidebarTab}
+          onTask={runTask}
+          onWelcome={openWelcome}
+        />
+      </AppShell>
+    );
+  }
+
+  return (
+    <AppShell>
+      <WelcomePage
+        recentProjects={appStore.recentProjects}
+        welcomeNotice={welcomeNotice}
+        onContinueWriting={continueWriting}
+        onImport={openImport}
+        onNewProject={createProject}
+        onOpenProject={openProject}
+        onRenameProject={renameProject}
+        onDeleteProject={deleteProject}
+        onSettings={openSettings}
+      />
+    </AppShell>
+  );
+}
