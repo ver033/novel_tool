@@ -1,5 +1,6 @@
 import axios from "axios";
 import type { OpenRouterModelSummary } from "../shared/types";
+import { parseOpenRouterSsePayload } from "./openrouter-stream-parser";
 
 export type OpenRouterMessage = {
   readonly role: "system" | "user" | "assistant";
@@ -34,10 +35,13 @@ export type OpenRouterHttpGetRequest = {
   readonly url: string;
 };
 
+export type OpenRouterHttpStream = AsyncIterable<string | Buffer> | Iterable<string | Buffer>;
+
 export type OpenRouterClientOptions = {
   readonly apiKey: string;
   readonly modelName: string;
   readonly httpPost?: (request: OpenRouterHttpRequest) => Promise<unknown>;
+  readonly httpStreamPost?: (request: OpenRouterHttpRequest) => Promise<OpenRouterHttpStream>;
 };
 
 export type OpenRouterChatCompletionInput = {
@@ -51,6 +55,10 @@ export type OpenRouterChatCompletionInput = {
 
 export type OpenRouterChatCompletionResult = {
   readonly content: string;
+};
+
+export type OpenRouterStreamHandlers = {
+  readonly onToken?: (token: string) => void;
 };
 
 const OPENROUTER_CHAT_COMPLETIONS_URL = "https://openrouter.ai/api/v1/chat/completions";
@@ -76,7 +84,7 @@ function extractProviderMessage(error: unknown): { readonly status?: number; rea
     if (isObject(data)) {
       const providerError = data.error;
       if (isObject(providerError) && typeof providerError.message === "string") {
-        return { status, message: providerError.message };
+        return { status, message: withProviderMetadata(providerError.message, providerError.metadata) };
       }
       if (typeof data.message === "string") {
         return { status, message: data.message };
@@ -86,6 +94,46 @@ function extractProviderMessage(error: unknown): { readonly status?: number; rea
   }
 
   return { message: error instanceof Error ? error.message : String(error) };
+}
+
+function extractRawProviderMessage(raw: unknown): string | null {
+  if (typeof raw === "string") {
+    return raw;
+  }
+  if (!isObject(raw)) {
+    return null;
+  }
+
+  const rawError = raw.error;
+  if (isObject(rawError) && typeof rawError.message === "string") {
+    return rawError.message;
+  }
+  if (typeof raw.message === "string") {
+    return raw.message;
+  }
+  if (typeof raw.detail === "string") {
+    return raw.detail;
+  }
+
+  return null;
+}
+
+function withProviderMetadata(message: string, metadata: unknown): string {
+  if (!isObject(metadata)) {
+    return message;
+  }
+
+  const details: string[] = [];
+  if (typeof metadata.provider_name === "string") {
+    details.push(`Provider: ${metadata.provider_name}`);
+  }
+
+  const rawMessage = extractRawProviderMessage(metadata.raw);
+  if (rawMessage) {
+    details.push(rawMessage);
+  }
+
+  return details.length > 0 ? `${message}；${details.join("；")}` : message;
 }
 
 function getChoiceError(choice: Record<string, unknown>): string | null {
@@ -142,6 +190,15 @@ async function defaultHttpPost(request: OpenRouterHttpRequest): Promise<unknown>
   return response.data;
 }
 
+async function defaultHttpStreamPost(request: OpenRouterHttpRequest): Promise<OpenRouterHttpStream> {
+  const response = await axios.post(request.url, request.body, {
+    headers: request.headers,
+    timeout: 60_000,
+    responseType: "stream"
+  });
+  return response.data as OpenRouterHttpStream;
+}
+
 async function defaultHttpGet(request: OpenRouterHttpGetRequest): Promise<unknown> {
   const response = await axios.get(request.url, {
     timeout: 60_000
@@ -171,16 +228,18 @@ function parseModelList(response: unknown): OpenRouterModelSummary[] {
 
 export class OpenRouterClient {
   private readonly httpPost: (request: OpenRouterHttpRequest) => Promise<unknown>;
+  private readonly httpStreamPost: (request: OpenRouterHttpRequest) => Promise<OpenRouterHttpStream>;
 
   constructor(private readonly options: OpenRouterClientOptions) {
     this.httpPost = options.httpPost ?? defaultHttpPost;
+    this.httpStreamPost = options.httpStreamPost ?? defaultHttpStreamPost;
   }
 
-  async createChatCompletion(input: OpenRouterChatCompletionInput): Promise<OpenRouterChatCompletionResult> {
+  private buildChatCompletionRequest(input: OpenRouterChatCompletionInput, stream: boolean): OpenRouterHttpRequest {
     const body: Record<string, unknown> = {
       model: this.options.modelName,
       messages: input.messages,
-      stream: false
+      stream
     };
 
     if (input.maxCompletionTokens !== undefined) {
@@ -196,7 +255,7 @@ export class OpenRouterClient {
       body.reasoning = input.reasoning;
     }
 
-    const request: OpenRouterHttpRequest = {
+    return {
       url: OPENROUTER_CHAT_COMPLETIONS_URL,
       headers: {
         Authorization: `Bearer ${this.options.apiKey}`,
@@ -205,11 +264,59 @@ export class OpenRouterClient {
       },
       body
     };
+  }
 
+  async createChatCompletion(input: OpenRouterChatCompletionInput): Promise<OpenRouterChatCompletionResult> {
+    const request = this.buildChatCompletionRequest(input, false);
     try {
       return {
         content: parseContent(await this.httpPost(request), Boolean(input.allowEmptyContent))
       };
+    } catch (error) {
+      const provider = extractProviderMessage(error);
+      const suffix = provider.status ? ` (${provider.status})` : "";
+      throw new Error(`OpenRouter 请求失败${suffix}：${redactSecrets(provider.message, this.options.apiKey)}`);
+    }
+  }
+
+  async streamChatCompletion(input: OpenRouterChatCompletionInput, handlers: OpenRouterStreamHandlers = {}): Promise<OpenRouterChatCompletionResult> {
+    const request = this.buildChatCompletionRequest(input, true);
+    let buffer = "";
+    let content = "";
+
+    try {
+      const stream = await this.httpStreamPost(request);
+      for await (const chunk of stream) {
+        buffer += typeof chunk === "string" ? chunk : chunk.toString("utf8");
+        const blocks = buffer.split(/\r?\n\r?\n/);
+        buffer = blocks.pop() ?? "";
+        const events = parseOpenRouterSsePayload(blocks.map((block) => `${block}\n\n`).join(""));
+
+        for (const event of events) {
+          if (event.type === "content") {
+            content += event.content;
+            handlers.onToken?.(event.content);
+          }
+          if (event.type === "error") {
+            throw new Error(event.message);
+          }
+        }
+      }
+
+      if (buffer.trim()) {
+        const events = parseOpenRouterSsePayload(`${buffer}\n\n`);
+        for (const event of events) {
+          if (event.type === "content") {
+            content += event.content;
+            handlers.onToken?.(event.content);
+          }
+          if (event.type === "error") {
+            throw new Error(event.message);
+          }
+        }
+      }
+
+      return { content };
     } catch (error) {
       const provider = extractProviderMessage(error);
       const suffix = provider.status ? ` (${provider.status})` : "";

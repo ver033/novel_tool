@@ -6,6 +6,13 @@ type Migration = {
   readonly up: (db: SqliteDatabase) => void;
 };
 
+function tableHasColumn(db: SqliteDatabase, tableName: string, columnName: string): boolean {
+  return db
+    .prepare(`PRAGMA table_info(${tableName})`)
+    .all()
+    .some((row) => row.name === columnName);
+}
+
 const migrations: readonly Migration[] = [
   {
     version: 1,
@@ -144,6 +151,50 @@ const migrations: readonly Migration[] = [
           value_json TEXT NOT NULL,
           updated_at TEXT NOT NULL
         );
+      `);
+    }
+  },
+  {
+    version: 2,
+    name: "ai_candidate_metadata",
+    up(db) {
+      if (!tableHasColumn(db, "ai_task_candidates", "metadata_json")) {
+        db.exec("ALTER TABLE ai_task_candidates ADD COLUMN metadata_json TEXT;");
+      }
+    }
+  },
+  {
+    version: 3,
+    name: "ai_chat_persistence",
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS ai_chat_sessions (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          title TEXT NOT NULL,
+          status TEXT NOT NULL CHECK (status IN ('active', 'deleted')),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_ai_chat_sessions_project_updated
+          ON ai_chat_sessions(project_id, updated_at);
+
+        CREATE TABLE IF NOT EXISTS ai_chat_messages (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          project_id TEXT NOT NULL,
+          role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'tool', 'error')),
+          content TEXT NOT NULL,
+          action_json TEXT,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY (session_id) REFERENCES ai_chat_sessions(id) ON DELETE CASCADE,
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_ai_chat_messages_session_created
+          ON ai_chat_messages(session_id, created_at);
       `);
     }
   }

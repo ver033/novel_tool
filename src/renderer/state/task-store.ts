@@ -9,6 +9,7 @@ import type {
 } from "../../main/shared/types";
 import { applyAiCandidateToEditor } from "../editor/ai-apply";
 import { getNovelToolApi } from "./app-store";
+import { formatIpcErrorMessage } from "./ipc-error";
 
 type PreviewResult = {
   readonly task: AiTaskRecord;
@@ -31,12 +32,14 @@ export function useTaskStore({ projectId, chapterId, taskType, selectionSnapshot
   const [candidate, setCandidate] = useState<AiTaskCandidateRecord | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [streamingText, setStreamingText] = useState("");
   const configuredKey = useRef<string | null>(null);
 
   useEffect(() => {
     setTask(null);
     setCandidate(null);
     setError(null);
+    setStreamingText("");
     configuredKey.current = null;
   }, [projectId, chapterId, taskType, selectionSnapshot?.selectionHash]);
 
@@ -70,7 +73,7 @@ export function useTaskStore({ projectId, chapterId, taskType, selectionSnapshot
       })
       .catch((reason: unknown) => {
         configuredKey.current = null;
-        setError(reason instanceof Error ? reason.message : "创建 AI 任务失败");
+        setError(formatIpcErrorMessage(reason, "创建 AI 任务失败"));
       })
       .finally(() => {
         setBusy(false);
@@ -84,6 +87,8 @@ export function useTaskStore({ projectId, chapterId, taskType, selectionSnapshot
 
     setBusy(true);
     setError(null);
+    setStreamingText("");
+    let unsubscribe: (() => void) | null = null;
     try {
       const updatedTask = (await api.ai.updateTask({
         taskId: task.id,
@@ -92,12 +97,29 @@ export function useTaskStore({ projectId, chapterId, taskType, selectionSnapshot
         }
       })) as AiTaskRecord;
       setTask(updatedTask);
-      const result = (await api.ai.generatePreview({ taskId: updatedTask.id })) as PreviewResult;
+      const requestId = `task_stream_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+      unsubscribe = api.ai.subscribeAiStream(requestId, {
+        onChunk(event) {
+          setStreamingText((current) => `${current}${event.content}`);
+        },
+        onDone(event) {
+          const result = event.payload as PreviewResult;
+          setTask(result.task);
+          setCandidate(result.candidate);
+          setStreamingText("");
+        },
+        onError(event) {
+          setError(event.error);
+        }
+      });
+      const result = (await api.ai.generatePreviewStream({ requestId, taskId: updatedTask.id })) as PreviewResult;
       setTask(result.task);
       setCandidate(result.candidate);
+      setStreamingText("");
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "生成预览失败");
+      setError(formatIpcErrorMessage(reason, "生成预览失败"));
     } finally {
+      unsubscribe?.();
       setBusy(false);
     }
   }, [api, instruction, task]);
@@ -113,7 +135,7 @@ export function useTaskStore({ projectId, chapterId, taskType, selectionSnapshot
       const rejected = (await api.ai.rejectCandidate({ candidateId: candidate.id })) as AiTaskCandidateRecord;
       setCandidate(rejected);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "拒绝候选失败");
+      setError(formatIpcErrorMessage(reason, "拒绝候选失败"));
     } finally {
       setBusy(false);
     }
@@ -138,11 +160,41 @@ export function useTaskStore({ projectId, chapterId, taskType, selectionSnapshot
       setTask(result.task);
       setCandidate(result.candidate);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "加入草稿纸失败");
+      setError(formatIpcErrorMessage(reason, "加入草稿纸失败"));
     } finally {
       setBusy(false);
     }
   }, [api, candidate, chapterId, projectId, task]);
+
+  const saveTextToScratchpad = useCallback(
+    async (content: string) => {
+      if (!projectId || !task) {
+        return;
+      }
+
+      setBusy(true);
+      setError(null);
+      try {
+        await api.scratch.create({
+          projectId,
+          chapterId: chapterId ?? undefined,
+          content,
+          sourceTaskId: task.id,
+          pinned: false
+        });
+        if (candidate) {
+          const result = (await api.ai.saveCandidateToScratchpad({ candidateId: candidate.id })) as PreviewResult;
+          setTask(result.task);
+          setCandidate(result.candidate);
+        }
+      } catch (reason) {
+        setError(formatIpcErrorMessage(reason, "加入草稿纸失败"));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [api, candidate, chapterId, projectId, task]
+  );
 
   const applyCandidate = useCallback(
     async (applyMode: AiApplyCandidateInput["applyMode"]) => {
@@ -172,7 +224,7 @@ export function useTaskStore({ projectId, chapterId, taskType, selectionSnapshot
         setTask(result.task);
         setCandidate(result.candidate);
       } catch (reason) {
-        setError(reason instanceof Error ? reason.message : "应用候选失败");
+        setError(formatIpcErrorMessage(reason, "应用候选失败"));
       } finally {
         setBusy(false);
       }
@@ -188,6 +240,8 @@ export function useTaskStore({ projectId, chapterId, taskType, selectionSnapshot
     generatePreview,
     rejectCandidate,
     saveCandidateToScratchpad,
+    saveTextToScratchpad,
+    streamingText,
     task
   };
 }

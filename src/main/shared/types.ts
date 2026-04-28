@@ -3,10 +3,15 @@ import type {
   aiCreateTaskInputSchema,
   aiApplyCandidateInputSchema,
   aiProviderSettingsSchema,
+  aiClearChatInputSchema,
   aiGeneratePreviewInputSchema,
+  aiGeneratePreviewStreamInputSchema,
+  aiGetChatSessionInputSchema,
+  aiListChatMessagesInputSchema,
   aiRejectCandidateInputSchema,
   aiSaveCandidateToScratchpadInputSchema,
   aiSendChatMessageInputSchema,
+  aiSendChatMessageStreamInputSchema,
   aiUpdateTaskInputSchema,
   chapterCreateInputSchema,
   chapterCreateSnapshotInputSchema,
@@ -32,10 +37,13 @@ import type {
   settingsListModelsInputSchema,
   settingsTestConnectionInputSchema
 } from "./schemas";
+import type { ProofreadIssue } from "./proofread";
 
 export type TaskType = "polish" | "expand" | "proofread" | "continue";
 export type AiTaskStatus = "empty" | "configured" | "generating" | "preview_ready" | "failed" | "applied" | "inserted" | "saved_to_scratchpad";
 export type CandidateStatus = "preview" | "applied" | "inserted" | "rejected" | "copied" | "inserted_to_scratchpad";
+export type AiChatSessionStatus = "active" | "deleted";
+export type AiChatMessageRole = "user" | "assistant" | "tool" | "error";
 
 export type SelectionSnapshot = {
   readonly chapterId: string;
@@ -70,6 +78,7 @@ export type AiTaskCandidateRecord = {
   readonly originalText: string | null;
   readonly generatedText: string;
   readonly changeSummary: string | null;
+  readonly proofreadIssues: readonly ProofreadIssue[] | null;
   readonly status: CandidateStatus;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -84,6 +93,50 @@ export type ScratchNoteRecord = {
   readonly sourceTaskId: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;
+};
+
+export type AiChatAction =
+  | {
+      readonly type: "none";
+    }
+  | {
+      readonly type: "add_to_scratchpad";
+      readonly content: string;
+      readonly chapterId: string | null;
+    };
+
+export type AiChatSessionRecord = {
+  readonly id: string;
+  readonly projectId: string;
+  readonly title: string;
+  readonly status: AiChatSessionStatus;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+};
+
+export type AiChatMessageRecord = {
+  readonly id: string;
+  readonly sessionId: string;
+  readonly projectId: string;
+  readonly role: AiChatMessageRole;
+  readonly content: string;
+  readonly action: AiChatAction | null;
+  readonly createdAt: string;
+};
+
+export type AiStreamChunkEvent = {
+  readonly requestId: string;
+  readonly content: string;
+};
+
+export type AiStreamDoneEvent = {
+  readonly requestId: string;
+  readonly payload: unknown;
+};
+
+export type AiStreamErrorEvent = {
+  readonly requestId: string;
+  readonly error: string;
 };
 
 export type ImportPreviewChapter = {
@@ -182,9 +235,14 @@ export type SettingsListModelsInput = z.input<typeof settingsListModelsInputSche
 export type AiCreateTaskInput = z.input<typeof aiCreateTaskInputSchema>;
 export type AiUpdateTaskInput = z.input<typeof aiUpdateTaskInputSchema>;
 export type AiGeneratePreviewInput = z.input<typeof aiGeneratePreviewInputSchema>;
+export type AiGeneratePreviewStreamInput = z.input<typeof aiGeneratePreviewStreamInputSchema>;
 export type AiApplyCandidateInput = z.input<typeof aiApplyCandidateInputSchema>;
 export type AiSaveCandidateToScratchpadInput = z.input<typeof aiSaveCandidateToScratchpadInputSchema>;
 export type AiSendChatMessageInput = z.input<typeof aiSendChatMessageInputSchema>;
+export type AiGetChatSessionInput = z.input<typeof aiGetChatSessionInputSchema>;
+export type AiListChatMessagesInput = z.input<typeof aiListChatMessagesInputSchema>;
+export type AiClearChatInput = z.input<typeof aiClearChatInputSchema>;
+export type AiSendChatMessageStreamInput = z.input<typeof aiSendChatMessageStreamInputSchema>;
 export type AiRejectCandidateInput = z.input<typeof aiRejectCandidateInputSchema>;
 export type ScratchListInput = z.input<typeof scratchListInputSchema>;
 export type ScratchCreateInput = z.input<typeof scratchCreateInputSchema>;
@@ -227,9 +285,17 @@ export const ipcChannels = {
     createTask: "novelTool:ai:createTask",
     updateTask: "novelTool:ai:updateTask",
     generatePreview: "novelTool:ai:generatePreview",
+    generatePreviewStream: "novelTool:ai:generatePreviewStream",
     applyCandidate: "novelTool:ai:applyCandidate",
     saveCandidateToScratchpad: "novelTool:ai:saveCandidateToScratchpad",
     sendChatMessage: "novelTool:ai:sendChatMessage",
+    getChatSession: "novelTool:ai:getChatSession",
+    listChatMessages: "novelTool:ai:listChatMessages",
+    clearChat: "novelTool:ai:clearChat",
+    sendChatMessageStream: "novelTool:ai:sendChatMessageStream",
+    streamChunk: "novelTool:ai:streamChunk",
+    streamDone: "novelTool:ai:streamDone",
+    streamError: "novelTool:ai:streamError",
     rejectCandidate: "novelTool:ai:rejectCandidate"
   },
   scratch: {

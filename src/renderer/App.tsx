@@ -24,6 +24,7 @@ export function App() {
   const [settingsCategory, setSettingsCategory] = useState<SettingsCategory>("通用");
   const [importStep, setImportStep] = useState(1);
   const [welcomeNotice, setWelcomeNotice] = useState<string | null>(null);
+  const [scratchpadRefreshToken, setScratchpadRefreshToken] = useState(0);
   const appStore = useAppStore();
 
   const openWriting = useCallback(() => {
@@ -98,6 +99,11 @@ export function App() {
     setSidebarOpen(true);
     setSidebarTab("chat");
   }, []);
+  const openScratchpad = useCallback(() => {
+    setSidebarOpen(true);
+    setSidebarTab("scratch");
+    setScratchpadRefreshToken((current) => current + 1);
+  }, []);
   const runTask = useCallback((task: TaskType, snapshot?: SelectionSnapshot | null) => {
     setTaskType(task);
     setSelectionSnapshot(snapshot ?? null);
@@ -151,6 +157,7 @@ export function App() {
           currentProject={appStore.currentProject}
           sidebarOpen={sidebarOpen}
           sidebarTab={sidebarTab}
+          scratchpadRefreshToken={scratchpadRefreshToken}
           selectionSnapshot={selectionSnapshot}
           taskType={taskType}
           onCreateChapter={createChapter}
@@ -158,6 +165,7 @@ export function App() {
           onCloseSidebar={() => setSidebarOpen(false)}
           onImport={openImport}
           onOpenAiChat={openAiChat}
+          onOpenScratchpad={openScratchpad}
           onRenameChapter={renameChapter}
           onSelectChapter={appStore.selectChapter}
           onSettings={openSettings}

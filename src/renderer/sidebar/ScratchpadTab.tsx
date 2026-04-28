@@ -7,9 +7,10 @@ import { filterScratchNotes, getScratchNoteSourceLabel, scratchpadFilters, sortS
 type ScratchpadTabProps = {
   readonly chapterId: string | null;
   readonly projectId: string | null;
+  readonly refreshToken: number;
 };
 
-export function ScratchpadTab({ chapterId, projectId }: ScratchpadTabProps) {
+export function ScratchpadTab({ chapterId, projectId, refreshToken }: ScratchpadTabProps) {
   const api = useMemo(getNovelToolApi, []);
   const [activeFilter, setActiveFilter] = useState<(typeof scratchpadFilters)[number]>("全部");
   const [draft, setDraft] = useState("");
@@ -38,7 +39,7 @@ export function ScratchpadTab({ chapterId, projectId }: ScratchpadTabProps) {
 
   useEffect(() => {
     void loadNotes();
-  }, [loadNotes]);
+  }, [loadNotes, refreshToken]);
 
   async function createNote(): Promise<void> {
     if (!projectId || !draft.trim()) {

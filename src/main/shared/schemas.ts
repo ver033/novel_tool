@@ -114,7 +114,13 @@ export const editorSettingsSchema = z
   .object({
     fontSize: z.number().int().min(12).max(28).optional(),
     lineHeight: z.number().min(1.4).max(2.6).optional(),
-    autosaveMs: z.number().int().min(800).max(5000).optional()
+    autosaveMs: z.number().int().min(800).max(5000).optional(),
+    layoutPreset: z.enum(["immersive", "review", "reading", "custom"]).optional(),
+    pageWidth: z.enum(["narrow", "medium", "wide"]).optional(),
+    fontFamily: z.enum(["system", "song", "hei", "fangsong"]).optional(),
+    paragraphSpacing: z.enum(["compact", "standard", "loose"]).optional(),
+    firstLineIndent: z.enum(["none", "two", "four"]).optional(),
+    theme: z.enum(["light", "eye", "night"]).optional()
   })
   .strict();
 
@@ -189,10 +195,17 @@ export const aiGeneratePreviewInputSchema = z
   })
   .strict();
 
+export const aiGeneratePreviewStreamInputSchema = z
+  .object({
+    requestId: idSchema,
+    taskId: idSchema
+  })
+  .strict();
+
 export const aiApplyCandidateInputSchema = z
   .object({
     candidateId: idSchema,
-    applyMode: z.enum(["replace_selection", "insert_below", "insert_at_cursor", "apply_proofread_suggestion"]),
+    applyMode: z.enum(["replace_selection", "insert_below", "insert_at_cursor"]),
     selectionHash: z.string().trim().min(1).optional(),
     writebackConfirmed: z.literal(true)
   })
@@ -207,6 +220,34 @@ export const aiSaveCandidateToScratchpadInputSchema = z
 export const aiSendChatMessageInputSchema = z
   .object({
     message: nonEmptyString.max(8000),
+    currentChapterTitle: z.string().trim().min(1).max(160).optional(),
+    selectionText: z.string().trim().min(1).max(20000).optional(),
+    chapterExcerpt: z.string().trim().min(1).max(20000).optional()
+  })
+  .strict();
+
+export const aiGetChatSessionInputSchema = z
+  .object({
+    projectId: idSchema
+  })
+  .strict();
+
+export const aiListChatMessagesInputSchema = z
+  .object({
+    projectId: idSchema,
+    sessionId: idSchema
+  })
+  .strict();
+
+export const aiClearChatInputSchema = aiListChatMessagesInputSchema;
+
+export const aiSendChatMessageStreamInputSchema = z
+  .object({
+    requestId: idSchema,
+    projectId: idSchema,
+    sessionId: idSchema,
+    message: nonEmptyString.max(8000),
+    chapterId: optionalIdSchema,
     currentChapterTitle: z.string().trim().min(1).max(160).optional(),
     selectionText: z.string().trim().min(1).max(20000).optional(),
     chapterExcerpt: z.string().trim().min(1).max(20000).optional()

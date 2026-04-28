@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { proofreadIssueTypes, proofreadResultSchema, type ProofreadIssue } from "../shared/proofread";
 import type { AiTaskRecord } from "../shared/types";
 import type { OpenRouterMessage, OpenRouterReasoningConfig, OpenRouterResponseFormat } from "./openrouter-client";
 
@@ -13,6 +13,7 @@ type BuiltPrompt = {
 type GeneratedCandidateText = {
   readonly generatedText: string;
   readonly changeSummary: string | null;
+  readonly proofreadIssues?: readonly ProofreadIssue[];
 };
 
 const defaultReasoning: OpenRouterReasoningConfig = {
@@ -32,29 +33,19 @@ const maxCompletionTokensByTask: Record<AiTaskRecord["taskType"], number> = {
   continue: 4096
 };
 
-const proofreadIssueSchema = z.object({
-  type: z.enum(["错别字", "标点", "病句", "表达不顺", "对白不自然", "重复表达", "无问题"]),
-  quote: z.string(),
-  suggestion: z.string(),
-  reason: z.string()
-});
-
-const proofreadResultSchema = z.object({
-  issues: z.array(proofreadIssueSchema).max(3)
-});
-
 const proofreadJsonSchema = {
   type: "object",
   properties: {
     issues: {
       type: "array",
+      minItems: 1,
       maxItems: 3,
       items: {
         type: "object",
         properties: {
           type: {
             type: "string",
-            enum: ["错别字", "标点", "病句", "表达不顺", "对白不自然", "重复表达", "无问题"],
+            enum: proofreadIssueTypes,
             description: "问题类型"
           },
           quote: {
@@ -186,17 +177,19 @@ export function parseProofreadResponse(content: string): GeneratedCandidateText 
   }
 
   const result = proofreadResultSchema.parse(parsed);
-  const issue = result.issues.find((item) => item.type !== "无问题") ?? result.issues[0];
+  const proofreadIssues = result.issues.filter((item) => item.type !== "无问题");
 
-  if (!issue || issue.type === "无问题") {
+  if (proofreadIssues.length === 0) {
     return {
       generatedText: "",
-      changeSummary: "无问题"
+      changeSummary: "无问题",
+      proofreadIssues: []
     };
   }
 
   return {
-    generatedText: issue.suggestion,
-    changeSummary: `${issue.type}：${issue.reason}`
+    generatedText: "",
+    changeSummary: `发现 ${proofreadIssues.length} 个问题`,
+    proofreadIssues
   };
 }

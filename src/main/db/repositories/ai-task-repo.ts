@@ -1,4 +1,5 @@
 import { createId } from "../../shared/ids";
+import { parseProofreadCandidateMetadata, stringifyProofreadCandidateMetadata, type ProofreadIssue } from "../../shared/proofread";
 import type {
   AiTaskCandidateRecord,
   AiTaskRecord,
@@ -32,6 +33,7 @@ type AiTaskCandidateRow = {
   readonly original_text: string | null;
   readonly generated_text: string;
   readonly change_summary: string | null;
+  readonly metadata_json: string | null;
   readonly status: CandidateStatus;
   readonly created_at: string;
   readonly updated_at: string;
@@ -45,6 +47,7 @@ type CreateCandidateInput = {
   readonly originalText: string | null;
   readonly generatedText: string;
   readonly changeSummary?: string | null;
+  readonly proofreadIssues?: readonly ProofreadIssue[] | null;
 };
 
 type TaskPatch = {
@@ -89,6 +92,7 @@ function mapCandidate(row: AiTaskCandidateRow): AiTaskCandidateRecord {
     originalText: row.original_text,
     generatedText: row.generated_text,
     changeSummary: row.change_summary,
+    proofreadIssues: parseProofreadCandidateMetadata(row.metadata_json)?.proofreadIssues ?? null,
     status: row.status,
     createdAt: row.created_at,
     updatedAt: row.updated_at
@@ -168,6 +172,7 @@ export class AiTaskRepository {
       originalText: input.originalText,
       generatedText: input.generatedText,
       changeSummary: input.changeSummary ?? null,
+      proofreadIssues: input.proofreadIssues ?? null,
       status: "preview",
       createdAt,
       updatedAt: createdAt
@@ -176,8 +181,8 @@ export class AiTaskRepository {
     this.db
       .prepare(
         `INSERT INTO ai_task_candidates (
-          id, task_id, kind, original_text, generated_text, change_summary, status, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          id, task_id, kind, original_text, generated_text, change_summary, metadata_json, status, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         candidate.id,
@@ -186,6 +191,7 @@ export class AiTaskRepository {
         candidate.originalText,
         candidate.generatedText,
         candidate.changeSummary,
+        stringifyProofreadCandidateMetadata(candidate.proofreadIssues),
         candidate.status,
         candidate.createdAt,
         candidate.updatedAt

@@ -9,7 +9,13 @@ export const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
   fontSize: 20,
   lineHeight: 2.08,
-  autosaveMs: 1000
+  autosaveMs: 1000,
+  layoutPreset: "immersive",
+  pageWidth: "medium",
+  fontFamily: "system",
+  paragraphSpacing: "standard",
+  firstLineIndent: "two",
+  theme: "light"
 };
 
 export type SecretStore = {

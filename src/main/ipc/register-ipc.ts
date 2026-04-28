@@ -8,6 +8,7 @@ import { OpenRouterTaskGenerator } from "../ai/openrouter-task-generator";
 import { ChapterService } from "../chapter/chapter-service";
 import { createDatabase, resolveDatabasePath, type SqliteDatabase } from "../db/database";
 import { runMigrations } from "../db/migrations";
+import { AiChatRepository } from "../db/repositories/ai-chat-repo";
 import { AiTaskRepository } from "../db/repositories/ai-task-repo";
 import { ChapterRepository } from "../db/repositories/chapter-repo";
 import { ImportJobRepository } from "../db/repositories/import-job-repo";
@@ -54,7 +55,44 @@ function useE2eAiGenerators(): boolean {
 
 function createE2eTaskGenerator(): AiTaskGenerator {
   return {
+    async generateStream(task, handlers) {
+      if (task.taskType === "proofread") {
+        return {
+          generatedText: "",
+          changeSummary: "发现 1 个问题",
+          proofreadIssues: [
+            {
+              type: "表达不顺",
+              quote: task.inputText,
+              suggestion: e2eGeneratedText.proofread,
+              reason: "E2E 校对建议"
+            }
+          ]
+        };
+      }
+
+      handlers.onChunk?.({ requestId: "e2e_task_stream", content: e2eGeneratedText[task.taskType] });
+      return {
+        generatedText: e2eGeneratedText[task.taskType],
+        changeSummary: `E2E ${task.taskType} candidate`
+      };
+    },
     async generate(task) {
+      if (task.taskType === "proofread") {
+        return {
+          generatedText: "",
+          changeSummary: "发现 1 个问题",
+          proofreadIssues: [
+            {
+              type: "表达不顺",
+              quote: task.inputText,
+              suggestion: e2eGeneratedText.proofread,
+              reason: "E2E 校对建议"
+            }
+          ]
+        };
+      }
+
       return {
         generatedText: e2eGeneratedText[task.taskType],
         changeSummary: `E2E ${task.taskType} candidate`
@@ -65,6 +103,15 @@ function createE2eTaskGenerator(): AiTaskGenerator {
 
 function createE2eChatGenerator(): AiChatGenerator {
   return {
+    async sendMessageStream(input, handlers) {
+      const content = `E2E AI 回复：${input.message}`;
+      handlers.onChunk?.({ requestId: input.requestId, content });
+      return {
+        role: "assistant",
+        content,
+        createdAt: new Date().toISOString()
+      };
+    },
     async sendMessage(input) {
       return {
         role: "assistant",
@@ -112,7 +159,9 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
     const aiTaskService = new AiTaskService(
       (projectId) => new AiTaskRepository(resolveProjectDb(projectId)),
       useE2eAiGenerators() ? createE2eTaskGenerator() : new OpenRouterTaskGenerator(settingsService),
-      useE2eAiGenerators() ? createE2eChatGenerator() : new OpenRouterChatGenerator(settingsService)
+      useE2eAiGenerators() ? createE2eChatGenerator() : new OpenRouterChatGenerator(settingsService),
+      (projectId) => new AiChatRepository(resolveProjectDb(projectId)),
+      (projectId) => new ScratchNoteRepository(resolveProjectDb(projectId))
     );
     const txtImporter = new TxtImporter(importJobRepo, projectRepo, projectService);
 

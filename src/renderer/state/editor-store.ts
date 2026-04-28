@@ -14,7 +14,13 @@ export const AUTOSAVE_DEBOUNCE_MS = 1000;
 const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
   fontSize: 20,
   lineHeight: 2.08,
-  autosaveMs: AUTOSAVE_DEBOUNCE_MS
+  autosaveMs: AUTOSAVE_DEBOUNCE_MS,
+  layoutPreset: "immersive",
+  pageWidth: "medium",
+  fontFamily: "system",
+  paragraphSpacing: "standard",
+  firstLineIndent: "two",
+  theme: "light"
 };
 
 export type SaveStatus = "saved" | "dirty" | "saving" | "failed";

@@ -1,4 +1,5 @@
-import type { AiChatGenerator, AiChatMessageResult } from "./ai-task-service";
+import type { AiChatGenerationInput, AiChatGenerator, AiChatMessageResult, AiChatStreamHandlers } from "./ai-task-service";
+import type { OpenRouterMessage } from "./openrouter-client";
 import { OpenRouterClient } from "./openrouter-client";
 import type { SettingsService } from "../settings/settings-service";
 import type { AiSendChatMessageInput } from "../shared/types";
@@ -15,6 +16,32 @@ function buildUserPrompt(input: AiSendChatMessageInput): string {
     .join("\n");
 }
 
+function buildSystemPrompt(): string {
+  return [
+    "你是中文小说写作助手。",
+    "你可以讨论润色、扩写、校对、续写、节奏、人物动机和场景处理。",
+    "用户要求总结并加入草稿纸时，直接给出可保存的总结正文；系统会负责保存动作。",
+    "不要直接替用户确认写回正文；涉及正文修改时给出建议或候选文本。",
+    "保持回答简洁、具体、可执行。"
+  ].join("\n");
+}
+
+function buildHistoryMessages(input: AiChatGenerationInput): OpenRouterMessage[] {
+  return input.history
+    .flatMap((message): OpenRouterMessage[] => {
+      if (message.role !== "user" && message.role !== "assistant") {
+        return [];
+      }
+      return [
+        {
+          role: message.role,
+          content: message.content
+        }
+      ];
+    })
+    .slice(-12);
+}
+
 export class OpenRouterChatGenerator implements AiChatGenerator {
   constructor(private readonly settingsService: SettingsService) {}
 
@@ -28,12 +55,7 @@ export class OpenRouterChatGenerator implements AiChatGenerator {
       messages: [
         {
           role: "system",
-          content: [
-            "你是中文小说写作助手。",
-            "你可以讨论润色、扩写、校对、续写、节奏、人物动机和场景处理。",
-            "不要直接替用户确认写回正文；涉及正文修改时给出建议或候选文本。",
-            "保持回答简洁、具体、可执行。"
-          ].join("\n")
+          content: buildSystemPrompt()
         },
         {
           role: "user",
@@ -43,6 +65,46 @@ export class OpenRouterChatGenerator implements AiChatGenerator {
       maxCompletionTokens: 1600,
       temperature: 0.55
     });
+    const content = result.content.trim();
+    if (!content) {
+      throw new Error("OpenRouter 返回了空对话内容。");
+    }
+
+    return {
+      role: "assistant",
+      content,
+      createdAt: new Date().toISOString()
+    };
+  }
+
+  async sendMessageStream(input: AiChatGenerationInput, handlers: AiChatStreamHandlers): Promise<AiChatMessageResult> {
+    const config = this.settingsService.getOpenRouterConfig();
+    const client = new OpenRouterClient({
+      apiKey: config.apiKey,
+      modelName: config.modelName
+    });
+    const result = await client.streamChatCompletion(
+      {
+        messages: [
+          {
+            role: "system",
+            content: buildSystemPrompt()
+          },
+          ...buildHistoryMessages(input),
+          {
+            role: "user",
+            content: buildUserPrompt(input)
+          }
+        ],
+        maxCompletionTokens: 1600,
+        temperature: 0.55
+      },
+      {
+        onToken(token) {
+          handlers.onChunk?.({ requestId: input.requestId, content: token });
+        }
+      }
+    );
     const content = result.content.trim();
     if (!content) {
       throw new Error("OpenRouter 返回了空对话内容。");

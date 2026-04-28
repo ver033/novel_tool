@@ -15,6 +15,7 @@ type RightUtilitySidebarProps = {
   readonly currentChapterId: string | null;
   readonly currentChapterTitle: string | null;
   readonly currentProjectId: string | null;
+  readonly scratchpadRefreshToken: number;
   readonly selectionSnapshot: SelectionSnapshot | null;
   readonly taskType: TaskType;
   readonly editor: Editor | null;
@@ -37,6 +38,7 @@ export function RightUtilitySidebar({
   currentProjectId,
   editor,
   flushPendingSave,
+  scratchpadRefreshToken,
   selectionSnapshot,
   taskType,
   onTabChange,
@@ -57,7 +59,12 @@ export function RightUtilitySidebar({
       </nav>
       <div className="sidebar-content">
         {activeTab === "chat" ? (
-          <AiChatTab currentChapterId={currentChapterId} currentChapterTitle={currentChapterTitle} selectionSnapshot={selectionSnapshot} />
+          <AiChatTab
+            currentChapterId={currentChapterId}
+            currentChapterTitle={currentChapterTitle}
+            currentProjectId={currentProjectId}
+            selectionSnapshot={selectionSnapshot}
+          />
         ) : null}
         {activeTab === "task" ? (
           <CurrentTaskTab
@@ -71,7 +78,7 @@ export function RightUtilitySidebar({
             onOpenSettings={onOpenSettings}
           />
         ) : null}
-        {activeTab === "scratch" ? <ScratchpadTab chapterId={currentChapterId} projectId={currentProjectId} /> : null}
+        {activeTab === "scratch" ? <ScratchpadTab chapterId={currentChapterId} projectId={currentProjectId} refreshToken={scratchpadRefreshToken} /> : null}
       </div>
     </aside>
   );

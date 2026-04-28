@@ -70,7 +70,13 @@ const defaultForm: SettingsFormState = {
   editor: {
     fontSize: 20,
     lineHeight: 2.08,
-    autosaveMs: 1000
+    autosaveMs: 1000,
+    layoutPreset: "immersive",
+    pageWidth: "medium",
+    fontFamily: "system",
+    paragraphSpacing: "standard",
+    firstLineIndent: "two",
+    theme: "light"
   },
   aiProvider: {
     providerType: "openrouter",
@@ -494,26 +500,50 @@ function SettingsContent({
       <div className="settings-grid">
         <div className="settings-card">
           <h3>编辑器</h3>
-          <p className="muted">调整正文书写体验。</p>
+          <p className="muted">调整正文书写体验。这些设置也可以在写作页顶部的 Aa「页面与排版」中快速切换。</p>
           <div className="form-grid">
-            <label>字体大小</label>
-            <select className="input" value={String(form.editor.fontSize)} onChange={(event) => onEditorChange({ fontSize: Number(event.target.value) })}>
-              <option value="16">16px</option>
-              <option value="18">18px</option>
-              <option value="20">20px</option>
-            </select>
-            <label>行间距</label>
-            <select className="input" value={String(form.editor.lineHeight)} onChange={(event) => onEditorChange({ lineHeight: Number(event.target.value) })}>
-              <option value="1.7">1.7</option>
-              <option value="1.9">1.9</option>
-              <option value="2.08">2.08</option>
-              <option value="2">2.0</option>
-              <option value="2.2">2.2</option>
+            <label>页面宽度</label>
+            <select className="input" value={form.editor.pageWidth} onChange={(event) => onEditorChange({ layoutPreset: "custom", pageWidth: event.target.value as EditorSettings["pageWidth"] })}>
+              <option value="narrow">窄栏</option>
+              <option value="medium">适中</option>
+              <option value="wide">宽栏</option>
             </select>
             <label>正文字体</label>
-            <select className="input" defaultValue="system" disabled>
-              <option value="system">系统无衬线</option>
-              <option value="song">宋体</option>
+            <select className="input" value={form.editor.fontFamily} onChange={(event) => onEditorChange({ layoutPreset: "custom", fontFamily: event.target.value as EditorSettings["fontFamily"] })}>
+              <option value="system">默认</option>
+              <option value="song">宋体感</option>
+              <option value="hei">黑体感</option>
+              <option value="fangsong">仿宋感</option>
+            </select>
+            <label>字体大小</label>
+            <select className="input" value={String(form.editor.fontSize)} onChange={(event) => onEditorChange({ layoutPreset: "custom", fontSize: Number(event.target.value) })}>
+              <option value="18">18px</option>
+              <option value="20">20px</option>
+              <option value="22">22px</option>
+            </select>
+            <label>行间距</label>
+            <select className="input" value={String(form.editor.lineHeight)} onChange={(event) => onEditorChange({ layoutPreset: "custom", lineHeight: Number(event.target.value) })}>
+              <option value="1.82">1.82</option>
+              <option value="2.08">2.08</option>
+              <option value="2.32">2.32</option>
+            </select>
+            <label>段间距</label>
+            <select className="input" value={form.editor.paragraphSpacing} onChange={(event) => onEditorChange({ layoutPreset: "custom", paragraphSpacing: event.target.value as EditorSettings["paragraphSpacing"] })}>
+              <option value="compact">紧凑</option>
+              <option value="standard">标准</option>
+              <option value="loose">宽松</option>
+            </select>
+            <label>首行缩进</label>
+            <select className="input" value={form.editor.firstLineIndent} onChange={(event) => onEditorChange({ layoutPreset: "custom", firstLineIndent: event.target.value as EditorSettings["firstLineIndent"] })}>
+              <option value="none">无</option>
+              <option value="two">2字</option>
+              <option value="four">4字</option>
+            </select>
+            <label>主题</label>
+            <select className="input" value={form.editor.theme} onChange={(event) => onEditorChange({ layoutPreset: "custom", theme: event.target.value as EditorSettings["theme"] })}>
+              <option value="light">浅色</option>
+              <option value="eye">护眼</option>
+              <option value="night">夜间</option>
             </select>
           </div>
         </div>

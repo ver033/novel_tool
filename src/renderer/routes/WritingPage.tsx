@@ -1,4 +1,4 @@
-import { useCallback, useState, type FormEvent } from "react";
+import { useCallback, useMemo, useState, type CSSProperties, type FormEvent } from "react";
 import type { Editor } from "@tiptap/react";
 import { Button } from "../components/Button";
 import { Input } from "../components/Input";
@@ -8,9 +8,26 @@ import { NovelEditor } from "../editor/NovelEditor";
 import { LeftChapterTree } from "../layout/LeftChapterTree";
 import { RightUtilitySidebar, type SidebarTab, type TaskType } from "../layout/RightUtilitySidebar";
 import { TopBar } from "../layout/TopBar";
+import { getNovelToolApi } from "../state/app-store";
 import { useEditorStore } from "../state/editor-store";
 import type { SettingsCategory } from "./SettingsPage";
 import type { ChapterSummary, ProjectRecord, SelectionSnapshot } from "../../main/shared/types";
+
+type EditorInnerStyle = CSSProperties & {
+  readonly maxWidth: string;
+};
+
+const pageWidthBySetting = {
+  narrow: "760px",
+  medium: "860px",
+  wide: "980px"
+} as const;
+
+const themeClassBySetting = {
+  light: "theme-light",
+  eye: "theme-eye",
+  night: "theme-night"
+} as const;
 
 type WritingPageProps = {
   readonly activeChapter: ChapterSummary | null;
@@ -19,6 +36,7 @@ type WritingPageProps = {
   readonly currentProject: ProjectRecord | null;
   readonly sidebarOpen: boolean;
   readonly sidebarTab: SidebarTab;
+  readonly scratchpadRefreshToken: number;
   readonly selectionSnapshot: SelectionSnapshot | null;
   readonly taskType: TaskType;
   readonly onCreateChapter: () => void;
@@ -28,6 +46,7 @@ type WritingPageProps = {
   readonly onSidebarTabChange: (tab: SidebarTab) => void;
   readonly onCloseSidebar: () => void;
   readonly onOpenAiChat: () => void;
+  readonly onOpenScratchpad: () => void;
   readonly onImport: () => void;
   readonly onTask: (task: TaskType, snapshot?: SelectionSnapshot | null) => void;
   readonly onWelcome: () => void;
@@ -41,6 +60,7 @@ export function WritingPage({
   currentProject,
   sidebarOpen,
   sidebarTab,
+  scratchpadRefreshToken,
   selectionSnapshot,
   taskType,
   onCreateChapter,
@@ -50,16 +70,22 @@ export function WritingPage({
   onSidebarTabChange,
   onCloseSidebar,
   onOpenAiChat,
+  onOpenScratchpad,
   onImport,
   onTask,
   onWelcome,
   onSettings
 }: WritingPageProps) {
+  const api = useMemo(getNovelToolApi, []);
   const editorStore = useEditorStore(activeChapter);
   const [editor, setEditor] = useState<Editor | null>(null);
   const [renameChapterDraft, setRenameChapterDraft] = useState<{ id: string; title: string } | null>(null);
   const [renameChapterTitle, setRenameChapterTitle] = useState("");
   const targetWordCount = activeChapter?.targetWordCount ?? 3000;
+  const editorInnerStyle: EditorInnerStyle = {
+    maxWidth: pageWidthBySetting[editorStore.editorSettings.pageWidth] ?? pageWidthBySetting.medium
+  };
+  const editorThemeClass = themeClassBySetting[editorStore.editorSettings.theme] ?? themeClassBySetting.light;
   const flushBeforeNavigation = useCallback(
     (next: () => void) => {
       void editorStore.flushPendingSave().then(next).catch(() => undefined);
@@ -76,6 +102,22 @@ export function WritingPage({
   const handleImport = useCallback(() => flushBeforeNavigation(onImport), [flushBeforeNavigation, onImport]);
   const handleWelcome = useCallback(() => flushBeforeNavigation(onWelcome), [flushBeforeNavigation, onWelcome]);
   const handleSettings = useCallback((category?: SettingsCategory) => flushBeforeNavigation(() => onSettings(category)), [flushBeforeNavigation, onSettings]);
+  const handleSelectionToScratchpad = useCallback(
+    async (snapshot: SelectionSnapshot) => {
+      if (!currentProject) {
+        throw new Error("当前项目不可用，无法加入草稿纸。");
+      }
+
+      await api.scratch.create({
+        projectId: currentProject.id,
+        chapterId: snapshot.chapterId,
+        content: snapshot.text,
+        pinned: false
+      });
+      onOpenScratchpad();
+    },
+    [api, currentProject, onOpenScratchpad]
+  );
   const startChapterRename = useCallback((chapterId: string, currentTitle: string) => {
     setRenameChapterDraft({ id: chapterId, title: currentTitle });
     setRenameChapterTitle(currentTitle);
@@ -108,12 +150,14 @@ export function WritingPage({
       <TopBar
         title={currentProject?.name ?? "我的小说"}
         saveStatus={editorStore.saveStatus}
+        editorSettings={editorStore.editorSettings}
         onImport={handleImport}
+        onEditorSettingsChange={editorStore.updateEditorSettings}
         onWelcome={handleWelcome}
         onSettings={handleSettings}
       />
 
-      <main className={`workspace ${sidebarOpen ? "" : "no-sidebar"}`}>
+      <main className={`workspace ${sidebarOpen ? "" : "no-sidebar"} ${editorThemeClass}`}>
         <LeftChapterTree
           activeChapterId={activeChapterId}
           chapters={chapters}
@@ -125,7 +169,7 @@ export function WritingPage({
 
         <section className="editor-wrap">
           <div className="editor-scroll">
-            <div className="editor-inner">
+            <div className="editor-inner" style={editorInnerStyle}>
               {activeChapter ? (
                 <>
                   <h1 className="chapter-heading">{activeChapter.title}</h1>
@@ -136,7 +180,7 @@ export function WritingPage({
                     editorSettings={editorStore.editorSettings}
                     onContentChange={editorStore.handleContentChange}
                     onEditorReady={setEditor}
-                    onEditorSettingsChange={editorStore.updateEditorSettings}
+                    onSelectionToScratchpad={handleSelectionToScratchpad}
                     onTask={onTask}
                   />
                 </>
@@ -175,6 +219,7 @@ export function WritingPage({
             currentChapterId={activeChapter?.id ?? null}
             currentChapterTitle={activeChapter?.title ?? null}
             currentProjectId={currentProject?.id ?? null}
+            scratchpadRefreshToken={scratchpadRefreshToken}
             selectionSnapshot={selectionSnapshot}
             taskType={taskType}
             editor={editor}

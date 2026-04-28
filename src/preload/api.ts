@@ -1,11 +1,19 @@
-import { ipcRenderer } from "electron";
+import { ipcRenderer, type IpcRendererEvent } from "electron";
 import type {
   AiApplyCandidateInput,
+  AiClearChatInput,
   AiCreateTaskInput,
   AiGeneratePreviewInput,
+  AiGeneratePreviewStreamInput,
+  AiGetChatSessionInput,
+  AiListChatMessagesInput,
   AiRejectCandidateInput,
   AiSaveCandidateToScratchpadInput,
   AiSendChatMessageInput,
+  AiSendChatMessageStreamInput,
+  AiStreamChunkEvent,
+  AiStreamDoneEvent,
+  AiStreamErrorEvent,
   AiUpdateTaskInput,
   ChapterCreateInput,
   ChapterCreateSnapshotInput,
@@ -31,6 +39,12 @@ import type {
   SettingsTestConnectionInput
 } from "../main/shared/types";
 import { ipcChannels } from "../main/shared/types";
+
+type AiStreamHandlers = {
+  readonly onChunk?: (event: AiStreamChunkEvent) => void;
+  readonly onDone?: (event: AiStreamDoneEvent) => void;
+  readonly onError?: (event: AiStreamErrorEvent) => void;
+};
 
 export type NovelToolApi = {
   readonly platform: {
@@ -69,9 +83,15 @@ export type NovelToolApi = {
     readonly createTask: (input: AiCreateTaskInput) => Promise<unknown>;
     readonly updateTask: (input: AiUpdateTaskInput) => Promise<unknown>;
     readonly generatePreview: (input: AiGeneratePreviewInput) => Promise<unknown>;
+    readonly generatePreviewStream: (input: AiGeneratePreviewStreamInput) => Promise<unknown>;
     readonly applyCandidate: (input: AiApplyCandidateInput) => Promise<unknown>;
     readonly saveCandidateToScratchpad: (input: AiSaveCandidateToScratchpadInput) => Promise<unknown>;
     readonly sendChatMessage: (input: AiSendChatMessageInput) => Promise<unknown>;
+    readonly getChatSession: (input: AiGetChatSessionInput) => Promise<unknown>;
+    readonly listChatMessages: (input: AiListChatMessagesInput) => Promise<unknown>;
+    readonly clearChat: (input: AiClearChatInput) => Promise<unknown>;
+    readonly sendChatMessageStream: (input: AiSendChatMessageStreamInput) => Promise<unknown>;
+    readonly subscribeAiStream: (requestId: string, handlers: AiStreamHandlers) => () => void;
     readonly rejectCandidate: (input: AiRejectCandidateInput) => Promise<unknown>;
   };
   readonly scratch: {
@@ -125,9 +145,39 @@ export const novelToolApi: NovelToolApi = Object.freeze({
     createTask: (input: AiCreateTaskInput) => ipcRenderer.invoke(ipcChannels.ai.createTask, input),
     updateTask: (input: AiUpdateTaskInput) => ipcRenderer.invoke(ipcChannels.ai.updateTask, input),
     generatePreview: (input: AiGeneratePreviewInput) => ipcRenderer.invoke(ipcChannels.ai.generatePreview, input),
+    generatePreviewStream: (input: AiGeneratePreviewStreamInput) => ipcRenderer.invoke(ipcChannels.ai.generatePreviewStream, input),
     applyCandidate: (input: AiApplyCandidateInput) => ipcRenderer.invoke(ipcChannels.ai.applyCandidate, input),
     saveCandidateToScratchpad: (input: AiSaveCandidateToScratchpadInput) => ipcRenderer.invoke(ipcChannels.ai.saveCandidateToScratchpad, input),
     sendChatMessage: (input: AiSendChatMessageInput) => ipcRenderer.invoke(ipcChannels.ai.sendChatMessage, input),
+    getChatSession: (input: AiGetChatSessionInput) => ipcRenderer.invoke(ipcChannels.ai.getChatSession, input),
+    listChatMessages: (input: AiListChatMessagesInput) => ipcRenderer.invoke(ipcChannels.ai.listChatMessages, input),
+    clearChat: (input: AiClearChatInput) => ipcRenderer.invoke(ipcChannels.ai.clearChat, input),
+    sendChatMessageStream: (input: AiSendChatMessageStreamInput) => ipcRenderer.invoke(ipcChannels.ai.sendChatMessageStream, input),
+    subscribeAiStream: (requestId: string, handlers: AiStreamHandlers) => {
+      const onChunk = (_event: IpcRendererEvent, payload: AiStreamChunkEvent) => {
+        if (payload.requestId === requestId) {
+          handlers.onChunk?.(payload);
+        }
+      };
+      const onDone = (_event: IpcRendererEvent, payload: AiStreamDoneEvent) => {
+        if (payload.requestId === requestId) {
+          handlers.onDone?.(payload);
+        }
+      };
+      const onError = (_event: IpcRendererEvent, payload: AiStreamErrorEvent) => {
+        if (payload.requestId === requestId) {
+          handlers.onError?.(payload);
+        }
+      };
+      ipcRenderer.on(ipcChannels.ai.streamChunk, onChunk);
+      ipcRenderer.on(ipcChannels.ai.streamDone, onDone);
+      ipcRenderer.on(ipcChannels.ai.streamError, onError);
+      return () => {
+        ipcRenderer.off(ipcChannels.ai.streamChunk, onChunk);
+        ipcRenderer.off(ipcChannels.ai.streamDone, onDone);
+        ipcRenderer.off(ipcChannels.ai.streamError, onError);
+      };
+    },
     rejectCandidate: (input: AiRejectCandidateInput) => ipcRenderer.invoke(ipcChannels.ai.rejectCandidate, input)
   }),
   scratch: Object.freeze({
