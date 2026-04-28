@@ -6,7 +6,7 @@ import StarterKit from "@tiptap/starter-kit";
 import { CharacterCount, Placeholder } from "@tiptap/extensions";
 import { UniqueID } from "@tiptap/extension-unique-id";
 import { countWritingUnits } from "../../main/shared/text";
-import type { EditorSettings, SelectionSnapshot, TaskType } from "../../main/shared/types";
+import type { EditorSettings, SelectionSnapshot, TaskPromptPreset, TaskType } from "../../main/shared/types";
 import { SelectionBubbleMenu } from "./SelectionBubbleMenu";
 import type { TiptapDocument } from "./tiptap/converters";
 import { createParagraphId, ensureParagraphIds } from "./tiptap/paragraph-id";
@@ -17,10 +17,11 @@ export type NovelEditorProps = {
   readonly contentJson: TiptapDocument;
   readonly contentVersion: number;
   readonly editorSettings: EditorSettings;
+  readonly taskPromptPresets: readonly TaskPromptPreset[];
   readonly onContentChange: (contentJson: TiptapDocument) => void;
   readonly onEditorReady?: (editor: Editor | null) => void;
   readonly onSelectionToScratchpad?: (snapshot: SelectionSnapshot) => Promise<void> | void;
-  readonly onTask: (task: TaskType, snapshot?: SelectionSnapshot | null) => void;
+  readonly onTask: (task: TaskType, snapshot?: SelectionSnapshot | null, preset?: TaskPromptPreset | null) => void;
 };
 
 type EditorContentStyle = CSSProperties & {
@@ -55,6 +56,7 @@ export const NovelEditor = memo(function NovelEditor({
   contentJson,
   contentVersion,
   editorSettings,
+  taskPromptPresets,
   onContentChange,
   onEditorReady,
   onSelectionToScratchpad,
@@ -127,13 +129,21 @@ export const NovelEditor = memo(function NovelEditor({
     return () => onEditorReady?.(null);
   }, [editor, onEditorReady]);
 
-  function handleTask(task: TaskType, snapshot: SelectionSnapshot): void {
-    onTask(task, snapshot);
+  function handleTask(task: TaskType, snapshot: SelectionSnapshot, taskPromptPreset?: TaskPromptPreset | null): void {
+    onTask(task, snapshot, taskPromptPreset);
   }
 
   return (
     <>
-      {editor ? <SelectionBubbleMenu chapterId={chapterId} editor={editor} onSelectionToScratchpad={onSelectionToScratchpad} onTask={handleTask} /> : null}
+      {editor ? (
+        <SelectionBubbleMenu
+          chapterId={chapterId}
+          editor={editor}
+          taskPromptPresets={taskPromptPresets}
+          onSelectionToScratchpad={onSelectionToScratchpad}
+          onTask={handleTask}
+        />
+      ) : null}
       <EditorContent editor={editor} className="novel-editor-content" style={editorContentStyle} />
     </>
   );

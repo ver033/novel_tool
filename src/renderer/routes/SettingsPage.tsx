@@ -9,10 +9,11 @@ import {
   X
 } from "@phosphor-icons/react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import type { AiProviderSettingsState, EditorSettings, OpenRouterModelSummary, SettingsSaveInput, SettingsState } from "../../main/shared/types";
+import type { AiProviderSettingsState, EditorSettings, OpenRouterModelSummary, SettingsSaveInput, SettingsState, TaskPromptPreset } from "../../main/shared/types";
 import { Button } from "../components/Button";
 import { IconButton } from "../components/IconButton";
 import { Input } from "../components/Input";
+import { Textarea } from "../components/Textarea";
 import { getNovelToolApi } from "../state/app-store";
 
 export type SettingsCategory = "通用" | "编辑器" | "AI 服务" | "提示词预设" | "导入导出" | "备份与数据" | "快捷键";
@@ -32,6 +33,7 @@ type SettingsFormState = {
   readonly editor: EditorSettings;
   readonly aiProvider: EditableAiProviderSettings;
   readonly projectPath: string;
+  readonly taskPromptPresets: readonly TaskPromptPreset[];
 };
 
 type StatusState = {
@@ -50,11 +52,24 @@ type SettingsContentProps = {
   readonly onAiProviderChange: (patch: Partial<EditableAiProviderSettings>) => void;
   readonly onEditorChange: (patch: Partial<EditorSettings>) => void;
   readonly onProjectPathChange: (projectPath: string) => void;
+  readonly onTaskPromptPresetsChange: (taskPromptPresets: readonly TaskPromptPreset[]) => void;
   readonly onTestConnection: () => void;
 };
 
 const categories: readonly SettingsCategory[] = ["通用", "编辑器", "AI 服务", "提示词预设", "导入导出", "备份与数据", "快捷键"];
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+
+const taskPromptPresetLabels: Record<TaskPromptPreset["taskType"], string> = {
+  polish: "润色",
+  expand: "扩写",
+  continue: "续写"
+};
+
+const builtInPromptPresetDescriptions: readonly [string, string, string][] = [
+  ["基础润色", "润色", "保持事实不变，让语言更顺滑。"],
+  ["细节扩写", "扩写", "补充环境、动作和心理细节。"],
+  ["自然续写", "续写", "承接当前章节语气继续推进。"]
+];
 
 const categoryIcons: Record<SettingsCategory, ReactNode> = {
   通用: <GearSix size={20} />,
@@ -84,7 +99,8 @@ const defaultForm: SettingsFormState = {
     modelName: "openai/gpt-5.2",
     apiKey: ""
   },
-  projectPath: ""
+  projectPath: "",
+  taskPromptPresets: []
 };
 
 function formatError(reason: unknown): string {
@@ -100,7 +116,8 @@ function formFromSettings(settings: SettingsState): SettingsFormState {
       modelName: settings.aiProvider?.modelName ?? defaultForm.aiProvider.modelName,
       apiKey: ""
     },
-    projectPath: settings.projectPath ?? ""
+    projectPath: settings.projectPath ?? "",
+    taskPromptPresets: [...settings.taskPromptPresets]
   };
 }
 
@@ -114,8 +131,16 @@ function buildSaveInput(form: SettingsFormState): SettingsSaveInput {
       modelName: form.aiProvider.modelName.trim(),
       ...(apiKey ? { apiKey } : {})
     },
+    taskPromptPresets: [...form.taskPromptPresets],
     ...(form.projectPath.trim() ? { projectPath: form.projectPath.trim() } : {})
   };
+}
+
+function createTaskPromptPresetId(): string {
+  if (globalThis.crypto?.randomUUID) {
+    return `preset_${globalThis.crypto.randomUUID()}`;
+  }
+  return `preset_${Date.now()}_${Math.random().toString(16).slice(2)}`;
 }
 
 function filterModelSuggestions(models: readonly OpenRouterModelSummary[], query: string): readonly OpenRouterModelSummary[] {
@@ -222,6 +247,13 @@ export function SettingsPage({ activeCategory, onCategoryChange, onWelcome, onCl
     }));
   };
 
+  const updateTaskPromptPresets = (taskPromptPresets: readonly TaskPromptPreset[]) => {
+    setForm((current) => ({
+      ...current,
+      taskPromptPresets
+    }));
+  };
+
   return (
     <div className="settings-page">
       <header className="settings-top">
@@ -259,6 +291,7 @@ export function SettingsPage({ activeCategory, onCategoryChange, onWelcome, onCl
             onAiProviderChange={updateAiProvider}
             onEditorChange={updateEditor}
             onProjectPathChange={(projectPath) => setForm((current) => ({ ...current, projectPath }))}
+            onTaskPromptPresetsChange={updateTaskPromptPresets}
             onTestConnection={testConnection}
           />
           <div className="notice">
@@ -286,8 +319,43 @@ function SettingsContent({
   onAiProviderChange,
   onEditorChange,
   onProjectPathChange,
+  onTaskPromptPresetsChange,
   onTestConnection
 }: SettingsContentProps) {
+  const [newPresetName, setNewPresetName] = useState("");
+  const [newPresetTaskType, setNewPresetTaskType] = useState<TaskPromptPreset["taskType"]>("polish");
+  const [newPresetInstruction, setNewPresetInstruction] = useState("");
+
+  const addTaskPromptPreset = () => {
+    const name = newPresetName.trim();
+    const instruction = newPresetInstruction.trim();
+    if (!name || !instruction) {
+      return;
+    }
+
+    onTaskPromptPresetsChange([
+      ...form.taskPromptPresets,
+      {
+        id: createTaskPromptPresetId(),
+        name,
+        taskType: newPresetTaskType,
+        instruction,
+        showInSelectionMenu: true
+      }
+    ]);
+    setNewPresetName("");
+    setNewPresetTaskType("polish");
+    setNewPresetInstruction("");
+  };
+
+  const updateTaskPromptPreset = (presetId: string, patch: Partial<TaskPromptPreset>) => {
+    onTaskPromptPresetsChange(form.taskPromptPresets.map((preset) => (preset.id === presetId ? { ...preset, ...patch } : preset)));
+  };
+
+  const deleteTaskPromptPreset = (presetId: string) => {
+    onTaskPromptPresetsChange(form.taskPromptPresets.filter((preset) => preset.id !== presetId));
+  };
+
   if (category === "通用") {
     return (
       <div className="settings-grid">
@@ -465,30 +533,79 @@ function SettingsContent({
     return (
       <div className="settings-grid">
         <div className="settings-card">
-          <h3>内置提示词预设</h3>
-          <p className="muted">用于右侧当前任务和 AI 对话的常用写作指令。</p>
-          {[
-            ["基础润色", "保持事实不变，让语言更顺滑。"],
-            ["细节扩写", "补充环境、动作和心理细节。"],
-            ["错漏校对", "列出问题并逐条给出建议。"],
-            ["自然续写", "承接当前章节语气继续推进。"]
-          ].map(([name, desc]) => (
+          <h3>内置任务</h3>
+          <p className="muted">内置任务由系统维护，保证写回方式和输出格式稳定。校对暂不开放自定义预设。</p>
+          {builtInPromptPresetDescriptions.map(([name, taskTypeLabel, desc]) => (
             <div className="detected-row preset-row" key={name}>
               <span>
                 <b>{name}</b>
                 <br />
                 <span className="muted">{desc}</span>
               </span>
-              <span className="tag">内置</span>
+              <span className="tag">{taskTypeLabel}</span>
             </div>
           ))}
         </div>
-        <div className="settings-card">
-          <h3>任务内自定义</h3>
-          <p className="muted">在右侧当前任务中直接编辑自定义要求，生成预览时会使用最新内容。</p>
-          <div className="detected-row simple-row">
-            <span>自定义要求</span>
-            <span className="tag">任务内编辑</span>
+        <div className="settings-card wide">
+          <h3>我的任务预设</h3>
+          <p className="muted">预设只用于选中文字后的润色、扩写、续写。本次任务仍可在右侧面板追加临时要求。</p>
+          {form.taskPromptPresets.length === 0 ? (
+            <div className="empty-inline">还没有自定义预设。可以先添加一个常用润色或扩写指令。</div>
+          ) : (
+            <div className="prompt-preset-list">
+              {form.taskPromptPresets.map((preset) => (
+                <div className="prompt-preset-editor" key={preset.id}>
+                  <div className="prompt-preset-head">
+                    <Input aria-label="预设名称" value={preset.name} onChange={(event) => updateTaskPromptPreset(preset.id, { name: event.target.value })} />
+                    <select
+                      aria-label={`${preset.name} 的任务大类`}
+                      className="input"
+                      value={preset.taskType}
+                      onChange={(event) => updateTaskPromptPreset(preset.id, { taskType: event.target.value as TaskPromptPreset["taskType"] })}
+                    >
+                      <option value="polish">润色</option>
+                      <option value="expand">扩写</option>
+                      <option value="continue">续写</option>
+                    </select>
+                    <button
+                      className={`toggle ${preset.showInSelectionMenu ? "on" : ""}`}
+                      onClick={() => updateTaskPromptPreset(preset.id, { showInSelectionMenu: !preset.showInSelectionMenu })}
+                      type="button"
+                      aria-label={`${preset.name} 是否显示在选区菜单`}
+                    />
+                    <button className="small-button" onClick={() => deleteTaskPromptPreset(preset.id)} type="button">
+                      删除
+                    </button>
+                  </div>
+                  <Textarea
+                    aria-label={`${preset.name} 的预设要求`}
+                    value={preset.instruction}
+                    placeholder="写清楚这类任务的固定要求。"
+                    onChange={(event) => updateTaskPromptPreset(preset.id, { instruction: event.target.value })}
+                  />
+                  <div className="prompt-preset-meta">
+                    <span>{taskPromptPresetLabels[preset.taskType]}</span>
+                    <span>{preset.showInSelectionMenu ? "显示在选中文字 AI 菜单" : "不显示在选中文字 AI 菜单"}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="settings-card wide">
+          <h3>新增预设</h3>
+          <p className="muted">新增后需要点击底部“保存设置”才会写入本地设置。</p>
+          <div className="prompt-preset-new">
+            <Input aria-label="新预设名称" value={newPresetName} placeholder="预设名称，例如：古风润色" onChange={(event) => setNewPresetName(event.target.value)} />
+            <select aria-label="新预设任务大类" className="input" value={newPresetTaskType} onChange={(event) => setNewPresetTaskType(event.target.value as TaskPromptPreset["taskType"])}>
+              <option value="polish">润色</option>
+              <option value="expand">扩写</option>
+              <option value="continue">续写</option>
+            </select>
+            <Textarea aria-label="新预设要求" value={newPresetInstruction} placeholder="预设要求，例如：用更古雅但不晦涩的表达润色选中文本，保持事实不变。" onChange={(event) => setNewPresetInstruction(event.target.value)} />
+            <Button disabled={!newPresetName.trim() || !newPresetInstruction.trim()} onClick={addTaskPromptPreset} variant="secondary">
+              添加预设
+            </Button>
           </div>
         </div>
       </div>

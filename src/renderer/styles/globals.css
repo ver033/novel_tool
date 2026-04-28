@@ -1299,6 +1299,27 @@ select:focus-visible {
   font-weight: 720;
 }
 
+.bubble-dropdown.ai .preset-option {
+  height: auto;
+  min-height: 42px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+}
+
+.bubble-dropdown.ai .preset-option span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bubble-dropdown.ai .preset-option small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 680;
+}
+
 .highlight-swatch {
   width: 16px;
   height: 16px;
@@ -2132,6 +2153,69 @@ select:focus-visible {
   align-items: center;
 }
 
+.empty-inline {
+  min-height: 64px;
+  display: grid;
+  place-items: center;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  color: var(--muted);
+  background: #fbfcfe;
+  font-size: 14px;
+  line-height: 1.6;
+  text-align: center;
+}
+
+.prompt-preset-list {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.prompt-preset-editor {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfe;
+}
+
+.prompt-preset-head {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) 130px 60px 70px;
+  align-items: center;
+  gap: 10px;
+}
+
+.prompt-preset-editor .text-box,
+.prompt-preset-new .text-box {
+  min-height: 96px;
+}
+
+.prompt-preset-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.prompt-preset-new {
+  display: grid;
+  grid-template-columns: minmax(200px, 1fr) 140px;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.prompt-preset-new .text-box {
+  grid-column: 1 / -1;
+}
+
+.prompt-preset-new .secondary-button {
+  justify-self: start;
+}
+
 .shortcut-row {
   grid-template-columns: 1fr 140px;
   align-items: center;
@@ -2231,6 +2315,18 @@ select:focus-visible {
   border-color: #fecaca;
   background: #fff5f5;
   color: #b91c1c;
+}
+
+.inline-error-banner {
+  margin: 0 0 18px;
+  padding: 11px 14px;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  background: #fff5f5;
+  color: #b91c1c;
+  font-size: 14px;
+  font-weight: 640;
+  line-height: 1.6;
 }
 
 .wizard-actions {

@@ -20,13 +20,14 @@ type UseTaskStoreOptions = {
   readonly projectId: string | null;
   readonly chapterId: string | null;
   readonly taskType: TaskType;
+  readonly presetId: string | null;
   readonly selectionSnapshot: SelectionSnapshot | null;
   readonly instruction: string;
   readonly editor: Editor | null;
   readonly flushPendingSave: () => Promise<void>;
 };
 
-export function useTaskStore({ projectId, chapterId, taskType, selectionSnapshot, instruction, editor, flushPendingSave }: UseTaskStoreOptions) {
+export function useTaskStore({ projectId, chapterId, taskType, presetId, selectionSnapshot, instruction, editor, flushPendingSave }: UseTaskStoreOptions) {
   const api = useMemo(getNovelToolApi, []);
   const [task, setTask] = useState<AiTaskRecord | null>(null);
   const [candidate, setCandidate] = useState<AiTaskCandidateRecord | null>(null);
@@ -41,14 +42,14 @@ export function useTaskStore({ projectId, chapterId, taskType, selectionSnapshot
     setError(null);
     setStreamingText("");
     configuredKey.current = null;
-  }, [projectId, chapterId, taskType, selectionSnapshot?.selectionHash]);
+  }, [projectId, chapterId, taskType, presetId, selectionSnapshot?.selectionHash]);
 
   useEffect(() => {
     if (!projectId || !selectionSnapshot) {
       return;
     }
 
-    const nextKey = `${projectId}:${chapterId ?? "none"}:${taskType}:${selectionSnapshot.selectionHash}`;
+    const nextKey = `${projectId}:${chapterId ?? "none"}:${taskType}:${presetId ?? "none"}:${selectionSnapshot.selectionHash}`;
     if (configuredKey.current === nextKey) {
       return;
     }
@@ -63,6 +64,7 @@ export function useTaskStore({ projectId, chapterId, taskType, selectionSnapshot
         taskType,
         inputText: selectionSnapshot.text,
         instruction,
+        ...(presetId ? { presetId } : {}),
         selection: {
           ...selectionSnapshot,
           paragraphIds: [...selectionSnapshot.paragraphIds]
@@ -78,7 +80,7 @@ export function useTaskStore({ projectId, chapterId, taskType, selectionSnapshot
       .finally(() => {
         setBusy(false);
       });
-  }, [api, chapterId, instruction, projectId, selectionSnapshot, taskType]);
+  }, [api, chapterId, instruction, presetId, projectId, selectionSnapshot, taskType]);
 
   const generatePreview = useCallback(async () => {
     if (!task) {
@@ -93,7 +95,8 @@ export function useTaskStore({ projectId, chapterId, taskType, selectionSnapshot
       const updatedTask = (await api.ai.updateTask({
         taskId: task.id,
         patch: {
-          instruction
+          instruction,
+          ...(presetId ? { presetId } : {})
         }
       })) as AiTaskRecord;
       setTask(updatedTask);
@@ -122,7 +125,7 @@ export function useTaskStore({ projectId, chapterId, taskType, selectionSnapshot
       unsubscribe?.();
       setBusy(false);
     }
-  }, [api, instruction, task]);
+  }, [api, instruction, presetId, task]);
 
   const rejectCandidate = useCallback(async () => {
     if (!candidate) {

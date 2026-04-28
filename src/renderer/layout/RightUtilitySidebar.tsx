@@ -1,6 +1,6 @@
 import { X } from "@phosphor-icons/react";
 import type { Editor } from "@tiptap/react";
-import type { SelectionSnapshot } from "../../main/shared/types";
+import type { SelectionSnapshot, TaskPromptPreset } from "../../main/shared/types";
 import { IconButton } from "../components/IconButton";
 import { AiChatTab } from "../sidebar/AiChatTab";
 import { CurrentTaskTab } from "../sidebar/CurrentTaskTab";
@@ -17,6 +17,7 @@ type RightUtilitySidebarProps = {
   readonly currentProjectId: string | null;
   readonly scratchpadRefreshToken: number;
   readonly selectionSnapshot: SelectionSnapshot | null;
+  readonly taskPromptPreset: TaskPromptPreset | null;
   readonly taskType: TaskType;
   readonly editor: Editor | null;
   readonly flushPendingSave: () => Promise<void>;
@@ -40,6 +41,7 @@ export function RightUtilitySidebar({
   flushPendingSave,
   scratchpadRefreshToken,
   selectionSnapshot,
+  taskPromptPreset,
   taskType,
   onTabChange,
   onClose,
@@ -72,6 +74,7 @@ export function RightUtilitySidebar({
             currentChapterTitle={currentChapterTitle}
             projectId={currentProjectId}
             selectionSnapshot={selectionSnapshot}
+            taskPromptPreset={taskPromptPreset}
             taskType={taskType}
             editor={editor}
             flushPendingSave={flushPendingSave}

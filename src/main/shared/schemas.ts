@@ -11,6 +11,7 @@ const tiptapJsonSchema = z
   .passthrough();
 
 export const taskTypeSchema = z.enum(["polish", "expand", "proofread", "continue"]);
+export const promptPresetTaskTypeSchema = z.enum(["polish", "expand", "continue"]);
 
 export const selectionSnapshotSchema = z
   .object({
@@ -133,14 +134,25 @@ export const aiProviderSettingsSchema = z
   })
   .strict();
 
+export const taskPromptPresetSchema = z
+  .object({
+    id: idSchema,
+    name: nonEmptyString.max(80),
+    taskType: promptPresetTaskTypeSchema,
+    instruction: nonEmptyString.max(4000),
+    showInSelectionMenu: z.boolean()
+  })
+  .strict();
+
 export const settingsSaveInputSchema = z
   .object({
     editor: editorSettingsSchema.optional(),
     aiProvider: aiProviderSettingsSchema.optional(),
-    projectPath: z.string().trim().min(1).optional()
+    projectPath: z.string().trim().min(1).optional(),
+    taskPromptPresets: z.array(taskPromptPresetSchema).max(100).optional()
   })
   .strict()
-  .refine((value) => Boolean(value.editor ?? value.aiProvider ?? value.projectPath), {
+  .refine((value) => Boolean(value.editor ?? value.aiProvider ?? value.projectPath ?? value.taskPromptPresets), {
     message: "at least one settings section is required"
   });
 

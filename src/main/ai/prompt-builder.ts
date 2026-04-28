@@ -1,5 +1,5 @@
 import { proofreadIssueTypes, proofreadResultSchema, type ProofreadIssue } from "../shared/proofread";
-import type { AiTaskRecord } from "../shared/types";
+import type { AiTaskRecord, TaskPromptPreset } from "../shared/types";
 import type { OpenRouterMessage, OpenRouterReasoningConfig, OpenRouterResponseFormat } from "./openrouter-client";
 
 type BuiltPrompt = {
@@ -14,6 +14,10 @@ type GeneratedCandidateText = {
   readonly generatedText: string;
   readonly changeSummary: string | null;
   readonly proofreadIssues?: readonly ProofreadIssue[];
+};
+
+type PromptBuildContext = {
+  readonly taskPreset?: TaskPromptPreset | null;
 };
 
 const defaultReasoning: OpenRouterReasoningConfig = {
@@ -112,7 +116,7 @@ function systemPromptFor(task: AiTaskRecord): string {
   ].join("\n");
 }
 
-function userPromptFor(task: AiTaskRecord): string {
+function userPromptFor(task: AiTaskRecord, context: PromptBuildContext): string {
   const customInstruction = task.instruction?.trim() || "无";
   const taskLabel = {
     polish: "润色",
@@ -120,6 +124,9 @@ function userPromptFor(task: AiTaskRecord): string {
     proofread: "校对",
     continue: "续写"
   }[task.taskType];
+  const presetLines = context.taskPreset
+    ? [`任务预设：${context.taskPreset.name}`, `预设要求：${context.taskPreset.instruction}`]
+    : [];
 
   return [
     `任务：${taskLabel}`,
@@ -129,17 +136,18 @@ function userPromptFor(task: AiTaskRecord): string {
     "3. 不改变时间地点。",
     "4. 不改变叙事视角。",
     "5. 不新增关键剧情结论。",
-    `额外要求：${customInstruction}`,
+    ...presetLines,
+    `本次要求：${customInstruction}`,
     "文本：",
     task.inputText
   ].join("\n");
 }
 
-export function buildAiTaskPrompt(task: AiTaskRecord): BuiltPrompt {
+export function buildAiTaskPrompt(task: AiTaskRecord, context: PromptBuildContext = {}): BuiltPrompt {
   const base = {
     messages: [
       { role: "system", content: systemPromptFor(task) },
-      { role: "user", content: userPromptFor(task) }
+      { role: "user", content: userPromptFor(task, context) }
     ] satisfies readonly OpenRouterMessage[]
   };
 

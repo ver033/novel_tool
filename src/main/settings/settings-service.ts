@@ -1,9 +1,19 @@
 import { SettingsRepository } from "../db/repositories/settings-repo";
-import type { AiProviderSettingsState, EditorSettings, OpenRouterModelSummary, SettingsListModelsInput, SettingsSaveInput, SettingsState } from "../shared/types";
+import type {
+  AiProviderSettingsState,
+  EditorSettings,
+  OpenRouterModelSummary,
+  SettingsListModelsInput,
+  SettingsSaveInput,
+  SettingsState,
+  TaskPromptPreset,
+  TaskType
+} from "../shared/types";
 
 const EDITOR_SETTINGS_KEY = "editor";
 const AI_PROVIDER_SETTINGS_KEY = "aiProvider";
 const PROJECT_PATH_SETTINGS_KEY = "projectPath";
+const TASK_PROMPT_PRESETS_SETTINGS_KEY = "taskPromptPresets";
 export const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 
 const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
@@ -88,6 +98,47 @@ function sanitizeAiProvider(settings: StoredAiProviderSettings | null): AiProvid
   };
 }
 
+function normalizeTaskPromptPresets(presets: readonly TaskPromptPreset[]): TaskPromptPreset[] {
+  const seenIds = new Set<string>();
+  return presets.map((preset) => {
+    const id = preset.id.trim();
+    const name = preset.name.trim();
+    const instruction = preset.instruction.trim();
+    if (!id) {
+      throw new Error("提示词预设 ID 不能为空。");
+    }
+    if (!name) {
+      throw new Error("提示词预设名称不能为空。");
+    }
+    if (!instruction) {
+      throw new Error("提示词预设要求不能为空。");
+    }
+    if (!["polish", "expand", "continue"].includes(preset.taskType)) {
+      throw new Error("提示词预设只支持润色、扩写、续写。");
+    }
+    if (seenIds.has(id)) {
+      throw new Error("提示词预设 ID 重复。");
+    }
+    seenIds.add(id);
+    return {
+      id,
+      name,
+      taskType: preset.taskType,
+      instruction,
+      showInSelectionMenu: preset.showInSelectionMenu
+    };
+  });
+}
+
+function taskTypeLabel(taskType: TaskType): string {
+  return {
+    polish: "润色",
+    expand: "扩写",
+    proofread: "校对",
+    continue: "续写"
+  }[taskType];
+}
+
 export class SettingsService {
   private readonly secretStore: SecretStore;
   private readonly connectionTester: OpenRouterConnectionTester;
@@ -110,7 +161,8 @@ export class SettingsService {
         ...savedEditor
       },
       aiProvider: sanitizeAiProvider(this.settingsRepo.getJson<StoredAiProviderSettings>(AI_PROVIDER_SETTINGS_KEY)),
-      projectPath: this.settingsRepo.getJson<string>(PROJECT_PATH_SETTINGS_KEY)
+      projectPath: this.settingsRepo.getJson<string>(PROJECT_PATH_SETTINGS_KEY),
+      taskPromptPresets: this.listTaskPromptPresets()
     };
   }
 
@@ -139,7 +191,31 @@ export class SettingsService {
       this.settingsRepo.setJson(PROJECT_PATH_SETTINGS_KEY, input.projectPath);
     }
 
+    if (input.taskPromptPresets !== undefined) {
+      this.settingsRepo.setJson(TASK_PROMPT_PRESETS_SETTINGS_KEY, normalizeTaskPromptPresets(input.taskPromptPresets));
+    }
+
     return this.getSettings();
+  }
+
+  listTaskPromptPresets(): TaskPromptPreset[] {
+    return normalizeTaskPromptPresets(this.settingsRepo.getJson<TaskPromptPreset[]>(TASK_PROMPT_PRESETS_SETTINGS_KEY) ?? []);
+  }
+
+  getTaskPromptPresetForTask(presetId: string | null | undefined, taskType: TaskType): TaskPromptPreset | null {
+    if (!presetId) {
+      return null;
+    }
+
+    const preset = this.listTaskPromptPresets().find((item) => item.id === presetId);
+    if (!preset) {
+      throw new Error(`提示词预设不存在：${presetId}。`);
+    }
+    if (preset.taskType !== taskType) {
+      throw new Error(`提示词预设“${preset.name}”不适用于${taskTypeLabel(taskType)}任务。`);
+    }
+
+    return preset;
   }
 
   getOpenRouterConfig(override?: SettingsSaveInput["aiProvider"]): OpenRouterRuntimeConfig {

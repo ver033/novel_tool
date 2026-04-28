@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type MouseEvent, type ReactNode } from "react";
+import { useMemo, useState, type FormEvent, type MouseEvent, type ReactNode } from "react";
 import {
   CaretDown,
   Code,
@@ -21,7 +21,7 @@ import {
 } from "@phosphor-icons/react";
 import type { useEditor } from "@tiptap/react";
 import { BubbleMenu } from "@tiptap/react/menus";
-import type { SelectionSnapshot, TaskType } from "../../main/shared/types";
+import type { SelectionSnapshot, TaskPromptPreset, TaskType } from "../../main/shared/types";
 import { createSelectionSnapshotFromEditor } from "./tiptap/selection-utils";
 import type { TextAlignValue } from "./tiptap/text-align";
 
@@ -30,8 +30,9 @@ type EditorInstance = NonNullable<ReturnType<typeof useEditor>>;
 type SelectionBubbleMenuProps = {
   readonly chapterId: string | null;
   readonly editor: EditorInstance;
+  readonly taskPromptPresets: readonly TaskPromptPreset[];
   readonly onSelectionToScratchpad?: (snapshot: SelectionSnapshot) => Promise<void> | void;
-  readonly onTask: (task: TaskType, snapshot: SelectionSnapshot) => void;
+  readonly onTask: (task: TaskType, snapshot: SelectionSnapshot, preset?: TaskPromptPreset | null) => void;
 };
 
 type ActiveMenu = "ai" | "block" | "align" | "highlight" | "more" | null;
@@ -42,6 +43,12 @@ const aiTasks: readonly [TaskType, string][] = [
   ["proofread", "校对"],
   ["continue", "续写"]
 ];
+
+const presetTaskLabels: Record<TaskPromptPreset["taskType"], string> = {
+  polish: "润色",
+  expand: "扩写",
+  continue: "续写"
+};
 
 const fontSizeOptions = ["14px", "16px", "18px", "20px"] as const;
 
@@ -79,7 +86,7 @@ function isTextAlignActive(editor: EditorInstance, value: TextAlignValue): boole
   return editor.isActive("paragraph", { textAlign: value }) || editor.isActive("heading", { textAlign: value });
 }
 
-export function SelectionBubbleMenu({ chapterId, editor, onSelectionToScratchpad, onTask }: SelectionBubbleMenuProps) {
+export function SelectionBubbleMenu({ chapterId, editor, taskPromptPresets, onSelectionToScratchpad, onTask }: SelectionBubbleMenuProps) {
   const [activeMenu, setActiveMenu] = useState<ActiveMenu>(null);
   const [linkOpen, setLinkOpen] = useState(false);
   const [linkDraft, setLinkDraft] = useState("");
@@ -100,7 +107,17 @@ export function SelectionBubbleMenu({ chapterId, editor, onSelectionToScratchpad
     }
 
     setActiveMenu(null);
-    onTask(task, snapshot);
+    onTask(task, snapshot, null);
+  }
+
+  function runAiPreset(taskPromptPreset: TaskPromptPreset): void {
+    const snapshot = createSelectionSnapshotFromEditor(editor, chapterId);
+    if (!snapshot) {
+      return;
+    }
+
+    setActiveMenu(null);
+    onTask(taskPromptPreset.taskType, snapshot, taskPromptPreset);
   }
 
   function runCommand(command: () => void): void {
@@ -164,6 +181,10 @@ export function SelectionBubbleMenu({ chapterId, editor, onSelectionToScratchpad
 
   const blockActiveLabel = editor.isActive("heading", { level: 1 }) ? "标题 1" : editor.isActive("heading", { level: 2 }) ? "标题 2" : "段落";
   const currentFontSize = (editor.getAttributes("textStyle").fontSize as string | undefined) ?? "16px";
+  const visibleTaskPromptPresets = useMemo(
+    () => taskPromptPresets.filter((preset) => preset.showInSelectionMenu),
+    [taskPromptPresets]
+  );
 
   return (
     <BubbleMenu
@@ -189,6 +210,17 @@ export function SelectionBubbleMenu({ chapterId, editor, onSelectionToScratchpad
                 {label}
               </button>
             ))}
+            {visibleTaskPromptPresets.length > 0 ? (
+              <>
+                <span className="dropdown-label">我的预设</span>
+                {visibleTaskPromptPresets.map((taskPromptPreset) => (
+                  <button className="preset-option" key={taskPromptPreset.id} onClick={() => runAiPreset(taskPromptPreset)} onMouseDown={keepSelection} type="button">
+                    <span>{taskPromptPreset.name}</span>
+                    <small>{presetTaskLabels[taskPromptPreset.taskType]}</small>
+                  </button>
+                ))}
+              </>
+            ) : null}
           </span>
         ) : null}
       </span>

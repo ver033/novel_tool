@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, type CSSProperties, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type CSSProperties, type FormEvent } from "react";
 import type { Editor } from "@tiptap/react";
 import { Button } from "../components/Button";
 import { Input } from "../components/Input";
@@ -11,7 +11,7 @@ import { TopBar } from "../layout/TopBar";
 import { getNovelToolApi } from "../state/app-store";
 import { useEditorStore } from "../state/editor-store";
 import type { SettingsCategory } from "./SettingsPage";
-import type { ChapterSummary, ProjectRecord, SelectionSnapshot } from "../../main/shared/types";
+import type { ChapterSummary, ProjectRecord, SelectionSnapshot, TaskPromptPreset } from "../../main/shared/types";
 
 type EditorInnerStyle = CSSProperties & {
   readonly maxWidth: string;
@@ -38,6 +38,7 @@ type WritingPageProps = {
   readonly sidebarTab: SidebarTab;
   readonly scratchpadRefreshToken: number;
   readonly selectionSnapshot: SelectionSnapshot | null;
+  readonly taskPromptPreset: TaskPromptPreset | null;
   readonly taskType: TaskType;
   readonly onCreateChapter: () => void;
   readonly onDeleteChapter: (chapterId: string) => void;
@@ -48,7 +49,7 @@ type WritingPageProps = {
   readonly onOpenAiChat: () => void;
   readonly onOpenScratchpad: () => void;
   readonly onImport: () => void;
-  readonly onTask: (task: TaskType, snapshot?: SelectionSnapshot | null) => void;
+  readonly onTask: (task: TaskType, snapshot?: SelectionSnapshot | null, preset?: TaskPromptPreset | null) => void;
   readonly onWelcome: () => void;
   readonly onSettings: (category?: SettingsCategory) => void;
 };
@@ -62,6 +63,7 @@ export function WritingPage({
   sidebarTab,
   scratchpadRefreshToken,
   selectionSnapshot,
+  taskPromptPreset,
   taskType,
   onCreateChapter,
   onDeleteChapter,
@@ -79,6 +81,8 @@ export function WritingPage({
   const api = useMemo(getNovelToolApi, []);
   const editorStore = useEditorStore(activeChapter);
   const [editor, setEditor] = useState<Editor | null>(null);
+  const [taskPromptPresets, setTaskPromptPresets] = useState<TaskPromptPreset[]>([]);
+  const [taskPromptPresetError, setTaskPromptPresetError] = useState<string | null>(null);
   const [renameChapterDraft, setRenameChapterDraft] = useState<{ id: string; title: string } | null>(null);
   const [renameChapterTitle, setRenameChapterTitle] = useState("");
   const targetWordCount = activeChapter?.targetWordCount ?? 3000;
@@ -92,6 +96,28 @@ export function WritingPage({
     },
     [editorStore]
   );
+  useEffect(() => {
+    let cancelled = false;
+    void api.settings
+      .get()
+      .then((settings) => {
+        if (!cancelled) {
+          const presets = (settings as { taskPromptPresets?: readonly TaskPromptPreset[] }).taskPromptPresets ?? [];
+          setTaskPromptPresets([...presets]);
+          setTaskPromptPresetError(null);
+        }
+      })
+      .catch((reason: unknown) => {
+        if (!cancelled) {
+          setTaskPromptPresets([]);
+          setTaskPromptPresetError(reason instanceof Error ? reason.message : String(reason));
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [api]);
   const handleCreateChapter = useCallback(() => flushBeforeNavigation(onCreateChapter), [flushBeforeNavigation, onCreateChapter]);
   const handleSelectChapter = useCallback(
     (chapterId: string) => {
@@ -170,6 +196,11 @@ export function WritingPage({
         <section className="editor-wrap">
           <div className="editor-scroll">
             <div className="editor-inner" style={editorInnerStyle}>
+              {taskPromptPresetError ? (
+                <div className="inline-error-banner" role="alert">
+                  提示词预设加载失败：{taskPromptPresetError}
+                </div>
+              ) : null}
               {activeChapter ? (
                 <>
                   <h1 className="chapter-heading">{activeChapter.title}</h1>
@@ -178,6 +209,7 @@ export function WritingPage({
                     contentJson={editorStore.contentJson}
                     contentVersion={editorStore.contentVersion}
                     editorSettings={editorStore.editorSettings}
+                    taskPromptPresets={taskPromptPresets}
                     onContentChange={editorStore.handleContentChange}
                     onEditorReady={setEditor}
                     onSelectionToScratchpad={handleSelectionToScratchpad}
@@ -221,6 +253,7 @@ export function WritingPage({
             currentProjectId={currentProject?.id ?? null}
             scratchpadRefreshToken={scratchpadRefreshToken}
             selectionSnapshot={selectionSnapshot}
+            taskPromptPreset={taskPromptPreset}
             taskType={taskType}
             editor={editor}
             flushPendingSave={editorStore.flushPendingSave}

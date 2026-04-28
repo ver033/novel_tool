@@ -35,11 +35,13 @@ import type {
   scratchUpdateInputSchema,
   settingsSaveInputSchema,
   settingsListModelsInputSchema,
-  settingsTestConnectionInputSchema
+  settingsTestConnectionInputSchema,
+  taskPromptPresetSchema
 } from "./schemas";
 import type { ProofreadIssue } from "./proofread";
 
 export type TaskType = "polish" | "expand" | "proofread" | "continue";
+export type PromptPresetTaskType = "polish" | "expand" | "continue";
 export type AiTaskStatus = "empty" | "configured" | "generating" | "preview_ready" | "failed" | "applied" | "inserted" | "saved_to_scratchpad";
 export type CandidateStatus = "preview" | "applied" | "inserted" | "rejected" | "copied" | "inserted_to_scratchpad";
 export type AiChatSessionStatus = "active" | "deleted";
@@ -209,7 +211,10 @@ export type SettingsState = {
   readonly editor: EditorSettings;
   readonly aiProvider: AiProviderSettingsState | null;
   readonly projectPath: string | null;
+  readonly taskPromptPresets: readonly TaskPromptPreset[];
 };
+
+export type TaskPromptPreset = z.output<typeof taskPromptPresetSchema>;
 
 export type OpenRouterModelSummary = {
   readonly id: string;

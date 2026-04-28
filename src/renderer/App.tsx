@@ -7,7 +7,7 @@ import { SettingsPage, type SettingsCategory } from "./routes/SettingsPage";
 import { WelcomePage } from "./routes/WelcomePage";
 import { WritingPage } from "./routes/WritingPage";
 import { useAppStore } from "./state/app-store";
-import type { ImportConfirmResult, SelectionSnapshot } from "../main/shared/types";
+import type { ImportConfirmResult, SelectionSnapshot, TaskPromptPreset } from "../main/shared/types";
 
 type Page = "welcome" | "writing" | "settings" | "import";
 type ImportReturnPage = "welcome" | "writing";
@@ -20,6 +20,7 @@ export function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>("task");
   const [taskType, setTaskType] = useState<TaskType>("polish");
+  const [taskPromptPreset, setTaskPromptPreset] = useState<TaskPromptPreset | null>(null);
   const [selectionSnapshot, setSelectionSnapshot] = useState<SelectionSnapshot | null>(null);
   const [settingsCategory, setSettingsCategory] = useState<SettingsCategory>("通用");
   const [importStep, setImportStep] = useState(1);
@@ -104,8 +105,9 @@ export function App() {
     setSidebarTab("scratch");
     setScratchpadRefreshToken((current) => current + 1);
   }, []);
-  const runTask = useCallback((task: TaskType, snapshot?: SelectionSnapshot | null) => {
+  const runTask = useCallback((task: TaskType, snapshot?: SelectionSnapshot | null, preset?: TaskPromptPreset | null) => {
     setTaskType(task);
+    setTaskPromptPreset(preset ?? null);
     setSelectionSnapshot(snapshot ?? null);
     setSidebarOpen(true);
     setSidebarTab("task");
@@ -159,6 +161,7 @@ export function App() {
           sidebarTab={sidebarTab}
           scratchpadRefreshToken={scratchpadRefreshToken}
           selectionSnapshot={selectionSnapshot}
+          taskPromptPreset={taskPromptPreset}
           taskType={taskType}
           onCreateChapter={createChapter}
           onDeleteChapter={deleteChapter}

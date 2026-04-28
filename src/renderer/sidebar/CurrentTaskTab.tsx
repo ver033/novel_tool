@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Editor } from "@tiptap/react";
 import type { ProofreadIssue } from "../../main/shared/proofread";
-import type { SelectionSnapshot, TaskType } from "../../main/shared/types";
+import type { SelectionSnapshot, TaskPromptPreset, TaskType } from "../../main/shared/types";
 import { Button } from "../components/Button";
 import { Textarea } from "../components/Textarea";
 import type { SettingsCategory } from "../routes/SettingsPage";
@@ -13,6 +13,7 @@ type CurrentTaskTabProps = {
   readonly currentChapterTitle: string | null;
   readonly projectId: string | null;
   readonly selectionSnapshot: SelectionSnapshot | null;
+  readonly taskPromptPreset: TaskPromptPreset | null;
   readonly taskType: TaskType;
   readonly editor: Editor | null;
   readonly flushPendingSave: () => Promise<void>;
@@ -25,6 +26,10 @@ const defaultInstruction: Record<TaskType, string> = {
   proofread: "请检查错别字、病句、重复表达和表达不顺。",
   continue: "请自然衔接后续剧情，不要突然跳转视角。"
 };
+
+function initialInstructionForTask(taskType: TaskType, taskPromptPreset: TaskPromptPreset | null): string {
+  return taskPromptPreset ? "" : defaultInstruction[taskType];
+}
 
 function applyModeForTask(taskType: TaskType) {
   if (taskType === "expand") {
@@ -94,15 +99,25 @@ function formatProofreadIssueDraft(issue: ProofreadIssue): string {
   ].join("\n");
 }
 
-export function CurrentTaskTab({ chapterId, currentChapterTitle, projectId, selectionSnapshot, taskType, editor, flushPendingSave, onOpenSettings }: CurrentTaskTabProps) {
-  const [instruction, setInstruction] = useState(defaultInstruction[taskType]);
+export function CurrentTaskTab({
+  chapterId,
+  currentChapterTitle,
+  projectId,
+  selectionSnapshot,
+  taskPromptPreset,
+  taskType,
+  editor,
+  flushPendingSave,
+  onOpenSettings
+}: CurrentTaskTabProps) {
+  const [instruction, setInstruction] = useState(initialInstructionForTask(taskType, taskPromptPreset));
   const [copiedIssueIndex, setCopiedIssueIndex] = useState<number | null>(null);
   const [copyError, setCopyError] = useState<string | null>(null);
   useEffect(() => {
-    setInstruction(defaultInstruction[taskType]);
+    setInstruction(initialInstructionForTask(taskType, taskPromptPreset));
     setCopiedIssueIndex(null);
     setCopyError(null);
-  }, [taskType, selectionSnapshot?.selectionHash]);
+  }, [taskType, taskPromptPreset?.id, selectionSnapshot?.selectionHash]);
 
   const selectedText = selectionSnapshot?.text ?? "请先在正文中选中文本，再从选区工具条选择 AI 任务。";
   const label = taskLabels[taskType];
@@ -110,6 +125,7 @@ export function CurrentTaskTab({ chapterId, currentChapterTitle, projectId, sele
     projectId,
     chapterId,
     taskType,
+    presetId: taskPromptPreset?.id ?? null,
     selectionSnapshot,
     instruction,
     editor,
@@ -171,7 +187,7 @@ export function CurrentTaskTab({ chapterId, currentChapterTitle, projectId, sele
         </div>
         {errorPanel}
         {copyErrorPanel}
-        <label className="field-label">自定义要求</label>
+        <label className="field-label">本次要求</label>
         <Textarea value={instruction} onChange={(event) => setInstruction(event.target.value)} />
         <label className="field-label">原文节选</label>
         <div className="preview-box">{selectedText}</div>
@@ -237,6 +253,7 @@ export function CurrentTaskTab({ chapterId, currentChapterTitle, projectId, sele
     <div className="task-card">
       <h2 className="task-title">
         当前任务 <span className="mini-tag">{label}</span>
+        {taskPromptPreset ? <span className="mini-tag">{taskPromptPreset.name}</span> : null}
       </h2>
       <div className="task-meta">
         <div>状态：{statusText}</div>
@@ -244,8 +261,18 @@ export function CurrentTaskTab({ chapterId, currentChapterTitle, projectId, sele
         <div>目标：当前选区</div>
       </div>
       {errorPanel}
-      <label className="field-label">自定义要求</label>
-      <Textarea value={instruction} onChange={(event) => setInstruction(event.target.value)} />
+      {taskPromptPreset ? (
+        <>
+          <label className="field-label">预设要求</label>
+          <div className="preview-box preset-preview">{taskPromptPreset.instruction}</div>
+        </>
+      ) : null}
+      <label className="field-label">本次要求</label>
+      <Textarea
+        value={instruction}
+        placeholder={taskPromptPreset ? "可选：只补充这一次任务的要求，不会改动预设。" : undefined}
+        onChange={(event) => setInstruction(event.target.value)}
+      />
       <label className="field-label">原文节选</label>
       <div className="preview-box">{selectedText}</div>
       <label className="field-label">预览结果</label>

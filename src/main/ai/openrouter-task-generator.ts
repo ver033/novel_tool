@@ -21,7 +21,8 @@ export class OpenRouterTaskGenerator implements AiTaskGenerator {
 
   async generate(task: AiTaskRecord): Promise<AiTaskGenerationResult> {
     const config = this.settingsService.getOpenRouterConfig();
-    const prompt = buildAiTaskPrompt(task);
+    const taskPreset = this.settingsService.getTaskPromptPresetForTask(task.presetId, task.taskType);
+    const prompt = buildAiTaskPrompt(task, { taskPreset });
     const client = new OpenRouterClient({
       apiKey: config.apiKey,
       modelName: config.modelName
@@ -44,7 +45,8 @@ export class OpenRouterTaskGenerator implements AiTaskGenerator {
 
   async generateStream(task: AiTaskRecord, handlers: AiTaskStreamHandlers): Promise<AiTaskGenerationResult> {
     const config = this.settingsService.getOpenRouterConfig();
-    const prompt = buildAiTaskPrompt(task);
+    const taskPreset = this.settingsService.getTaskPromptPresetForTask(task.presetId, task.taskType);
+    const prompt = buildAiTaskPrompt(task, { taskPreset });
     const client = new OpenRouterClient({
       apiKey: config.apiKey,
       modelName: config.modelName
