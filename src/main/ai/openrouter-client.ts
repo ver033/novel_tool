@@ -1,4 +1,5 @@
 import axios from "axios";
+import { StringDecoder } from "node:string_decoder";
 import type { OpenRouterModelSummary } from "../shared/types";
 import { parseOpenRouterSsePayload } from "./openrouter-stream-parser";
 
@@ -29,6 +30,7 @@ export type OpenRouterHttpRequest = {
   readonly url: string;
   readonly headers: Record<string, string>;
   readonly body: Record<string, unknown>;
+  readonly signal?: AbortSignal;
 };
 
 export type OpenRouterHttpGetRequest = {
@@ -51,10 +53,12 @@ export type OpenRouterChatCompletionInput = {
   readonly responseFormat?: OpenRouterResponseFormat;
   readonly reasoning?: OpenRouterReasoningConfig;
   readonly allowEmptyContent?: boolean;
+  readonly signal?: AbortSignal;
 };
 
 export type OpenRouterChatCompletionResult = {
   readonly content: string;
+  readonly truncated: boolean;
 };
 
 export type OpenRouterStreamHandlers = {
@@ -69,7 +73,10 @@ function isObject(value: unknown): value is Record<string, unknown> {
 }
 
 function redactSecrets(message: string, apiKey: string): string {
-  return message.replaceAll(apiKey, "[REDACTED]").replace(/sk-or-v1-[A-Za-z0-9._-]+/g, "[REDACTED]");
+  return message
+    .replaceAll(apiKey, "[REDACTED]")
+    .replace(/sk-or-v1-[A-Za-z0-9._-]+/g, "[REDACTED]")
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/g, "Bearer [REDACTED]");
 }
 
 function extractProviderMessage(error: unknown): { readonly status?: number; readonly message: string } {
@@ -136,6 +143,16 @@ function withProviderMetadata(message: string, metadata: unknown): string {
   return details.length > 0 ? `${message}；${details.join("；")}` : message;
 }
 
+function formatOpenRouterRequestError(provider: { readonly status?: number; readonly message: string }, apiKey: string): string {
+  const suffix = provider.status ? ` (${provider.status})` : "";
+  const message = redactSecrets(provider.message, apiKey);
+  if (provider.status === 429) {
+    return `OpenRouter 请求失败${suffix}：上游 Provider 限流或暂时不可用。请稍后重试，或在设置中换用其他模型。原始错误：${message}`;
+  }
+
+  return `OpenRouter 请求失败${suffix}：${message}`;
+}
+
 function getChoiceError(choice: Record<string, unknown>): string | null {
   const error = choice.error;
   if (!isObject(error)) {
@@ -151,7 +168,7 @@ function getFinishReason(choice: Record<string, unknown>): string {
   return typeof choice.finish_reason === "string" ? choice.finish_reason : "unknown";
 }
 
-function parseContent(response: unknown, allowEmptyContent: boolean): string {
+function parseCompletionResponse(response: unknown, allowEmptyContent: boolean): OpenRouterChatCompletionResult {
   if (!isObject(response) || !Array.isArray(response.choices)) {
     throw new Error("OpenRouter 响应缺少 choices。");
   }
@@ -170,13 +187,14 @@ function parseContent(response: unknown, allowEmptyContent: boolean): string {
     throw new Error("OpenRouter 响应缺少 choices[0].message。");
   }
 
+  const truncated = getFinishReason(firstChoice) === "length";
   const content = firstChoice.message.content;
   if (typeof content === "string") {
-    return content;
+    return { content, truncated };
   }
 
-  if (allowEmptyContent && (content === null || content === undefined)) {
-    return "";
+  if ((allowEmptyContent || truncated) && (content === null || content === undefined)) {
+    return { content: "", truncated };
   }
 
   throw new Error(`OpenRouter 响应没有文本内容（finish_reason: ${getFinishReason(firstChoice)}）。`);
@@ -185,7 +203,8 @@ function parseContent(response: unknown, allowEmptyContent: boolean): string {
 async function defaultHttpPost(request: OpenRouterHttpRequest): Promise<unknown> {
   const response = await axios.post(request.url, request.body, {
     headers: request.headers,
-    timeout: 60_000
+    timeout: 60_000,
+    signal: request.signal
   });
   return response.data;
 }
@@ -194,7 +213,8 @@ async function defaultHttpStreamPost(request: OpenRouterHttpRequest): Promise<Op
   const response = await axios.post(request.url, request.body, {
     headers: request.headers,
     timeout: 60_000,
-    responseType: "stream"
+    responseType: "stream",
+    signal: request.signal
   });
   return response.data as OpenRouterHttpStream;
 }
@@ -262,20 +282,18 @@ export class OpenRouterClient {
         "Content-Type": "application/json",
         "X-OpenRouter-Title": "MoShu"
       },
-      body
+      body,
+      signal: input.signal
     };
   }
 
   async createChatCompletion(input: OpenRouterChatCompletionInput): Promise<OpenRouterChatCompletionResult> {
     const request = this.buildChatCompletionRequest(input, false);
     try {
-      return {
-        content: parseContent(await this.httpPost(request), Boolean(input.allowEmptyContent))
-      };
+      return parseCompletionResponse(await this.httpPost(request), Boolean(input.allowEmptyContent));
     } catch (error) {
       const provider = extractProviderMessage(error);
-      const suffix = provider.status ? ` (${provider.status})` : "";
-      throw new Error(`OpenRouter 请求失败${suffix}：${redactSecrets(provider.message, this.options.apiKey)}`);
+      throw new Error(formatOpenRouterRequestError(provider, this.options.apiKey));
     }
   }
 
@@ -283,11 +301,13 @@ export class OpenRouterClient {
     const request = this.buildChatCompletionRequest(input, true);
     let buffer = "";
     let content = "";
+    let truncated = false;
+    const decoder = new StringDecoder("utf8");
 
     try {
       const stream = await this.httpStreamPost(request);
       for await (const chunk of stream) {
-        buffer += typeof chunk === "string" ? chunk : chunk.toString("utf8");
+        buffer += typeof chunk === "string" ? chunk : decoder.write(chunk);
         const blocks = buffer.split(/\r?\n\r?\n/);
         buffer = blocks.pop() ?? "";
         const events = parseOpenRouterSsePayload(blocks.map((block) => `${block}\n\n`).join(""));
@@ -300,9 +320,13 @@ export class OpenRouterClient {
           if (event.type === "error") {
             throw new Error(event.message);
           }
+          if (event.type === "truncated") {
+            truncated = true;
+          }
         }
       }
 
+      buffer += decoder.end();
       if (buffer.trim()) {
         const events = parseOpenRouterSsePayload(`${buffer}\n\n`);
         for (const event of events) {
@@ -313,14 +337,16 @@ export class OpenRouterClient {
           if (event.type === "error") {
             throw new Error(event.message);
           }
+          if (event.type === "truncated") {
+            truncated = true;
+          }
         }
       }
 
-      return { content };
+      return { content, truncated };
     } catch (error) {
       const provider = extractProviderMessage(error);
-      const suffix = provider.status ? ` (${provider.status})` : "";
-      throw new Error(`OpenRouter 请求失败${suffix}：${redactSecrets(provider.message, this.options.apiKey)}`);
+      throw new Error(formatOpenRouterRequestError(provider, this.options.apiKey));
     }
   }
 }

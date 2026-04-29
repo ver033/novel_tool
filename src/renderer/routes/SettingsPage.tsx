@@ -216,14 +216,28 @@ export function SettingsPage({ activeCategory, onCategoryChange, onWelcome, onCl
     setStatus({ kind: "testing", message: "正在测试 AI 连接" });
     try {
       await api.settings.testConnection({ aiProvider: buildSaveInput(form).aiProvider });
+    } catch (reason) {
+      setStatus({ kind: "error", message: `连接测试失败：${formatError(reason)}` });
+      return;
+    }
+
+    setStatus({ kind: "saving", message: "连接测试通过，正在保存设置" });
+    try {
       const saved = (await api.settings.save(buildSaveInput(form))) as SettingsState;
       applySettings(saved);
+    } catch (reason) {
+      setStatus({ kind: "error", message: `连接可用，但保存设置失败：${formatError(reason)}` });
+      return;
+    }
+
+    setStatus({ kind: "testing", message: "设置已保存，正在获取模型列表" });
+    try {
       const models = (await api.settings.listModels({})) as OpenRouterModelSummary[];
       setModelOptions([...models]);
       setModelListLoaded(true);
       setStatus({ kind: "saved", message: `AI 连接测试通过，设置已保存，已获取 ${models.length} 个可用模型` });
     } catch (reason) {
-      setStatus({ kind: "error", message: formatError(reason) });
+      setStatus({ kind: "error", message: `设置已保存，但获取模型列表失败：${formatError(reason)}` });
     }
   };
 
@@ -257,7 +271,7 @@ export function SettingsPage({ activeCategory, onCategoryChange, onWelcome, onCl
   return (
     <div className="settings-page">
       <header className="settings-top">
-        <button className="brand brand-button" onClick={onWelcome} title="返回开始页" type="button">
+        <button className="brand brand-button" onClick={onWelcome} title="返回上一页" type="button">
           <span className="line-icon">
             <GearSix size={24} />
           </span>

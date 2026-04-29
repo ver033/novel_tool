@@ -21,7 +21,7 @@ import { createElectronSecretStore } from "../settings/electron-secret-store";
 import { SettingsService } from "../settings/settings-service";
 import { ipcChannels } from "../shared/types";
 import type { TaskType } from "../shared/types";
-import { parseIpcPayload } from "../shared/schemas";
+import { IpcPayloadValidationError, parseIpcPayload } from "../shared/schemas";
 import type { z } from "zod";
 import { registerAiIpc } from "./ai-ipc";
 import { registerChapterIpc } from "./chapter-ipc";
@@ -126,9 +126,25 @@ export function createValidatedIpcHandler<TSchema extends z.ZodType, TResult>(
   schema: TSchema,
   handler: ValidatedHandler<TSchema, TResult>
 ) {
-  return (event: IpcMainInvokeEvent, payload: unknown): Promise<TResult> | TResult => {
-    return handler(parseIpcPayload(schema, payload), event);
+  return async (event: IpcMainInvokeEvent, payload: unknown): Promise<TResult> => {
+    try {
+      return await handler(parseIpcPayload(schema, payload), event);
+    } catch (error) {
+      throw sanitizeIpcError(error);
+    }
   };
+}
+
+export function sanitizeIpcError(error: unknown): Error {
+  if (error instanceof IpcPayloadValidationError) {
+    return new Error("IPC 请求参数无效。");
+  }
+
+  if (error instanceof Error) {
+    return new Error(error.message);
+  }
+
+  return new Error(String(error));
 }
 
 export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDatabase {
@@ -161,7 +177,8 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
       useE2eAiGenerators() ? createE2eTaskGenerator() : new OpenRouterTaskGenerator(settingsService),
       useE2eAiGenerators() ? createE2eChatGenerator() : new OpenRouterChatGenerator(settingsService),
       (projectId) => new AiChatRepository(resolveProjectDb(projectId)),
-      (projectId) => new ScratchNoteRepository(resolveProjectDb(projectId))
+      (projectId) => new ScratchNoteRepository(resolveProjectDb(projectId)),
+      (projectId) => new ChapterRepository(resolveProjectDb(projectId))
     );
     const txtImporter = new TxtImporter(importJobRepo, projectRepo, projectService);
 

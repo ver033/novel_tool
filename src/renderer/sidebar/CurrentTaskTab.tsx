@@ -57,7 +57,7 @@ function isAiSettingsError(error: string): boolean {
 }
 
 function isTruncatedAiOutputError(error: string): boolean {
-  return error.includes("finish_reason: length");
+  return error.includes("finish_reason: length") || error.includes("被截断") || error.includes("结果已截断");
 }
 
 function isOpenRouterRateLimitError(error: string): boolean {
@@ -77,7 +77,7 @@ function taskErrorTitle(error: string, taskType: TaskType): string {
   return "AI 任务失败";
 }
 
-function taskErrorHint(error: string): string | null {
+function taskErrorHint(error: string, taskType: TaskType): string | null {
   if (isAiSettingsError(error)) {
     return "请先填写 OpenRouter API Key 和模型名称，并测试保存。";
   }
@@ -85,7 +85,9 @@ function taskErrorHint(error: string): string | null {
     return "当前模型或上游 Provider 正在限流。请稍后重试，或在 AI 服务设置中换用其他模型。";
   }
   if (isTruncatedAiOutputError(error)) {
-    return "模型已返回结果，但内容被截断。请缩短选区，或换用输出额度更高的模型后重试。";
+    return taskType === "proofread"
+      ? "模型已返回结果，但校对内容被截断。请缩短选区后重试。"
+      : "模型已返回部分结果。可以点击继续生成，或缩短选区后重新生成。";
   }
   return null;
 }
@@ -133,6 +135,8 @@ export function CurrentTaskTab({
   });
   const primaryLabel = taskType === "expand" ? "插入下方" : taskType === "continue" ? "插入到光标处" : "应用替换";
   const hasCandidateText = Boolean(taskStore.candidate?.generatedText.trim());
+  const partialTruncatedText = taskStore.streamingText || taskStore.task?.outputText || "";
+  const canContinueTruncated = Boolean(taskStore.task && taskStore.error?.includes("截断") && partialTruncatedText.trim() && taskType !== "proofread");
   const statusText = useMemo(() => {
     if (taskStore.busy) {
       return "处理中";
@@ -143,7 +147,7 @@ export function CurrentTaskTab({
     <div className="task-error-panel" role="alert">
       <b>{taskErrorTitle(taskStore.error, taskType)}</b>
       <p>{taskStore.error}</p>
-      {taskErrorHint(taskStore.error) ? <p className="task-error-hint">{taskErrorHint(taskStore.error)}</p> : null}
+      {taskErrorHint(taskStore.error, taskType) ? <p className="task-error-hint">{taskErrorHint(taskStore.error, taskType)}</p> : null}
       {isAiSettingsError(taskStore.error) ? (
         <Button onClick={() => onOpenSettings("AI 服务")} type="button" variant="secondary">
           打开 AI 服务设置
@@ -283,13 +287,18 @@ export function CurrentTaskTab({
             {taskStore.streamingText}
           </>
         ) : (
-          taskStore.candidate?.generatedText || taskStore.candidate?.changeSummary || "尚未生成预览。"
+          taskStore.candidate?.generatedText || taskStore.candidate?.changeSummary || taskStore.task?.outputText || "尚未生成预览。"
         )}
       </div>
       <div className="task-actions">
         <Button disabled={!taskStore.task || taskStore.busy} onClick={() => void taskStore.generatePreview()} variant="ghost">
           {taskStore.candidate ? "重新生成" : "生成预览"}
         </Button>
+        {canContinueTruncated ? (
+          <Button disabled={taskStore.busy} onClick={() => void taskStore.continuePreview()} variant="ghost">
+            继续生成
+          </Button>
+        ) : null}
         <Button disabled={!taskStore.candidate || taskStore.busy} onClick={() => void taskStore.rejectCandidate()} variant="ghost">
           忽略候选
         </Button>

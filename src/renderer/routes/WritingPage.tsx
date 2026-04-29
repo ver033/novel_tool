@@ -10,6 +10,7 @@ import { RightUtilitySidebar, type SidebarTab, type TaskType } from "../layout/R
 import { TopBar } from "../layout/TopBar";
 import { getNovelToolApi } from "../state/app-store";
 import { useEditorStore } from "../state/editor-store";
+import { formatIpcErrorMessage } from "../state/ipc-error";
 import type { SettingsCategory } from "./SettingsPage";
 import type { ChapterSummary, ProjectRecord, SelectionSnapshot, TaskPromptPreset } from "../../main/shared/types";
 
@@ -29,6 +30,73 @@ const themeClassBySetting = {
   night: "theme-night"
 } as const;
 
+type EditorSearchResult = {
+  readonly chapterId: string;
+  readonly snippet: string;
+  readonly title: string;
+};
+
+export type SearchHighlightPart = {
+  readonly highlighted: boolean;
+  readonly text: string;
+};
+
+export function getHighlightedSearchParts(text: string, query: string): SearchHighlightPart[] {
+  const trimmedQuery = query.trim();
+  if (!text || !trimmedQuery) {
+    return text ? [{ highlighted: false, text }] : [];
+  }
+
+  const lowerText = text.toLocaleLowerCase("zh-CN");
+  const lowerQuery = trimmedQuery.toLocaleLowerCase("zh-CN");
+  const parts: SearchHighlightPart[] = [];
+  let cursor = 0;
+
+  while (cursor < text.length) {
+    const matchIndex = lowerText.indexOf(lowerQuery, cursor);
+    if (matchIndex < 0) {
+      parts.push({ highlighted: false, text: text.slice(cursor) });
+      break;
+    }
+
+    if (matchIndex > cursor) {
+      parts.push({ highlighted: false, text: text.slice(cursor, matchIndex) });
+    }
+    parts.push({ highlighted: true, text: text.slice(matchIndex, matchIndex + trimmedQuery.length) });
+    cursor = matchIndex + trimmedQuery.length;
+  }
+
+  return parts;
+}
+
+function buildSearchSnippet(text: string, query: string): string {
+  const normalizedText = text.replace(/\s+/g, " ").trim();
+  if (!normalizedText) {
+    return "匹配章节标题";
+  }
+
+  const index = normalizedText.toLocaleLowerCase("zh-CN").indexOf(query.toLocaleLowerCase("zh-CN"));
+  if (index < 0) {
+    return normalizedText.slice(0, 68);
+  }
+
+  const start = Math.max(0, index - 24);
+  const end = Math.min(normalizedText.length, index + query.length + 44);
+  return `${start > 0 ? "..." : ""}${normalizedText.slice(start, end)}${end < normalizedText.length ? "..." : ""}`;
+}
+
+function renderHighlightedSearchText(text: string, query: string) {
+  return getHighlightedSearchParts(text, query).map((part, index) =>
+    part.highlighted ? (
+      <mark className="search-result-highlight" key={`${part.text}-${index}`}>
+        {part.text}
+      </mark>
+    ) : (
+      <span key={`${part.text}-${index}`}>{part.text}</span>
+    )
+  );
+}
+
 type WritingPageProps = {
   readonly activeChapter: ChapterSummary | null;
   readonly activeChapterId: string | null;
@@ -44,6 +112,7 @@ type WritingPageProps = {
   readonly onDeleteChapter: (chapterId: string) => void;
   readonly onRenameChapter: (chapterId: string, currentTitle: string) => void;
   readonly onSelectChapter: (chapterId: string) => void;
+  readonly onUpdateChapterTargetWordCount: (chapterId: string, targetWordCount: number | null) => Promise<void>;
   readonly onSidebarTabChange: (tab: SidebarTab) => void;
   readonly onCloseSidebar: () => void;
   readonly onOpenAiChat: () => void;
@@ -69,6 +138,7 @@ export function WritingPage({
   onDeleteChapter,
   onRenameChapter,
   onSelectChapter,
+  onUpdateChapterTargetWordCount,
   onSidebarTabChange,
   onCloseSidebar,
   onOpenAiChat,
@@ -85,14 +155,46 @@ export function WritingPage({
   const [taskPromptPresetError, setTaskPromptPresetError] = useState<string | null>(null);
   const [renameChapterDraft, setRenameChapterDraft] = useState<{ id: string; title: string } | null>(null);
   const [renameChapterTitle, setRenameChapterTitle] = useState("");
-  const targetWordCount = activeChapter?.targetWordCount ?? 3000;
+  const [targetWordCountModalOpen, setTargetWordCountModalOpen] = useState(false);
+  const [targetWordCountDraft, setTargetWordCountDraft] = useState("");
+  const [targetWordCountError, setTargetWordCountError] = useState<string | null>(null);
+  const [targetWordCountSaving, setTargetWordCountSaving] = useState(false);
+  const [confirmWelcomeOpen, setConfirmWelcomeOpen] = useState(false);
+  const [navigationError, setNavigationError] = useState<string | null>(null);
+  const [inlineChapterRenameActive, setInlineChapterRenameActive] = useState(false);
+  const [inlineChapterTitle, setInlineChapterTitle] = useState("");
+  const [focusMode, setFocusMode] = useState(false);
+  const [searchValue, setSearchValue] = useState("");
+  const [searchResults, setSearchResults] = useState<EditorSearchResult[]>([]);
+  const [searchBusy, setSearchBusy] = useState(false);
+  const targetWordCount = activeChapter?.targetWordCount ?? null;
+  const targetProgressLabel = useMemo(() => {
+    if (!targetWordCount) {
+      return null;
+    }
+
+    const remaining = targetWordCount - editorStore.wordCount;
+    const progress = Math.min(999, Math.round((editorStore.wordCount / targetWordCount) * 100));
+    if (remaining > 0) {
+      return `还差 ${remaining.toLocaleString("zh-CN")} 字 · ${progress}%`;
+    }
+    if (remaining < 0) {
+      return `已超过 ${Math.abs(remaining).toLocaleString("zh-CN")} 字 · ${progress}%`;
+    }
+    return "已达成本章目标 · 100%";
+  }, [editorStore.wordCount, targetWordCount]);
   const editorInnerStyle: EditorInnerStyle = {
     maxWidth: pageWidthBySetting[editorStore.editorSettings.pageWidth] ?? pageWidthBySetting.medium
   };
   const editorThemeClass = themeClassBySetting[editorStore.editorSettings.theme] ?? themeClassBySetting.light;
   const flushBeforeNavigation = useCallback(
     (next: () => void) => {
-      void editorStore.flushPendingSave().then(next).catch(() => undefined);
+      setNavigationError(null);
+      void editorStore.flushPendingSave()
+        .then(next)
+        .catch((reason: unknown) => {
+          setNavigationError(formatIpcErrorMessage(reason, "保存失败，已留在当前页面。"));
+        });
     },
     [editorStore]
   );
@@ -118,6 +220,53 @@ export function WritingPage({
       cancelled = true;
     };
   }, [api]);
+  useEffect(() => {
+    const query = searchValue.trim();
+    if (!currentProject || !query) {
+      setSearchResults([]);
+      setSearchBusy(false);
+      return;
+    }
+
+    let cancelled = false;
+    setSearchBusy(true);
+    void Promise.all(
+      chapters.map(async (chapter) => {
+        const content = (await api.chapter.getContent({ projectId: currentProject.id, chapterId: chapter.id })) as { plainText?: string } | undefined;
+        const plainText = content?.plainText ?? "";
+        const titleMatches = chapter.title.toLocaleLowerCase("zh-CN").includes(query.toLocaleLowerCase("zh-CN"));
+        const contentMatches = plainText.toLocaleLowerCase("zh-CN").includes(query.toLocaleLowerCase("zh-CN"));
+        if (!titleMatches && !contentMatches) {
+          return null;
+        }
+
+        return {
+          chapterId: chapter.id,
+          snippet: buildSearchSnippet(contentMatches ? plainText : chapter.title, query),
+          title: chapter.title
+        } satisfies EditorSearchResult;
+      })
+    )
+      .then((results) => {
+        if (!cancelled) {
+          setSearchResults(results.filter((result): result is EditorSearchResult => Boolean(result)));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSearchResults([]);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setSearchBusy(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [api, chapters, currentProject, searchValue]);
   const handleCreateChapter = useCallback(() => flushBeforeNavigation(onCreateChapter), [flushBeforeNavigation, onCreateChapter]);
   const handleSelectChapter = useCallback(
     (chapterId: string) => {
@@ -126,8 +275,28 @@ export function WritingPage({
     [flushBeforeNavigation, onSelectChapter]
   );
   const handleImport = useCallback(() => flushBeforeNavigation(onImport), [flushBeforeNavigation, onImport]);
-  const handleWelcome = useCallback(() => flushBeforeNavigation(onWelcome), [flushBeforeNavigation, onWelcome]);
+  const handleWelcome = useCallback(() => {
+    setConfirmWelcomeOpen(true);
+  }, []);
+  const closeConfirmWelcome = useCallback(() => {
+    setConfirmWelcomeOpen(false);
+  }, []);
+  const confirmWelcome = useCallback(() => {
+    setConfirmWelcomeOpen(false);
+    flushBeforeNavigation(onWelcome);
+  }, [flushBeforeNavigation, onWelcome]);
   const handleSettings = useCallback((category?: SettingsCategory) => flushBeforeNavigation(() => onSettings(category)), [flushBeforeNavigation, onSettings]);
+  const handleFocusModeToggle = useCallback(() => {
+    setFocusMode((current) => !current);
+    setSearchValue("");
+  }, []);
+  const handleSearchResultSelect = useCallback(
+    (chapterId: string) => {
+      setSearchValue("");
+      flushBeforeNavigation(() => onSelectChapter(chapterId));
+    },
+    [flushBeforeNavigation, onSelectChapter]
+  );
   const handleSelectionToScratchpad = useCallback(
     async (snapshot: SelectionSnapshot) => {
       if (!currentProject) {
@@ -154,6 +323,54 @@ export function WritingPage({
     setRenameChapterTitle("");
   }, []);
 
+  const startInlineChapterRename = useCallback(() => {
+    if (!activeChapter) {
+      return;
+    }
+    setInlineChapterTitle(activeChapter.title);
+    setInlineChapterRenameActive(true);
+  }, [activeChapter]);
+
+  const cancelInlineChapterRename = useCallback(() => {
+    setInlineChapterRenameActive(false);
+    setInlineChapterTitle("");
+  }, []);
+
+  const submitInlineChapterRename = useCallback(
+    (event: FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+      const title = inlineChapterTitle.trim();
+      if (!activeChapter || !title) {
+        cancelInlineChapterRename();
+        return;
+      }
+
+      if (title !== activeChapter.title) {
+        onRenameChapter(activeChapter.id, title);
+      }
+      cancelInlineChapterRename();
+    },
+    [activeChapter, cancelInlineChapterRename, inlineChapterTitle, onRenameChapter]
+  );
+
+  const openTargetWordCountModal = useCallback(() => {
+    if (!activeChapter) {
+      return;
+    }
+    setTargetWordCountDraft(activeChapter.targetWordCount ? String(activeChapter.targetWordCount) : "");
+    setTargetWordCountError(null);
+    setTargetWordCountModalOpen(true);
+  }, [activeChapter]);
+
+  const closeTargetWordCountModal = useCallback(() => {
+    if (targetWordCountSaving) {
+      return;
+    }
+    setTargetWordCountModalOpen(false);
+    setTargetWordCountDraft("");
+    setTargetWordCountError(null);
+  }, [targetWordCountSaving]);
+
   const submitChapterRename = useCallback(
     (event: FormEvent<HTMLFormElement>) => {
       event.preventDefault();
@@ -171,27 +388,79 @@ export function WritingPage({
     [cancelChapterRename, onRenameChapter, renameChapterDraft, renameChapterTitle]
   );
 
+  const submitTargetWordCount = useCallback(
+    async (event: FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+      if (!activeChapter || targetWordCountSaving) {
+        return;
+      }
+
+      const trimmed = targetWordCountDraft.trim();
+      const nextTargetWordCount = trimmed ? Number.parseInt(trimmed, 10) : null;
+      if (trimmed && (!/^\d+$/.test(trimmed) || !nextTargetWordCount || nextTargetWordCount < 100 || nextTargetWordCount > 500000)) {
+        setTargetWordCountError("目标字数需要在 100 到 500,000 之间。");
+        return;
+      }
+
+      setTargetWordCountSaving(true);
+      setTargetWordCountError(null);
+      try {
+        await onUpdateChapterTargetWordCount(activeChapter.id, nextTargetWordCount);
+        setTargetWordCountModalOpen(false);
+        setTargetWordCountDraft("");
+      } catch (reason) {
+        setTargetWordCountError(reason instanceof Error ? reason.message : String(reason));
+      } finally {
+        setTargetWordCountSaving(false);
+      }
+    },
+    [activeChapter, onUpdateChapterTargetWordCount, targetWordCountDraft, targetWordCountSaving]
+  );
+
   return (
     <div className="writing-page">
       <TopBar
+        focusMode={focusMode}
         title={currentProject?.name ?? "我的小说"}
         saveStatus={editorStore.saveStatus}
+        searchValue={searchValue}
         editorSettings={editorStore.editorSettings}
         onImport={handleImport}
         onEditorSettingsChange={editorStore.updateEditorSettings}
+        onFocusModeToggle={handleFocusModeToggle}
+        onSearchChange={setSearchValue}
         onWelcome={handleWelcome}
         onSettings={handleSettings}
       />
+      {navigationError ? (
+        <div className="navigation-error-banner" role="alert">
+          {navigationError}
+        </div>
+      ) : null}
+      {searchValue.trim() && !focusMode ? (
+        <div className="search-result-list" role="listbox" aria-label="搜索结果">
+          {searchBusy ? <div className="search-result-empty">正在搜索...</div> : null}
+          {!searchBusy && searchResults.length === 0 ? <div className="search-result-empty">没有找到匹配内容</div> : null}
+          {searchResults.map((result) => (
+            <button key={result.chapterId} onClick={() => handleSearchResultSelect(result.chapterId)} type="button">
+              <strong>{renderHighlightedSearchText(result.title, searchValue)}</strong>
+              <span>{renderHighlightedSearchText(result.snippet, searchValue)}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
 
-      <main className={`workspace ${sidebarOpen ? "" : "no-sidebar"} ${editorThemeClass}`}>
-        <LeftChapterTree
-          activeChapterId={activeChapterId}
-          chapters={chapters}
-          onCreateChapter={handleCreateChapter}
-          onDeleteChapter={onDeleteChapter}
-          onRenameChapter={startChapterRename}
-          onSelectChapter={handleSelectChapter}
-        />
+      <main className={`workspace ${focusMode ? "focus-mode no-sidebar" : sidebarOpen ? "" : "no-sidebar"} ${editorThemeClass}`}>
+        {!focusMode ? (
+          <LeftChapterTree
+            activeChapterId={activeChapterId}
+            chapters={chapters}
+            onCreateChapter={handleCreateChapter}
+            onDeleteChapter={onDeleteChapter}
+            onRenameChapter={startChapterRename}
+            onSelectChapter={handleSelectChapter}
+          />
+        ) : null}
 
         <section className="editor-wrap">
           <div className="editor-scroll">
@@ -203,7 +472,28 @@ export function WritingPage({
               ) : null}
               {activeChapter ? (
                 <>
-                  <h1 className="chapter-heading">{activeChapter.title}</h1>
+                  {inlineChapterRenameActive ? (
+                    <form className="chapter-title-form" onSubmit={submitInlineChapterRename}>
+                      <Input
+                        autoFocus
+                        id="chapter-title-input"
+                        value={inlineChapterTitle}
+                        onChange={(event) => setInlineChapterTitle(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Escape") {
+                            cancelInlineChapterRename();
+                          }
+                        }}
+                      />
+                      <button className="small-button blue" disabled={!inlineChapterTitle.trim()} type="submit">
+                        保存
+                      </button>
+                    </form>
+                  ) : (
+                    <button className="chapter-heading chapter-heading-button" onClick={startInlineChapterRename} title="点击重命名章节" type="button">
+                      {activeChapter.title}
+                    </button>
+                  )}
                   <NovelEditor
                     chapterId={activeChapter.id}
                     contentJson={editorStore.contentJson}
@@ -228,24 +518,26 @@ export function WritingPage({
             </div>
           </div>
 
-          {!sidebarOpen && activeChapter ? <FloatingAiButton onClick={onOpenAiChat} /> : null}
+          {!focusMode && !sidebarOpen && activeChapter ? <FloatingAiButton onClick={onOpenAiChat} /> : null}
 
           <footer className="bottom-metrics">
             <div className="metrics-inner">
               <div className="metric-left">
                 <span>字数：{editorStore.wordCount.toLocaleString("zh-CN")}</span>
-                <span>今日：{(activeChapter?.dailyWordCount ?? 0).toLocaleString("zh-CN")}</span>
-                <span>本章目标：{targetWordCount.toLocaleString("zh-CN")}</span>
+                <span>今日：{editorStore.dailyWordCount.toLocaleString("zh-CN")}</span>
+                <button className="metric-button" disabled={!activeChapter} onClick={openTargetWordCountModal} type="button">
+                  本章目标：{targetWordCount ? targetWordCount.toLocaleString("zh-CN") : "设置"}
+                </button>
+                {targetProgressLabel ? <span className="metric-progress">{targetProgressLabel}</span> : null}
               </div>
               <div className="metric-right">
-                <span>中文⌄</span>
                 <span>{editorStore.saveStatusLabel}</span>
               </div>
             </div>
           </footer>
         </section>
 
-        {sidebarOpen ? (
+        {!focusMode && sidebarOpen ? (
           <RightUtilitySidebar
             activeTab={sidebarTab}
             currentChapterId={activeChapter?.id ?? null}
@@ -264,7 +556,7 @@ export function WritingPage({
         ) : null}
       </main>
 
-      <Modal open={Boolean(renameChapterDraft)} title="重命名章节">
+      <Modal open={Boolean(renameChapterDraft)} title="重命名章节" onClose={cancelChapterRename}>
         <form className="rename-form" onSubmit={submitChapterRename}>
           <label className="field-label" htmlFor="chapter-rename-input">
             章节名称
@@ -284,6 +576,47 @@ export function WritingPage({
             </Button>
           </div>
         </form>
+      </Modal>
+      <Modal open={targetWordCountModalOpen} title="设置本章目标" onClose={closeTargetWordCountModal}>
+        <form className="rename-form" onSubmit={submitTargetWordCount}>
+          <label className="field-label" htmlFor="chapter-target-input">
+            目标字数
+          </label>
+          <Input
+            autoFocus
+            id="chapter-target-input"
+            inputMode="numeric"
+            placeholder="例如 3000，留空表示不设置"
+            value={targetWordCountDraft}
+            onChange={(event) => setTargetWordCountDraft(event.target.value)}
+          />
+          {targetWordCountError ? (
+            <div className="inline-error-banner compact" role="alert">
+              {targetWordCountError}
+            </div>
+          ) : null}
+          <div className="modal-actions">
+            <Button disabled={targetWordCountSaving} onClick={closeTargetWordCountModal} type="button" variant="ghost">
+              取消
+            </Button>
+            <Button disabled={targetWordCountSaving} type="submit" variant="primary">
+              保存
+            </Button>
+          </div>
+        </form>
+      </Modal>
+      <Modal open={confirmWelcomeOpen} title="返回开始页？" onClose={closeConfirmWelcome}>
+        <div className="confirm-dialog-body">
+          <p>当前项目会保留在最近项目中，编辑内容会先保存。确认返回开始页吗？</p>
+          <div className="modal-actions">
+            <Button onClick={closeConfirmWelcome} type="button" variant="ghost">
+              继续写作
+            </Button>
+            <Button onClick={confirmWelcome} type="button" variant="primary">
+              返回开始页
+            </Button>
+          </div>
+        </div>
       </Modal>
     </div>
   );

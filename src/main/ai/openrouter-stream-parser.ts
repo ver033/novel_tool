@@ -1,5 +1,6 @@
 export type OpenRouterStreamEvent =
   | { readonly type: "content"; readonly content: string }
+  | { readonly type: "truncated" }
   | { readonly type: "done" }
   | { readonly type: "error"; readonly message: string };
 
@@ -16,7 +17,7 @@ function parseDataPayload(payload: string): OpenRouterStreamEvent[] {
   try {
     parsed = JSON.parse(payload);
   } catch {
-    throw new Error("OpenRouter 流式响应不是合法 JSON。");
+    return [];
   }
 
   if (!isObject(parsed)) {
@@ -50,7 +51,7 @@ function parseDataPayload(payload: string): OpenRouterStreamEvent[] {
   }
 
   if (firstChoice.finish_reason === "length") {
-    events.push({ type: "error", message: "OpenRouter 流式响应被截断（finish_reason: length）。" });
+    events.push({ type: "truncated" });
   }
 
   return events;

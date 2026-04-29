@@ -1,6 +1,8 @@
 import { proofreadIssueTypes, proofreadResultSchema, type ProofreadIssue } from "../shared/proofread";
 import type { AiTaskRecord, TaskPromptPreset } from "../shared/types";
 import type { OpenRouterMessage, OpenRouterReasoningConfig, OpenRouterResponseFormat } from "./openrouter-client";
+import { estimateMessagesTokens } from "./token-estimator";
+import { getTokenBudget } from "./token-budget";
 
 type BuiltPrompt = {
   readonly messages: readonly OpenRouterMessage[];
@@ -28,13 +30,6 @@ const defaultReasoning: OpenRouterReasoningConfig = {
 const proofreadReasoning: OpenRouterReasoningConfig = {
   effort: "medium",
   exclude: true
-};
-
-const maxCompletionTokensByTask: Record<AiTaskRecord["taskType"], number> = {
-  polish: 4096,
-  expand: 4096,
-  proofread: 4096,
-  continue: 4096
 };
 
 const proofreadJsonSchema = {
@@ -143,18 +138,41 @@ function userPromptFor(task: AiTaskRecord, context: PromptBuildContext): string 
   ].join("\n");
 }
 
+function taskLabelFor(taskType: AiTaskRecord["taskType"]): string {
+  return {
+    polish: "润色",
+    expand: "扩写",
+    proofread: "校对",
+    continue: "续写"
+  }[taskType];
+}
+
+function assertWithinInputBudget(task: AiTaskRecord, messages: readonly OpenRouterMessage[]): void {
+  const budget = getTokenBudget(task.taskType);
+  const estimatedTokens = estimateMessagesTokens(messages);
+  if (estimatedTokens <= budget.maxInputTokens) {
+    return;
+  }
+
+  throw new Error(
+    `选区太长，${taskLabelFor(task.taskType)}任务预计输入约 ${estimatedTokens} tokens，超过上限 ${budget.maxInputTokens}。请缩短选区后重试。`
+  );
+}
+
 export function buildAiTaskPrompt(task: AiTaskRecord, context: PromptBuildContext = {}): BuiltPrompt {
+  const budget = getTokenBudget(task.taskType);
   const base = {
     messages: [
       { role: "system", content: systemPromptFor(task) },
       { role: "user", content: userPromptFor(task, context) }
     ] satisfies readonly OpenRouterMessage[]
   };
+  assertWithinInputBudget(task, base.messages);
 
   if (task.taskType === "proofread") {
     return {
       ...base,
-      maxCompletionTokens: maxCompletionTokensByTask.proofread,
+      maxCompletionTokens: budget.maxOutputTokens,
       temperature: 0.2,
       reasoning: proofreadReasoning,
       responseFormat: {
@@ -170,7 +188,49 @@ export function buildAiTaskPrompt(task: AiTaskRecord, context: PromptBuildContex
 
   return {
     ...base,
-    maxCompletionTokens: maxCompletionTokensByTask[task.taskType],
+    maxCompletionTokens: budget.maxOutputTokens,
+    temperature: task.taskType === "polish" ? 0.45 : 0.65,
+    reasoning: defaultReasoning
+  };
+}
+
+export function buildAiTaskContinuationPrompt(task: AiTaskRecord, partialText: string, context: PromptBuildContext = {}): BuiltPrompt {
+  if (task.taskType === "proofread") {
+    throw new Error("校对任务不支持继续生成，请缩短选区后重新校对。");
+  }
+
+  const budget = getTokenBudget(task.taskType);
+  const customInstruction = task.instruction?.trim() || "无";
+  const presetLines = context.taskPreset
+    ? [`任务预设：${context.taskPreset.name}`, `预设要求：${context.taskPreset.instruction}`]
+    : [];
+  const messages = [
+    { role: "system", content: systemPromptFor(task) },
+    {
+      role: "user",
+      content: [
+        `任务：继续生成被截断的${taskLabelFor(task.taskType)}结果`,
+        "通用硬性约束：",
+        "1. 不改变剧情事实。",
+        "2. 不改变人物关系。",
+        "3. 不改变时间地点。",
+        "4. 不改变叙事视角。",
+        "5. 不重复已生成部分。",
+        ...presetLines,
+        `本次要求：${customInstruction}`,
+        "原始文本：",
+        task.inputText,
+        "已生成部分：",
+        partialText,
+        "请只输出紧接在已生成部分之后的后续正文，不要解释。"
+      ].join("\n")
+    }
+  ] satisfies readonly OpenRouterMessage[];
+  assertWithinInputBudget(task, messages);
+
+  return {
+    messages,
+    maxCompletionTokens: budget.maxOutputTokens,
     temperature: task.taskType === "polish" ? 0.45 : 0.65,
     reasoning: defaultReasoning
   };

@@ -1,4 +1,4 @@
-import { BookOpen, GearSix, MagnifyingGlass, UploadSimple } from "@phosphor-icons/react";
+import { BookOpen, CornersIn, CornersOut, GearSix, MagnifyingGlass, UploadSimple } from "@phosphor-icons/react";
 import { useState } from "react";
 import type { EditorSettings } from "../../main/shared/types";
 import { IconButton } from "../components/IconButton";
@@ -9,10 +9,14 @@ type TopBarProps = {
   readonly mode?: "welcome" | "writing";
   readonly saveStatus?: "saved" | "dirty" | "saving" | "failed";
   readonly editorSettings?: EditorSettings;
+  readonly focusMode?: boolean;
   readonly onImport?: () => void;
   readonly onEditorSettingsChange?: (patch: Partial<EditorSettings>) => void | Promise<void>;
+  readonly onFocusModeToggle?: () => void;
+  readonly onSearchChange?: (value: string) => void;
   readonly onWelcome: () => void;
   readonly onSettings: () => void;
+  readonly searchValue?: string;
 };
 
 function saveStatusLabel(status: NonNullable<TopBarProps["saveStatus"]>): string {
@@ -120,13 +124,17 @@ export function TopBar({
   mode = "writing",
   saveStatus = "saved",
   editorSettings,
+  focusMode = false,
   onImport,
   onEditorSettingsChange,
+  onFocusModeToggle,
+  onSearchChange,
   onWelcome,
-  onSettings
+  onSettings,
+  searchValue = ""
 }: TopBarProps) {
   const [layoutPanelOpen, setLayoutPanelOpen] = useState(false);
-  const canShowLayoutPanel = mode === "writing" && editorSettings && onEditorSettingsChange;
+  const canShowLayoutPanel = mode === "writing" && editorSettings && onEditorSettingsChange && !focusMode;
   const updateEditorSetting = (patch: Partial<EditorSettings>) => {
     if (!onEditorSettingsChange) {
       return;
@@ -135,7 +143,7 @@ export function TopBar({
   };
 
   return (
-    <header className="topbar">
+    <header className={`topbar ${focusMode ? "focus-mode" : ""}`}>
       <button className="brand brand-button" onClick={onWelcome} title="返回开始页" type="button">
         <span className={mode === "welcome" ? "logo" : "line-icon"}>
           <BookOpen size={24} weight="regular" />
@@ -145,12 +153,27 @@ export function TopBar({
           {subtitle ? <small>{subtitle}</small> : null}
         </span>
       </button>
-      <label className="search">
-        <MagnifyingGlass size={21} />
-        <input placeholder={mode === "welcome" ? "搜索作品或章节" : "搜索章节或内容"} />
-      </label>
+      {focusMode ? (
+        <span className="focus-mode-label">专注写作</span>
+      ) : (
+        <label className="search">
+          <MagnifyingGlass size={21} />
+          <input
+            aria-label={mode === "welcome" ? "搜索作品或章节" : "搜索章节或内容"}
+            disabled={!onSearchChange}
+            onChange={(event) => onSearchChange?.(event.target.value)}
+            placeholder={mode === "welcome" ? "搜索作品或章节" : "搜索章节或内容"}
+            value={searchValue}
+          />
+        </label>
+      )}
       <div className="top-actions">
-        {mode === "writing" && onImport ? (
+        {mode === "writing" && onFocusModeToggle ? (
+          <IconButton label={focusMode ? "退出专注" : "专注模式"} onClick={onFocusModeToggle}>
+            {focusMode ? <CornersOut size={24} weight="regular" /> : <CornersIn size={24} weight="regular" />}
+          </IconButton>
+        ) : null}
+        {mode === "writing" && onImport && !focusMode ? (
           <IconButton label="导入 TXT" onClick={() => onImport()}>
             <UploadSimple size={24} weight="regular" />
           </IconButton>
@@ -325,9 +348,11 @@ export function TopBar({
             ) : null}
           </div>
         ) : null}
-        <IconButton label="设置" onClick={onSettings}>
-          <GearSix size={24} weight="regular" />
-        </IconButton>
+        {!focusMode ? (
+          <IconButton label="设置" onClick={onSettings}>
+            <GearSix size={24} weight="regular" />
+          </IconButton>
+        ) : null}
         {mode === "writing" ? (
           <span className={`status-pill ${saveStatus}`}>
             <span className="dot" />

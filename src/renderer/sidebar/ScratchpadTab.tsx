@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ScratchNoteRecord } from "../../main/shared/types";
 import { Button } from "../components/Button";
 import { getNovelToolApi } from "../state/app-store";
@@ -17,6 +17,11 @@ export function ScratchpadTab({ chapterId, projectId, refreshToken }: Scratchpad
   const [notes, setNotes] = useState<ScratchNoteRecord[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const latestProjectId = useRef(projectId);
+
+  useEffect(() => {
+    latestProjectId.current = projectId;
+  }, [projectId]);
 
   const loadNotes = useCallback(async () => {
     if (!projectId) {
@@ -28,12 +33,17 @@ export function ScratchpadTab({ chapterId, projectId, refreshToken }: Scratchpad
     setLoading(true);
     try {
       const result = (await api.scratch.list({ projectId })) as ScratchNoteRecord[];
+      if (latestProjectId.current !== projectId) {
+        return;
+      }
       setNotes(sortScratchNotes(result));
       setError(null);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "读取草稿纸失败");
     } finally {
-      setLoading(false);
+      if (latestProjectId.current === projectId) {
+        setLoading(false);
+      }
     }
   }, [api, projectId]);
 
@@ -46,13 +56,17 @@ export function ScratchpadTab({ chapterId, projectId, refreshToken }: Scratchpad
       return;
     }
 
+    const targetProjectId = projectId;
     try {
       const created = (await api.scratch.create({
-        projectId,
+        projectId: targetProjectId,
         chapterId: chapterId ?? undefined,
         content: draft.trim(),
         pinned: false
       })) as ScratchNoteRecord;
+      if (latestProjectId.current !== targetProjectId) {
+        return;
+      }
       setNotes((current) => sortScratchNotes([created, ...current]));
       setDraft("");
       setError(null);
@@ -62,6 +76,7 @@ export function ScratchpadTab({ chapterId, projectId, refreshToken }: Scratchpad
   }
 
   async function togglePin(note: ScratchNoteRecord): Promise<void> {
+    const targetProjectId = projectId;
     try {
       const updated = (await api.scratch.update({
         noteId: note.id,
@@ -69,6 +84,9 @@ export function ScratchpadTab({ chapterId, projectId, refreshToken }: Scratchpad
           pinned: !note.pinned
         }
       })) as ScratchNoteRecord;
+      if (latestProjectId.current !== targetProjectId) {
+        return;
+      }
       setNotes((current) => sortScratchNotes(current.map((item) => (item.id === updated.id ? updated : item))));
       setError(null);
     } catch (reason) {
@@ -81,8 +99,12 @@ export function ScratchpadTab({ chapterId, projectId, refreshToken }: Scratchpad
       return;
     }
 
+    const targetProjectId = projectId;
     try {
       await api.scratch.delete({ noteId: note.id });
+      if (latestProjectId.current !== targetProjectId) {
+        return;
+      }
       setNotes((current) => current.filter((item) => item.id !== note.id));
       setError(null);
     } catch (reason) {

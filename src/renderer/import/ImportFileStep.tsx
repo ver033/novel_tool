@@ -21,7 +21,7 @@ export function ImportFileStep({ busy, currentProjectId, error, mode, preview, s
         <div className="drop-zone">
           <div>
             <span className="file-icon">TXT</span>
-            <h2 className="section-title">拖入 TXT 文件，或点击选择</h2>
+            <h2 className="section-title">选择 TXT 文件</h2>
             <p className="muted">{preview ? `已选择 ${preview.fileName}，识别到 ${preview.chapters.length} 章。` : "当前版本支持纯文本文件，会自动识别章节并进入预览。"}</p>
             {error ? <p className="mini-tag orange">{error}</p> : null}
             <Button disabled={busy} onClick={onSelectFile} variant="primary">

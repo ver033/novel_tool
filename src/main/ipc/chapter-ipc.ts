@@ -7,7 +7,8 @@ import {
   chapterGetContentInputSchema,
   chapterListInputSchema,
   chapterRenameInputSchema,
-  chapterSaveContentInputSchema
+  chapterSaveContentInputSchema,
+  chapterUpdateTargetWordCountInputSchema
 } from "../shared/schemas";
 import { ipcChannels } from "../shared/types";
 import { createValidatedIpcHandler } from "./register-ipc";
@@ -19,6 +20,10 @@ export function registerChapterIpc(chapterService: ChapterService): void {
   ipcMain.handle(ipcChannels.chapter.delete, createValidatedIpcHandler(chapterDeleteInputSchema, (input) => chapterService.deleteChapter(input)));
   ipcMain.handle(ipcChannels.chapter.getContent, createValidatedIpcHandler(chapterGetContentInputSchema, (input) => chapterService.getContent(input)));
   ipcMain.handle(ipcChannels.chapter.saveContent, createValidatedIpcHandler(chapterSaveContentInputSchema, (input) => chapterService.saveContent(input)));
+  ipcMain.handle(
+    ipcChannels.chapter.updateTargetWordCount,
+    createValidatedIpcHandler(chapterUpdateTargetWordCountInputSchema, (input) => chapterService.updateTargetWordCount(input))
+  );
   ipcMain.handle(
     ipcChannels.chapter.createSnapshot,
     createValidatedIpcHandler(chapterCreateSnapshotInputSchema, (input) => chapterService.createSnapshot(input))

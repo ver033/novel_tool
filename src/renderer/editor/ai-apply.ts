@@ -31,6 +31,7 @@ type ApplyAiCandidateInput = {
   readonly task: AiTaskRecord;
   readonly candidate: AiTaskCandidateRecord;
   readonly applyMode: AiApplyCandidateInput["applyMode"];
+  readonly currentChapterId: string | null;
   readonly flushPendingSave: () => Promise<void>;
 };
 
@@ -59,6 +60,16 @@ function getInsertionContent(text: string): TiptapDocument["content"] {
   return content;
 }
 
+function resolveContainingParagraphEnd(editor: Editor, position: number): number {
+  const resolved = editor.state.doc.resolve(position);
+  for (let depth = resolved.depth; depth > 0; depth -= 1) {
+    if (resolved.node(depth).type.name === "paragraph") {
+      return resolved.after(depth);
+    }
+  }
+  return position;
+}
+
 function writeCandidateToEditor(editor: Editor, task: AiTaskRecord, candidate: AiTaskCandidateRecord, applyMode: AiApplyCandidateInput["applyMode"]): void {
   const content = getInsertionContent(candidate.generatedText);
   const chain = editor.chain().focus();
@@ -74,7 +85,7 @@ function writeCandidateToEditor(editor: Editor, task: AiTaskRecord, candidate: A
   }
 
   if (applyMode === "insert_below") {
-    chain.insertContentAt(task.selection.to, content).run();
+    chain.insertContentAt(resolveContainingParagraphEnd(editor, task.selection.to), content).run();
     return;
   }
 
@@ -95,15 +106,20 @@ export async function applyAiCandidateToEditor({
   task,
   candidate,
   applyMode,
+  currentChapterId,
   flushPendingSave
 }: ApplyAiCandidateInput): Promise<ApplyResult> {
   if (!task.chapterId) {
     throw new Error("当前 AI 任务没有关联章节，不能应用到正文。");
   }
+  if (currentChapterId !== task.chapterId) {
+    throw new Error("当前章节已切换，请重新生成 AI 结果后再应用。");
+  }
 
   assertSelectionStillMatches(editor, task);
   await flushPendingSave();
   await api.chapter.createSnapshot({
+    projectId: task.projectId,
     chapterId: task.chapterId,
     reason: `apply_ai_${task.taskType}`
   });
@@ -113,6 +129,7 @@ export async function applyAiCandidateToEditor({
   const contentJson = editor.getJSON() as TiptapDocument;
   const plainText = extractPlainTextFromTiptapJson(contentJson);
   await api.chapter.saveContent({
+    projectId: task.projectId,
     chapterId: task.chapterId,
     contentJson,
     plainText,

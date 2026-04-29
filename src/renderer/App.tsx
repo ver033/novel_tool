@@ -3,13 +3,14 @@ import { useCallback, useState } from "react";
 import { AppShell } from "./layout/AppShell";
 import type { SidebarTab, TaskType } from "./layout/RightUtilitySidebar";
 import { ImportWizardPage } from "./routes/ImportWizardPage";
+import { NewProjectPage } from "./routes/NewProjectPage";
 import { SettingsPage, type SettingsCategory } from "./routes/SettingsPage";
 import { WelcomePage } from "./routes/WelcomePage";
 import { WritingPage } from "./routes/WritingPage";
 import { useAppStore } from "./state/app-store";
-import type { ImportConfirmResult, SelectionSnapshot, TaskPromptPreset } from "../main/shared/types";
+import type { ImportConfirmResult, ProjectCreateInput, SelectionSnapshot, TaskPromptPreset } from "../main/shared/types";
 
-type Page = "welcome" | "writing" | "settings" | "import";
+type Page = "welcome" | "writing" | "settings" | "import" | "newProject";
 type ImportReturnPage = "welcome" | "writing";
 type SettingsReturnPage = "welcome" | "writing";
 
@@ -69,9 +70,14 @@ export function App() {
         setWelcomeNotice(reason instanceof Error ? reason.message : String(reason));
       });
   }, [appStore, openWriting]);
-  const createProject = useCallback(() => {
+  const openNewProject = useCallback(() => {
     setWelcomeNotice(null);
-    void appStore.createProject().then(openWriting);
+    setPage("newProject");
+  }, []);
+  const createProject = useCallback(async (input: ProjectCreateInput) => {
+    setWelcomeNotice(null);
+    await appStore.createProject(input);
+    openWriting();
   }, [appStore, openWriting]);
   const openProject = useCallback((projectId: string) => {
     setWelcomeNotice(null);
@@ -93,6 +99,10 @@ export function App() {
   const renameChapter = useCallback((chapterId: string, title: string) => {
     void appStore.renameChapter(chapterId, title);
   }, [appStore]);
+  const updateChapterTargetWordCount = useCallback(
+    (chapterId: string, targetWordCount: number | null) => appStore.updateChapterTargetWordCount(chapterId, targetWordCount),
+    [appStore]
+  );
   const deleteChapter = useCallback((chapterId: string) => {
     void appStore.deleteChapter(chapterId);
   }, [appStore]);
@@ -128,7 +138,12 @@ export function App() {
   if (page === "settings") {
     return (
       <AppShell>
-        <SettingsPage activeCategory={settingsCategory} onCategoryChange={setSettingsCategory} onClose={returnFromSettings} onWelcome={openWelcome} />
+        <SettingsPage
+          activeCategory={settingsCategory}
+          onCategoryChange={setSettingsCategory}
+          onClose={returnFromSettings}
+          onWelcome={returnFromSettings}
+        />
       </AppShell>
     );
   }
@@ -144,6 +159,19 @@ export function App() {
           onFinish={finishImport}
           onNext={nextImportStep}
           onStepChange={setImportStep}
+        />
+      </AppShell>
+    );
+  }
+
+  if (page === "newProject") {
+    return (
+      <AppShell>
+        <NewProjectPage
+          onCancel={openWelcome}
+          onCreate={createProject}
+          onSelectProjectSavePath={appStore.selectProjectSavePath}
+          onSuggestProjectPath={appStore.suggestProjectPath}
         />
       </AppShell>
     );
@@ -171,6 +199,7 @@ export function App() {
           onOpenScratchpad={openScratchpad}
           onRenameChapter={renameChapter}
           onSelectChapter={appStore.selectChapter}
+          onUpdateChapterTargetWordCount={updateChapterTargetWordCount}
           onSettings={openSettings}
           onSidebarTabChange={setSidebarTab}
           onTask={runTask}
@@ -187,7 +216,7 @@ export function App() {
         welcomeNotice={welcomeNotice}
         onContinueWriting={continueWriting}
         onImport={openImport}
-        onNewProject={createProject}
+        onNewProject={openNewProject}
         onOpenProject={openProject}
         onRenameProject={renameProject}
         onDeleteProject={deleteProject}

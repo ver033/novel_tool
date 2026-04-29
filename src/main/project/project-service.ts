@@ -52,6 +52,9 @@ export class ProjectService {
 
   createProject(input: ProjectCreateInput): CreatedProject {
     const projectFilePath = this.resolveNewProjectFilePath(input);
+    if (existsSync(projectFilePath)) {
+      throw new Error("项目文件已存在，请选择新的文件名或打开已有项目。");
+    }
     const projectDb = openProjectDatabase(projectFilePath);
     const projectRepo = new ProjectRepository(projectDb);
     const chapterRepo = new ChapterRepository(projectDb);
@@ -80,7 +83,8 @@ export class ProjectService {
         plainText: "",
         wordCount: 0,
         dailyWordCount: 0,
-        targetWordCount: null,
+        dailyWordCountDate: null,
+        targetWordCount: input.targetWordCount ?? null,
         status: "draft",
         createdAt,
         updatedAt: createdAt
@@ -116,8 +120,11 @@ export class ProjectService {
     if (!isNovelToolProjectFile(filePath)) {
       throw new Error("墨枢项目文件必须使用 .noveltool 扩展名。");
     }
+    if (!existsSync(filePath)) {
+      throw new Error(`项目文件不存在：${filePath}`);
+    }
 
-    const projectDb = openExistingProjectDatabase(filePath);
+    const projectDb = this.activeProjectDb && this.activeProjectFilePath === filePath ? this.activeProjectDb : openExistingProjectDatabase(filePath);
     const fileProject = readProjectRecordFromDatabase(projectDb);
     const projectRepo = new ProjectRepository(projectDb);
     const updatedAt = nowIso();
@@ -201,6 +208,14 @@ export class ProjectService {
     return visibleProjects;
   }
 
+  getSuggestedProjectFilePath(projectName: string): string {
+    const projectFileDirectory = this.resolveProjectFileDirectory();
+    if (!projectFileDirectory) {
+      throw new Error("创建项目需要 .noveltool 文件路径。");
+    }
+    return resolveAvailableProjectFilePath(projectFileDirectory, projectName);
+  }
+
   getProjectDatabaseForProject(projectId: string): SqliteDatabase {
     if (this.activeProjectDb && this.activeProjectId === projectId) {
       return this.activeProjectDb;
@@ -253,8 +268,7 @@ export class ProjectService {
   }
 
   private resolveNewProjectFilePath(input: ProjectCreateInput): string {
-    const projectFileDirectory =
-      typeof this.options.projectFileDirectory === "function" ? this.options.projectFileDirectory() : this.options.projectFileDirectory;
+    const projectFileDirectory = this.resolveProjectFileDirectory();
     const filePath = input.rootPath
       ? path.resolve(input.rootPath)
       : projectFileDirectory
@@ -267,5 +281,9 @@ export class ProjectService {
       throw new Error("墨枢项目文件必须使用 .noveltool 扩展名。");
     }
     return filePath;
+  }
+
+  private resolveProjectFileDirectory(): string | undefined {
+    return typeof this.options.projectFileDirectory === "function" ? this.options.projectFileDirectory() : this.options.projectFileDirectory;
   }
 }

@@ -1,14 +1,24 @@
 import type { ImportPreview } from "../../main/shared/types";
+import { useEffect, useState } from "react";
 
 type ImportPreviewStepProps = {
   readonly preview: ImportPreview | null;
   readonly onMerge: (chapterIndex: number) => void;
   readonly onRedetect: () => void;
   readonly onRename: (chapterIndex: number, title: string) => void;
-  readonly onSplit: (chapterIndex: number) => void;
+  readonly onSplit: (chapterIndex: number, lineNumber: number) => void;
 };
 
 export function ImportPreviewStep({ preview, onMerge, onRedetect, onRename, onSplit }: ImportPreviewStepProps) {
+  const [activeChapterIndex, setActiveChapterIndex] = useState(0);
+  const chapterCount = preview?.chapters.length ?? 0;
+
+  useEffect(() => {
+    if (activeChapterIndex >= chapterCount) {
+      setActiveChapterIndex(Math.max(0, chapterCount - 1));
+    }
+  }, [activeChapterIndex, chapterCount]);
+
   if (!preview) {
     return (
       <div className="drop-zone">
@@ -21,7 +31,18 @@ export function ImportPreviewStep({ preview, onMerge, onRedetect, onRename, onSp
     );
   }
 
-  const activeChapter = preview.chapters[0] ?? null;
+  const currentPreview = preview;
+  const activeChapter = currentPreview.chapters[activeChapterIndex] ?? currentPreview.chapters[0] ?? null;
+
+  function splitChapter(chapterIndex: number): void {
+    const chapter = currentPreview.chapters[chapterIndex];
+    if (!chapter) {
+      return;
+    }
+    const lineCount = chapter.text.split("\n").length;
+    const lineNumber = Math.max(2, Math.min(lineCount, Math.ceil(lineCount / 2)));
+    onSplit(chapterIndex, lineNumber);
+  }
 
   return (
     <>
@@ -33,15 +54,15 @@ export function ImportPreviewStep({ preview, onMerge, onRedetect, onRename, onSp
             <button className="link-button" onClick={onRedetect} type="button">重新识别</button>
           </div>
           {preview.chapters.map((chapter, index) => (
-            <div className={`detected-row ${index === 0 ? "active" : ""}`} key={`${chapter.order}-${chapter.title}`}>
-              <span>
+            <div className={`detected-row ${index === activeChapterIndex ? "active" : ""}`} key={`${chapter.order}-${chapter.title}`}>
+              <button className="detected-main" onClick={() => setActiveChapterIndex(index)} type="button">
                 <b>{chapter.title}</b>
                 <br />
                 <span className="muted">{chapter.wordCount.toLocaleString("zh-CN")} 字</span>
-              </span>
+              </button>
               <span className="row-actions">
                 <button disabled={index === 0} onClick={() => onMerge(index)} type="button">合并</button>
-                <button onClick={() => onSplit(index)} type="button">拆分</button>
+                <button onClick={() => splitChapter(index)} type="button">拆分</button>
                 <button onClick={() => onRename(index, chapter.title)} type="button">重命名</button>
               </span>
             </div>

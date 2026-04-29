@@ -84,7 +84,7 @@ export function WelcomePage({
   }
 
   return (
-    <div className="welcome-page">
+    <div className="welcome-page" onClick={() => setMenuProjectId(null)}>
       <TopBar title="墨枢" subtitle="专注创作，静心成书" mode="welcome" onWelcome={() => undefined} onSettings={onSettings} />
 
       <main className="main welcome-grid">
@@ -219,7 +219,7 @@ export function WelcomePage({
         </aside>
       </main>
 
-      <Modal open={Boolean(renameProjectDraft)} title="重命名项目">
+      <Modal open={Boolean(renameProjectDraft)} title="重命名项目" onClose={cancelProjectRename}>
         <form className="rename-form" onSubmit={submitProjectRename}>
           <label className="field-label" htmlFor="project-rename-input">
             项目名称

@@ -35,14 +35,27 @@ export function useTaskStore({ projectId, chapterId, taskType, presetId, selecti
   const [error, setError] = useState<string | null>(null);
   const [streamingText, setStreamingText] = useState("");
   const configuredKey = useRef<string | null>(null);
+  const activeRequestId = useRef<string | null>(null);
+
+  const cancelActiveStream = useCallback(() => {
+    const requestId = activeRequestId.current;
+    if (!requestId) {
+      return;
+    }
+    activeRequestId.current = null;
+    void api.ai.cancelStream({ requestId });
+  }, [api]);
 
   useEffect(() => {
+    cancelActiveStream();
     setTask(null);
     setCandidate(null);
     setError(null);
     setStreamingText("");
     configuredKey.current = null;
-  }, [projectId, chapterId, taskType, presetId, selectionSnapshot?.selectionHash]);
+  }, [cancelActiveStream, projectId, chapterId, taskType, presetId, selectionSnapshot?.selectionHash]);
+
+  useEffect(() => () => cancelActiveStream(), [cancelActiveStream]);
 
   useEffect(() => {
     if (!projectId || !selectionSnapshot) {
@@ -91,6 +104,7 @@ export function useTaskStore({ projectId, chapterId, taskType, presetId, selecti
     setError(null);
     setStreamingText("");
     let unsubscribe: (() => void) | null = null;
+    let requestId: string | null = null;
     try {
       const updatedTask = (await api.ai.updateTask({
         taskId: task.id,
@@ -100,7 +114,9 @@ export function useTaskStore({ projectId, chapterId, taskType, presetId, selecti
         }
       })) as AiTaskRecord;
       setTask(updatedTask);
-      const requestId = `task_stream_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+      requestId = `task_stream_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+      cancelActiveStream();
+      activeRequestId.current = requestId;
       unsubscribe = api.ai.subscribeAiStream(requestId, {
         onChunk(event) {
           setStreamingText((current) => `${current}${event.content}`);
@@ -122,10 +138,56 @@ export function useTaskStore({ projectId, chapterId, taskType, presetId, selecti
     } catch (reason) {
       setError(formatIpcErrorMessage(reason, "生成预览失败"));
     } finally {
+      if (requestId && activeRequestId.current === requestId) {
+        activeRequestId.current = null;
+      }
       unsubscribe?.();
       setBusy(false);
     }
   }, [api, instruction, presetId, task]);
+
+  const continuePreview = useCallback(async () => {
+    if (!task) {
+      return;
+    }
+
+    setBusy(true);
+    setError(null);
+    setStreamingText((current) => current || task.outputText || "");
+    let unsubscribe: (() => void) | null = null;
+    let requestId: string | null = null;
+    try {
+      requestId = `task_continue_stream_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+      cancelActiveStream();
+      activeRequestId.current = requestId;
+      unsubscribe = api.ai.subscribeAiStream(requestId, {
+        onChunk(event) {
+          setStreamingText((current) => `${current}${event.content}`);
+        },
+        onDone(event) {
+          const result = event.payload as PreviewResult;
+          setTask(result.task);
+          setCandidate(result.candidate);
+          setStreamingText("");
+        },
+        onError(event) {
+          setError(event.error);
+        }
+      });
+      const result = (await api.ai.continuePreviewStream({ requestId, taskId: task.id })) as PreviewResult;
+      setTask(result.task);
+      setCandidate(result.candidate);
+      setStreamingText("");
+    } catch (reason) {
+      setError(formatIpcErrorMessage(reason, "继续生成失败"));
+    } finally {
+      if (requestId && activeRequestId.current === requestId) {
+        activeRequestId.current = null;
+      }
+      unsubscribe?.();
+      setBusy(false);
+    }
+  }, [api, cancelActiveStream, task]);
 
   const rejectCandidate = useCallback(async () => {
     if (!candidate) {
@@ -222,6 +284,7 @@ export function useTaskStore({ projectId, chapterId, taskType, presetId, selecti
           task,
           candidate,
           applyMode,
+          currentChapterId: chapterId,
           flushPendingSave
         });
         setTask(result.task);
@@ -232,13 +295,14 @@ export function useTaskStore({ projectId, chapterId, taskType, presetId, selecti
         setBusy(false);
       }
     },
-    [api, candidate, editor, flushPendingSave, task]
+    [api, candidate, chapterId, editor, flushPendingSave, task]
   );
 
   return {
     applyCandidate,
     busy,
     candidate,
+    continuePreview,
     error,
     generatePreview,
     rejectCandidate,

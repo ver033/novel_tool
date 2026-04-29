@@ -1,7 +1,9 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import chardet from "chardet";
 import iconv from "iconv-lite";
 import { normalizeTxtContent } from "./chapter-detector";
+
+const MAX_TXT_IMPORT_BYTES = 20 * 1024 * 1024;
 
 export type TxtReadResult = {
   readonly text: string;
@@ -26,6 +28,11 @@ function normalizeEncoding(value: string | null | undefined): string {
 }
 
 export function readTxtFile(filePath: string): TxtReadResult {
+  const stats = statSync(filePath);
+  if (stats.size > MAX_TXT_IMPORT_BYTES) {
+    throw new Error("TXT 文件过大，请选择 20MB 以内的文本文件。");
+  }
+
   const buffer = readFileSync(filePath);
   const encoding = normalizeEncoding(chardet.detect(buffer));
   const text = normalizeTxtContent(iconv.decode(buffer, encoding));

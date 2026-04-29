@@ -116,6 +116,9 @@ export function ImportWizardPage({ currentProjectId, step, onBack, onNext, onSte
   }
 
   function handlePrimary(): void {
+    if (busy) {
+      return;
+    }
     if (step === 1) {
       if (preview) {
         onNext();
@@ -162,7 +165,7 @@ export function ImportWizardPage({ currentProjectId, step, onBack, onNext, onSte
   return (
     <div className="import-shell">
       <header className="settings-top">
-        <button className="brand brand-button" onClick={onCancel} title="返回开始页" type="button">
+        <button className="brand brand-button" onClick={onCancel} title="返回上一页" type="button">
           <span className="line-icon">
             <BookOpen size={24} />
           </span>
@@ -216,7 +219,7 @@ export function ImportWizardPage({ currentProjectId, step, onBack, onNext, onSte
                   onMerge={(chapterIndex) => void updatePreview([{ type: "merge_with_previous", chapterIndex }])}
                   onRedetect={() => void updatePreview([{ type: "redetect" }])}
                   onRename={renameChapter}
-                  onSplit={(chapterIndex) => void updatePreview([{ type: "split_from_line", chapterIndex, lineNumber: 2 }])}
+                  onSplit={(chapterIndex, lineNumber) => void updatePreview([{ type: "split_from_line", chapterIndex, lineNumber }])}
                 />
               ) : null}
               {!preview ? <ImportFileStep busy={busy} currentProjectId={currentProjectId} error={error} mode={mode} preview={preview} onModeChange={setMode} onSelectFile={selectAndPreviewTxt} /> : null}
@@ -229,7 +232,7 @@ export function ImportWizardPage({ currentProjectId, step, onBack, onNext, onSte
                 onMerge={(chapterIndex) => void updatePreview([{ type: "merge_with_previous", chapterIndex }])}
                 onRedetect={() => void updatePreview([{ type: "redetect" }])}
                 onRename={renameChapter}
-                onSplit={(chapterIndex) => void updatePreview([{ type: "split_from_line", chapterIndex, lineNumber: 2 }])}
+                onSplit={(chapterIndex, lineNumber) => void updatePreview([{ type: "split_from_line", chapterIndex, lineNumber }])}
               />
               <ImportFileStep busy={busy} currentProjectId={currentProjectId} error={error} mode={mode} preview={preview} showDropZone={false} onModeChange={setMode} onSelectFile={selectAndPreviewTxt} />
             </>
@@ -252,7 +255,7 @@ export function ImportWizardPage({ currentProjectId, step, onBack, onNext, onSte
         </section>
       </main>
 
-      <Modal open={Boolean(renameChapterDraft)} title="重命名章节">
+      <Modal open={Boolean(renameChapterDraft)} title="重命名章节" onClose={cancelRenameChapter}>
         <form className="rename-form" onSubmit={submitRenameChapter}>
           <label className="field-label" htmlFor="import-chapter-rename-input">
             章节名称

@@ -29,6 +29,11 @@ type CreateMessageInput = {
   readonly action: AiChatAction | null;
 };
 
+type CreateSessionInput = {
+  readonly projectId: string;
+  readonly title?: string;
+};
+
 type ListMessagesInput = {
   readonly projectId: string;
   readonly sessionId: string;
@@ -37,6 +42,20 @@ type ListMessagesInput = {
 type ClearSessionInput = {
   readonly projectId: string;
   readonly sessionId: string;
+};
+
+type RenameSessionInput = {
+  readonly projectId: string;
+  readonly sessionId: string;
+  readonly title: string;
+};
+
+type DeleteSessionInput = ClearSessionInput;
+
+type RenameSessionFromFirstMessageInput = {
+  readonly projectId: string;
+  readonly sessionId: string;
+  readonly message: string;
 };
 
 function nowIso(): string {
@@ -74,22 +93,43 @@ function mapMessage(row: AiChatMessageRow): AiChatMessageRecord {
   };
 }
 
+function createSessionTitleFromMessage(message: string): string {
+  const compact = message.replace(/\s+/g, " ").trim();
+  if (compact.length <= 20) {
+    return compact;
+  }
+
+  return `${compact.slice(0, 20)}...`;
+}
+
 export class AiChatRepository {
   constructor(private readonly db: SqliteDatabase) {}
 
   getOrCreateDefaultSession(projectId: string): AiChatSessionRecord {
     const existing = this.db
-      .prepare("SELECT * FROM ai_chat_sessions WHERE project_id = ? AND status = 'active' ORDER BY created_at ASC LIMIT 1")
+      .prepare("SELECT * FROM ai_chat_sessions WHERE project_id = ? AND status = 'active' ORDER BY updated_at DESC, rowid DESC LIMIT 1")
       .get(projectId) as AiChatSessionRow | undefined;
     if (existing) {
       return mapSession(existing);
     }
 
+    return this.createSession({ projectId, title: "默认对话" });
+  }
+
+  listSessions(projectId: string): AiChatSessionRecord[] {
+    const rows = this.db
+      .prepare("SELECT * FROM ai_chat_sessions WHERE project_id = ? AND status = 'active' ORDER BY updated_at DESC, rowid DESC")
+      .all(projectId) as AiChatSessionRow[];
+
+    return rows.map(mapSession);
+  }
+
+  createSession(input: CreateSessionInput): AiChatSessionRecord {
     const createdAt = nowIso();
     const session = {
       id: createId("chat"),
-      projectId,
-      title: "默认对话",
+      projectId: input.projectId,
+      title: input.title?.trim() || "新对话",
       status: "active",
       createdAt,
       updatedAt: createdAt
@@ -100,6 +140,44 @@ export class AiChatRepository {
       .run(session.id, session.projectId, session.title, session.status, session.createdAt, session.updatedAt);
 
     return session;
+  }
+
+  renameSession(input: RenameSessionInput): AiChatSessionRecord {
+    const updatedAt = nowIso();
+    this.db
+      .prepare("UPDATE ai_chat_sessions SET title = ?, updated_at = ? WHERE project_id = ? AND id = ? AND status = 'active'")
+      .run(input.title.trim(), updatedAt, input.projectId, input.sessionId);
+
+    const row = this.db
+      .prepare("SELECT * FROM ai_chat_sessions WHERE project_id = ? AND id = ? AND status = 'active'")
+      .get(input.projectId, input.sessionId) as AiChatSessionRow | undefined;
+    if (!row) {
+      throw new Error("AI 对话不存在。");
+    }
+
+    return mapSession(row);
+  }
+
+  renameSessionFromFirstMessage(input: RenameSessionFromFirstMessageInput): AiChatSessionRecord | null {
+    const row = this.db
+      .prepare("SELECT * FROM ai_chat_sessions WHERE project_id = ? AND id = ? AND status = 'active'")
+      .get(input.projectId, input.sessionId) as AiChatSessionRow | undefined;
+    if (!row || (row.title !== "新对话" && row.title !== "默认对话")) {
+      return null;
+    }
+
+    const existingMessageCount = this.db
+      .prepare("SELECT COUNT(*) AS count FROM ai_chat_messages WHERE project_id = ? AND session_id = ?")
+      .get(input.projectId, input.sessionId) as { readonly count: number };
+    if (existingMessageCount.count !== 1) {
+      return null;
+    }
+
+    return this.renameSession({
+      projectId: input.projectId,
+      sessionId: input.sessionId,
+      title: createSessionTitleFromMessage(input.message)
+    });
   }
 
   listMessages(input: ListMessagesInput): AiChatMessageRecord[] {
@@ -137,5 +215,16 @@ export class AiChatRepository {
   clearSession(input: ClearSessionInput): void {
     this.db.prepare("DELETE FROM ai_chat_messages WHERE project_id = ? AND session_id = ?").run(input.projectId, input.sessionId);
     this.db.prepare("UPDATE ai_chat_sessions SET updated_at = ? WHERE id = ? AND project_id = ?").run(nowIso(), input.sessionId, input.projectId);
+  }
+
+  deleteSession(input: DeleteSessionInput): void {
+    const deletedAt = nowIso();
+    const transaction = this.db.transaction(() => {
+      this.db.prepare("DELETE FROM ai_chat_messages WHERE project_id = ? AND session_id = ?").run(input.projectId, input.sessionId);
+      this.db
+        .prepare("UPDATE ai_chat_sessions SET status = 'deleted', updated_at = ? WHERE project_id = ? AND id = ?")
+        .run(deletedAt, input.projectId, input.sessionId);
+    });
+    transaction();
   }
 }

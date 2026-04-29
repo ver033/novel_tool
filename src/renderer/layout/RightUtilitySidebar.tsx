@@ -66,6 +66,7 @@ export function RightUtilitySidebar({
             currentChapterTitle={currentChapterTitle}
             currentProjectId={currentProjectId}
             selectionSnapshot={selectionSnapshot}
+            onOpenSettings={onOpenSettings}
           />
         ) : null}
         {activeTab === "task" ? (

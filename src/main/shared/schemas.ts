@@ -3,12 +3,17 @@ import { z } from "zod";
 const nonEmptyString = z.string().trim().min(1);
 const idSchema = nonEmptyString.max(128);
 const optionalIdSchema = idSchema.optional();
+const MAX_TIPTAP_JSON_CHARS = 2_000_000;
+const MAX_CHAPTER_PLAIN_TEXT_CHARS = 1_000_000;
 
 const tiptapJsonSchema = z
   .object({
     type: z.string().min(1)
   })
-  .passthrough();
+  .passthrough()
+  .refine((value) => JSON.stringify(value).length <= MAX_TIPTAP_JSON_CHARS, {
+    message: "contentJson is too large"
+  });
 
 export const taskTypeSchema = z.enum(["polish", "expand", "proofread", "continue"]);
 export const promptPresetTaskTypeSchema = z.enum(["polish", "expand", "continue"]);
@@ -32,9 +37,18 @@ export const selectionSnapshotSchema = z
 export const projectCreateInputSchema = z
   .object({
     name: nonEmptyString.max(120),
-    rootPath: z.string().trim().min(1).optional()
+    rootPath: z.string().trim().min(1).optional(),
+    targetWordCount: z.number().int().min(100).max(500_000).optional()
   })
   .strict();
+
+export const projectSelectSavePathInputSchema = z
+  .object({
+    suggestedName: nonEmptyString.max(120).optional()
+  })
+  .strict();
+
+export const projectSuggestFilePathInputSchema = projectSelectSavePathInputSchema;
 
 export const projectOpenInputSchema = z
   .object({
@@ -70,12 +84,14 @@ export const chapterCreateInputSchema = z
     projectId: idSchema,
     title: nonEmptyString.max(160),
     volumeTitle: z.string().trim().min(1).max(160).optional(),
-    sortOrder: z.number().int().nonnegative().optional()
+    sortOrder: z.number().int().nonnegative().optional(),
+    targetWordCount: z.number().int().min(100).max(500_000).nullable().optional()
   })
   .strict();
 
 export const chapterRenameInputSchema = z
   .object({
+    projectId: optionalIdSchema,
     chapterId: idSchema,
     title: nonEmptyString.max(160)
   })
@@ -89,6 +105,7 @@ export const chapterListInputSchema = z
 
 export const chapterDeleteInputSchema = z
   .object({
+    projectId: optionalIdSchema,
     chapterId: idSchema
   })
   .strict();
@@ -97,15 +114,25 @@ export const chapterGetContentInputSchema = chapterDeleteInputSchema;
 
 export const chapterSaveContentInputSchema = z
   .object({
+    projectId: optionalIdSchema,
     chapterId: idSchema,
     contentJson: tiptapJsonSchema,
-    plainText: z.string(),
+    plainText: z.string().max(MAX_CHAPTER_PLAIN_TEXT_CHARS),
     wordCount: z.number().int().nonnegative().optional()
+  })
+  .strict();
+
+export const chapterUpdateTargetWordCountInputSchema = z
+  .object({
+    projectId: optionalIdSchema,
+    chapterId: idSchema,
+    targetWordCount: z.number().int().min(100).max(500_000).nullable()
   })
   .strict();
 
 export const chapterCreateSnapshotInputSchema = z
   .object({
+    projectId: optionalIdSchema,
     chapterId: idSchema,
     reason: nonEmptyString.max(120)
   })
@@ -214,6 +241,12 @@ export const aiGeneratePreviewStreamInputSchema = z
   })
   .strict();
 
+export const aiCancelStreamInputSchema = z
+  .object({
+    requestId: idSchema
+  })
+  .strict();
+
 export const aiApplyCandidateInputSchema = z
   .object({
     candidateId: idSchema,
@@ -231,7 +264,10 @@ export const aiSaveCandidateToScratchpadInputSchema = z
 
 export const aiSendChatMessageInputSchema = z
   .object({
+    projectId: optionalIdSchema,
+    sessionId: optionalIdSchema,
     message: nonEmptyString.max(8000),
+    chapterId: optionalIdSchema,
     currentChapterTitle: z.string().trim().min(1).max(160).optional(),
     selectionText: z.string().trim().min(1).max(20000).optional(),
     chapterExcerpt: z.string().trim().min(1).max(20000).optional()
@@ -241,6 +277,30 @@ export const aiSendChatMessageInputSchema = z
 export const aiGetChatSessionInputSchema = z
   .object({
     projectId: idSchema
+  })
+  .strict();
+
+export const aiListChatSessionsInputSchema = aiGetChatSessionInputSchema;
+
+export const aiCreateChatSessionInputSchema = z
+  .object({
+    projectId: idSchema,
+    title: z.string().trim().min(1).max(80).optional()
+  })
+  .strict();
+
+export const aiRenameChatSessionInputSchema = z
+  .object({
+    projectId: idSchema,
+    sessionId: idSchema,
+    title: nonEmptyString.max(80)
+  })
+  .strict();
+
+export const aiDeleteChatSessionInputSchema = z
+  .object({
+    projectId: idSchema,
+    sessionId: idSchema
   })
   .strict();
 

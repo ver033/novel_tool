@@ -1,0 +1,36 @@
+import path from "node:path";
+
+const selectedTxtFilePaths = new Set<string>();
+const selectedProjectFilePaths = new Set<string>();
+
+function normalizeFilePath(filePath: string): string {
+  return path.resolve(filePath);
+}
+
+function assertSelectedPathAllowed(filePath: string, allowedPaths: ReadonlySet<string>, message: string): string {
+  const resolvedPath = normalizeFilePath(filePath);
+  if (!allowedPaths.has(resolvedPath)) {
+    throw new Error(message);
+  }
+  return resolvedPath;
+}
+
+export function allowSelectedTxtFilePath(filePath: string): string {
+  const resolvedPath = normalizeFilePath(filePath);
+  selectedTxtFilePaths.add(resolvedPath);
+  return resolvedPath;
+}
+
+export function assertSelectedTxtFilePathAllowed(filePath: string): string {
+  return assertSelectedPathAllowed(filePath, selectedTxtFilePaths, "TXT 文件必须通过选择文件按钮打开。");
+}
+
+export function allowSelectedProjectFilePath(filePath: string): string {
+  const resolvedPath = normalizeFilePath(filePath);
+  selectedProjectFilePaths.add(resolvedPath);
+  return resolvedPath;
+}
+
+export function assertSelectedProjectFilePathAllowed(filePath: string): string {
+  return assertSelectedPathAllowed(filePath, selectedProjectFilePaths, "项目文件必须通过选择文件按钮打开。");
+}

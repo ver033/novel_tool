@@ -63,6 +63,10 @@ export const NovelEditor = memo(function NovelEditor({
   onTask
 }: NovelEditorProps) {
   const appliedContentVersion = useRef<number | null>(null);
+  const onContentChangeRef = useRef(onContentChange);
+  useEffect(() => {
+    onContentChangeRef.current = onContentChange;
+  }, [onContentChange]);
   const editorContentStyle: EditorContentStyle = {
     "--editor-font-family": fontFamilyBySetting[editorSettings.fontFamily] ?? fontFamilyBySetting.system,
     "--editor-font-size": `${editorSettings.fontSize}px`,
@@ -111,7 +115,7 @@ export const NovelEditor = memo(function NovelEditor({
       }
     },
     onUpdate({ editor: currentEditor }) {
-      onContentChange(currentEditor.getJSON() as TiptapDocument);
+      onContentChangeRef.current(currentEditor.getJSON() as TiptapDocument);
     }
   });
 
@@ -122,7 +126,7 @@ export const NovelEditor = memo(function NovelEditor({
 
     editor.commands.setContent(ensureParagraphIds(contentJson), { emitUpdate: false });
     appliedContentVersion.current = contentVersion;
-  }, [chapterId, contentJson, contentVersion, editor]);
+  }, [contentVersion, editor]);
 
   useEffect(() => {
     onEditorReady?.(editor);

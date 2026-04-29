@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChapterContent, ChapterSummary, EditorSettings, SettingsState } from "../../main/shared/types";
 import { countWritingUnits } from "../../main/shared/text";
 import { getNovelToolApi } from "./app-store";
@@ -50,6 +50,29 @@ function statusLabel(status: SaveStatus, savedAt: Date | null, errorMessage: str
   return formatSavedAt(savedAt);
 }
 
+function localDateKey(value: Date = new Date()): string {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+export function getVisibleDailyWordCount(input: {
+  readonly dailyWordCount: number;
+  readonly dailyWordCountDate: string | null;
+  readonly savedWordCount: number;
+  readonly saveStatus: SaveStatus;
+  readonly today?: string;
+  readonly wordCount: number;
+}): number {
+  const baseDailyWordCount = input.dailyWordCountDate === (input.today ?? localDateKey()) ? input.dailyWordCount : 0;
+  if (input.saveStatus !== "dirty" && input.saveStatus !== "saving") {
+    return baseDailyWordCount;
+  }
+
+  return Math.max(0, baseDailyWordCount + input.wordCount - input.savedWordCount);
+}
+
 export function useEditorStore(activeChapter: ChapterSummary | null) {
   const api = useMemo(getNovelToolApi, []);
   const [contentJson, setContentJson] = useState<TiptapDocument>(() => createTiptapDocumentFromPlainText(""));
@@ -60,8 +83,13 @@ export function useEditorStore(activeChapter: ChapterSummary | null) {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [editorSettings, setEditorSettings] = useState<EditorSettings>(DEFAULT_EDITOR_SETTINGS);
   const [wordCount, setWordCount] = useState(0);
+  const [dailyWordCount, setDailyWordCount] = useState(0);
+  const [dailyWordCountDate, setDailyWordCountDate] = useState<string | null>(null);
+  const [savedWordCount, setSavedWordCount] = useState(0);
+  const saveInFlight = useRef<Promise<void> | null>(null);
 
   const chapterId = activeChapter?.id ?? null;
+  const projectId = activeChapter?.projectId ?? null;
 
   useEffect(() => {
     let cancelled = false;
@@ -86,12 +114,15 @@ export function useEditorStore(activeChapter: ChapterSummary | null) {
   }, [api]);
 
   useEffect(() => {
-    if (!chapterId) {
+    if (!chapterId || !projectId) {
       const emptyDocument = createTiptapDocumentFromPlainText("");
       setContentJson(emptyDocument);
       setContentVersion((current) => current + 1);
       setPlainText("");
       setWordCount(0);
+      setDailyWordCount(0);
+      setDailyWordCountDate(null);
+      setSavedWordCount(0);
       setSaveStatus("saved");
       setLastSavedAt(null);
       setErrorMessage(null);
@@ -99,13 +130,14 @@ export function useEditorStore(activeChapter: ChapterSummary | null) {
     }
 
     const currentChapterId = chapterId;
+    const currentProjectId = projectId;
     let cancelled = false;
 
     async function loadChapterContent() {
       setSaveStatus("saved");
       setErrorMessage(null);
       try {
-        const content = (await api.chapter.getContent({ chapterId: currentChapterId })) as ChapterContent | undefined;
+        const content = (await api.chapter.getContent({ projectId: currentProjectId, chapterId: currentChapterId })) as ChapterContent | undefined;
         if (cancelled) {
           return;
         }
@@ -118,6 +150,9 @@ export function useEditorStore(activeChapter: ChapterSummary | null) {
         setContentVersion((current) => current + 1);
         setPlainText(nextPlainText);
         setWordCount(content.wordCount ?? countWritingUnits(nextPlainText));
+        setDailyWordCount(content.dailyWordCount ?? 0);
+        setDailyWordCountDate(content.dailyWordCountDate ?? null);
+        setSavedWordCount(content.wordCount ?? countWritingUnits(nextPlainText));
         setLastSavedAt(content.updatedAt ? new Date(content.updatedAt) : null);
       } catch (reason) {
         if (cancelled) {
@@ -128,6 +163,9 @@ export function useEditorStore(activeChapter: ChapterSummary | null) {
         setContentVersion((current) => current + 1);
         setPlainText("");
         setWordCount(0);
+        setDailyWordCount(0);
+        setDailyWordCountDate(null);
+        setSavedWordCount(0);
         setErrorMessage(formatError(reason));
         setSaveStatus("failed");
       }
@@ -138,7 +176,7 @@ export function useEditorStore(activeChapter: ChapterSummary | null) {
     return () => {
       cancelled = true;
     };
-  }, [api, chapterId]);
+  }, [api, chapterId, projectId]);
 
   const handleContentChange = useCallback((nextContentJson: TiptapDocument) => {
     const nextPlainText = extractPlainTextFromTiptapJson(nextContentJson);
@@ -165,26 +203,42 @@ export function useEditorStore(activeChapter: ChapterSummary | null) {
   );
 
   const flushPendingSave = useCallback(async () => {
-    if (!chapterId || saveStatus !== "dirty") {
+    if (!chapterId || !projectId || saveStatus !== "dirty") {
       return;
+    }
+    if (saveInFlight.current) {
+      return saveInFlight.current;
     }
 
     setSaveStatus("saving");
-    try {
+    const savePromise = (async () => {
       const content = (await api.chapter.saveContent({
+        projectId,
         chapterId,
         contentJson,
         plainText,
         wordCount
       })) as ChapterContent | undefined;
       setSaveStatus("saved");
+      setDailyWordCount(content?.dailyWordCount ?? 0);
+      setDailyWordCountDate(content?.dailyWordCountDate ?? localDateKey());
+      setSavedWordCount(content?.wordCount ?? wordCount);
       setLastSavedAt(content?.updatedAt ? new Date(content.updatedAt) : new Date());
+    })();
+
+    saveInFlight.current = savePromise;
+    try {
+      await savePromise;
     } catch (reason) {
       setErrorMessage(formatError(reason));
       setSaveStatus("failed");
       throw reason;
+    } finally {
+      if (saveInFlight.current === savePromise) {
+        saveInFlight.current = null;
+      }
     }
-  }, [api, chapterId, contentJson, plainText, saveStatus, wordCount]);
+  }, [api, chapterId, contentJson, plainText, projectId, saveStatus, wordCount]);
 
   useEffect(() => {
     if (!chapterId || saveStatus !== "dirty") {
@@ -198,10 +252,13 @@ export function useEditorStore(activeChapter: ChapterSummary | null) {
     return () => window.clearTimeout(timer);
   }, [chapterId, editorSettings.autosaveMs, flushPendingSave, saveStatus]);
 
+  const visibleDailyWordCount = getVisibleDailyWordCount({ dailyWordCount, dailyWordCountDate, savedWordCount, saveStatus, wordCount });
+
   return {
     contentJson,
     contentVersion,
     editorSettings,
+    dailyWordCount: visibleDailyWordCount,
     flushPendingSave,
     handleContentChange,
     plainText,

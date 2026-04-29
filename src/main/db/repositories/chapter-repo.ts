@@ -12,6 +12,7 @@ type ChapterRow = {
   readonly plain_text: string;
   readonly word_count: number;
   readonly daily_word_count: number;
+  readonly daily_word_count_date: string | null;
   readonly target_word_count: number | null;
   readonly status: string;
   readonly created_at: string;
@@ -36,6 +37,7 @@ function mapSummary(row: ChapterRow): ChapterSummary {
     sortOrder: row.sort_order,
     wordCount: row.word_count,
     dailyWordCount: row.daily_word_count,
+    dailyWordCountDate: row.daily_word_count_date,
     targetWordCount: row.target_word_count,
     status: row.status,
     createdAt: row.created_at,
@@ -70,8 +72,8 @@ export class ChapterRepository {
       .prepare(
         `INSERT INTO chapters (
           id, project_id, title, volume_title, sort_order, content_json, plain_text,
-          word_count, daily_word_count, target_word_count, status, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          word_count, daily_word_count, daily_word_count_date, target_word_count, status, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         chapter.id,
@@ -83,6 +85,7 @@ export class ChapterRepository {
         chapter.plainText,
         chapter.wordCount,
         chapter.dailyWordCount,
+        chapter.dailyWordCountDate,
         chapter.targetWordCount,
         chapter.status,
         chapter.createdAt,
@@ -112,16 +115,31 @@ export class ChapterRepository {
     this.db.prepare("DELETE FROM chapters WHERE id = ?").run(chapterId);
   }
 
-  saveContent(chapterId: string, contentJson: unknown, plainText: string, wordCount: number, updatedAt: string): ChapterContent {
+  saveContent(
+    chapterId: string,
+    contentJson: unknown,
+    plainText: string,
+    wordCount: number,
+    dailyWordCount: number,
+    dailyWordCountDate: string,
+    updatedAt: string
+  ): ChapterContent {
     this.db
-      .prepare("UPDATE chapters SET content_json = ?, plain_text = ?, word_count = ?, updated_at = ? WHERE id = ?")
-      .run(serializeContentJson(contentJson), plainText, wordCount, updatedAt, chapterId);
+      .prepare(
+        "UPDATE chapters SET content_json = ?, plain_text = ?, word_count = ?, daily_word_count = ?, daily_word_count_date = ?, updated_at = ? WHERE id = ?"
+      )
+      .run(serializeContentJson(contentJson), plainText, wordCount, dailyWordCount, dailyWordCountDate, updatedAt, chapterId);
 
     const content = this.getContent(chapterId);
     if (!content) {
       throw new Error("Chapter not found");
     }
     return content;
+  }
+
+  updateTargetWordCount(chapterId: string, targetWordCount: number | null, updatedAt: string): ChapterSummary {
+    this.db.prepare("UPDATE chapters SET target_word_count = ?, updated_at = ? WHERE id = ?").run(targetWordCount, updatedAt, chapterId);
+    return mapSummary(this.findRowById(chapterId));
   }
 
   createSnapshot(snapshot: ChapterSnapshot): ChapterSnapshot {

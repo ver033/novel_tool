@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent, type MouseEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type FormEvent, type MouseEvent, type ReactNode } from "react";
 import {
   CaretDown,
   Code,
@@ -92,6 +92,20 @@ export function SelectionBubbleMenu({ chapterId, editor, taskPromptPresets, onSe
   const [linkDraft, setLinkDraft] = useState("");
   const [scratchStatus, setScratchStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [scratchError, setScratchError] = useState("");
+
+  useEffect(() => {
+    const resetMenus = () => {
+      setActiveMenu(null);
+      setLinkOpen(false);
+      setScratchStatus("idle");
+      setScratchError("");
+    };
+
+    editor.on("selectionUpdate", resetMenus);
+    return () => {
+      editor.off("selectionUpdate", resetMenus);
+    };
+  }, [editor]);
 
   function toggleMenu(menu: Exclude<ActiveMenu, null>): void {
     setLinkOpen(false);

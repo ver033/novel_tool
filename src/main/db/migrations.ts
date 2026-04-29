@@ -37,6 +37,7 @@ const migrations: readonly Migration[] = [
           plain_text TEXT NOT NULL,
           word_count INTEGER NOT NULL DEFAULT 0,
           daily_word_count INTEGER NOT NULL DEFAULT 0,
+          daily_word_count_date TEXT,
           target_word_count INTEGER,
           status TEXT NOT NULL DEFAULT 'draft',
           created_at TEXT NOT NULL,
@@ -196,6 +197,15 @@ const migrations: readonly Migration[] = [
         CREATE INDEX IF NOT EXISTS idx_ai_chat_messages_session_created
           ON ai_chat_messages(session_id, created_at);
       `);
+    }
+  },
+  {
+    version: 4,
+    name: "chapter_daily_word_count_date",
+    up(db) {
+      if (!tableHasColumn(db, "chapters", "daily_word_count_date")) {
+        db.exec("ALTER TABLE chapters ADD COLUMN daily_word_count_date TEXT;");
+      }
     }
   }
 ];

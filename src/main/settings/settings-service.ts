@@ -160,7 +160,7 @@ export class SettingsService {
         ...DEFAULT_EDITOR_SETTINGS,
         ...savedEditor
       },
-      aiProvider: sanitizeAiProvider(this.settingsRepo.getJson<StoredAiProviderSettings>(AI_PROVIDER_SETTINGS_KEY)),
+      aiProvider: sanitizeAiProvider(this.getStoredAiProviderSettings()),
       projectPath: this.settingsRepo.getJson<string>(PROJECT_PATH_SETTINGS_KEY),
       taskPromptPresets: this.listTaskPromptPresets()
     };
@@ -175,7 +175,7 @@ export class SettingsService {
     }
 
     if (input.aiProvider) {
-      const current = this.settingsRepo.getJson<StoredAiProviderSettings>(AI_PROVIDER_SETTINGS_KEY);
+      const current = this.getStoredAiProviderSettings();
       const encryptedApiKey = input.aiProvider.apiKey
         ? this.secretStore.encrypt(input.aiProvider.apiKey)
         : current?.encryptedApiKey ?? (current?.apiKey ? this.secretStore.encrypt(current.apiKey) : undefined);
@@ -219,7 +219,7 @@ export class SettingsService {
   }
 
   getOpenRouterConfig(override?: SettingsSaveInput["aiProvider"]): OpenRouterRuntimeConfig {
-    const settings = this.settingsRepo.getJson<StoredAiProviderSettings>(AI_PROVIDER_SETTINGS_KEY);
+    const settings = this.getStoredAiProviderSettings();
     const modelName = override?.modelName?.trim() || settings?.modelName;
     const apiKey = override?.apiKey?.trim() || this.getStoredApiKey(settings);
 
@@ -262,5 +262,22 @@ export class SettingsService {
       return this.secretStore.decrypt(settings.encryptedApiKey);
     }
     return settings.apiKey ?? null;
+  }
+
+  private getStoredAiProviderSettings(): StoredAiProviderSettings | null {
+    const settings = this.settingsRepo.getJson<StoredAiProviderSettings>(AI_PROVIDER_SETTINGS_KEY);
+    if (!settings?.apiKey || settings.encryptedApiKey) {
+      return settings;
+    }
+
+    const encryptedApiKey = this.secretStore.encrypt(settings.apiKey);
+    const migrated = {
+      providerType: "openrouter",
+      baseUrl: settings.baseUrl || OPENROUTER_BASE_URL,
+      modelName: settings.modelName,
+      encryptedApiKey
+    } satisfies StoredAiProviderSettings;
+    this.settingsRepo.setJson(AI_PROVIDER_SETTINGS_KEY, migrated);
+    return migrated;
   }
 }

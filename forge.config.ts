@@ -3,6 +3,8 @@ import { MakerDMG } from "@electron-forge/maker-dmg";
 import { MakerSquirrel } from "@electron-forge/maker-squirrel";
 import { MakerZIP } from "@electron-forge/maker-zip";
 import { VitePlugin } from "@electron-forge/plugin-vite";
+import { flipFuses, FuseV1Options, FuseVersion } from "@electron/fuses";
+import path from "node:path";
 
 const packagedRuntimeDependencyRoots = [
   ".vite",
@@ -11,6 +13,8 @@ const packagedRuntimeDependencyRoots = [
   "node_modules/bindings",
   "node_modules/file-uri-to-path"
 ];
+const appBundleName = "墨枢";
+const executableName = "novel-tool";
 
 export function shouldPackageRuntimeFile(file: string): boolean {
   if (!file) {
@@ -35,12 +39,34 @@ export function shouldIgnorePackageFile(file: string): boolean {
   return !shouldPackageRuntimeFile(file);
 }
 
+export function resolvePackagedElectronBinary(buildPath: string, platform: string): string {
+  if (platform === "darwin") {
+    return path.join(buildPath, `${appBundleName}.app`, "Contents", "MacOS", executableName);
+  }
+  if (platform === "win32") {
+    return path.join(buildPath, `${executableName}.exe`);
+  }
+  return path.join(buildPath, executableName);
+}
+
+async function applyElectronFuses(buildPath: string, _electronVersion: string, platform: string, arch: string): Promise<void> {
+  await flipFuses(resolvePackagedElectronBinary(buildPath, platform), {
+    version: FuseVersion.V1,
+    resetAdHocDarwinSignature: platform === "darwin" && arch === "arm64",
+    [FuseV1Options.RunAsNode]: false,
+    [FuseV1Options.EnableNodeOptionsEnvironmentVariable]: false,
+    [FuseV1Options.EnableNodeCliInspectArguments]: false
+  });
+}
+
 const config: ForgeConfig = {
   packagerConfig: {
     asar: {
       unpack: "**/*.node"
     },
-    ignore: shouldIgnorePackageFile
+    ignore: shouldIgnorePackageFile,
+    executableName,
+    afterComplete: [applyElectronFuses]
   },
   rebuildConfig: {},
   makers: [

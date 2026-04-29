@@ -3,6 +3,7 @@ import type { NovelToolApi } from "../../preload/api";
 import type {
   ChapterSummary,
   ImportConfirmResult,
+  ProjectCreateInput,
   ProjectRecord
 } from "../../main/shared/types";
 
@@ -66,8 +67,24 @@ export function useAppStore() {
     return opened;
   }, [api, loadRecentProjects]);
 
-  const createProject = useCallback(async () => {
-    const created = (await api.project.createProject({ name: "我的小说" })) as CreatedProjectResult;
+  const selectProjectSavePath = useCallback(
+    async (suggestedName: string) => {
+      const selected = (await api.project.selectProjectSavePath({ suggestedName })) as SelectedProjectFile | null;
+      return selected?.filePath ?? null;
+    },
+    [api]
+  );
+
+  const suggestProjectPath = useCallback(
+    async (suggestedName: string) => {
+      const suggested = (await api.project.suggestProjectPath({ suggestedName })) as SelectedProjectFile;
+      return suggested.filePath;
+    },
+    [api]
+  );
+
+  const createProject = useCallback(async (input: ProjectCreateInput) => {
+    const created = (await api.project.createProject(input)) as CreatedProjectResult;
     setCurrentProject(created.project);
     setChapters([created.initialChapter]);
     setActiveChapterId(created.initialChapter.id);
@@ -101,11 +118,12 @@ export function useAppStore() {
         return;
       }
 
+      const wasCurrentProject = currentProject?.id === projectId;
       await api.project.deleteProject({ projectId });
       setRecentProjects((current) => current.filter((project) => project.id !== projectId));
       setCurrentProject((current) => (current?.id === projectId ? null : current));
-      setChapters((current) => (currentProject?.id === projectId ? [] : current));
-      setActiveChapterId((current) => (currentProject?.id === projectId ? null : current));
+      setChapters((current) => (wasCurrentProject ? [] : current));
+      setActiveChapterId((current) => (wasCurrentProject ? null : current));
     },
     [api, currentProject?.id]
   );
@@ -116,10 +134,15 @@ export function useAppStore() {
     }
 
     const title = `第${chapters.length + 1}章`;
-    const chapter = (await api.chapter.create({ projectId: currentProject.id, title })) as ChapterSummary;
+    const inheritedTargetWordCount = chapters[chapters.length - 1]?.targetWordCount ?? null;
+    const chapter = (await api.chapter.create({
+      projectId: currentProject.id,
+      title,
+      targetWordCount: inheritedTargetWordCount
+    })) as ChapterSummary;
     setChapters((current) => [...current, chapter]);
     setActiveChapterId(chapter.id);
-  }, [api, chapters.length, currentProject]);
+  }, [api, chapters, currentProject]);
 
   const renameChapter = useCallback(
     async (chapterId: string, title: string) => {
@@ -128,12 +151,24 @@ export function useAppStore() {
         return;
       }
 
-      await api.chapter.rename({ chapterId, title: trimmedTitle });
+      await api.chapter.rename({ projectId: currentProject?.id, chapterId, title: trimmedTitle });
       setChapters((current) =>
         current.map((chapter) => (chapter.id === chapterId ? { ...chapter, title: trimmedTitle, updatedAt: new Date().toISOString() } : chapter))
       );
     },
-    [api]
+    [api, currentProject?.id]
+  );
+
+  const updateChapterTargetWordCount = useCallback(
+    async (chapterId: string, targetWordCount: number | null) => {
+      const updated = (await api.chapter.updateTargetWordCount({
+        projectId: currentProject?.id,
+        chapterId,
+        targetWordCount
+      })) as ChapterSummary;
+      setChapters((current) => current.map((chapter) => (chapter.id === updated.id ? updated : chapter)));
+    },
+    [api, currentProject?.id]
   );
 
   const deleteChapter = useCallback(
@@ -150,11 +185,11 @@ export function useAppStore() {
           ? remainingChapters[Math.min(chapterIndex, remainingChapters.length - 1)]?.id ?? null
           : activeChapterId;
 
-      await api.chapter.delete({ chapterId });
+      await api.chapter.delete({ projectId: currentProject?.id, chapterId });
       setChapters(remainingChapters);
       setActiveChapterId(nextActiveId);
     },
-    [activeChapterId, api, chapters]
+    [activeChapterId, api, chapters, currentProject?.id]
   );
 
   useEffect(() => {
@@ -167,17 +202,10 @@ export function useAppStore() {
 
   const acceptImportedProject = useCallback((result: ImportConfirmResult) => {
     setCurrentProject(result.project);
-    setChapters((current) => {
-      if (currentProject?.id !== result.project.id) {
-        return [...result.chapters];
-      }
-      const currentIds = new Set(current.map((chapter) => chapter.id));
-      const imported = result.chapters.filter((chapter) => !currentIds.has(chapter.id));
-      return [...current, ...imported];
-    });
+    setChapters([...result.chapters]);
     setActiveChapterId(result.firstChapterId ?? result.chapters[0]?.id ?? null);
     void loadRecentProjects();
-  }, [currentProject?.id, loadRecentProjects]);
+  }, [loadRecentProjects]);
 
   return useMemo(() => ({
     acceptImportedProject,
@@ -195,8 +223,11 @@ export function useAppStore() {
     recentProjects,
     renameProject,
     renameChapter,
+    updateChapterTargetWordCount,
     refreshRecentProjects: loadRecentProjects,
-    selectChapter
+    selectChapter,
+    selectProjectSavePath,
+    suggestProjectPath
   }), [
     acceptImportedProject,
     activeChapter,
@@ -213,7 +244,10 @@ export function useAppStore() {
     recentProjects,
     renameProject,
     renameChapter,
+    updateChapterTargetWordCount,
     loadRecentProjects,
-    selectChapter
+    selectChapter,
+    selectProjectSavePath,
+    suggestProjectPath
   ]);
 }

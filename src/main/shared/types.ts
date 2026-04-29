@@ -1,13 +1,18 @@
 import type { z } from "zod";
 import type {
   aiCreateTaskInputSchema,
+  aiCreateChatSessionInputSchema,
   aiApplyCandidateInputSchema,
   aiProviderSettingsSchema,
   aiClearChatInputSchema,
+  aiCancelStreamInputSchema,
+  aiDeleteChatSessionInputSchema,
   aiGeneratePreviewInputSchema,
   aiGeneratePreviewStreamInputSchema,
   aiGetChatSessionInputSchema,
+  aiListChatSessionsInputSchema,
   aiListChatMessagesInputSchema,
+  aiRenameChatSessionInputSchema,
   aiRejectCandidateInputSchema,
   aiSaveCandidateToScratchpadInputSchema,
   aiSendChatMessageInputSchema,
@@ -20,6 +25,7 @@ import type {
   chapterListInputSchema,
   chapterRenameInputSchema,
   chapterSaveContentInputSchema,
+  chapterUpdateTargetWordCountInputSchema,
   editorSettingsSchema,
   importConfirmTxtInputSchema,
   importPreviewTxtInputSchema,
@@ -29,6 +35,8 @@ import type {
   projectOpenFileInputSchema,
   projectOpenInputSchema,
   projectRenameInputSchema,
+  projectSelectSavePathInputSchema,
+  projectSuggestFilePathInputSchema,
   scratchCreateInputSchema,
   scratchDeleteInputSchema,
   scratchListInputSchema,
@@ -183,6 +191,7 @@ export type ChapterSummary = {
   readonly sortOrder: number;
   readonly wordCount: number;
   readonly dailyWordCount: number;
+  readonly dailyWordCountDate: string | null;
   readonly targetWordCount: number | null;
   readonly status: string;
   readonly createdAt: string;
@@ -225,6 +234,8 @@ export type OpenRouterModelSummary = {
 export type ProjectCreateInput = z.input<typeof projectCreateInputSchema>;
 export type ProjectOpenInput = z.input<typeof projectOpenInputSchema>;
 export type ProjectOpenFileInput = z.input<typeof projectOpenFileInputSchema>;
+export type ProjectSelectSavePathInput = z.input<typeof projectSelectSavePathInputSchema>;
+export type ProjectSuggestFilePathInput = z.input<typeof projectSuggestFilePathInputSchema>;
 export type ProjectRenameInput = z.input<typeof projectRenameInputSchema>;
 export type ProjectDeleteInput = z.input<typeof projectDeleteInputSchema>;
 export type ChapterListInput = z.input<typeof chapterListInputSchema>;
@@ -234,6 +245,7 @@ export type ChapterDeleteInput = z.input<typeof chapterDeleteInputSchema>;
 export type ChapterGetContentInput = z.input<typeof chapterGetContentInputSchema>;
 export type ChapterSaveContentInput = z.input<typeof chapterSaveContentInputSchema>;
 export type ChapterCreateSnapshotInput = z.input<typeof chapterCreateSnapshotInputSchema>;
+export type ChapterUpdateTargetWordCountInput = z.input<typeof chapterUpdateTargetWordCountInputSchema>;
 export type SettingsSaveInput = z.input<typeof settingsSaveInputSchema>;
 export type SettingsTestConnectionInput = z.input<typeof settingsTestConnectionInputSchema>;
 export type SettingsListModelsInput = z.input<typeof settingsListModelsInputSchema>;
@@ -241,10 +253,16 @@ export type AiCreateTaskInput = z.input<typeof aiCreateTaskInputSchema>;
 export type AiUpdateTaskInput = z.input<typeof aiUpdateTaskInputSchema>;
 export type AiGeneratePreviewInput = z.input<typeof aiGeneratePreviewInputSchema>;
 export type AiGeneratePreviewStreamInput = z.input<typeof aiGeneratePreviewStreamInputSchema>;
+export type AiContinuePreviewStreamInput = AiGeneratePreviewStreamInput;
+export type AiCancelStreamInput = z.input<typeof aiCancelStreamInputSchema>;
 export type AiApplyCandidateInput = z.input<typeof aiApplyCandidateInputSchema>;
 export type AiSaveCandidateToScratchpadInput = z.input<typeof aiSaveCandidateToScratchpadInputSchema>;
 export type AiSendChatMessageInput = z.input<typeof aiSendChatMessageInputSchema>;
 export type AiGetChatSessionInput = z.input<typeof aiGetChatSessionInputSchema>;
+export type AiListChatSessionsInput = z.input<typeof aiListChatSessionsInputSchema>;
+export type AiCreateChatSessionInput = z.input<typeof aiCreateChatSessionInputSchema>;
+export type AiRenameChatSessionInput = z.input<typeof aiRenameChatSessionInputSchema>;
+export type AiDeleteChatSessionInput = z.input<typeof aiDeleteChatSessionInputSchema>;
 export type AiListChatMessagesInput = z.input<typeof aiListChatMessagesInputSchema>;
 export type AiClearChatInput = z.input<typeof aiClearChatInputSchema>;
 export type AiSendChatMessageStreamInput = z.input<typeof aiSendChatMessageStreamInputSchema>;
@@ -265,6 +283,8 @@ export const ipcChannels = {
     createProject: "novelTool:project:createProject",
     openProject: "novelTool:project:openProject",
     selectProjectFile: "novelTool:project:selectProjectFile",
+    selectProjectSavePath: "novelTool:project:selectProjectSavePath",
+    suggestProjectPath: "novelTool:project:suggestProjectPath",
     openProjectFile: "novelTool:project:openProjectFile",
     renameProject: "novelTool:project:renameProject",
     deleteProject: "novelTool:project:deleteProject",
@@ -278,6 +298,7 @@ export const ipcChannels = {
     delete: "novelTool:chapter:delete",
     getContent: "novelTool:chapter:getContent",
     saveContent: "novelTool:chapter:saveContent",
+    updateTargetWordCount: "novelTool:chapter:updateTargetWordCount",
     createSnapshot: "novelTool:chapter:createSnapshot"
   },
   settings: {
@@ -291,13 +312,19 @@ export const ipcChannels = {
     updateTask: "novelTool:ai:updateTask",
     generatePreview: "novelTool:ai:generatePreview",
     generatePreviewStream: "novelTool:ai:generatePreviewStream",
+    continuePreviewStream: "novelTool:ai:continuePreviewStream",
     applyCandidate: "novelTool:ai:applyCandidate",
     saveCandidateToScratchpad: "novelTool:ai:saveCandidateToScratchpad",
     sendChatMessage: "novelTool:ai:sendChatMessage",
     getChatSession: "novelTool:ai:getChatSession",
+    listChatSessions: "novelTool:ai:listChatSessions",
+    createChatSession: "novelTool:ai:createChatSession",
+    renameChatSession: "novelTool:ai:renameChatSession",
+    deleteChatSession: "novelTool:ai:deleteChatSession",
     listChatMessages: "novelTool:ai:listChatMessages",
     clearChat: "novelTool:ai:clearChat",
     sendChatMessageStream: "novelTool:ai:sendChatMessageStream",
+    cancelStream: "novelTool:ai:cancelStream",
     streamChunk: "novelTool:ai:streamChunk",
     streamDone: "novelTool:ai:streamDone",
     streamError: "novelTool:ai:streamError",

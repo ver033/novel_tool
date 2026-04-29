@@ -1,6 +1,9 @@
-import type { AiChatGenerationInput, AiChatGenerator, AiChatMessageResult, AiChatStreamHandlers } from "./ai-task-service";
+import type { AiChatGenerationInput, AiChatGenerator, AiChatMessageResult, AiChatStreamHandlers, AiGenerationOptions } from "./ai-task-service";
+import { logDevLlmPrompt } from "./dev-prompt-logger";
 import type { OpenRouterMessage } from "./openrouter-client";
 import { OpenRouterClient } from "./openrouter-client";
+import { getTokenBudget } from "./token-budget";
+import { estimateMessagesTokens } from "./token-estimator";
 import type { SettingsService } from "../settings/settings-service";
 import type { AiSendChatMessageInput } from "../shared/types";
 
@@ -42,27 +45,77 @@ function buildHistoryMessages(input: AiChatGenerationInput): OpenRouterMessage[]
     .slice(-12);
 }
 
+function assertChatMessagesWithinBudget(messages: readonly OpenRouterMessage[], maxInputTokens: number): void {
+  const estimatedTokens = estimateMessagesTokens(messages);
+  if (estimatedTokens <= maxInputTokens) {
+    return;
+  }
+
+  throw new Error(`AI 对话上下文太长，预计输入约 ${estimatedTokens} tokens，超过上限 ${maxInputTokens}。请缩短问题或选中文本后重试。`);
+}
+
+export function buildChatCompletionMessages(input: AiChatGenerationInput): OpenRouterMessage[] {
+  const systemMessage = {
+    role: "system",
+    content: buildSystemPrompt()
+  } satisfies OpenRouterMessage;
+  const userMessage = {
+    role: "user",
+    content: buildUserPrompt(input)
+  } satisfies OpenRouterMessage;
+  const chatBudget = getTokenBudget("chat");
+  assertChatMessagesWithinBudget([systemMessage, userMessage], chatBudget.maxInputTokens);
+  const selectedHistory: OpenRouterMessage[] = [];
+
+  for (const historyMessage of buildHistoryMessages(input).reverse()) {
+    const candidate = [systemMessage, historyMessage, ...selectedHistory, userMessage];
+    if (estimateMessagesTokens(candidate) <= chatBudget.maxInputTokens) {
+      selectedHistory.unshift(historyMessage);
+    }
+  }
+
+  return [systemMessage, ...selectedHistory, userMessage];
+}
+
 export class OpenRouterChatGenerator implements AiChatGenerator {
   constructor(private readonly settingsService: SettingsService) {}
 
   async sendMessage(input: AiSendChatMessageInput): Promise<AiChatMessageResult> {
+    const chatBudget = getTokenBudget("chat");
     const config = this.settingsService.getOpenRouterConfig();
     const client = new OpenRouterClient({
       apiKey: config.apiKey,
       modelName: config.modelName
     });
+    const messages = [
+      {
+        role: "system",
+        content: buildSystemPrompt()
+      },
+      {
+        role: "user",
+        content: buildUserPrompt(input)
+      }
+    ] satisfies readonly OpenRouterMessage[];
+    assertChatMessagesWithinBudget(messages, chatBudget.maxInputTokens);
+    logDevLlmPrompt({
+      kind: "chat",
+      modelName: config.modelName,
+      messages,
+      meta: {
+        chapterId: input.chapterId,
+        currentChapterTitle: input.currentChapterTitle,
+        projectId: input.projectId,
+        sessionId: input.sessionId
+      },
+      params: {
+        maxCompletionTokens: chatBudget.maxOutputTokens,
+        temperature: 0.55
+      }
+    });
     const result = await client.createChatCompletion({
-      messages: [
-        {
-          role: "system",
-          content: buildSystemPrompt()
-        },
-        {
-          role: "user",
-          content: buildUserPrompt(input)
-        }
-      ],
-      maxCompletionTokens: 1600,
+      messages,
+      maxCompletionTokens: chatBudget.maxOutputTokens,
       temperature: 0.55
     });
     const content = result.content.trim();
@@ -77,27 +130,37 @@ export class OpenRouterChatGenerator implements AiChatGenerator {
     };
   }
 
-  async sendMessageStream(input: AiChatGenerationInput, handlers: AiChatStreamHandlers): Promise<AiChatMessageResult> {
+  async sendMessageStream(input: AiChatGenerationInput, handlers: AiChatStreamHandlers, options: AiGenerationOptions = {}): Promise<AiChatMessageResult> {
+    const chatBudget = getTokenBudget("chat");
     const config = this.settingsService.getOpenRouterConfig();
     const client = new OpenRouterClient({
       apiKey: config.apiKey,
       modelName: config.modelName
     });
+    const messages = buildChatCompletionMessages(input);
+    logDevLlmPrompt({
+      kind: "chat",
+      modelName: config.modelName,
+      messages,
+      meta: {
+        chapterId: input.chapterId,
+        currentChapterTitle: input.currentChapterTitle,
+        historyMessageCount: input.history.length,
+        projectId: input.projectId,
+        requestMode: "stream",
+        sessionId: input.sessionId
+      },
+      params: {
+        maxCompletionTokens: chatBudget.maxOutputTokens,
+        temperature: 0.55
+      }
+    });
     const result = await client.streamChatCompletion(
       {
-        messages: [
-          {
-            role: "system",
-            content: buildSystemPrompt()
-          },
-          ...buildHistoryMessages(input),
-          {
-            role: "user",
-            content: buildUserPrompt(input)
-          }
-        ],
-        maxCompletionTokens: 1600,
-        temperature: 0.55
+        messages,
+        maxCompletionTokens: chatBudget.maxOutputTokens,
+        temperature: 0.55,
+        signal: options.signal
       },
       {
         onToken(token) {

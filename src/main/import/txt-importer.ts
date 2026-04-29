@@ -55,6 +55,7 @@ function chapterContentFromPreview(projectId: string, preview: ImportPreviewChap
     plainText: preview.text,
     wordCount: preview.wordCount,
     dailyWordCount: 0,
+    dailyWordCountDate: null,
     targetWordCount: null,
     status: "draft",
     createdAt,
@@ -85,9 +86,12 @@ export class TxtImporter {
 
   updatePreview(input: ImportUpdatePreviewInput): ImportPreview {
     const preview = this.importJobRepo.getPreview(input.importJobId);
-    const chapters = input.operations.some((operation) => operation.type === "redetect")
-      ? detectTxtChapters(this.importJobRepo.getRawText(input.importJobId))
-      : applyImportPreviewOperations(preview.chapters, input.operations);
+    if (input.operations.length > 1) {
+      throw new Error("章节调整请一次提交一个操作。");
+    }
+    const redetectCount = input.operations.filter((operation) => operation.type === "redetect").length;
+    const chapters =
+      redetectCount > 0 ? detectTxtChapters(this.importJobRepo.getRawText(input.importJobId)) : applyImportPreviewOperations(preview.chapters, input.operations);
     return this.importJobRepo.updatePreview(input.importJobId, chapters);
   }
 
