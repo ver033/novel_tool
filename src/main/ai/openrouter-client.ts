@@ -1,12 +1,39 @@
 import axios from "axios";
 import { StringDecoder } from "node:string_decoder";
 import type { OpenRouterModelSummary } from "../shared/types";
-import { parseOpenRouterSsePayload } from "./openrouter-stream-parser";
+import { parseOpenRouterSsePayload, type OpenRouterStreamEvent } from "./openrouter-stream-parser";
 
-export type OpenRouterMessage = {
-  readonly role: "system" | "user" | "assistant";
-  readonly content: string;
+export type OpenRouterToolCall = {
+  readonly id: string;
+  readonly name: string;
+  readonly argumentsJson: string;
 };
+
+export type OpenRouterToolDefinition = {
+  readonly type: "function";
+  readonly function: {
+    readonly name: string;
+    readonly description: string;
+    readonly parameters: object;
+  };
+};
+
+export type OpenRouterMessage =
+  | {
+      readonly role: "system" | "user";
+      readonly content: string;
+    }
+  | {
+      readonly role: "assistant";
+      readonly content: string | null;
+      readonly tool_calls?: readonly unknown[];
+    }
+  | {
+      readonly role: "tool";
+      readonly tool_call_id: string;
+      readonly name?: string;
+      readonly content: string;
+    };
 
 export type OpenRouterResponseFormat =
   | { readonly type: "json_object" }
@@ -52,21 +79,27 @@ export type OpenRouterChatCompletionInput = {
   readonly temperature?: number;
   readonly responseFormat?: OpenRouterResponseFormat;
   readonly reasoning?: OpenRouterReasoningConfig;
+  readonly tools?: readonly OpenRouterToolDefinition[];
+  readonly toolChoice?: "auto" | "none";
+  readonly parallelToolCalls?: boolean;
   readonly allowEmptyContent?: boolean;
   readonly signal?: AbortSignal;
 };
 
 export type OpenRouterChatCompletionResult = {
   readonly content: string;
+  readonly reasoning?: string;
+  readonly toolCalls?: readonly OpenRouterToolCall[];
   readonly truncated: boolean;
 };
 
 export type OpenRouterStreamHandlers = {
   readonly onToken?: (token: string) => void;
+  readonly onReasoning?: (token: string) => void;
 };
 
 const OPENROUTER_CHAT_COMPLETIONS_URL = "https://openrouter.ai/api/v1/chat/completions";
-const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models?output_modalities=text";
+const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models?output_modalities=text&supported_parameters=tools";
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object");
@@ -168,6 +201,94 @@ function getFinishReason(choice: Record<string, unknown>): string {
   return typeof choice.finish_reason === "string" ? choice.finish_reason : "unknown";
 }
 
+function extractReasoningDetailText(detail: unknown): string | null {
+  if (!isObject(detail)) {
+    return null;
+  }
+  if (typeof detail.text === "string" && detail.text.trim()) {
+    return detail.text.trim();
+  }
+  if (typeof detail.summary === "string" && detail.summary.trim()) {
+    return detail.summary.trim();
+  }
+  return null;
+}
+
+function appendUniqueReasoning(parts: string[], text: string): void {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return;
+  }
+  const alreadyCovered = parts.some((part) => part === trimmed || part.includes(trimmed) || trimmed.includes(part));
+  if (!alreadyCovered) {
+    parts.push(trimmed);
+  }
+}
+
+function extractReasoningFromMessage(message: Record<string, unknown>): string | undefined {
+  const parts: string[] = [];
+  if (Array.isArray(message.reasoning_details)) {
+    for (const detail of message.reasoning_details) {
+      const text = extractReasoningDetailText(detail);
+      if (text) {
+        appendUniqueReasoning(parts, text);
+      }
+    }
+  }
+  if (typeof message.reasoning_content === "string" && message.reasoning_content.trim()) {
+    appendUniqueReasoning(parts, message.reasoning_content);
+  }
+  if (typeof message.reasoning === "string" && message.reasoning.trim()) {
+    appendUniqueReasoning(parts, message.reasoning);
+  }
+
+  return parts.length > 0 ? parts.join("\n") : undefined;
+}
+
+function buildCompletionResult(
+  content: string,
+  truncated: boolean,
+  reasoning?: string,
+  toolCalls?: readonly OpenRouterToolCall[]
+): OpenRouterChatCompletionResult {
+  const trimmedReasoning = reasoning?.trim();
+  return {
+    content,
+    ...(trimmedReasoning ? { reasoning: trimmedReasoning } : {}),
+    ...(toolCalls && toolCalls.length > 0 ? { toolCalls } : {}),
+    truncated
+  };
+}
+
+function parseToolCalls(message: Record<string, unknown>): readonly OpenRouterToolCall[] {
+  const rawToolCalls = message.tool_calls;
+  if (rawToolCalls === undefined || rawToolCalls === null) {
+    return [];
+  }
+  if (!Array.isArray(rawToolCalls)) {
+    throw new Error("OpenRouter 响应工具调用格式无效：tool_calls 不是数组。");
+  }
+
+  return rawToolCalls.map((rawToolCall, index) => {
+    if (!isObject(rawToolCall)) {
+      throw new Error(`OpenRouter 响应工具调用格式无效：第 ${index + 1} 个 tool_call 不是对象。`);
+    }
+    const fn = rawToolCall.function;
+    if (typeof rawToolCall.id !== "string" || !rawToolCall.id.trim() || !isObject(fn)) {
+      throw new Error(`OpenRouter 响应工具调用格式无效：第 ${index + 1} 个 tool_call 缺少 id 或 function。`);
+    }
+    if (typeof fn.name !== "string" || !fn.name.trim() || typeof fn.arguments !== "string") {
+      throw new Error(`OpenRouter 响应工具调用格式无效：第 ${index + 1} 个 tool_call 缺少 function.name 或 function.arguments。`);
+    }
+
+    return {
+      id: rawToolCall.id,
+      name: fn.name,
+      argumentsJson: fn.arguments
+    };
+  });
+}
+
 function parseCompletionResponse(response: unknown, allowEmptyContent: boolean): OpenRouterChatCompletionResult {
   if (!isObject(response) || !Array.isArray(response.choices)) {
     throw new Error("OpenRouter 响应缺少 choices。");
@@ -188,13 +309,15 @@ function parseCompletionResponse(response: unknown, allowEmptyContent: boolean):
   }
 
   const truncated = getFinishReason(firstChoice) === "length";
+  const reasoning = extractReasoningFromMessage(firstChoice.message);
+  const toolCalls = parseToolCalls(firstChoice.message);
   const content = firstChoice.message.content;
   if (typeof content === "string") {
-    return { content, truncated };
+    return buildCompletionResult(content, truncated, reasoning, toolCalls);
   }
 
-  if ((allowEmptyContent || truncated) && (content === null || content === undefined)) {
-    return { content: "", truncated };
+  if ((allowEmptyContent || truncated || toolCalls.length > 0) && (content === null || content === undefined)) {
+    return buildCompletionResult("", truncated, reasoning, toolCalls);
   }
 
   throw new Error(`OpenRouter 响应没有文本内容（finish_reason: ${getFinishReason(firstChoice)}）。`);
@@ -219,6 +342,70 @@ async function defaultHttpStreamPost(request: OpenRouterHttpRequest): Promise<Op
   return response.data as OpenRouterHttpStream;
 }
 
+class ReasoningAccumulator {
+  private readonly textByKey = new Map<string, string>();
+
+  append(event: Extract<OpenRouterStreamEvent, { readonly type: "reasoning" }>): string | null {
+    const key = this.keyFor(event);
+    const previous = this.textByKey.get(key);
+
+    if (!previous) {
+      this.textByKey.set(key, event.content);
+      return event.content;
+    }
+    if (event.content === previous || previous.includes(event.content)) {
+      return null;
+    }
+    if (event.content.startsWith(previous)) {
+      const suffix = event.content.slice(previous.length);
+      this.textByKey.set(key, event.content);
+      return suffix || null;
+    }
+
+    const next = `${previous}${event.content}`;
+    this.textByKey.set(key, next);
+    return event.content;
+  }
+
+  private keyFor(event: Extract<OpenRouterStreamEvent, { readonly type: "reasoning" }>): string {
+    if (event.detailId) {
+      return `${event.source}:id:${event.detailId}`;
+    }
+    if (event.detailIndex !== undefined) {
+      return `${event.source}:index:${event.detailIndex}:${event.detailType ?? ""}`;
+    }
+    return event.source;
+  }
+}
+
+class ToolCallAccumulator {
+  private readonly calls = new Map<number, { id?: string; name?: string; argumentsJson: string }>();
+
+  append(event: Extract<OpenRouterStreamEvent, { readonly type: "tool_call_delta" }>): void {
+    const previous = this.calls.get(event.index) ?? { argumentsJson: "" };
+    this.calls.set(event.index, {
+      id: event.id ?? previous.id,
+      name: event.name ?? previous.name,
+      argumentsJson: `${previous.argumentsJson}${event.argumentsJsonDelta ?? ""}`
+    });
+  }
+
+  toToolCalls(): readonly OpenRouterToolCall[] {
+    return Array.from(this.calls.entries())
+      .sort(([left], [right]) => left - right)
+      .map(([index, call]) => {
+        if (!call.id || !call.name) {
+          throw new Error(`OpenRouter 流式工具调用格式无效：第 ${index + 1} 个 tool_call 缺少 id 或 function.name。`);
+        }
+        return {
+          id: call.id,
+          name: call.name,
+          argumentsJson: call.argumentsJson
+        };
+      });
+  }
+}
+
 async function defaultHttpGet(request: OpenRouterHttpGetRequest): Promise<unknown> {
   const response = await axios.get(request.url, {
     timeout: 60_000
@@ -236,11 +423,18 @@ function parseModelList(response: unknown): OpenRouterModelSummary[] {
       return [];
     }
 
+    const topProvider = item.top_provider;
+    const topProviderContextLength = isObject(topProvider) && typeof topProvider.context_length === "number" ? topProvider.context_length : null;
+    const supportedParameters = Array.isArray(item.supported_parameters)
+      ? item.supported_parameters.filter((parameter): parameter is string => typeof parameter === "string")
+      : [];
+
     return [
       {
         id: item.id,
         name: item.name,
-        contextLength: typeof item.context_length === "number" ? item.context_length : null
+        contextLength: typeof item.context_length === "number" ? item.context_length : topProviderContextLength,
+        supportsTools: supportedParameters.length === 0 ? true : supportedParameters.includes("tools")
       }
     ];
   });
@@ -274,6 +468,15 @@ export class OpenRouterClient {
     if (input.reasoning) {
       body.reasoning = input.reasoning;
     }
+    if (input.tools) {
+      body.tools = input.tools;
+    }
+    if (input.toolChoice) {
+      body.tool_choice = input.toolChoice;
+    }
+    if (input.parallelToolCalls !== undefined) {
+      body.parallel_tool_calls = input.parallelToolCalls;
+    }
 
     return {
       url: OPENROUTER_CHAT_COMPLETIONS_URL,
@@ -301,8 +504,36 @@ export class OpenRouterClient {
     const request = this.buildChatCompletionRequest(input, true);
     let buffer = "";
     let content = "";
+    let reasoning = "";
     let truncated = false;
     const decoder = new StringDecoder("utf8");
+    const reasoningAccumulator = new ReasoningAccumulator();
+    const toolCallAccumulator = new ToolCallAccumulator();
+
+    const applyEvents = (events: readonly OpenRouterStreamEvent[]): void => {
+      for (const event of events) {
+        if (event.type === "content") {
+          content += event.content;
+          handlers.onToken?.(event.content);
+        }
+        if (event.type === "reasoning") {
+          const delta = reasoningAccumulator.append(event);
+          if (delta) {
+            reasoning += delta;
+            handlers.onReasoning?.(delta);
+          }
+        }
+        if (event.type === "tool_call_delta") {
+          toolCallAccumulator.append(event);
+        }
+        if (event.type === "error") {
+          throw new Error(event.message);
+        }
+        if (event.type === "truncated") {
+          truncated = true;
+        }
+      }
+    };
 
     try {
       const stream = await this.httpStreamPost(request);
@@ -311,39 +542,16 @@ export class OpenRouterClient {
         const blocks = buffer.split(/\r?\n\r?\n/);
         buffer = blocks.pop() ?? "";
         const events = parseOpenRouterSsePayload(blocks.map((block) => `${block}\n\n`).join(""));
-
-        for (const event of events) {
-          if (event.type === "content") {
-            content += event.content;
-            handlers.onToken?.(event.content);
-          }
-          if (event.type === "error") {
-            throw new Error(event.message);
-          }
-          if (event.type === "truncated") {
-            truncated = true;
-          }
-        }
+        applyEvents(events);
       }
 
       buffer += decoder.end();
       if (buffer.trim()) {
         const events = parseOpenRouterSsePayload(`${buffer}\n\n`);
-        for (const event of events) {
-          if (event.type === "content") {
-            content += event.content;
-            handlers.onToken?.(event.content);
-          }
-          if (event.type === "error") {
-            throw new Error(event.message);
-          }
-          if (event.type === "truncated") {
-            truncated = true;
-          }
-        }
+        applyEvents(events);
       }
 
-      return { content, truncated };
+      return buildCompletionResult(content, truncated, reasoning, toolCallAccumulator.toToolCalls());
     } catch (error) {
       const provider = extractProviderMessage(error);
       throw new Error(formatOpenRouterRequestError(provider, this.options.apiKey));

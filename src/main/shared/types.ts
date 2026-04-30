@@ -120,6 +120,9 @@ export type AiChatSessionRecord = {
   readonly projectId: string;
   readonly title: string;
   readonly status: AiChatSessionStatus;
+  readonly lastContextUsage: AiStreamContextEvent | null;
+  readonly compactedMemorySummary: string | null;
+  readonly compactedMemoryThroughMessageId: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;
 };
@@ -137,6 +140,22 @@ export type AiChatMessageRecord = {
 export type AiStreamChunkEvent = {
   readonly requestId: string;
   readonly content: string;
+};
+
+export type AiStreamReasoningEvent = {
+  readonly requestId: string;
+  readonly content: string;
+};
+
+export type AiStreamContextEvent = {
+  readonly requestId: string;
+  readonly estimatedInputTokens: number;
+  readonly maxInputTokens: number;
+  readonly maxOutputTokens: number;
+  readonly modelContextTokens: number | null;
+  readonly modelName: string;
+  readonly contextMode: "direct" | "summarized";
+  readonly scopeLabel: string;
 };
 
 export type AiStreamDoneEvent = {
@@ -229,6 +248,7 @@ export type OpenRouterModelSummary = {
   readonly id: string;
   readonly name: string;
   readonly contextLength: number | null;
+  readonly supportsTools?: boolean | null;
 };
 
 export type ProjectCreateInput = z.input<typeof projectCreateInputSchema>;
@@ -326,6 +346,8 @@ export const ipcChannels = {
     sendChatMessageStream: "novelTool:ai:sendChatMessageStream",
     cancelStream: "novelTool:ai:cancelStream",
     streamChunk: "novelTool:ai:streamChunk",
+    streamReasoning: "novelTool:ai:streamReasoning",
+    streamContext: "novelTool:ai:streamContext",
     streamDone: "novelTool:ai:streamDone",
     streamError: "novelTool:ai:streamError",
     rejectCandidate: "novelTool:ai:rejectCandidate"

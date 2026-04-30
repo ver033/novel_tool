@@ -5,6 +5,7 @@ import { OpenRouterChatGenerator } from "../ai/openrouter-chat-generator";
 import { DefaultOpenRouterConnectionTester } from "../ai/openrouter-connection-tester";
 import { OpenRouterModelCatalogClient } from "../ai/openrouter-client";
 import { OpenRouterTaskGenerator } from "../ai/openrouter-task-generator";
+import { getTokenBudget } from "../ai/token-budget";
 import { ChapterService } from "../chapter/chapter-service";
 import { createDatabase, resolveDatabasePath, type SqliteDatabase } from "../db/database";
 import { runMigrations } from "../db/migrations";
@@ -178,7 +179,9 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
       useE2eAiGenerators() ? createE2eChatGenerator() : new OpenRouterChatGenerator(settingsService),
       (projectId) => new AiChatRepository(resolveProjectDb(projectId)),
       (projectId) => new ScratchNoteRepository(resolveProjectDb(projectId)),
-      (projectId) => new ChapterRepository(resolveProjectDb(projectId))
+      (projectId) => new ChapterRepository(resolveProjectDb(projectId)),
+      undefined,
+      async () => getTokenBudget("chat", useE2eAiGenerators() ? null : (await settingsService.getOpenRouterConfigWithModelMetadata()).contextLength)
     );
     const txtImporter = new TxtImporter(importJobRepo, projectRepo, projectService);
 

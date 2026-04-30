@@ -37,6 +37,8 @@ export type OpenRouterRuntimeConfig = {
   readonly apiKey: string;
   readonly baseUrl: string;
   readonly modelName: string;
+  readonly contextLength: number | null;
+  readonly supportsTools?: boolean | null;
 };
 
 export type OpenRouterConnectionTestResult = {
@@ -94,6 +96,8 @@ function sanitizeAiProvider(settings: StoredAiProviderSettings | null): AiProvid
     providerType: "openrouter",
     baseUrl: settings.baseUrl || OPENROUTER_BASE_URL,
     modelName: settings.modelName,
+    contextLength: settings.contextLength ?? null,
+    supportsTools: settings.supportsTools ?? null,
     apiKeyConfigured: Boolean(settings.encryptedApiKey ?? settings.apiKey)
   };
 }
@@ -183,6 +187,8 @@ export class SettingsService {
         providerType: "openrouter",
         baseUrl: OPENROUTER_BASE_URL,
         modelName: input.aiProvider.modelName,
+        contextLength: input.aiProvider.contextLength ?? null,
+        supportsTools: input.aiProvider.supportsTools ?? current?.supportsTools ?? null,
         ...(encryptedApiKey ? { encryptedApiKey } : {})
       } satisfies StoredAiProviderSettings);
     }
@@ -233,12 +239,53 @@ export class SettingsService {
     return {
       apiKey,
       baseUrl: OPENROUTER_BASE_URL,
-      modelName
+      modelName,
+      contextLength: override?.contextLength ?? settings?.contextLength ?? null,
+      supportsTools: override?.supportsTools ?? settings?.supportsTools ?? null
+    };
+  }
+
+  async getOpenRouterConfigWithModelMetadata(
+    override?: SettingsSaveInput["aiProvider"],
+    options: { readonly requireTools?: boolean } = {}
+  ): Promise<OpenRouterRuntimeConfig> {
+    const config = this.getOpenRouterConfig(override);
+    if (options.requireTools && config.supportsTools === false) {
+      throw new Error(this.unsupportedToolsModelMessage(config.modelName));
+    }
+    if (config.contextLength !== null && (!options.requireTools || config.supportsTools === true)) {
+      return config;
+    }
+
+    const metadata = await this.findModelMetadata(config.modelName);
+    if (options.requireTools && (!metadata || metadata.supportsTools === false)) {
+      throw new Error(this.unsupportedToolsModelMessage(config.modelName));
+    }
+    if (!metadata) {
+      return config;
+    }
+
+    if (!override?.modelName && !override?.contextLength && override?.supportsTools === undefined) {
+      this.saveSettings({
+        aiProvider: {
+          providerType: "openrouter",
+          baseUrl: OPENROUTER_BASE_URL,
+          modelName: config.modelName,
+          contextLength: metadata.contextLength,
+          supportsTools: metadata.supportsTools ?? null
+        }
+      });
+    }
+
+    return {
+      ...config,
+      contextLength: metadata.contextLength,
+      supportsTools: metadata.supportsTools ?? null
     };
   }
 
   async testConnection(input?: { readonly aiProvider?: SettingsSaveInput["aiProvider"] }): Promise<OpenRouterConnectionTestResult> {
-    return this.connectionTester.testConnection(this.getOpenRouterConfig(input?.aiProvider));
+    return this.connectionTester.testConnection(await this.getOpenRouterConfigWithModelMetadata(input?.aiProvider, { requireTools: true }));
   }
 
   async listOpenRouterModels(input?: SettingsListModelsInput): Promise<OpenRouterModelSummary[]> {
@@ -250,7 +297,8 @@ export class SettingsService {
     return filtered.slice(0, query ? 30 : 400).map((model) => ({
       id: model.id,
       name: model.name,
-      contextLength: model.contextLength
+      contextLength: model.contextLength,
+      supportsTools: model.supportsTools ?? null
     }));
   }
 
@@ -275,9 +323,24 @@ export class SettingsService {
       providerType: "openrouter",
       baseUrl: settings.baseUrl || OPENROUTER_BASE_URL,
       modelName: settings.modelName,
+      contextLength: settings.contextLength ?? null,
+      supportsTools: settings.supportsTools ?? null,
       encryptedApiKey
     } satisfies StoredAiProviderSettings;
     this.settingsRepo.setJson(AI_PROVIDER_SETTINGS_KEY, migrated);
     return migrated;
+  }
+
+  private unsupportedToolsModelMessage(modelName: string): string {
+    return `当前模型不支持 OpenRouter tools：${modelName}。AI 对话需要工具调用能力，请在设置中选择支持工具调用的模型，例如 deepseek/deepseek-v3.2。`;
+  }
+
+  private async findModelMetadata(modelName: string): Promise<OpenRouterModelSummary | null> {
+    const normalizedModelName = modelName.trim().toLocaleLowerCase("zh-CN");
+    if (!normalizedModelName) {
+      return null;
+    }
+
+    return (await this.modelCatalog.listModels()).find((item) => item.id.toLocaleLowerCase("zh-CN") === normalizedModelName) ?? null;
   }
 }

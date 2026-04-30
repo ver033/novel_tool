@@ -97,6 +97,8 @@ const defaultForm: SettingsFormState = {
     providerType: "openrouter",
     baseUrl: OPENROUTER_BASE_URL,
     modelName: "openai/gpt-5.2",
+    contextLength: null,
+    supportsTools: null,
     apiKey: ""
   },
   projectPath: "",
@@ -114,6 +116,8 @@ function formFromSettings(settings: SettingsState): SettingsFormState {
       providerType: settings.aiProvider?.providerType ?? defaultForm.aiProvider.providerType,
       baseUrl: settings.aiProvider?.baseUrl ?? defaultForm.aiProvider.baseUrl,
       modelName: settings.aiProvider?.modelName ?? defaultForm.aiProvider.modelName,
+      contextLength: settings.aiProvider?.contextLength ?? null,
+      supportsTools: settings.aiProvider?.supportsTools ?? null,
       apiKey: ""
     },
     projectPath: settings.projectPath ?? "",
@@ -129,6 +133,8 @@ function buildSaveInput(form: SettingsFormState): SettingsSaveInput {
       providerType: form.aiProvider.providerType,
       baseUrl: form.aiProvider.baseUrl.trim(),
       modelName: form.aiProvider.modelName.trim(),
+      contextLength: form.aiProvider.contextLength ?? null,
+      supportsTools: form.aiProvider.supportsTools ?? null,
       ...(apiKey ? { apiKey } : {})
     },
     taskPromptPresets: [...form.taskPromptPresets],
@@ -159,6 +165,11 @@ function formatContextLength(value: number | null): string {
     return "上下文未知";
   }
   return `${value.toLocaleString("zh-CN")} tokens`;
+}
+
+function findExactModel(models: readonly OpenRouterModelSummary[], modelName: string): OpenRouterModelSummary | null {
+  const normalized = modelName.trim().toLocaleLowerCase("zh-CN");
+  return models.find((model) => model.id.toLocaleLowerCase("zh-CN") === normalized) ?? null;
 }
 
 export function SettingsPage({ activeCategory, onCategoryChange, onWelcome, onClose }: SettingsPageProps) {
@@ -233,9 +244,25 @@ export function SettingsPage({ activeCategory, onCategoryChange, onWelcome, onCl
     setStatus({ kind: "testing", message: "设置已保存，正在获取模型列表" });
     try {
       const models = (await api.settings.listModels({})) as OpenRouterModelSummary[];
+      const matchedModel = findExactModel(models, form.aiProvider.modelName);
+      const nextForm = {
+        ...form,
+        aiProvider: {
+          ...form.aiProvider,
+          contextLength: matchedModel?.contextLength ?? null,
+          supportsTools: matchedModel?.supportsTools ?? null
+        }
+      } satisfies SettingsFormState;
+      const saved = (await api.settings.save(buildSaveInput(nextForm))) as SettingsState;
       setModelOptions([...models]);
       setModelListLoaded(true);
-      setStatus({ kind: "saved", message: `AI 连接测试通过，设置已保存，已获取 ${models.length} 个可用模型` });
+      applySettings(saved);
+      setStatus({
+        kind: "saved",
+        message: matchedModel
+          ? `AI 连接测试通过，设置已保存，已获取 ${models.length} 个可用模型，当前模型上下文 ${formatContextLength(matchedModel.contextLength)}`
+          : `AI 连接测试通过，设置已保存，已获取 ${models.length} 个可用模型；当前模型上下文未知`
+      });
     } catch (reason) {
       setStatus({ kind: "error", message: `设置已保存，但获取模型列表失败：${formatError(reason)}` });
     }
@@ -256,7 +283,13 @@ export function SettingsPage({ activeCategory, onCategoryChange, onWelcome, onCl
       ...current,
       aiProvider: {
         ...current.aiProvider,
-        ...patch
+        ...patch,
+        ...(patch.modelName !== undefined && patch.contextLength === undefined
+          ? {
+              contextLength: findExactModel(modelOptions, patch.modelName)?.contextLength ?? null,
+              supportsTools: findExactModel(modelOptions, patch.modelName)?.supportsTools ?? null
+            }
+          : {})
       }
     }));
   };
@@ -472,7 +505,12 @@ function SettingsContent({
                     <div className="model-suggestion-list">
                       {modelSuggestions.map((model) => {
                         function selectModel(modelId: string): void {
-                          onAiProviderChange({ modelName: modelId });
+                          const selected = findExactModel(modelOptions, modelId);
+                          onAiProviderChange({
+                            modelName: modelId,
+                            contextLength: selected?.contextLength ?? null,
+                            supportsTools: selected?.supportsTools ?? null
+                          });
                         }
 
                         return (
@@ -493,6 +531,7 @@ function SettingsContent({
               ) : (
                 <p className="model-picker-hint">测试连接成功后会获取可用模型列表。</p>
               )}
+              <p className="model-picker-hint">当前模型上下文：{formatContextLength(form.aiProvider.contextLength ?? null)}</p>
             </div>
           </div>
           <div className="connection-row">

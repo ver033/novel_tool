@@ -17,8 +17,10 @@ import type {
   AiSendChatMessageInput,
   AiSendChatMessageStreamInput,
   AiStreamChunkEvent,
+  AiStreamContextEvent,
   AiStreamDoneEvent,
   AiStreamErrorEvent,
+  AiStreamReasoningEvent,
   AiUpdateTaskInput,
   ChapterCreateInput,
   ChapterCreateSnapshotInput,
@@ -50,6 +52,8 @@ import { ipcChannels } from "../main/shared/types";
 
 type AiStreamHandlers = {
   readonly onChunk?: (event: AiStreamChunkEvent) => void;
+  readonly onReasoning?: (event: AiStreamReasoningEvent) => void;
+  readonly onContext?: (event: AiStreamContextEvent) => void;
   readonly onDone?: (event: AiStreamDoneEvent) => void;
   readonly onError?: (event: AiStreamErrorEvent) => void;
 };
@@ -190,16 +194,30 @@ export const novelToolApi: NovelToolApi = Object.freeze({
           handlers.onDone?.(payload);
         }
       };
+      const onReasoning = (_event: IpcRendererEvent, payload: AiStreamReasoningEvent) => {
+        if (payload.requestId === requestId) {
+          handlers.onReasoning?.(payload);
+        }
+      };
+      const onContext = (_event: IpcRendererEvent, payload: AiStreamContextEvent) => {
+        if (payload.requestId === requestId) {
+          handlers.onContext?.(payload);
+        }
+      };
       const onError = (_event: IpcRendererEvent, payload: AiStreamErrorEvent) => {
         if (payload.requestId === requestId) {
           handlers.onError?.(payload);
         }
       };
       ipcRenderer.on(ipcChannels.ai.streamChunk, onChunk);
+      ipcRenderer.on(ipcChannels.ai.streamReasoning, onReasoning);
+      ipcRenderer.on(ipcChannels.ai.streamContext, onContext);
       ipcRenderer.on(ipcChannels.ai.streamDone, onDone);
       ipcRenderer.on(ipcChannels.ai.streamError, onError);
       return () => {
         ipcRenderer.off(ipcChannels.ai.streamChunk, onChunk);
+        ipcRenderer.off(ipcChannels.ai.streamReasoning, onReasoning);
+        ipcRenderer.off(ipcChannels.ai.streamContext, onContext);
         ipcRenderer.off(ipcChannels.ai.streamDone, onDone);
         ipcRenderer.off(ipcChannels.ai.streamError, onError);
         void ipcRenderer.invoke(ipcChannels.ai.cancelStream, { requestId });

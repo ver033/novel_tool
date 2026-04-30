@@ -24,7 +24,10 @@ export function estimateTextTokens(text: string): number {
 }
 
 export function estimateMessagesTokens(messages: readonly OpenRouterMessage[]): number {
-  return messages.reduce((total, message) => total + MESSAGE_OVERHEAD_TOKENS + estimateTextTokens(message.role) + estimateTextTokens(message.content), 0);
+  return messages.reduce(
+    (total, message) => total + MESSAGE_OVERHEAD_TOKENS + estimateTextTokens(message.role) + estimateTextTokens(message.content ?? ""),
+    0
+  );
 }
 
 export function truncateTextToTokenBudget(text: string, maxTokens: number): { readonly text: string; readonly truncated: boolean } {

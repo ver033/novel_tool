@@ -85,6 +85,12 @@ export function registerAiIpc(aiTaskService: AiTaskService): void {
         onChunk(payload) {
           sendToLiveSender(event, ipcChannels.ai.streamChunk, payload);
         },
+        onReasoning(payload) {
+          sendToLiveSender(event, ipcChannels.ai.streamReasoning, payload);
+        },
+        onContext(payload) {
+          sendToLiveSender(event, ipcChannels.ai.streamContext, payload);
+        },
         onDone(payload) {
           sendToLiveSender(event, ipcChannels.ai.streamDone, payload);
         },

@@ -207,6 +207,30 @@ const migrations: readonly Migration[] = [
         db.exec("ALTER TABLE chapters ADD COLUMN daily_word_count_date TEXT;");
       }
     }
+  },
+  {
+    version: 5,
+    name: "ai_chat_session_context_usage",
+    up(db) {
+      if (!tableHasColumn(db, "ai_chat_sessions", "context_usage_json")) {
+        db.exec("ALTER TABLE ai_chat_sessions ADD COLUMN context_usage_json TEXT;");
+      }
+    }
+  },
+  {
+    version: 6,
+    name: "ai_chat_session_memory_compaction",
+    up(db) {
+      if (!tableHasColumn(db, "ai_chat_sessions", "memory_summary")) {
+        db.exec("ALTER TABLE ai_chat_sessions ADD COLUMN memory_summary TEXT;");
+      }
+      if (!tableHasColumn(db, "ai_chat_sessions", "memory_compacted_through_message_id")) {
+        db.exec("ALTER TABLE ai_chat_sessions ADD COLUMN memory_compacted_through_message_id TEXT;");
+      }
+      if (!tableHasColumn(db, "ai_chat_sessions", "memory_updated_at")) {
+        db.exec("ALTER TABLE ai_chat_sessions ADD COLUMN memory_updated_at TEXT;");
+      }
+    }
   }
 ];
 

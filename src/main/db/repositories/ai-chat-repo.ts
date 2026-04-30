@@ -1,5 +1,12 @@
 import { createId } from "../../shared/ids";
-import type { AiChatAction, AiChatMessageRecord, AiChatMessageRole, AiChatSessionRecord, AiChatSessionStatus } from "../../shared/types";
+import type {
+  AiChatAction,
+  AiChatMessageRecord,
+  AiChatMessageRole,
+  AiChatSessionRecord,
+  AiChatSessionStatus,
+  AiStreamContextEvent
+} from "../../shared/types";
 import type { SqliteDatabase } from "../database";
 
 type AiChatSessionRow = {
@@ -7,6 +14,10 @@ type AiChatSessionRow = {
   readonly project_id: string;
   readonly title: string;
   readonly status: AiChatSessionStatus;
+  readonly context_usage_json: string | null;
+  readonly memory_summary: string | null;
+  readonly memory_compacted_through_message_id: string | null;
+  readonly memory_updated_at: string | null;
   readonly created_at: string;
   readonly updated_at: string;
 };
@@ -58,6 +69,19 @@ type RenameSessionFromFirstMessageInput = {
   readonly message: string;
 };
 
+type UpdateSessionContextUsageInput = {
+  readonly projectId: string;
+  readonly sessionId: string;
+  readonly contextUsage: AiStreamContextEvent | null;
+};
+
+type UpdateSessionMemoryInput = {
+  readonly projectId: string;
+  readonly sessionId: string;
+  readonly summary: string;
+  readonly compactedThroughMessageId: string;
+};
+
 function nowIso(): string {
   return new Date().toISOString();
 }
@@ -70,12 +94,23 @@ function stringifyAction(value: AiChatAction | null): string | null {
   return value ? JSON.stringify(value) : null;
 }
 
+function parseContextUsage(value: string | null): AiStreamContextEvent | null {
+  return value ? (JSON.parse(value) as AiStreamContextEvent) : null;
+}
+
+function stringifyContextUsage(value: AiStreamContextEvent | null): string | null {
+  return value ? JSON.stringify(value) : null;
+}
+
 function mapSession(row: AiChatSessionRow): AiChatSessionRecord {
   return {
     id: row.id,
     projectId: row.project_id,
     title: row.title,
     status: row.status,
+    lastContextUsage: parseContextUsage(row.context_usage_json),
+    compactedMemorySummary: row.memory_summary,
+    compactedMemoryThroughMessageId: row.memory_compacted_through_message_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -131,15 +166,43 @@ export class AiChatRepository {
       projectId: input.projectId,
       title: input.title?.trim() || "新对话",
       status: "active",
+      lastContextUsage: null,
+      compactedMemorySummary: null,
+      compactedMemoryThroughMessageId: null,
       createdAt,
       updatedAt: createdAt
     } satisfies AiChatSessionRecord;
 
     this.db
-      .prepare("INSERT INTO ai_chat_sessions (id, project_id, title, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)")
-      .run(session.id, session.projectId, session.title, session.status, session.createdAt, session.updatedAt);
+      .prepare(
+        `INSERT INTO ai_chat_sessions
+         (id, project_id, title, status, context_usage_json, memory_summary, memory_compacted_through_message_id, memory_updated_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        session.id,
+        session.projectId,
+        session.title,
+        session.status,
+        stringifyContextUsage(session.lastContextUsage),
+        session.compactedMemorySummary,
+        session.compactedMemoryThroughMessageId,
+        null,
+        session.createdAt,
+        session.updatedAt
+      );
 
     return session;
+  }
+
+  getSession(input: ClearSessionInput): AiChatSessionRecord {
+    const row = this.db
+      .prepare("SELECT * FROM ai_chat_sessions WHERE project_id = ? AND id = ? AND status = 'active'")
+      .get(input.projectId, input.sessionId) as AiChatSessionRow | undefined;
+    if (!row) {
+      throw new Error("AI 对话不存在。");
+    }
+    return mapSession(row);
   }
 
   renameSession(input: RenameSessionInput): AiChatSessionRecord {
@@ -212,9 +275,33 @@ export class AiChatRepository {
     return message;
   }
 
+  updateSessionContextUsage(input: UpdateSessionContextUsageInput): void {
+    this.db
+      .prepare("UPDATE ai_chat_sessions SET context_usage_json = ?, updated_at = ? WHERE project_id = ? AND id = ? AND status = 'active'")
+      .run(stringifyContextUsage(input.contextUsage), nowIso(), input.projectId, input.sessionId);
+  }
+
+  updateSessionMemory(input: UpdateSessionMemoryInput): AiChatSessionRecord {
+    const updatedAt = nowIso();
+    this.db
+      .prepare(
+        `UPDATE ai_chat_sessions
+         SET memory_summary = ?, memory_compacted_through_message_id = ?, memory_updated_at = ?, updated_at = ?
+         WHERE project_id = ? AND id = ? AND status = 'active'`
+      )
+      .run(input.summary, input.compactedThroughMessageId, updatedAt, updatedAt, input.projectId, input.sessionId);
+    return this.getSession(input);
+  }
+
   clearSession(input: ClearSessionInput): void {
     this.db.prepare("DELETE FROM ai_chat_messages WHERE project_id = ? AND session_id = ?").run(input.projectId, input.sessionId);
-    this.db.prepare("UPDATE ai_chat_sessions SET updated_at = ? WHERE id = ? AND project_id = ?").run(nowIso(), input.sessionId, input.projectId);
+    this.db
+      .prepare(
+        `UPDATE ai_chat_sessions
+         SET context_usage_json = NULL, memory_summary = NULL, memory_compacted_through_message_id = NULL, memory_updated_at = NULL, updated_at = ?
+         WHERE id = ? AND project_id = ?`
+      )
+      .run(nowIso(), input.sessionId, input.projectId);
   }
 
   deleteSession(input: DeleteSessionInput): void {

@@ -1,10 +1,12 @@
 import { PaperPlaneRight, Plus, Trash } from "@phosphor-icons/react";
-import { useState } from "react";
+import { type CSSProperties, type KeyboardEvent, useState } from "react";
 import type { AiChatMessageRecord, SelectionSnapshot } from "../../main/shared/types";
 import { Button } from "../components/Button";
 import { Modal } from "../components/Modal";
 import type { SettingsCategory } from "../routes/SettingsPage";
 import { useChatStore } from "../state/chat-store";
+import { ChatMessageContent } from "./ChatMessageContent";
+import { buildChatContextUsageDisplay } from "./chat-context-display";
 
 type AiChatTabProps = {
   readonly currentChapterId: string | null;
@@ -120,6 +122,13 @@ export function AiChatTab({ currentChapterId, currentChapterTitle, currentProjec
     await chatStore.sendMessage(message);
   }
 
+  function handleDraftKeyDown(event: KeyboardEvent<HTMLTextAreaElement>): void {
+    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+      event.preventDefault();
+      void sendMessage();
+    }
+  }
+
   async function retryLastMessage(): Promise<void> {
     const lastUserMessage = getLastUserMessage(chatStore.messages);
     if (!lastUserMessage || chatStore.busy || chatStore.loading || !chatStore.session) {
@@ -137,6 +146,13 @@ export function AiChatTab({ currentChapterId, currentChapterTitle, currentProjec
   const lastUserMessage = getLastUserMessage(chatStore.messages);
   const errorHint = chatStore.error ? chatErrorHint(chatStore.error) : null;
   const showSettingsAction = Boolean(chatStore.error && (isAiSettingsError(chatStore.error) || isOpenRouterRateLimitError(chatStore.error)));
+  const contextDisplay = chatStore.contextUsage ? buildChatContextUsageDisplay(chatStore.contextUsage) : null;
+  const showContextStatus = Boolean(contextDisplay || chatStore.contextUsagePending);
+  const contextRingStyle = contextDisplay
+    ? ({
+        "--context-used": `${contextDisplay.percent * 3.6}deg`
+      } as CSSProperties)
+    : undefined;
 
   return (
     <>
@@ -190,21 +206,32 @@ export function AiChatTab({ currentChapterId, currentChapterTitle, currentProjec
         <div className="messages" aria-live="polite">
           {chatStore.loading ? (
             <div className="message pending" role="status">
-              正在读取 AI 对话...
+              <div className="message-content">正在读取 AI 对话...</div>
             </div>
           ) : null}
           {!chatStore.loading && chatStore.messages.length === 0 ? (
-            <div className="message">暂无对话记录。</div>
+            <div className="message">
+              <div className="message-content">暂无对话记录。</div>
+            </div>
           ) : null}
           {chatStore.messages.map((message) => (
             <div className={messageClassName(message)} key={message.id}>
-              {message.content}
+              <ChatMessageContent content={message.content} rich={message.role === "assistant"} />
               <div className="message-time">{new Date(message.createdAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}</div>
             </div>
           ))}
           {chatStore.busy ? (
             <div className="message pending" role="status">
-              {chatStore.streamingText ? chatStore.streamingText : "AI 正在回复..."}
+              {chatStore.streamingReasoning ? (
+                <details className="chat-reasoning" open>
+                  <summary>思考</summary>
+                  <div>{chatStore.streamingReasoning}</div>
+                </details>
+              ) : null}
+              <ChatMessageContent
+                content={chatStore.streamingText ? chatStore.streamingText : chatStore.contextUsagePending ? "正在分析上下文..." : "AI 正在思考中"}
+                rich={Boolean(chatStore.streamingText)}
+              />
             </div>
           ) : null}
           {chatStore.error ? (
@@ -231,8 +258,53 @@ export function AiChatTab({ currentChapterId, currentChapterTitle, currentProjec
           ) : null}
         </div>
         <div className="chat-input">
-          <textarea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="告诉 AI 你的想法..." />
+          <textarea
+            aria-label="AI 对话输入，Enter 发送，Shift Enter 换行"
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={handleDraftKeyDown}
+            placeholder="告诉 AI 你的想法..."
+            value={draft}
+          />
           <div className="chat-bottom chat-bottom-send">
+            <div className="chat-bottom-meta">
+              {showContextStatus ? (
+                <div
+                  className={`chat-context-status${chatStore.contextUsagePending ? " preparing" : ""}`}
+                  aria-label={
+                    contextDisplay
+                      ? `背景信息窗口：${chatStore.contextUsagePending ? "正在准备新上下文，" : ""}${contextDisplay.percentText} 已用，${contextDisplay.usedOfTotalLabel}`
+                      : "正在分析上下文"
+                  }
+                  tabIndex={0}
+                >
+                  <div className="chat-context-status-main">
+                    <span className="chat-context-ring" style={contextRingStyle} aria-hidden="true" />
+                    <strong>{contextDisplay?.percentText ?? "分析中"}</strong>
+                    {contextDisplay ? <span>{contextDisplay.usedLabel}</span> : null}
+                    <span className="chat-context-model-label">{contextDisplay?.modelLabel ?? "准备上下文"}</span>
+                    {chatStore.contextUsagePending ? <span className="context-updating">更新中</span> : null}
+                  </div>
+                  {contextDisplay ? (
+                    <div className="chat-context-popover" role="tooltip">
+                      <div className="chat-context-popover-title">背景信息窗口：</div>
+                      <div className="chat-context-popover-percent">{contextDisplay.percentText} 已用</div>
+                      <div className="chat-context-popover-total">{contextDisplay.usedOfTotalLabel}</div>
+                      <div className="chat-context-popover-strong">{contextDisplay.compressionLabel}</div>
+                      {chatStore.contextUsagePending ? (
+                        <div className="chat-context-popover-pending">正在准备新上下文，新用量会在最终请求开始时刷新。</div>
+                      ) : null}
+                      <div className="chat-context-popover-meta">
+                        <span>模型 {contextDisplay.modelLabel}</span>
+                        <span>范围 {contextDisplay.scopeLabel}</span>
+                        <span>模型窗口 {contextDisplay.windowLabel}</span>
+                        <span>输入预算 {contextDisplay.inputBudgetLabel}</span>
+                        <span>输出 {contextDisplay.outputBudgetLabel}</span>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
             <button
               className="send"
               disabled={!draft.trim() || chatStore.busy || chatStore.loading || !chatStore.session || !currentProjectId}

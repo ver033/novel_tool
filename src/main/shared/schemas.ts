@@ -157,6 +157,8 @@ export const aiProviderSettingsSchema = z
     providerType: z.enum(["openrouter"]),
     baseUrl: nonEmptyString.max(2048),
     modelName: nonEmptyString.max(160),
+    contextLength: z.number().int().positive().nullable().optional(),
+    supportsTools: z.boolean().nullable().optional(),
     apiKey: z.string().min(1).max(4096).optional()
   })
   .strict();

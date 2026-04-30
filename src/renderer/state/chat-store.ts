@@ -1,5 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { AiChatAction, AiChatMessageRecord, AiChatSessionRecord, ChapterContent, SelectionSnapshot } from "../../main/shared/types";
+import type {
+  AiChatAction,
+  AiChatMessageRecord,
+  AiChatSessionRecord,
+  AiStreamContextEvent,
+  ChapterContent,
+  SelectionSnapshot,
+  SettingsState
+} from "../../main/shared/types";
+import { createIdleChatContextUsage } from "../sidebar/chat-context-display";
 import { getNovelToolApi } from "./app-store";
 import { formatIpcErrorMessage } from "./ipc-error";
 
@@ -32,12 +41,25 @@ function createRequestId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
 }
 
+function isCanceledIpcError(reason: unknown): boolean {
+  const message = formatIpcErrorMessage(reason, "");
+  return message.includes("canceled") || message.includes("AI 对话已取消");
+}
+
+function getSessionContextUsage(session: AiChatSessionRecord | null): AiStreamContextEvent | null {
+  return session?.lastContextUsage ?? null;
+}
+
 export function useChatStore({ projectId, currentChapterId, currentChapterTitle, selectionSnapshot }: UseChatStoreOptions) {
   const api = useMemo(getNovelToolApi, []);
   const [session, setSession] = useState<AiChatSessionRecord | null>(null);
   const [sessions, setSessions] = useState<readonly AiChatSessionRecord[]>([]);
   const [messages, setMessages] = useState<readonly AiChatMessageRecord[]>([]);
   const [streamingText, setStreamingText] = useState("");
+  const [streamingReasoning, setStreamingReasoning] = useState("");
+  const [idleContextUsage, setIdleContextUsage] = useState<AiStreamContextEvent | null>(null);
+  const [contextUsage, setContextUsage] = useState<AiStreamContextEvent | null>(null);
+  const [contextUsagePending, setContextUsagePending] = useState(false);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -88,6 +110,10 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
       setSessions([]);
       setMessages([]);
       setStreamingText("");
+      setStreamingReasoning("");
+      setIdleContextUsage(null);
+      setContextUsage(null);
+      setContextUsagePending(false);
       setError(null);
       return () => {
         disposed = true;
@@ -96,8 +122,14 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
 
     setLoading(true);
     setError(null);
+    setContextUsagePending(false);
+    setContextUsage((current) => current ?? createIdleChatContextUsage(null));
     void (async () => {
-      let loadedSessions = (await api.ai.listChatSessions({ projectId })) as AiChatSessionRecord[];
+      const [settings, initialSessions] = await Promise.all([
+        api.settings.get() as Promise<SettingsState>,
+        api.ai.listChatSessions({ projectId }) as Promise<AiChatSessionRecord[]>
+      ]);
+      let loadedSessions = initialSessions;
       if (loadedSessions.length === 0) {
         const createdSession = (await api.ai.getChatSession({ projectId })) as AiChatSessionRecord;
         loadedSessions = [createdSession];
@@ -106,15 +138,18 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
       const loadedMessages = nextSession ? await api.ai.listChatMessages({ projectId: nextSession.projectId, sessionId: nextSession.id }) : [];
 
       return {
+        idleContextUsage: createIdleChatContextUsage(settings),
         loadedMessages: loadedMessages as AiChatMessageRecord[],
         loadedSessions,
         nextSession
       };
     })()
-      .then(({ loadedMessages, loadedSessions, nextSession }) => {
+      .then(({ idleContextUsage, loadedMessages, loadedSessions, nextSession }) => {
         if (disposed) {
           return;
         }
+        setIdleContextUsage(idleContextUsage);
+        setContextUsage(getSessionContextUsage(nextSession) ?? idleContextUsage);
         setSessions(loadedSessions);
         setSession(nextSession);
         setMessages(loadedMessages);
@@ -151,12 +186,15 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
       });
       setMessages([]);
       setStreamingText("");
+      setStreamingReasoning("");
+      setContextUsage(idleContextUsage);
+      setContextUsagePending(false);
     } catch (reason) {
       setError(formatIpcErrorMessage(reason, "清空 AI 对话失败"));
     } finally {
       setBusy(false);
     }
-  }, [api, busy, projectId, session]);
+  }, [api, busy, idleContextUsage, projectId, session]);
 
   const selectSession = useCallback(
     async (sessionId: string) => {
@@ -172,6 +210,9 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
       setLoading(true);
       setError(null);
       setStreamingText("");
+      setStreamingReasoning("");
+      setContextUsage(getSessionContextUsage(selectedSession) ?? idleContextUsage);
+      setContextUsagePending(false);
       try {
         setSession(selectedSession);
         await loadMessages(selectedSession);
@@ -181,7 +222,7 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
         setLoading(false);
       }
     },
-    [busy, loadMessages, loading, projectId, session, sessions]
+    [busy, idleContextUsage, loadMessages, loading, projectId, session, sessions]
   );
 
   const createSession = useCallback(async () => {
@@ -192,18 +233,21 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
     setLoading(true);
     setError(null);
     setStreamingText("");
+    setStreamingReasoning("");
+    setContextUsagePending(false);
     try {
       const createdSession = (await api.ai.createChatSession({ projectId })) as AiChatSessionRecord;
       const loadedSessions = (await api.ai.listChatSessions({ projectId })) as AiChatSessionRecord[];
       setSessions(loadedSessions.length > 0 ? loadedSessions : [createdSession]);
       setSession(createdSession);
       setMessages([]);
+      setContextUsage(idleContextUsage);
     } catch (reason) {
       setError(formatIpcErrorMessage(reason, "创建 AI 对话失败"));
     } finally {
       setLoading(false);
     }
-  }, [api, busy, loading, projectId]);
+  }, [api, busy, idleContextUsage, loading, projectId]);
 
   const deleteCurrentSession = useCallback(async () => {
     if (!projectId || !session || busy || loading) {
@@ -213,6 +257,8 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
     setLoading(true);
     setError(null);
     setStreamingText("");
+    setStreamingReasoning("");
+    setContextUsagePending(false);
     try {
       await api.ai.deleteChatSession({
         projectId,
@@ -223,13 +269,14 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
         loadedSessions[0] ?? ((await api.ai.createChatSession({ projectId })) as AiChatSessionRecord);
       setSessions(loadedSessions.length > 0 ? loadedSessions : [nextSession]);
       setSession(nextSession);
+      setContextUsage(getSessionContextUsage(nextSession) ?? idleContextUsage);
       await loadMessages(nextSession);
     } catch (reason) {
       setError(formatIpcErrorMessage(reason, "删除 AI 对话失败"));
     } finally {
       setLoading(false);
     }
-  }, [api, busy, loadMessages, loading, projectId, session]);
+  }, [api, busy, idleContextUsage, loadMessages, loading, projectId, session]);
 
   const sendMessage = useCallback(
     async (rawMessage: string) => {
@@ -251,11 +298,14 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
         applied = true;
         setMessages((current) => [...current.filter((item) => item.id !== pendingUser.id), ...result.messages]);
         setStreamingText("");
+        setStreamingReasoning("");
       };
 
       setBusy(true);
       setError(null);
       setStreamingText("");
+      setStreamingReasoning("");
+      setContextUsagePending(true);
       setMessages((current) => [...current, pendingUser]);
 
       try {
@@ -265,12 +315,34 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
             : undefined;
         unsubscribe = api.ai.subscribeAiStream(requestId, {
           onChunk(event) {
+            if (activeRequestId.current !== requestId) {
+              return;
+            }
             setStreamingText((current) => `${current}${event.content}`);
           },
+          onReasoning(event) {
+            if (activeRequestId.current !== requestId) {
+              return;
+            }
+            setStreamingReasoning((current) => `${current}${event.content}`);
+          },
+          onContext(event) {
+            if (activeRequestId.current !== requestId) {
+              return;
+            }
+            setContextUsage(event);
+            setContextUsagePending(false);
+          },
           onDone(event) {
+            if (activeRequestId.current !== requestId) {
+              return;
+            }
             applyResult(event.payload as ChatStreamPayload);
           },
           onError(event) {
+            if (activeRequestId.current !== requestId) {
+              return;
+            }
             setError(event.error);
           }
         });
@@ -284,20 +356,32 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
           ...(selectionSnapshot?.text ? { selectionText: selectionSnapshot.text } : {}),
           ...(content?.plainText ? { chapterExcerpt: content.plainText.slice(0, 6000) } : {})
         })) as ChatStreamPayload;
+        if (activeRequestId.current !== requestId) {
+          return;
+        }
         applyResult(result);
         await refreshSessions(session.id);
       } catch (reason) {
+        if (activeRequestId.current !== requestId && isCanceledIpcError(reason)) {
+          return;
+        }
+        setContextUsagePending(false);
         setError(formatIpcErrorMessage(reason, "AI 对话失败"));
         await loadMessages(session).catch(() => {
           setMessages((current) => current.filter((item) => item.id !== pendingUser.id));
         });
       } finally {
-        if (activeRequestId.current === requestId) {
+        const isCurrentRequest = activeRequestId.current === requestId;
+        if (isCurrentRequest) {
           activeRequestId.current = null;
         }
         unsubscribe?.();
-        setBusy(false);
-        setStreamingText("");
+        if (isCurrentRequest) {
+          setBusy(false);
+          setStreamingText("");
+          setStreamingReasoning("");
+          setContextUsagePending(false);
+        }
       }
     },
     [api, busy, currentChapterId, currentChapterTitle, loadMessages, projectId, refreshSessions, selectionSnapshot, session]
@@ -306,6 +390,8 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
   return {
     busy,
     clearChat,
+    contextUsage,
+    contextUsagePending,
     createSession,
     deleteCurrentSession,
     error,
@@ -315,6 +401,7 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
     sendMessage,
     session,
     sessions,
+    streamingReasoning,
     streamingText
   };
 }
