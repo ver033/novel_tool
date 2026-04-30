@@ -67,7 +67,12 @@ export function buildChatContextUsageDisplay(contextUsage: AiStreamContextEvent)
     windowLabel: formatTokenCount(contextUsage.modelContextTokens),
     inputBudgetLabel: formatTokenCount(contextUsage.maxInputTokens),
     outputBudgetLabel: formatTokenCount(contextUsage.maxOutputTokens),
-    compressionLabel: contextUsage.contextMode === "summarized" ? "墨枢已压缩背景信息" : "原文背景信息",
+    compressionLabel:
+      contextUsage.contextMode === "summarized"
+        ? "墨枢已压缩背景信息"
+        : contextUsage.contextMode === "mixed"
+          ? "部分原文 + 压缩背景"
+          : "原文背景信息",
     scopeLabel: contextUsage.scopeLabel
   };
 }

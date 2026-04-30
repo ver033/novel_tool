@@ -422,6 +422,22 @@ export const importConfirmTxtInputSchema = z
   })
   .strict();
 
+export const exportSelectTxtFilePathInputSchema = z
+  .object({
+    projectId: idSchema,
+    suggestedName: nonEmptyString.max(120).optional()
+  })
+  .strict();
+
+export const exportTxtInputSchema = z
+  .object({
+    projectId: idSchema,
+    filePath: nonEmptyString.max(4096),
+    range: z.literal("all_chapters"),
+    includeChapterTitles: z.boolean()
+  })
+  .strict();
+
 export class IpcPayloadValidationError extends Error {
   constructor(readonly issues: z.ZodIssue[]) {
     super("IPC payload validation failed");

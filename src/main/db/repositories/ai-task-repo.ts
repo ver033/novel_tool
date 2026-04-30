@@ -1,5 +1,5 @@
 import { createId } from "../../shared/ids";
-import { parseProofreadCandidateMetadata, stringifyProofreadCandidateMetadata, type ProofreadIssue } from "../../shared/proofread";
+import { parseAiCandidateMetadata, stringifyAiCandidateMetadata } from "../../shared/ai-candidate-metadata";
 import type {
   AiTaskCandidateRecord,
   AiTaskRecord,
@@ -47,7 +47,8 @@ type CreateCandidateInput = {
   readonly originalText: string | null;
   readonly generatedText: string;
   readonly changeSummary?: string | null;
-  readonly proofreadIssues?: readonly ProofreadIssue[] | null;
+  readonly proofreadIssues?: AiTaskCandidateRecord["proofreadIssues"];
+  readonly writingContextPlan?: AiTaskCandidateRecord["writingContextPlan"];
 };
 
 type TaskPatch = {
@@ -85,6 +86,7 @@ function mapTask(row: AiTaskRow): AiTaskRecord {
 }
 
 function mapCandidate(row: AiTaskCandidateRow): AiTaskCandidateRecord {
+  const metadata = parseAiCandidateMetadata(row.metadata_json);
   return {
     id: row.id,
     taskId: row.task_id,
@@ -92,7 +94,8 @@ function mapCandidate(row: AiTaskCandidateRow): AiTaskCandidateRecord {
     originalText: row.original_text,
     generatedText: row.generated_text,
     changeSummary: row.change_summary,
-    proofreadIssues: parseProofreadCandidateMetadata(row.metadata_json)?.proofreadIssues ?? null,
+    proofreadIssues: metadata?.proofreadIssues ?? null,
+    writingContextPlan: metadata?.writingContextPlan ?? null,
     status: row.status,
     createdAt: row.created_at,
     updatedAt: row.updated_at
@@ -173,6 +176,7 @@ export class AiTaskRepository {
       generatedText: input.generatedText,
       changeSummary: input.changeSummary ?? null,
       proofreadIssues: input.proofreadIssues ?? null,
+      writingContextPlan: input.writingContextPlan ?? null,
       status: "preview",
       createdAt,
       updatedAt: createdAt
@@ -191,7 +195,10 @@ export class AiTaskRepository {
         candidate.originalText,
         candidate.generatedText,
         candidate.changeSummary,
-        stringifyProofreadCandidateMetadata(candidate.proofreadIssues),
+        stringifyAiCandidateMetadata({
+          proofreadIssues: candidate.proofreadIssues,
+          writingContextPlan: candidate.writingContextPlan
+        }),
         candidate.status,
         candidate.createdAt,
         candidate.updatedAt

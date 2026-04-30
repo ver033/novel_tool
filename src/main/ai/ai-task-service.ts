@@ -24,6 +24,8 @@ import { enrichChatInputWithReferencedChapter } from "./chat-context-resolver";
 import { parseChatScopeReference } from "./chat-reference-parser";
 import type { OpenRouterToolCall, OpenRouterToolDefinition } from "./openrouter-client";
 import { estimateTextTokens } from "./token-estimator";
+import { WritingOperationRunner } from "./writing-operation-runner";
+import type { WritingOperationOutputKind, WritingOperationResult, WritingOperationTarget } from "./writing-operation-types";
 import type { AiChatRepository } from "../db/repositories/ai-chat-repo";
 import { AiTaskRepository } from "../db/repositories/ai-task-repo";
 import type { ChapterRepository } from "../db/repositories/chapter-repo";
@@ -52,6 +54,7 @@ import type {
   AiStreamContextEvent,
   AiTaskCandidateRecord,
   AiTaskRecord,
+  TaskType,
   AiUpdateTaskInput
 } from "../shared/types";
 
@@ -59,6 +62,7 @@ export type AiTaskGenerationResult = {
   readonly generatedText: string;
   readonly changeSummary: string | null;
   readonly proofreadIssues?: readonly ProofreadIssue[] | null;
+  readonly contextPlan?: AiTaskCandidateRecord["writingContextPlan"];
   readonly truncated?: boolean;
 };
 
@@ -135,6 +139,7 @@ type GeneratedPreview = {
 
 export type AiTaskStreamHandlers = {
   readonly onChunk?: (event: { readonly requestId: string; readonly content: string }) => void;
+  readonly onContext?: (event: AiStreamContextEvent) => void;
   readonly onDone?: (event: { readonly requestId: string; readonly payload: GeneratedPreview }) => void;
   readonly onError?: (event: { readonly requestId: string; readonly error: string }) => void;
 };
@@ -154,7 +159,7 @@ export type AiChatStreamHandlers = {
     readonly maxOutputTokens: number;
     readonly modelContextTokens: number | null;
     readonly modelName: string;
-    readonly contextMode: "direct" | "summarized";
+    readonly contextMode: "direct" | "summarized" | "mixed";
     readonly scopeLabel: string;
   }) => void;
   readonly onDone?: (event: { readonly requestId: string; readonly payload: AiChatStreamResult }) => void;
@@ -348,7 +353,8 @@ export class AiTaskService {
     scratchRepo?: ScratchNoteRepository | ScratchNoteRepositoryResolver,
     chapterRepo?: ChapterRepository | ChapterRepositoryResolver,
     private readonly chatPlanner?: ChatPlanner,
-    private readonly resolveChatTokenBudget: ChatTokenBudgetResolver = () => getTokenBudget("chat")
+    private readonly resolveChatTokenBudget: ChatTokenBudgetResolver = () => getTokenBudget("chat"),
+    private readonly writingOperationRunner?: WritingOperationRunner
   ) {
     this.resolveAiTaskRepo = typeof aiTaskRepo === "function" ? aiTaskRepo : () => aiTaskRepo;
     this.resolveAiChatRepo = aiChatRepo ? (typeof aiChatRepo === "function" ? aiChatRepo : () => aiChatRepo) : undefined;
@@ -534,6 +540,24 @@ export class AiTaskService {
       tokenBudget,
       signal,
       allowedActions,
+      executeWritingOperation: async (request: { readonly operation: TaskType; readonly target: WritingOperationTarget; readonly instruction: string }) => {
+        const result = await this.runChatWritingOperation({
+          projectId: input.projectId,
+          operation: request.operation,
+          target: request.target,
+          instruction: request.instruction,
+          signal
+        });
+        const outputKind: WritingOperationOutputKind = request.operation === "proofread" ? "proofread_issues" : "candidate_text";
+        return {
+          operation: request.operation,
+          outputKind,
+          generatedText: result.generatedText,
+          changeSummary: result.changeSummary,
+          proofreadIssues: result.proofreadIssues ?? null,
+          contextPlan: result.contextPlan
+        };
+      },
       summarizeResolvedContext: async (resolved: ResolvedChatAgentContext, summarizeSignal?: AbortSignal): Promise<ChatAgentContext> =>
         this.compressResolvedAgentContext(input.projectId, input.message, resolved, tokenBudget, summarizeSignal)
     };
@@ -551,9 +575,12 @@ export class AiTaskService {
         wordCount: chapter.wordCount,
         current: chapter.id === input.chapterId
       })),
-      tools: allowedActions.includes("add_to_scratchpad")
-        ? MOSHU_CHAT_AGENT_TOOLS
-        : MOSHU_CHAT_AGENT_TOOLS.filter((tool) => tool.function.name !== "add_to_scratchpad"),
+      tools: MOSHU_CHAT_AGENT_TOOLS.filter((tool) => {
+        if (tool.function.name === "add_to_scratchpad") {
+          return allowedActions.includes("add_to_scratchpad");
+        }
+        return true;
+      }),
       executeTool: (call) =>
         executeChatAgentToolWithAction({
           name: call.name,
@@ -561,6 +588,29 @@ export class AiTaskService {
           runtime: runtimeBase
         })
     };
+  }
+
+  private async runChatWritingOperation(input: {
+    readonly projectId: string;
+    readonly operation: TaskType;
+    readonly target: WritingOperationTarget;
+    readonly instruction: string;
+    readonly signal?: AbortSignal;
+  }): Promise<WritingOperationResult> {
+    if (!this.writingOperationRunner) {
+      throw new Error("写作操作服务未初始化。");
+    }
+    return this.writingOperationRunner.runRequest(
+      {
+        projectId: input.projectId,
+        source: "chat_tool",
+        operation: input.operation,
+        target: input.target,
+        userInstruction: input.instruction,
+        preset: null
+      },
+      { signal: input.signal }
+    );
   }
 
   private async compactChatMemoryIfNeeded(
@@ -772,7 +822,8 @@ export class AiTaskService {
         originalText: task.inputText,
         generatedText: generated.generatedText,
         changeSummary: generated.changeSummary,
-        proofreadIssues: generated.proofreadIssues ?? null
+        proofreadIssues: generated.proofreadIssues ?? null,
+        writingContextPlan: generated.contextPlan ?? null
       });
       const updatedTask = aiTaskRepo.updateTask(task.id, {
         status: "preview_ready",
@@ -819,6 +870,9 @@ export class AiTaskService {
           if (task.taskType !== "proofread") {
             handlers.onChunk?.({ requestId: input.requestId, content: event.content });
           }
+        },
+        onContext: (event) => {
+          handlers.onContext?.({ ...event, requestId: input.requestId });
         }
       }, { signal: abortController.signal });
       if (generated.truncated) {
@@ -836,7 +890,8 @@ export class AiTaskService {
         originalText: task.inputText,
         generatedText: generated.generatedText,
         changeSummary: generated.changeSummary,
-        proofreadIssues: generated.proofreadIssues ?? null
+        proofreadIssues: generated.proofreadIssues ?? null,
+        writingContextPlan: generated.contextPlan ?? null
       });
       const updatedTask = aiTaskRepo.updateTask(task.id, {
         status: "preview_ready",
@@ -896,6 +951,9 @@ export class AiTaskService {
         {
           onChunk: (event) => {
             handlers.onChunk?.({ requestId: input.requestId, content: event.content });
+          },
+          onContext: (event) => {
+            handlers.onContext?.({ ...event, requestId: input.requestId });
           }
         },
         { signal: abortController.signal }
@@ -915,7 +973,8 @@ export class AiTaskService {
         originalText: task.inputText,
         generatedText: generated.generatedText,
         changeSummary: generated.changeSummary,
-        proofreadIssues: generated.proofreadIssues ?? null
+        proofreadIssues: generated.proofreadIssues ?? null,
+        writingContextPlan: generated.contextPlan ?? null
       });
       const updatedTask = aiTaskRepo.updateTask(task.id, {
         status: "preview_ready",

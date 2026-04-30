@@ -20,6 +20,7 @@ export type NovelEditorProps = {
   readonly taskPromptPresets: readonly TaskPromptPreset[];
   readonly onContentChange: (contentJson: TiptapDocument) => void;
   readonly onEditorReady?: (editor: Editor | null) => void;
+  readonly onSelectionToChat?: (snapshot: SelectionSnapshot) => void;
   readonly onSelectionToScratchpad?: (snapshot: SelectionSnapshot) => Promise<void> | void;
   readonly onTask: (task: TaskType, snapshot?: SelectionSnapshot | null, preset?: TaskPromptPreset | null) => void;
 };
@@ -59,6 +60,7 @@ export const NovelEditor = memo(function NovelEditor({
   taskPromptPresets,
   onContentChange,
   onEditorReady,
+  onSelectionToChat,
   onSelectionToScratchpad,
   onTask
 }: NovelEditorProps) {
@@ -144,6 +146,7 @@ export const NovelEditor = memo(function NovelEditor({
           chapterId={chapterId}
           editor={editor}
           taskPromptPresets={taskPromptPresets}
+          onSelectionToChat={onSelectionToChat}
           onSelectionToScratchpad={onSelectionToScratchpad}
           onTask={handleTask}
         />

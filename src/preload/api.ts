@@ -30,6 +30,8 @@ import type {
   ChapterRenameInput,
   ChapterSaveContentInput,
   ChapterUpdateTargetWordCountInput,
+  ExportSelectTxtFilePathInput,
+  ExportTxtInput,
   ImportConfirmTxtInput,
   ImportPreviewTxtInput,
   ImportUpdatePreviewInput,
@@ -126,6 +128,10 @@ export type NovelToolApi = {
     readonly previewTxt: (input: ImportPreviewTxtInput) => Promise<unknown>;
     readonly updatePreview: (input: ImportUpdatePreviewInput) => Promise<unknown>;
     readonly confirmTxtImport: (input: ImportConfirmTxtInput) => Promise<unknown>;
+  };
+  readonly export: {
+    readonly selectTxtFilePath: (input: ExportSelectTxtFilePathInput) => Promise<unknown>;
+    readonly exportTxt: (input: ExportTxtInput) => Promise<unknown>;
   };
 };
 
@@ -236,5 +242,9 @@ export const novelToolApi: NovelToolApi = Object.freeze({
     previewTxt: (input: ImportPreviewTxtInput) => ipcRenderer.invoke(ipcChannels.import.previewTxt, input),
     updatePreview: (input: ImportUpdatePreviewInput) => ipcRenderer.invoke(ipcChannels.import.updatePreview, input),
     confirmTxtImport: (input: ImportConfirmTxtInput) => ipcRenderer.invoke(ipcChannels.import.confirmTxtImport, input)
+  }),
+  export: Object.freeze({
+    selectTxtFilePath: (input: ExportSelectTxtFilePathInput) => ipcRenderer.invoke(ipcChannels.export.selectTxtFilePath, input),
+    exportTxt: (input: ExportTxtInput) => ipcRenderer.invoke(ipcChannels.export.exportTxt, input)
   })
 });

@@ -1,4 +1,4 @@
-import { BookOpen, CornersIn, CornersOut, GearSix, MagnifyingGlass, UploadSimple } from "@phosphor-icons/react";
+import { BookOpen, CornersIn, CornersOut, DownloadSimple, GearSix, MagnifyingGlass, UploadSimple } from "@phosphor-icons/react";
 import { useState } from "react";
 import type { EditorSettings } from "../../main/shared/types";
 import { IconButton } from "../components/IconButton";
@@ -10,6 +10,7 @@ type TopBarProps = {
   readonly saveStatus?: "saved" | "dirty" | "saving" | "failed";
   readonly editorSettings?: EditorSettings;
   readonly focusMode?: boolean;
+  readonly onExport?: () => void;
   readonly onImport?: () => void;
   readonly onEditorSettingsChange?: (patch: Partial<EditorSettings>) => void | Promise<void>;
   readonly onFocusModeToggle?: () => void;
@@ -125,6 +126,7 @@ export function TopBar({
   saveStatus = "saved",
   editorSettings,
   focusMode = false,
+  onExport,
   onImport,
   onEditorSettingsChange,
   onFocusModeToggle,
@@ -176,6 +178,11 @@ export function TopBar({
         {mode === "writing" && onImport && !focusMode ? (
           <IconButton label="导入 TXT" onClick={() => onImport()}>
             <UploadSimple size={24} weight="regular" />
+          </IconButton>
+        ) : null}
+        {mode === "writing" && onExport && !focusMode ? (
+          <IconButton label="导出 TXT" onClick={() => onExport()}>
+            <DownloadSimple size={24} weight="regular" />
           </IconButton>
         ) : null}
         {canShowLayoutPanel ? (

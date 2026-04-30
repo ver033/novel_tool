@@ -1,8 +1,9 @@
 import { X } from "@phosphor-icons/react";
 import type { Editor } from "@tiptap/react";
-import type { SelectionSnapshot, TaskPromptPreset } from "../../main/shared/types";
+import type { ChapterSummary, SelectionSnapshot, TaskPromptPreset } from "../../main/shared/types";
 import { IconButton } from "../components/IconButton";
 import { AiChatTab } from "../sidebar/AiChatTab";
+import type { AiChatDraftSeed } from "../sidebar/chat-draft";
 import { CurrentTaskTab } from "../sidebar/CurrentTaskTab";
 import { ScratchpadTab } from "../sidebar/ScratchpadTab";
 import type { SettingsCategory } from "../routes/SettingsPage";
@@ -12,6 +13,8 @@ export type TaskType = "polish" | "expand" | "proofread" | "continue";
 
 type RightUtilitySidebarProps = {
   readonly activeTab: SidebarTab;
+  readonly aiChatDraftSeed: AiChatDraftSeed | null;
+  readonly chapters: readonly ChapterSummary[];
   readonly currentChapterId: string | null;
   readonly currentChapterTitle: string | null;
   readonly currentProjectId: string | null;
@@ -34,6 +37,8 @@ const tabLabels: Array<[SidebarTab, string]> = [
 
 export function RightUtilitySidebar({
   activeTab,
+  aiChatDraftSeed,
+  chapters,
   currentChapterId,
   currentChapterTitle,
   currentProjectId,
@@ -62,9 +67,11 @@ export function RightUtilitySidebar({
       <div className="sidebar-content">
         {activeTab === "chat" ? (
           <AiChatTab
+            chapters={chapters}
             currentChapterId={currentChapterId}
             currentChapterTitle={currentChapterTitle}
             currentProjectId={currentProjectId}
+            draftSeed={aiChatDraftSeed}
             selectionSnapshot={selectionSnapshot}
             onOpenSettings={onOpenSettings}
           />

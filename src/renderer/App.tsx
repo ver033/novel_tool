@@ -2,28 +2,33 @@ import "./styles/globals.css";
 import { useCallback, useState } from "react";
 import { AppShell } from "./layout/AppShell";
 import type { SidebarTab, TaskType } from "./layout/RightUtilitySidebar";
+import { ExportPage } from "./routes/ExportPage";
 import { ImportWizardPage } from "./routes/ImportWizardPage";
 import { NewProjectPage } from "./routes/NewProjectPage";
 import { SettingsPage, type SettingsCategory } from "./routes/SettingsPage";
 import { WelcomePage } from "./routes/WelcomePage";
 import { WritingPage } from "./routes/WritingPage";
+import type { AiChatDraftSeed } from "./sidebar/chat-draft";
 import { useAppStore } from "./state/app-store";
 import type { ImportConfirmResult, ProjectCreateInput, SelectionSnapshot, TaskPromptPreset } from "../main/shared/types";
 
-type Page = "welcome" | "writing" | "settings" | "import" | "newProject";
+type Page = "welcome" | "writing" | "settings" | "import" | "export" | "newProject";
 type ImportReturnPage = "welcome" | "writing";
+type ExportReturnPage = "welcome" | "writing";
 type SettingsReturnPage = "welcome" | "writing";
 
 export function App() {
   const [page, setPage] = useState<Page>("welcome");
   const [importReturnPage, setImportReturnPage] = useState<ImportReturnPage>("welcome");
+  const [exportReturnPage, setExportReturnPage] = useState<ExportReturnPage>("writing");
   const [settingsReturnPage, setSettingsReturnPage] = useState<SettingsReturnPage>("welcome");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>("task");
   const [taskType, setTaskType] = useState<TaskType>("polish");
   const [taskPromptPreset, setTaskPromptPreset] = useState<TaskPromptPreset | null>(null);
   const [selectionSnapshot, setSelectionSnapshot] = useState<SelectionSnapshot | null>(null);
-  const [settingsCategory, setSettingsCategory] = useState<SettingsCategory>("通用");
+  const [aiChatDraftSeed, setAiChatDraftSeed] = useState<AiChatDraftSeed | null>(null);
+  const [settingsCategory, setSettingsCategory] = useState<SettingsCategory>("AI 服务");
   const [importStep, setImportStep] = useState(1);
   const [welcomeNotice, setWelcomeNotice] = useState<string | null>(null);
   const [scratchpadRefreshToken, setScratchpadRefreshToken] = useState(0);
@@ -56,6 +61,13 @@ export function App() {
   const returnFromImport = useCallback(() => {
     setPage(importReturnPage);
   }, [importReturnPage]);
+  const openExport = useCallback(() => {
+    setExportReturnPage(page === "writing" ? "writing" : "welcome");
+    setPage("export");
+  }, [page]);
+  const returnFromExport = useCallback(() => {
+    setPage(exportReturnPage);
+  }, [exportReturnPage]);
   const continueWriting = useCallback(() => {
     void appStore.openProjectFile()
       .then((opened) => {
@@ -109,6 +121,15 @@ export function App() {
   const openAiChat = useCallback(() => {
     setSidebarOpen(true);
     setSidebarTab("chat");
+  }, []);
+  const sendSelectionToChat = useCallback((snapshot: SelectionSnapshot) => {
+    setSelectionSnapshot(snapshot);
+    setSidebarOpen(true);
+    setSidebarTab("chat");
+    setAiChatDraftSeed((current) => ({
+      id: (current?.id ?? 0) + 1,
+      text: snapshot.text
+    }));
   }, []);
   const openScratchpad = useCallback(() => {
     setSidebarOpen(true);
@@ -164,6 +185,18 @@ export function App() {
     );
   }
 
+  if (page === "export") {
+    return (
+      <AppShell>
+        <ExportPage
+          chapters={appStore.chapters}
+          currentProject={appStore.currentProject}
+          onClose={returnFromExport}
+        />
+      </AppShell>
+    );
+  }
+
   if (page === "newProject") {
     return (
       <AppShell>
@@ -187,6 +220,7 @@ export function App() {
           currentProject={appStore.currentProject}
           sidebarOpen={sidebarOpen}
           sidebarTab={sidebarTab}
+          aiChatDraftSeed={aiChatDraftSeed}
           scratchpadRefreshToken={scratchpadRefreshToken}
           selectionSnapshot={selectionSnapshot}
           taskPromptPreset={taskPromptPreset}
@@ -194,9 +228,11 @@ export function App() {
           onCreateChapter={createChapter}
           onDeleteChapter={deleteChapter}
           onCloseSidebar={() => setSidebarOpen(false)}
+          onExport={openExport}
           onImport={openImport}
           onOpenAiChat={openAiChat}
           onOpenScratchpad={openScratchpad}
+          onSelectionToChat={sendSelectionToChat}
           onRenameChapter={renameChapter}
           onSelectChapter={appStore.selectChapter}
           onUpdateChapterTargetWordCount={updateChapterTargetWordCount}

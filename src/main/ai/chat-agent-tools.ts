@@ -5,9 +5,17 @@ import type { OpenRouterToolDefinition } from "./openrouter-client";
 import type { TokenBudget } from "./token-budget";
 import type { ChapterRepository } from "../db/repositories/chapter-repo";
 import type { ScratchNoteRepository } from "../db/repositories/scratch-note-repo";
-import type { AiChatAction } from "../shared/types";
+import type { ProofreadIssue } from "../shared/proofread";
+import type { AiChatAction, TaskType } from "../shared/types";
+import type { WritingContextPlan, WritingOperationOutputKind, WritingOperationTarget } from "./writing-operation-types";
 
-export type ChatAgentToolName = "get_project_context" | "list_chapters" | "read_chapters" | "read_selection" | "add_to_scratchpad";
+export type ChatAgentToolName =
+  | "get_project_context"
+  | "list_chapters"
+  | "read_chapters"
+  | "read_selection"
+  | "add_to_scratchpad"
+  | "run_writing_operation";
 
 export type ChatAgentToolRuntime = {
   readonly projectId: string;
@@ -20,6 +28,18 @@ export type ChatAgentToolRuntime = {
   readonly signal?: AbortSignal;
   readonly allowedActions?: readonly AiChatAction["type"][];
   readonly summarizeResolvedContext?: (resolved: ResolvedChatAgentContext, signal?: AbortSignal) => Promise<ChatAgentContext>;
+  readonly executeWritingOperation?: (input: {
+    readonly operation: TaskType;
+    readonly target: WritingOperationTarget;
+    readonly instruction: string;
+  }) => Promise<{
+    readonly operation: TaskType;
+    readonly outputKind: WritingOperationOutputKind;
+    readonly generatedText: string;
+    readonly changeSummary: string | null;
+    readonly proofreadIssues: readonly ProofreadIssue[] | null;
+    readonly contextPlan: WritingContextPlan;
+  }>;
 };
 
 export type ChatAgentToolExecutionInput = {
@@ -37,7 +57,14 @@ const emptyArgsSchema = z.object({}).strict();
 
 const readChaptersArgsSchema = z
   .object({
-    scope: chatAgentScopeSchema
+    scope: chatAgentScopeSchema,
+    inlineText: z.string().trim().min(1).optional()
+  })
+  .strict();
+
+const readSelectionArgsSchema = z
+  .object({
+    inlineText: z.string().trim().min(1).optional()
   })
   .strict();
 
@@ -65,9 +92,24 @@ const readChaptersToolParameters = {
       type: "integer",
       minimum: 1,
       description: "scope=chapter_range 时的结束章节序号。"
+    },
+    inlineText: {
+      type: "string",
+      description: "scope=selection 且没有编辑器选区时，由模型从用户消息中复制出的待处理正文。"
     }
   },
   required: ["scope"]
+} as const;
+
+const readSelectionToolParameters = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    inlineText: {
+      type: "string",
+      description: "没有编辑器选区时，由模型从用户消息中复制出的待处理正文。"
+    }
+  }
 } as const;
 
 const addToScratchpadArgsSchema = z
@@ -77,6 +119,67 @@ const addToScratchpadArgsSchema = z
     pinned: z.boolean().optional()
   })
   .strict();
+
+const runWritingOperationArgsSchema = z
+  .object({
+    operation: z.enum(["polish", "expand", "proofread", "continue"]),
+    target: z.discriminatedUnion("kind", [
+      z.object({ kind: z.literal("selection") }).strict(),
+      z.object({ kind: z.literal("inline_text"), text: z.string().trim().min(1) }).strict(),
+      z.object({ kind: z.literal("chapter"), ordinal: z.number().int().positive() }).strict(),
+      z.object({ kind: z.literal("chapter_range"), from: z.number().int().positive(), to: z.number().int().positive() }).strict()
+    ]),
+    instruction: z.string().optional()
+  })
+  .strict();
+
+const runWritingOperationToolParameters = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    operation: {
+      type: "string",
+      enum: ["polish", "expand", "proofread", "continue"],
+      description: "写作操作。polish=润色，expand=扩写，proofread=校对，continue=续写。"
+    },
+    target: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        kind: {
+          type: "string",
+          enum: ["selection", "inline_text", "chapter", "chapter_range"],
+          description: "目标范围。对话内粘贴文本用 inline_text；当前选区用 selection；整章用 chapter；章节范围用 chapter_range。"
+        },
+        text: {
+          type: "string",
+          description: "kind=inline_text 时的目标文本。"
+        },
+        ordinal: {
+          type: "integer",
+          minimum: 1,
+          description: "kind=chapter 时的章节序号。"
+        },
+        from: {
+          type: "integer",
+          minimum: 1,
+          description: "kind=chapter_range 时的起始章节序号。"
+        },
+        to: {
+          type: "integer",
+          minimum: 1,
+          description: "kind=chapter_range 时的结束章节序号。"
+        }
+      },
+      required: ["kind"]
+    },
+    instruction: {
+      type: "string",
+      description: "作者本次额外要求。没有则留空。"
+    }
+  },
+  required: ["operation", "target"]
+} as const;
 
 function toJsonSchema(schema: z.ZodType): object {
   return z.toJSONSchema(schema, {
@@ -115,8 +218,17 @@ export const MOSHU_CHAT_AGENT_TOOLS: readonly OpenRouterToolDefinition[] = [
     function: {
       name: "read_selection",
       description:
-        "读取作者当前选中的正文。没有编辑器选区时，如果作者在当前消息里直接粘贴了待处理正文，也会读取这段粘贴文本。只有问题明确要求处理选区、当前选中文本或当前消息里的这段文本时才调用。",
-      parameters: toJsonSchema(emptyArgsSchema)
+        "读取作者当前选中的正文。没有编辑器选区但用户当前消息里直接粘贴了待处理正文时，必须把这段正文原样填入 inlineText；不要让本工具自行猜测正文范围。",
+      parameters: readSelectionToolParameters
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "run_writing_operation",
+      description:
+        "执行中文小说写作操作：润色、扩写、校对、续写。只生成候选文本或校对问题，不写回正文，不保存草稿纸。用户要求保存时必须另行调用 add_to_scratchpad。",
+      parameters: runWritingOperationToolParameters
     }
   },
   {
@@ -241,17 +353,27 @@ function normalizeReadChaptersArgs(value: unknown): unknown {
   if (isRecord(value)) {
     if ("scope" in value) {
       const scope = normalizeScopeValue(value.scope, value);
-      return scope ? { scope } : value;
+      return scope
+        ? {
+            scope,
+            ...(typeof value.inlineText === "string" ? { inlineText: value.inlineText } : {})
+          }
+        : value;
     }
     const scope = normalizeScopeValue(value, value);
-    return scope ? { scope } : value;
+    return scope
+      ? {
+          scope,
+          ...(typeof value.inlineText === "string" ? { inlineText: value.inlineText } : {})
+        }
+      : value;
   }
 
   const scope = normalizeScopeValue(value, {});
   return scope ? { scope } : value;
 }
 
-function parseReadChaptersArgs(argumentsJson: string): { readonly scope: ChatAgentScope } {
+function parseReadChaptersArgs(argumentsJson: string): { readonly scope: ChatAgentScope; readonly inlineText?: string } {
   const parsed = readChaptersArgsSchema.safeParse(normalizeReadChaptersArgs(parseJsonArguments(argumentsJson)));
   if (!parsed.success) {
     throw new Error(
@@ -277,22 +399,10 @@ type SelectionSource = {
   readonly sourceChapterIds: readonly string[];
 };
 
-const INLINE_TEXT_VERB_RE = /润色|改写|重写|扩写|续写|校对|修改|优化|整理|调整|总结|概括|提炼|分析/;
-const INLINE_TEXT_REFERENCE_RE = /这段|这一段|本段|下面|以下|上述|上面|前面|文字|内容|正文|段落|这章|这一章|本章/;
-
 function stripWrappingCodeFence(text: string): string {
   const trimmed = text.trim();
   const match = trimmed.match(/^```[^\n]*\n([\s\S]*?)\n?```$/);
   return match ? match[1].trim() : trimmed;
-}
-
-function isLikelyInlineTextInstructionLine(line: string): boolean {
-  const compact = line.trim().replace(/\s+/g, "");
-  if (!compact || compact.length > 90) {
-    return false;
-  }
-
-  return INLINE_TEXT_VERB_RE.test(compact) && (INLINE_TEXT_REFERENCE_RE.test(compact) || /^(请|帮我|帮忙|麻烦)/.test(compact));
 }
 
 function isLikelyInlineSourceText(text: string): boolean {
@@ -300,55 +410,7 @@ function isLikelyInlineSourceText(text: string): boolean {
   return compact.length >= 12 && /[\u3400-\u9fff]/.test(compact);
 }
 
-function extractTextAfterInstructionColon(message: string): string | null {
-  const normalized = message.replace(/\r\n/g, "\n").trim();
-  const match = normalized.match(
-    /^(?:请|帮我|帮忙|麻烦你?)?(?:把|将|对)?(?:下面|以下|这段|这一段|本段|这段文字|这段内容)?(?:文字|内容|正文|段落)?(?:进行)?(?:润色|改写|重写|扩写|续写|校对|修改|优化|整理|调整|总结|概括|提炼|分析)(?:一下|下)?[：:]\s*([\s\S]+)$/
-  );
-  if (!match) {
-    return null;
-  }
-
-  const text = stripWrappingCodeFence(match[1]);
-  return isLikelyInlineSourceText(text) ? text : null;
-}
-
-function extractInlineUserTextFromMessage(message: string): string | null {
-  const afterColon = extractTextAfterInstructionColon(message);
-  if (afterColon) {
-    return afterColon;
-  }
-
-  const lines = stripWrappingCodeFence(message.replace(/\r\n/g, "\n"))
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-  if (lines.length < 2) {
-    return null;
-  }
-
-  let start = 0;
-  let end = lines.length;
-  let removedInstruction = false;
-
-  while (start < end && isLikelyInlineTextInstructionLine(lines[start])) {
-    start += 1;
-    removedInstruction = true;
-  }
-  while (end > start && isLikelyInlineTextInstructionLine(lines[end - 1])) {
-    end -= 1;
-    removedInstruction = true;
-  }
-
-  if (!removedInstruction) {
-    return null;
-  }
-
-  const text = stripWrappingCodeFence(lines.slice(start, end).join("\n"));
-  return isLikelyInlineSourceText(text) ? text : null;
-}
-
-function resolveSelectionSource(runtime: ChatAgentToolRuntime): SelectionSource | null {
+function resolveSelectionSource(runtime: ChatAgentToolRuntime, inlineText?: string): SelectionSource | null {
   const editorSelectionText = runtime.selectionText?.trim();
   if (editorSelectionText) {
     return {
@@ -358,13 +420,13 @@ function resolveSelectionSource(runtime: ChatAgentToolRuntime): SelectionSource 
     };
   }
 
-  const inlineText = extractInlineUserTextFromMessage(runtime.userMessage);
-  if (!inlineText) {
+  const explicitInlineText = stripWrappingCodeFence(inlineText ?? "");
+  if (!isLikelyInlineSourceText(explicitInlineText)) {
     return null;
   }
 
   return {
-    text: inlineText,
+    text: explicitInlineText,
     scopeLabel: "对话内粘贴文本",
     sourceChapterIds: []
   };
@@ -401,7 +463,6 @@ async function executeGetProjectContext(runtime: ChatAgentToolRuntime): Promise<
   assertNotCanceled(runtime.signal);
   const chapters = runtime.chapterRepo.listByProject(runtime.projectId);
   const currentChapter = runtime.currentChapterId ? chapters.find((chapter) => chapter.id === runtime.currentChapterId) ?? null : null;
-  const inlineText = extractInlineUserTextFromMessage(runtime.userMessage);
 
   return {
     action: null,
@@ -416,7 +477,7 @@ async function executeGetProjectContext(runtime: ChatAgentToolRuntime): Promise<
           }
         : null,
       hasSelection: Boolean(runtime.selectionText?.trim()),
-      hasInlinePastedText: Boolean(inlineText)
+      inlineTextMustBeProvidedByToolArgs: true
     })
   };
 }
@@ -425,7 +486,7 @@ async function executeReadChapters(runtime: ChatAgentToolRuntime, argumentsJson:
   assertNotCanceled(runtime.signal);
   const args = parseReadChaptersArgs(argumentsJson);
   if (args.scope.type === "selection") {
-    const source = resolveSelectionSource(runtime);
+    const source = resolveSelectionSource(runtime, args.inlineText);
     if (!source) {
       throw new Error("当前没有选中文本，请先选择正文，或把要处理的文字直接粘贴到当前消息里。");
     }
@@ -471,9 +532,10 @@ async function executeReadChapters(runtime: ChatAgentToolRuntime, argumentsJson:
   };
 }
 
-async function executeReadSelection(runtime: ChatAgentToolRuntime): Promise<ChatAgentToolExecutionResult> {
+async function executeReadSelection(runtime: ChatAgentToolRuntime, argumentsJson: string): Promise<ChatAgentToolExecutionResult> {
   assertNotCanceled(runtime.signal);
-  const source = resolveSelectionSource(runtime);
+  const args = parseArgs(readSelectionArgsSchema, argumentsJson, "read_selection");
+  const source = resolveSelectionSource(runtime, args.inlineText);
   if (!source) {
     throw new Error("当前没有选中文本，请先选择正文，或把要处理的文字直接粘贴到当前消息里。");
   }
@@ -485,6 +547,90 @@ async function executeReadSelection(runtime: ChatAgentToolRuntime): Promise<Chat
       mode: "direct",
       sourceChapterIds: source.sourceChapterIds,
       contextText: source.text
+    })
+  };
+}
+
+function resolveWritingOperationTargetFromChatArgs(
+  runtime: ChatAgentToolRuntime,
+  target: z.output<typeof runWritingOperationArgsSchema>["target"]
+): WritingOperationTarget {
+  if (target.kind === "inline_text") {
+    return {
+      kind: "inline_text",
+      text: target.text
+    };
+  }
+
+  if (target.kind === "selection") {
+    const source = resolveSelectionSource(runtime);
+    if (!source) {
+      throw new Error("当前没有选中文本，也没有可识别的对话内粘贴文本。");
+    }
+    if (source.scopeLabel === "选中文本" && runtime.currentChapterId) {
+      return {
+        kind: "selection",
+        chapterId: runtime.currentChapterId,
+        selectionHash: "chat_selection",
+        text: source.text
+      };
+    }
+    return {
+      kind: "inline_text",
+      text: source.text
+    };
+  }
+
+  const chapters = runtime.chapterRepo.listByProject(runtime.projectId);
+  if (target.kind === "chapter") {
+    const chapter = chapters[target.ordinal - 1];
+    if (!chapter) {
+      throw new Error(`找不到第${target.ordinal}章。`);
+    }
+    return {
+      kind: "chapter",
+      chapterId: chapter.id
+    };
+  }
+
+  if (target.to > chapters.length || target.to < target.from) {
+    throw new Error(`章节范围无效：第${target.from}章到第${target.to}章。`);
+  }
+  return {
+    kind: "chapter_range",
+    fromOrdinal: target.from,
+    toOrdinal: target.to
+  };
+}
+
+async function executeRunWritingOperation(runtime: ChatAgentToolRuntime, argumentsJson: string): Promise<ChatAgentToolExecutionResult> {
+  assertNotCanceled(runtime.signal);
+  if (!runtime.executeWritingOperation) {
+    throw new Error("写作操作服务未初始化，无法执行润色、扩写、校对或续写。");
+  }
+
+  const args = parseArgs(runWritingOperationArgsSchema, argumentsJson, "run_writing_operation");
+  const target = resolveWritingOperationTargetFromChatArgs(runtime, args.target);
+  const result = await runtime.executeWritingOperation({
+    operation: args.operation,
+    target,
+    instruction: args.instruction ?? ""
+  });
+
+  return {
+    action: null,
+    content: stringifyToolResult({
+      operation: result.operation,
+      outputKind: result.outputKind,
+      generatedText: result.generatedText,
+      changeSummary: result.changeSummary,
+      proofreadIssues: result.proofreadIssues,
+      contextPlan: {
+        mode: result.contextPlan.mode,
+        estimatedInputTokens: result.contextPlan.estimatedInputTokens,
+        maxInputTokens: result.contextPlan.maxInputTokens,
+        reason: result.contextPlan.reason
+      }
     })
   };
 }
@@ -549,8 +695,9 @@ export async function executeChatAgentToolWithAction(input: ChatAgentToolExecuti
     case "read_chapters":
       return executeReadChapters(input.runtime, input.argumentsJson);
     case "read_selection":
-      parseArgs(emptyArgsSchema, input.argumentsJson, input.name);
-      return executeReadSelection(input.runtime);
+      return executeReadSelection(input.runtime, input.argumentsJson);
+    case "run_writing_operation":
+      return executeRunWritingOperation(input.runtime, input.argumentsJson);
     case "add_to_scratchpad":
       return executeAddToScratchpad(input.runtime, input.argumentsJson);
     default:

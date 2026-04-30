@@ -6,6 +6,7 @@ import { DefaultOpenRouterConnectionTester } from "../ai/openrouter-connection-t
 import { OpenRouterModelCatalogClient } from "../ai/openrouter-client";
 import { OpenRouterTaskGenerator } from "../ai/openrouter-task-generator";
 import { getTokenBudget } from "../ai/token-budget";
+import { WritingOperationRunner } from "../ai/writing-operation-runner";
 import { ChapterService } from "../chapter/chapter-service";
 import { createDatabase, resolveDatabasePath, type SqliteDatabase } from "../db/database";
 import { runMigrations } from "../db/migrations";
@@ -16,6 +17,7 @@ import { ImportJobRepository } from "../db/repositories/import-job-repo";
 import { ProjectRepository } from "../db/repositories/project-repo";
 import { ScratchNoteRepository } from "../db/repositories/scratch-note-repo";
 import { SettingsRepository } from "../db/repositories/settings-repo";
+import { TxtExporter } from "../export/txt-exporter";
 import { TxtImporter } from "../import/txt-importer";
 import { ProjectService } from "../project/project-service";
 import { createElectronSecretStore } from "../settings/electron-secret-store";
@@ -26,6 +28,7 @@ import { IpcPayloadValidationError, parseIpcPayload } from "../shared/schemas";
 import type { z } from "zod";
 import { registerAiIpc } from "./ai-ipc";
 import { registerChapterIpc } from "./chapter-ipc";
+import { registerExportIpc } from "./export-ipc";
 import { registerImportIpc } from "./import-ipc";
 import { registerProjectIpc } from "./project-ipc";
 import { registerScratchIpc } from "./scratch-ipc";
@@ -172,18 +175,24 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
     });
     const resolveProjectDb = (projectId?: string): SqliteDatabase =>
       projectId ? projectService.getProjectDatabaseForProject(projectId) : projectService.getActiveProjectDatabase();
+    const resolveChapterRepo = (projectId: string): ChapterRepository => new ChapterRepository(resolveProjectDb(projectId));
+    const writingOperationRunner = useE2eAiGenerators() ? undefined : WritingOperationRunner.fromSettings(settingsService, resolveChapterRepo);
     const chapterService = new ChapterService((projectId) => new ChapterRepository(resolveProjectDb(projectId)));
     const aiTaskService = new AiTaskService(
       (projectId) => new AiTaskRepository(resolveProjectDb(projectId)),
-      useE2eAiGenerators() ? createE2eTaskGenerator() : new OpenRouterTaskGenerator(settingsService),
+      useE2eAiGenerators()
+        ? createE2eTaskGenerator()
+        : new OpenRouterTaskGenerator(settingsService, resolveChapterRepo),
       useE2eAiGenerators() ? createE2eChatGenerator() : new OpenRouterChatGenerator(settingsService),
       (projectId) => new AiChatRepository(resolveProjectDb(projectId)),
       (projectId) => new ScratchNoteRepository(resolveProjectDb(projectId)),
-      (projectId) => new ChapterRepository(resolveProjectDb(projectId)),
+      resolveChapterRepo,
       undefined,
-      async () => getTokenBudget("chat", useE2eAiGenerators() ? null : (await settingsService.getOpenRouterConfigWithModelMetadata()).contextLength)
+      async () => getTokenBudget("chat", useE2eAiGenerators() ? null : (await settingsService.getOpenRouterConfigWithModelMetadata()).contextLength),
+      writingOperationRunner
     );
     const txtImporter = new TxtImporter(importJobRepo, projectRepo, projectService);
+    const txtExporter = new TxtExporter(resolveChapterRepo);
 
     ipcMain.handle(ipcChannels.system.getDatabaseStatus, () => ({
       ready: true
@@ -193,6 +202,7 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
     registerAiIpc(aiTaskService);
     registerScratchIpc((projectId) => new ScratchNoteRepository(resolveProjectDb(projectId)));
     registerImportIpc(txtImporter);
+    registerExportIpc(txtExporter);
     registerSettingsIpc(settingsService);
     registered = true;
   }

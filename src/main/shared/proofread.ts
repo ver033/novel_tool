@@ -13,7 +13,7 @@ export const proofreadIssueSchema = z
 
 export const proofreadResultSchema = z
   .object({
-    issues: z.array(proofreadIssueSchema).min(1).max(3)
+    issues: z.array(proofreadIssueSchema).max(3)
   })
   .strict();
 

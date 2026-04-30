@@ -1559,6 +1559,15 @@ select:focus-visible {
   gap: 12px;
 }
 
+.bubble-dropdown.ai .send-to-chat-option {
+  color: #1d4ed8;
+  font-weight: 760;
+}
+
+.bubble-dropdown.ai .send-to-chat-option svg {
+  color: currentColor;
+}
+
 .bubble-dropdown.ai .preset-option span {
   min-width: 0;
   overflow: hidden;
@@ -2431,12 +2440,73 @@ select:focus-visible {
 }
 
 .chat-input {
+  position: relative;
   margin-top: auto;
   border: 1px solid #bdd3ff;
   border-radius: 12px;
   padding: 14px;
   background: white;
   box-shadow: 0 10px 26px rgba(31, 35, 40, 0.05);
+}
+
+.chat-command-menu {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: calc(100% + 8px);
+  z-index: 12;
+  display: grid;
+  gap: 4px;
+  max-height: 260px;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid #d9e3f0;
+  border-radius: 10px;
+  background: #ffffff;
+  box-shadow: 0 18px 44px rgba(15, 23, 42, 0.16);
+}
+
+.chat-command-menu-title {
+  padding: 4px 8px 6px;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.chat-command-item {
+  display: grid;
+  grid-template-columns: minmax(82px, auto) 1fr;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  min-height: 36px;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #1f2937;
+  text-align: left;
+}
+
+.chat-command-item:hover,
+.chat-command-item:focus-visible {
+  outline: 0;
+  background: #f4f8ff;
+}
+
+.chat-command-item span {
+  color: #1d4ed8;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.chat-command-item small {
+  min-width: 0;
+  overflow: hidden;
+  color: #64748b;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-input textarea,
@@ -2914,6 +2984,193 @@ select:focus-visible {
   color: #b91c1c;
 }
 
+.export-panel {
+  max-width: 1120px;
+  margin: 0 auto;
+}
+
+.export-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 26px;
+}
+
+.export-head h1 {
+  margin: 0 0 8px;
+  font-size: 28px;
+  letter-spacing: 0;
+}
+
+.export-head p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+.export-format-mark {
+  min-width: 96px;
+  height: 58px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid #bfd0ea;
+  border-radius: 10px;
+  background: #f8fbff;
+  color: var(--blue);
+  font-size: 15px;
+  font-weight: 780;
+}
+
+.export-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 330px;
+  gap: 22px;
+  align-items: start;
+}
+
+.export-main,
+.export-summary-panel {
+  display: grid;
+  gap: 18px;
+}
+
+.export-section {
+  display: grid;
+  gap: 10px;
+}
+
+.export-section-label {
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 720;
+}
+
+.export-choice,
+.export-option,
+.export-destination,
+.export-summary-panel {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: white;
+}
+
+.export-choice,
+.export-option {
+  min-height: 82px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 16px 18px;
+}
+
+.export-choice.active,
+.export-option.active {
+  border-color: #bfdbfe;
+  background: #f8fbff;
+}
+
+.export-choice div,
+.export-option span {
+  display: grid;
+  gap: 6px;
+}
+
+.export-choice strong,
+.export-option strong {
+  color: var(--text);
+  font-size: 16px;
+}
+
+.export-choice div > span,
+.export-option small {
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.export-option {
+  justify-content: flex-start;
+  cursor: pointer;
+}
+
+.export-option input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--blue);
+}
+
+.export-destination {
+  min-height: 70px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  padding: 12px 14px 12px 18px;
+}
+
+.export-destination > span {
+  min-width: 0;
+  overflow: hidden;
+  color: #475569;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.export-summary-panel {
+  padding: 18px;
+}
+
+.export-summary-panel h2 {
+  margin: 6px 0 0;
+  font-size: 20px;
+  line-height: 1.35;
+}
+
+.export-stat-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.export-stat-grid div {
+  min-height: 82px;
+  display: grid;
+  align-content: center;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfe;
+}
+
+.export-stat-grid b {
+  color: var(--text);
+  font-size: 22px;
+}
+
+.export-stat-grid span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.export-result {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid #bbf7d0;
+  border-radius: 8px;
+  background: #f0fdf4;
+  color: #15803d;
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.5;
+}
+
 .inline-error-banner {
   margin: 0 0 18px;
   padding: 11px 14px;
@@ -3265,6 +3522,7 @@ select:focus-visible {
   .project-row,
   .import-summary,
   .import-split,
+  .export-grid,
   .settings-grid {
     grid-template-columns: 1fr;
   }

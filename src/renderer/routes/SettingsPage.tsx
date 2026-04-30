@@ -1,9 +1,5 @@
 import {
-  FileText,
   GearSix,
-  HardDrives,
-  Keyboard,
-  PencilSimpleLine,
   Robot,
   Sliders,
   X
@@ -50,13 +46,11 @@ type SettingsContentProps = {
   readonly modelOptions: readonly OpenRouterModelSummary[];
   readonly status: StatusState;
   readonly onAiProviderChange: (patch: Partial<EditableAiProviderSettings>) => void;
-  readonly onEditorChange: (patch: Partial<EditorSettings>) => void;
-  readonly onProjectPathChange: (projectPath: string) => void;
   readonly onTaskPromptPresetsChange: (taskPromptPresets: readonly TaskPromptPreset[]) => void;
   readonly onTestConnection: () => void;
 };
 
-const categories: readonly SettingsCategory[] = ["通用", "编辑器", "AI 服务", "提示词预设", "导入导出", "备份与数据", "快捷键"];
+const visibleCategories = ["AI 服务", "提示词预设"] as const satisfies readonly SettingsCategory[];
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 
 const taskPromptPresetLabels: Record<TaskPromptPreset["taskType"], string> = {
@@ -71,15 +65,16 @@ const builtInPromptPresetDescriptions: readonly [string, string, string][] = [
   ["自然续写", "续写", "承接当前章节语气继续推进。"]
 ];
 
-const categoryIcons: Record<SettingsCategory, ReactNode> = {
-  通用: <GearSix size={20} />,
-  编辑器: <PencilSimpleLine size={20} />,
+type VisibleSettingsCategory = (typeof visibleCategories)[number];
+
+const categoryIcons: Record<VisibleSettingsCategory, ReactNode> = {
   "AI 服务": <Robot size={20} />,
-  提示词预设: <Sliders size={20} />,
-  导入导出: <FileText size={20} />,
-  备份与数据: <HardDrives size={20} />,
-  快捷键: <Keyboard size={20} />
+  提示词预设: <Sliders size={20} />
 };
+
+function isVisibleCategory(category: SettingsCategory): category is VisibleSettingsCategory {
+  return (visibleCategories as readonly SettingsCategory[]).includes(category);
+}
 
 const defaultForm: SettingsFormState = {
   editor: {
@@ -179,6 +174,7 @@ export function SettingsPage({ activeCategory, onCategoryChange, onWelcome, onCl
   const [modelOptions, setModelOptions] = useState<OpenRouterModelSummary[]>([]);
   const [modelListLoaded, setModelListLoaded] = useState(false);
   const [status, setStatus] = useState<StatusState>({ kind: "loading", message: "正在读取设置" });
+  const activeVisibleCategory = isVisibleCategory(activeCategory) ? activeCategory : "AI 服务";
 
   const isBusy = status.kind === "loading" || status.kind === "saving" || status.kind === "testing";
 
@@ -268,16 +264,6 @@ export function SettingsPage({ activeCategory, onCategoryChange, onWelcome, onCl
     }
   };
 
-  const updateEditor = (patch: Partial<EditorSettings>) => {
-    setForm((current) => ({
-      ...current,
-      editor: {
-        ...current.editor,
-        ...patch
-      }
-    }));
-  };
-
   const updateAiProvider = (patch: Partial<EditableAiProviderSettings>) => {
     setForm((current) => ({
       ...current,
@@ -319,8 +305,8 @@ export function SettingsPage({ activeCategory, onCategoryChange, onWelcome, onCl
 
       <main className="settings-layout">
         <nav className="settings-nav" aria-label="设置分类">
-          {categories.map((category) => (
-            <button className={activeCategory === category ? "active" : ""} key={category} onClick={() => onCategoryChange(category)} type="button">
+          {visibleCategories.map((category) => (
+            <button className={activeVisibleCategory === category ? "active" : ""} key={category} onClick={() => onCategoryChange(category)} type="button">
               <span className="nav-icon">{categoryIcons[category]}</span>
               {category}
             </button>
@@ -329,15 +315,13 @@ export function SettingsPage({ activeCategory, onCategoryChange, onWelcome, onCl
         <section className="settings-content">
           <SettingsContent
             apiKeyConfigured={apiKeyConfigured}
-            category={activeCategory}
+            category={activeVisibleCategory}
             form={form}
             isBusy={isBusy}
             modelListLoaded={modelListLoaded}
             modelOptions={modelOptions}
             status={status}
             onAiProviderChange={updateAiProvider}
-            onEditorChange={updateEditor}
-            onProjectPathChange={(projectPath) => setForm((current) => ({ ...current, projectPath }))}
             onTaskPromptPresetsChange={updateTaskPromptPresets}
             onTestConnection={testConnection}
           />
@@ -364,8 +348,6 @@ function SettingsContent({
   modelOptions,
   status,
   onAiProviderChange,
-  onEditorChange,
-  onProjectPathChange,
   onTaskPromptPresetsChange,
   onTestConnection
 }: SettingsContentProps) {
@@ -402,61 +384,6 @@ function SettingsContent({
   const deleteTaskPromptPreset = (presetId: string) => {
     onTaskPromptPresetsChange(form.taskPromptPresets.filter((preset) => preset.id !== presetId));
   };
-
-  if (category === "通用") {
-    return (
-      <div className="settings-grid">
-        <div className="settings-card">
-          <h3>启动与项目</h3>
-          <p className="muted">管理打开应用后的默认入口和最近项目行为。</p>
-          <div className="form-grid">
-            <label>启动后</label>
-            <select className="input" defaultValue="start" disabled>
-              <option value="start">显示开始页</option>
-              <option value="last">打开上次项目</option>
-            </select>
-            <label>最近项目</label>
-            <button className="toggle on" type="button" aria-label="最近项目" disabled />
-            <label>默认项目目录</label>
-            <Input value={form.projectPath} placeholder="未设置" onChange={(event) => onProjectPathChange(event.target.value)} />
-          </div>
-        </div>
-        <div className="settings-card">
-          <h3>界面偏好</h3>
-          <p className="muted">控制基础界面密度和语言显示。</p>
-          <div className="form-grid">
-            <label>界面语言</label>
-            <select className="input" defaultValue="zh" disabled>
-              <option value="zh">简体中文</option>
-            </select>
-            <label>界面密度</label>
-            <select className="input" defaultValue="standard" disabled>
-              <option value="standard">标准</option>
-              <option value="compact">紧凑</option>
-            </select>
-            <label>侧栏默认</label>
-            <select className="input" defaultValue="closed" disabled>
-              <option value="closed">保持关闭</option>
-              <option value="task">打开当前任务</option>
-              <option value="chat">打开 AI 对话</option>
-            </select>
-          </div>
-        </div>
-        <div className="settings-card wide">
-          <h3>本地存储</h3>
-          <p className="muted">每个项目保存为单独的 .noveltool 文件，章节正文、快照和草稿纸都写入该文件。</p>
-          <div className="detected-row simple-row">
-            <span>项目目录</span>
-            <span>{form.projectPath || "未设置"}</span>
-          </div>
-          <div className="detected-row simple-row">
-            <span>自动保存延迟</span>
-            <span className="tag">{form.editor.autosaveMs}ms</span>
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   if (category === "AI 服务") {
     const modelSuggestions = filterModelSuggestions(modelOptions, form.aiProvider.modelName);
@@ -537,45 +464,6 @@ function SettingsContent({
           <div className="connection-row">
             <Button variant="ghost" disabled={isBusy} onClick={onTestConnection}>测试并保存</Button>
             <span className={status.kind === "error" ? "settings-message error" : "muted"}>{connectionText}</span>
-          </div>
-        </div>
-        <div className="settings-card">
-          <h3>默认 AI 行为</h3>
-          <p className="muted">设置 AI 在处理任务时的默认方式和偏好。</p>
-          <div className="form-grid">
-            <label>默认行动风格</label>
-            <select className="input" defaultValue="balanced" disabled>
-              <option value="balanced">平衡自然（推荐）</option>
-              <option value="detail">细腻描写</option>
-              <option value="classic">古风表达</option>
-            </select>
-            <label>应用前预览</label>
-            <button className="toggle on" type="button" aria-label="应用前预览" disabled />
-          </div>
-          <label className="field-label">任务偏好</label>
-          {["润色　提升语言流畅度与表达质量", "扩写　丰富细节，延展内容", "校对　检查错别字、病句和表达问题", "续写　基于上下文生成后续内容"].map((item) => (
-            <div className="detected-row task-pref-row" key={item}>
-              <input type="checkbox" defaultChecked disabled />
-              <span>{item}</span>
-              <span>☰</span>
-            </div>
-          ))}
-        </div>
-        <div className="settings-card">
-          <h3>上下文范围</h3>
-          <p className="muted">AI 请求只带入当前章节、选中文本和用户确认的附加上下文。</p>
-          <div className="form-grid">
-            <label>默认范围</label>
-            <select className="input" defaultValue="selection" disabled>
-              <option value="selection">当前选区 + 当前章节摘要</option>
-              <option value="only">仅当前选区</option>
-            </select>
-            <label>写回方式</label>
-            <select className="input" defaultValue="manual" disabled>
-              <option value="manual">预览后手动应用</option>
-            </select>
-            <label>快照</label>
-            <button className="toggle on" type="button" aria-label="快照" disabled />
           </div>
         </div>
       </div>
@@ -665,125 +553,5 @@ function SettingsContent({
     );
   }
 
-  if (category === "编辑器") {
-    return (
-      <div className="settings-grid">
-        <div className="settings-card">
-          <h3>编辑器</h3>
-          <p className="muted">调整正文书写体验。这些设置也可以在写作页顶部的 Aa「页面与排版」中快速切换。</p>
-          <div className="form-grid">
-            <label>页面宽度</label>
-            <select className="input" value={form.editor.pageWidth} onChange={(event) => onEditorChange({ layoutPreset: "custom", pageWidth: event.target.value as EditorSettings["pageWidth"] })}>
-              <option value="narrow">窄栏</option>
-              <option value="medium">适中</option>
-              <option value="wide">宽栏</option>
-            </select>
-            <label>正文字体</label>
-            <select className="input" value={form.editor.fontFamily} onChange={(event) => onEditorChange({ layoutPreset: "custom", fontFamily: event.target.value as EditorSettings["fontFamily"] })}>
-              <option value="system">默认</option>
-              <option value="song">宋体感</option>
-              <option value="hei">黑体感</option>
-              <option value="fangsong">仿宋感</option>
-            </select>
-            <label>字体大小</label>
-            <select className="input" value={String(form.editor.fontSize)} onChange={(event) => onEditorChange({ layoutPreset: "custom", fontSize: Number(event.target.value) })}>
-              <option value="18">18px</option>
-              <option value="20">20px</option>
-              <option value="22">22px</option>
-            </select>
-            <label>行间距</label>
-            <select className="input" value={String(form.editor.lineHeight)} onChange={(event) => onEditorChange({ layoutPreset: "custom", lineHeight: Number(event.target.value) })}>
-              <option value="1.82">1.82</option>
-              <option value="2.08">2.08</option>
-              <option value="2.32">2.32</option>
-            </select>
-            <label>段间距</label>
-            <select className="input" value={form.editor.paragraphSpacing} onChange={(event) => onEditorChange({ layoutPreset: "custom", paragraphSpacing: event.target.value as EditorSettings["paragraphSpacing"] })}>
-              <option value="compact">紧凑</option>
-              <option value="standard">标准</option>
-              <option value="loose">宽松</option>
-            </select>
-            <label>首行缩进</label>
-            <select className="input" value={form.editor.firstLineIndent} onChange={(event) => onEditorChange({ layoutPreset: "custom", firstLineIndent: event.target.value as EditorSettings["firstLineIndent"] })}>
-              <option value="none">无</option>
-              <option value="two">2字</option>
-              <option value="four">4字</option>
-            </select>
-            <label>主题</label>
-            <select className="input" value={form.editor.theme} onChange={(event) => onEditorChange({ layoutPreset: "custom", theme: event.target.value as EditorSettings["theme"] })}>
-              <option value="light">浅色</option>
-              <option value="eye">护眼</option>
-              <option value="night">夜间</option>
-            </select>
-          </div>
-        </div>
-        <div className="settings-card">
-          <h3>自动保存</h3>
-          <p className="muted">编辑后自动保存章节内容。</p>
-          <div className="form-grid">
-            <label>自动保存</label>
-            <button className="toggle on" type="button" aria-label="自动保存" disabled />
-            <label>延迟</label>
-            <select className="input" value={String(form.editor.autosaveMs)} onChange={(event) => onEditorChange({ autosaveMs: Number(event.target.value) })}>
-              <option value="800">800ms</option>
-              <option value="1000">1000ms</option>
-              <option value="1500">1500ms</option>
-              <option value="2000">2000ms</option>
-            </select>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (category === "导入导出") {
-    return (
-      <div className="settings-grid">
-        <div className="settings-card">
-          <h3>导入</h3>
-          <p className="muted">第一版支持 TXT 导入，导入前可以预览章节并调整识别结果。</p>
-          <div className="detected-row simple-row">
-            <span>TXT 导入</span>
-            <span className="tag">已支持</span>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (category === "备份与数据") {
-    return (
-      <div className="settings-grid">
-        <div className="settings-card">
-          <h3>备份与数据</h3>
-          <p className="muted">本地项目、章节和草稿纸均保存在本机。</p>
-          <div className="form-grid">
-            <label>自动备份</label>
-            <button className="toggle" type="button" aria-label="自动备份" disabled />
-            <label>项目路径</label>
-            <Input value={form.projectPath} placeholder="未设置" onChange={(event) => onProjectPathChange(event.target.value)} />
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="settings-grid">
-      <div className="settings-card">
-        <h3>快捷键</h3>
-        <p className="muted">常用写作操作快捷键。</p>
-        {[
-          ["保存章节", "⌘ S"],
-          ["打开 AI 对话", "⌘ J"],
-          ["新建章节", "⌘ N"]
-        ].map(([name, shortcut]) => (
-          <div className="detected-row shortcut-row" key={name}>
-            <span>{name}</span>
-            <span>{shortcut}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
+  return null;
 }

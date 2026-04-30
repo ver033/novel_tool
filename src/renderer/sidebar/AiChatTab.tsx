@@ -1,20 +1,43 @@
 import { PaperPlaneRight, Plus, Trash } from "@phosphor-icons/react";
-import { type CSSProperties, type KeyboardEvent, useState } from "react";
-import type { AiChatMessageRecord, SelectionSnapshot } from "../../main/shared/types";
+import { type CSSProperties, type KeyboardEvent, type ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import type { AiChatMessageRecord, ChapterSummary, SelectionSnapshot } from "../../main/shared/types";
 import { Button } from "../components/Button";
 import { Modal } from "../components/Modal";
 import type { SettingsCategory } from "../routes/SettingsPage";
 import { useChatStore } from "../state/chat-store";
 import { ChatMessageContent } from "./ChatMessageContent";
 import { buildChatContextUsageDisplay } from "./chat-context-display";
+import type { AiChatDraftSeed } from "./chat-draft";
 
 type AiChatTabProps = {
+  readonly chapters: readonly ChapterSummary[];
   readonly currentChapterId: string | null;
   readonly currentChapterTitle: string | null;
   readonly currentProjectId: string | null;
+  readonly draftSeed: AiChatDraftSeed | null;
   readonly selectionSnapshot: SelectionSnapshot | null;
   readonly onOpenSettings: (category?: SettingsCategory) => void;
 };
+
+type ChatCommandSuggestion = {
+  readonly label: string;
+  readonly detail: string;
+  readonly insertText: string;
+};
+
+type ActiveCommand = {
+  readonly trigger: "@" | "/";
+  readonly query: string;
+  readonly start: number;
+  readonly end: number;
+};
+
+const chatSkillSuggestions: readonly ChatCommandSuggestion[] = [
+  { label: "/润色", detail: "调用润色 skill，只返回候选正文", insertText: "/润色" },
+  { label: "/扩写", detail: "调用扩写 skill，补足动作、心理和承接", insertText: "/扩写" },
+  { label: "/校对", detail: "调用校对 skill，只列出问题和建议", insertText: "/校对" },
+  { label: "/续写", detail: "调用续写 skill，延续当前上下文", insertText: "/续写" }
+];
 
 const aiSettingsErrorMarkers = [
   "OpenRouter API Key 未配置",
@@ -102,15 +125,99 @@ function getLastUserMessage(messages: readonly AiChatMessageRecord[]): AiChatMes
   return null;
 }
 
-export function AiChatTab({ currentChapterId, currentChapterTitle, currentProjectId, selectionSnapshot, onOpenSettings }: AiChatTabProps) {
+function getActiveCommand(value: string, cursorIndex: number): ActiveCommand | null {
+  const beforeCursor = value.slice(0, cursorIndex);
+  const match = /(^|\s)([@/][^\s@/]*)$/.exec(beforeCursor);
+  if (!match) {
+    return null;
+  }
+
+  const token = match[2];
+  const trigger = token[0] as "@" | "/";
+  return {
+    trigger,
+    query: token.slice(1),
+    start: beforeCursor.length - token.length,
+    end: cursorIndex
+  };
+}
+
+function filterCommandSuggestions(suggestions: readonly ChatCommandSuggestion[], query: string): readonly ChatCommandSuggestion[] {
+  const normalizedQuery = query.trim().toLocaleLowerCase("zh-CN");
+  if (!normalizedQuery) {
+    return suggestions.slice(0, 8);
+  }
+
+  return suggestions
+    .filter((item) => `${item.label} ${item.detail}`.toLocaleLowerCase("zh-CN").includes(normalizedQuery))
+    .slice(0, 8);
+}
+
+export function AiChatTab({ chapters, currentChapterId, currentChapterTitle, currentProjectId, draftSeed, selectionSnapshot, onOpenSettings }: AiChatTabProps) {
   const [draft, setDraft] = useState("");
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [cursorIndex, setCursorIndex] = useState(0);
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const chatStore = useChatStore({
     projectId: currentProjectId,
     currentChapterId,
     currentChapterTitle,
     selectionSnapshot
   });
+
+  useEffect(() => {
+    const selectedText = draftSeed?.text.trim();
+    if (!selectedText) {
+      return;
+    }
+
+    setDraft((current) => {
+      const nextDraft = current.trim() ? `${current.trimEnd()}\n\n${selectedText}\n` : `${selectedText}\n`;
+      const nextCursorIndex = nextDraft.length;
+      setCursorIndex(nextCursorIndex);
+      requestAnimationFrame(() => {
+        inputRef.current?.focus();
+        inputRef.current?.setSelectionRange(nextCursorIndex, nextCursorIndex);
+      });
+      return nextDraft;
+    });
+  }, [draftSeed?.id]);
+  const chatMentionSuggestions = useMemo(() => {
+    const suggestions: ChatCommandSuggestion[] = [];
+    if (selectionSnapshot?.text) {
+      suggestions.push({
+        label: "@选区",
+        detail: "使用当前选中的正文",
+        insertText: "@选区"
+      });
+    }
+    if (currentChapterTitle) {
+      suggestions.push({
+        label: "@当前章节",
+        detail: currentChapterTitle,
+        insertText: "@当前章节"
+      });
+    }
+    suggestions.push({
+      label: "@全部章节",
+      detail: "读取当前项目所有章节",
+      insertText: "@全部章节"
+    });
+    for (const [index, chapter] of chapters.entries()) {
+      suggestions.push({
+        label: `@第${index + 1}章`,
+        detail: chapter.title,
+        insertText: `@第${index + 1}章`
+      });
+    }
+    return suggestions;
+  }, [chapters, currentChapterTitle, selectionSnapshot?.text]);
+
+  const activeCommand = getActiveCommand(draft, cursorIndex);
+  const commandSuggestions = activeCommand
+    ? filterCommandSuggestions(activeCommand.trigger === "@" ? chatMentionSuggestions : chatSkillSuggestions, activeCommand.query)
+    : [];
+  const showCommandSuggestions = commandSuggestions.length > 0 && !chatStore.busy && !chatStore.loading;
 
   async function sendMessage(): Promise<void> {
     const message = draft.trim();
@@ -122,7 +229,31 @@ export function AiChatTab({ currentChapterId, currentChapterTitle, currentProjec
     await chatStore.sendMessage(message);
   }
 
+  function handleDraftChange(event: ChangeEvent<HTMLTextAreaElement>): void {
+    setDraft(event.target.value);
+    setCursorIndex(event.currentTarget.selectionStart ?? event.target.value.length);
+  }
+
+  function insertCommandSuggestion(suggestion: ChatCommandSuggestion): void {
+    if (!activeCommand) {
+      return;
+    }
+    const nextDraft = `${draft.slice(0, activeCommand.start)}${suggestion.insertText} ${draft.slice(activeCommand.end)}`;
+    const nextCursor = activeCommand.start + suggestion.insertText.length + 1;
+    setDraft(nextDraft);
+    setCursorIndex(nextCursor);
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.setSelectionRange(nextCursor, nextCursor);
+    });
+  }
+
   function handleDraftKeyDown(event: KeyboardEvent<HTMLTextAreaElement>): void {
+    if (showCommandSuggestions && event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+      event.preventDefault();
+      insertCommandSuggestion(commandSuggestions[0]);
+      return;
+    }
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault();
       void sendMessage();
@@ -258,11 +389,25 @@ export function AiChatTab({ currentChapterId, currentChapterTitle, currentProjec
           ) : null}
         </div>
         <div className="chat-input">
+          {showCommandSuggestions ? (
+            <div className="chat-command-menu" role="listbox" aria-label={activeCommand?.trigger === "@" ? "选择上下文范围" : "选择写作操作"}>
+              <div className="chat-command-menu-title">{activeCommand?.trigger === "@" ? "选择上下文" : "调用 skill"}</div>
+              {commandSuggestions.map((suggestion) => (
+                <button className="chat-command-item" key={suggestion.label} onMouseDown={(event) => event.preventDefault()} onClick={() => insertCommandSuggestion(suggestion)} type="button">
+                  <span>{suggestion.label}</span>
+                  <small>{suggestion.detail}</small>
+                </button>
+              ))}
+            </div>
+          ) : null}
           <textarea
             aria-label="AI 对话输入，Enter 发送，Shift Enter 换行"
-            onChange={(event) => setDraft(event.target.value)}
+            onChange={handleDraftChange}
+            onClick={(event) => setCursorIndex(event.currentTarget.selectionStart ?? draft.length)}
             onKeyDown={handleDraftKeyDown}
+            onKeyUp={(event) => setCursorIndex(event.currentTarget.selectionStart ?? draft.length)}
             placeholder="告诉 AI 你的想法..."
+            ref={inputRef}
             value={draft}
           />
           <div className="chat-bottom chat-bottom-send">

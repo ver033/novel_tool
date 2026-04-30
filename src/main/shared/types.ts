@@ -27,6 +27,8 @@ import type {
   chapterSaveContentInputSchema,
   chapterUpdateTargetWordCountInputSchema,
   editorSettingsSchema,
+  exportSelectTxtFilePathInputSchema,
+  exportTxtInputSchema,
   importConfirmTxtInputSchema,
   importPreviewTxtInputSchema,
   importUpdatePreviewInputSchema,
@@ -47,6 +49,7 @@ import type {
   taskPromptPresetSchema
 } from "./schemas";
 import type { ProofreadIssue } from "./proofread";
+import type { WritingContextPlanMetadata } from "./ai-candidate-metadata";
 
 export type TaskType = "polish" | "expand" | "proofread" | "continue";
 export type PromptPresetTaskType = "polish" | "expand" | "continue";
@@ -89,6 +92,7 @@ export type AiTaskCandidateRecord = {
   readonly generatedText: string;
   readonly changeSummary: string | null;
   readonly proofreadIssues: readonly ProofreadIssue[] | null;
+  readonly writingContextPlan: WritingContextPlanMetadata | null;
   readonly status: CandidateStatus;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -154,7 +158,7 @@ export type AiStreamContextEvent = {
   readonly maxOutputTokens: number;
   readonly modelContextTokens: number | null;
   readonly modelName: string;
-  readonly contextMode: "direct" | "summarized";
+  readonly contextMode: "direct" | "summarized" | "mixed";
   readonly scopeLabel: string;
 };
 
@@ -294,6 +298,14 @@ export type ScratchDeleteInput = z.input<typeof scratchDeleteInputSchema>;
 export type ImportPreviewTxtInput = z.input<typeof importPreviewTxtInputSchema>;
 export type ImportUpdatePreviewInput = z.input<typeof importUpdatePreviewInputSchema>;
 export type ImportConfirmTxtInput = z.input<typeof importConfirmTxtInputSchema>;
+export type ExportSelectTxtFilePathInput = z.input<typeof exportSelectTxtFilePathInputSchema>;
+export type ExportTxtInput = z.input<typeof exportTxtInputSchema>;
+export type ExportTxtResult = {
+  readonly filePath: string;
+  readonly chapterCount: number;
+  readonly wordCount: number;
+  readonly exportedAt: string;
+};
 
 export const ipcChannels = {
   system: {
@@ -363,5 +375,9 @@ export const ipcChannels = {
     previewTxt: "novelTool:import:previewTxt",
     updatePreview: "novelTool:import:updatePreview",
     confirmTxtImport: "novelTool:import:confirmTxtImport"
+  },
+  export: {
+    selectTxtFilePath: "novelTool:export:selectTxtFilePath",
+    exportTxt: "novelTool:export:exportTxt"
   }
 } as const;

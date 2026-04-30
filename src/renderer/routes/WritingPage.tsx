@@ -7,6 +7,7 @@ import { FloatingAiButton } from "../editor/FloatingAiButton";
 import { NovelEditor } from "../editor/NovelEditor";
 import { LeftChapterTree } from "../layout/LeftChapterTree";
 import { RightUtilitySidebar, type SidebarTab, type TaskType } from "../layout/RightUtilitySidebar";
+import type { AiChatDraftSeed } from "../sidebar/chat-draft";
 import { TopBar } from "../layout/TopBar";
 import { getNovelToolApi } from "../state/app-store";
 import { useEditorStore } from "../state/editor-store";
@@ -104,6 +105,7 @@ type WritingPageProps = {
   readonly currentProject: ProjectRecord | null;
   readonly sidebarOpen: boolean;
   readonly sidebarTab: SidebarTab;
+  readonly aiChatDraftSeed: AiChatDraftSeed | null;
   readonly scratchpadRefreshToken: number;
   readonly selectionSnapshot: SelectionSnapshot | null;
   readonly taskPromptPreset: TaskPromptPreset | null;
@@ -117,6 +119,8 @@ type WritingPageProps = {
   readonly onCloseSidebar: () => void;
   readonly onOpenAiChat: () => void;
   readonly onOpenScratchpad: () => void;
+  readonly onSelectionToChat: (snapshot: SelectionSnapshot) => void;
+  readonly onExport: () => void;
   readonly onImport: () => void;
   readonly onTask: (task: TaskType, snapshot?: SelectionSnapshot | null, preset?: TaskPromptPreset | null) => void;
   readonly onWelcome: () => void;
@@ -130,6 +134,7 @@ export function WritingPage({
   currentProject,
   sidebarOpen,
   sidebarTab,
+  aiChatDraftSeed,
   scratchpadRefreshToken,
   selectionSnapshot,
   taskPromptPreset,
@@ -143,6 +148,8 @@ export function WritingPage({
   onCloseSidebar,
   onOpenAiChat,
   onOpenScratchpad,
+  onSelectionToChat,
+  onExport,
   onImport,
   onTask,
   onWelcome,
@@ -274,6 +281,7 @@ export function WritingPage({
     },
     [flushBeforeNavigation, onSelectChapter]
   );
+  const handleExport = useCallback(() => flushBeforeNavigation(onExport), [flushBeforeNavigation, onExport]);
   const handleImport = useCallback(() => flushBeforeNavigation(onImport), [flushBeforeNavigation, onImport]);
   const handleWelcome = useCallback(() => {
     setConfirmWelcomeOpen(true);
@@ -425,6 +433,7 @@ export function WritingPage({
         saveStatus={editorStore.saveStatus}
         searchValue={searchValue}
         editorSettings={editorStore.editorSettings}
+        onExport={handleExport}
         onImport={handleImport}
         onEditorSettingsChange={editorStore.updateEditorSettings}
         onFocusModeToggle={handleFocusModeToggle}
@@ -502,6 +511,7 @@ export function WritingPage({
                     taskPromptPresets={taskPromptPresets}
                     onContentChange={editorStore.handleContentChange}
                     onEditorReady={setEditor}
+                    onSelectionToChat={onSelectionToChat}
                     onSelectionToScratchpad={handleSelectionToScratchpad}
                     onTask={onTask}
                   />
@@ -540,6 +550,8 @@ export function WritingPage({
         {!focusMode && sidebarOpen ? (
           <RightUtilitySidebar
             activeTab={sidebarTab}
+            aiChatDraftSeed={aiChatDraftSeed}
+            chapters={chapters}
             currentChapterId={activeChapter?.id ?? null}
             currentChapterTitle={activeChapter?.title ?? null}
             currentProjectId={currentProject?.id ?? null}

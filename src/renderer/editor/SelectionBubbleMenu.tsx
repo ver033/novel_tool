@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent, type MouseEvent, type ReactNode } from "react";
 import {
   CaretDown,
+  ChatCircleText,
   Code,
   DotsThreeVertical,
   Highlighter,
@@ -31,6 +32,7 @@ type SelectionBubbleMenuProps = {
   readonly chapterId: string | null;
   readonly editor: EditorInstance;
   readonly taskPromptPresets: readonly TaskPromptPreset[];
+  readonly onSelectionToChat?: (snapshot: SelectionSnapshot) => void;
   readonly onSelectionToScratchpad?: (snapshot: SelectionSnapshot) => Promise<void> | void;
   readonly onTask: (task: TaskType, snapshot: SelectionSnapshot, preset?: TaskPromptPreset | null) => void;
 };
@@ -86,7 +88,7 @@ function isTextAlignActive(editor: EditorInstance, value: TextAlignValue): boole
   return editor.isActive("paragraph", { textAlign: value }) || editor.isActive("heading", { textAlign: value });
 }
 
-export function SelectionBubbleMenu({ chapterId, editor, taskPromptPresets, onSelectionToScratchpad, onTask }: SelectionBubbleMenuProps) {
+export function SelectionBubbleMenu({ chapterId, editor, taskPromptPresets, onSelectionToChat, onSelectionToScratchpad, onTask }: SelectionBubbleMenuProps) {
   const [activeMenu, setActiveMenu] = useState<ActiveMenu>(null);
   const [linkOpen, setLinkOpen] = useState(false);
   const [linkDraft, setLinkDraft] = useState("");
@@ -132,6 +134,16 @@ export function SelectionBubbleMenu({ chapterId, editor, taskPromptPresets, onSe
 
     setActiveMenu(null);
     onTask(taskPromptPreset.taskType, snapshot, taskPromptPreset);
+  }
+
+  function sendSelectionToChat(): void {
+    const snapshot = createSelectionSnapshotFromEditor(editor, chapterId);
+    if (!snapshot || !onSelectionToChat) {
+      return;
+    }
+
+    setActiveMenu(null);
+    onSelectionToChat(snapshot);
   }
 
   function runCommand(command: () => void): void {
@@ -219,6 +231,11 @@ export function SelectionBubbleMenu({ chapterId, editor, taskPromptPresets, onSe
         </button>
         {activeMenu === "ai" ? (
           <span className="bubble-dropdown ai">
+            <button className="send-to-chat-option" onClick={sendSelectionToChat} onMouseDown={keepSelection} type="button">
+              <ChatCircleText size={17} />
+              <span>送到 AI Chat</span>
+            </button>
+            <span className="dropdown-label">写作操作</span>
             {aiTasks.map(([task, label]) => (
               <button key={task} onClick={() => runAiTask(task)} onMouseDown={keepSelection} type="button">
                 {label}

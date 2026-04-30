@@ -32,19 +32,20 @@ const proofreadReasoning: OpenRouterReasoningConfig = {
   exclude: true
 };
 
+const actionableProofreadIssueTypes = proofreadIssueTypes.filter((type) => type !== "无问题");
+
 const proofreadJsonSchema = {
   type: "object",
   properties: {
     issues: {
       type: "array",
-      minItems: 1,
       maxItems: 3,
       items: {
         type: "object",
         properties: {
           type: {
             type: "string",
-            enum: proofreadIssueTypes,
+            enum: actionableProofreadIssueTypes,
             description: "问题类型"
           },
           quote: {
@@ -76,7 +77,7 @@ function systemPromptFor(task: AiTaskRecord): string {
       "你只检查文本，不重写整段正文。",
       "重点检查错别字、标点、病句、表达不顺、对白不自然和重复表达。",
       "不要改变剧情事实、人物关系、时间地点、叙事视角。",
-      '如果没有明确问题，只输出 {"issues":[{"type":"无问题","quote":"","suggestion":"","reason":"未发现明显问题"}]}',
+      '如果没有明确问题，只输出 {"issues":[]}',
       "如果存在问题，最多返回 3 个最重要的问题。",
       "必须输出符合 JSON Schema 的结果。"
     ].join("\n");
