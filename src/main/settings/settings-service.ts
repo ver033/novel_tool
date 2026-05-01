@@ -185,7 +185,7 @@ export class SettingsService {
         : current?.encryptedApiKey ?? (current?.apiKey ? this.secretStore.encrypt(current.apiKey) : undefined);
       this.settingsRepo.setJson(AI_PROVIDER_SETTINGS_KEY, {
         providerType: "openrouter",
-        baseUrl: OPENROUTER_BASE_URL,
+        baseUrl: input.aiProvider.baseUrl?.trim() || current?.baseUrl || OPENROUTER_BASE_URL,
         modelName: input.aiProvider.modelName,
         contextLength: input.aiProvider.contextLength ?? null,
         supportsTools: input.aiProvider.supportsTools ?? current?.supportsTools ?? null,
@@ -238,7 +238,7 @@ export class SettingsService {
 
     return {
       apiKey,
-      baseUrl: OPENROUTER_BASE_URL,
+      baseUrl: override?.baseUrl?.trim() || settings?.baseUrl || OPENROUTER_BASE_URL,
       modelName,
       contextLength: override?.contextLength ?? settings?.contextLength ?? null,
       supportsTools: override?.supportsTools ?? settings?.supportsTools ?? null
@@ -269,7 +269,7 @@ export class SettingsService {
       this.saveSettings({
         aiProvider: {
           providerType: "openrouter",
-          baseUrl: OPENROUTER_BASE_URL,
+          baseUrl: config.baseUrl,
           modelName: config.modelName,
           contextLength: metadata.contextLength,
           supportsTools: metadata.supportsTools ?? null

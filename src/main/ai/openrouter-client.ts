@@ -1,7 +1,10 @@
 import axios from "axios";
 import { StringDecoder } from "node:string_decoder";
 import type { OpenRouterModelSummary } from "../shared/types";
+import { OpenRouterError, type OpenRouterErrorCode } from "./openrouter-error";
 import { parseOpenRouterSsePayload, type OpenRouterStreamEvent } from "./openrouter-stream-parser";
+
+export { OpenRouterError, isOpenRouterCanceledError } from "./openrouter-error";
 
 export type OpenRouterToolCall = {
   readonly id: string;
@@ -68,6 +71,7 @@ export type OpenRouterHttpStream = AsyncIterable<string | Buffer> | Iterable<str
 
 export type OpenRouterClientOptions = {
   readonly apiKey: string;
+  readonly baseUrl?: string;
   readonly modelName: string;
   readonly httpPost?: (request: OpenRouterHttpRequest) => Promise<unknown>;
   readonly httpStreamPost?: (request: OpenRouterHttpRequest) => Promise<OpenRouterHttpStream>;
@@ -98,11 +102,76 @@ export type OpenRouterStreamHandlers = {
   readonly onReasoning?: (token: string) => void;
 };
 
-const OPENROUTER_CHAT_COMPLETIONS_URL = "https://openrouter.ai/api/v1/chat/completions";
-const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models?output_modalities=text&supported_parameters=tools";
+const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+const OPENROUTER_CHAT_COMPLETIONS_PATH = "chat/completions";
+const OPENROUTER_MODELS_PATH = "models?output_modalities=text&supported_parameters=tools";
+const OPENROUTER_REQUEST_TIMEOUT_MS = 60_000;
+const OPENROUTER_STREAM_TIMEOUT_MS = 300_000;
+
+function buildOpenRouterUrl(baseUrl: string | undefined, path: string): string {
+  return `${(baseUrl?.trim() || OPENROUTER_BASE_URL).replace(/\/+$/u, "")}/${path}`;
+}
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object");
+}
+
+function isAsyncIterable(value: unknown): value is AsyncIterable<unknown> {
+  return isObject(value) && Symbol.asyncIterator in value;
+}
+
+function isIterable(value: unknown): value is Iterable<unknown> {
+  return isObject(value) && Symbol.iterator in value;
+}
+
+function parseErrorResponseBody(text: string): unknown {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return {};
+  }
+  try {
+    return JSON.parse(trimmed) as unknown;
+  } catch {
+    return { message: trimmed };
+  }
+}
+
+async function readErrorResponseBody(data: unknown): Promise<unknown | null> {
+  if (typeof data === "string") {
+    return parseErrorResponseBody(data);
+  }
+  if (Buffer.isBuffer(data)) {
+    return parseErrorResponseBody(data.toString("utf8"));
+  }
+  if (!isAsyncIterable(data) && !isIterable(data)) {
+    return null;
+  }
+
+  const decoder = new StringDecoder("utf8");
+  let body = "";
+  for await (const chunk of data as AsyncIterable<unknown> | Iterable<unknown>) {
+    body += typeof chunk === "string" ? chunk : decoder.write(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+  }
+  body += decoder.end();
+  return parseErrorResponseBody(body);
+}
+
+async function normalizeStreamTransportError(error: unknown): Promise<unknown> {
+  if (!isObject(error) || !isObject(error.response)) {
+    return error;
+  }
+
+  const body = await readErrorResponseBody(error.response.data);
+  if (!body) {
+    return error;
+  }
+
+  return Object.assign(error instanceof Error ? error : new Error("OpenRouter stream request failed"), {
+    response: {
+      ...error.response,
+      data: body
+    }
+  });
 }
 
 function redactSecrets(message: string, apiKey: string): string {
@@ -184,6 +253,73 @@ function formatOpenRouterRequestError(provider: { readonly status?: number; read
   }
 
   return `OpenRouter 请求失败${suffix}：${message}`;
+}
+
+function classifyOpenRouterError(error: unknown, provider: { readonly status?: number; readonly message: string }): OpenRouterErrorCode {
+  if (provider.status === 429) {
+    return "rate_limited";
+  }
+  if (provider.status !== undefined) {
+    return "provider_error";
+  }
+  if (error instanceof Error && /timeout|timed out|ECONNABORTED/iu.test(error.message)) {
+    return "timeout";
+  }
+  if (
+    provider.message.startsWith("OpenRouter 响应") ||
+    provider.message.startsWith("OpenRouter 模型返回错误") ||
+    provider.message.includes("工具调用格式无效")
+  ) {
+    return "invalid_response";
+  }
+  return "network_error";
+}
+
+function isCancellationReason(reason: unknown): boolean {
+  if (!reason || typeof reason !== "object") {
+    return String(reason) === "canceled";
+  }
+
+  const record = reason as { readonly code?: unknown; readonly isCanceled?: unknown; readonly message?: unknown; readonly name?: unknown };
+  return (
+    record.isCanceled === true ||
+    record.code === "canceled" ||
+    record.code === "ERR_CANCELED" ||
+    record.name === "AbortError" ||
+    record.name === "CanceledError" ||
+    record.message === "canceled" ||
+    record.message === "AI 对话已取消。" ||
+    record.message === "AI 任务已取消。"
+  );
+}
+
+function toOpenRouterError(error: unknown, apiKey: string): OpenRouterError {
+  if (error instanceof OpenRouterError) {
+    return error;
+  }
+  if (isCancellationReason(error)) {
+    return new OpenRouterError({
+      code: "canceled",
+      message: "OpenRouter 请求已取消。",
+      isCanceled: true,
+      cause: error
+    });
+  }
+
+  const provider = extractProviderMessage(error);
+  return new OpenRouterError({
+    code: classifyOpenRouterError(error, provider),
+    status: provider.status,
+    message: formatOpenRouterRequestError(provider, apiKey),
+    cause: error
+  });
+}
+
+function toOpenRouterStreamError(error: unknown, apiKey: string): OpenRouterError | Promise<OpenRouterError> {
+  if (!isCancellationReason(error)) {
+    return Promise.resolve(normalizeStreamTransportError(error)).then((normalizedError) => toOpenRouterError(normalizedError, apiKey));
+  }
+  return toOpenRouterError(error, apiKey);
 }
 
 function getChoiceError(choice: Record<string, unknown>): string | null {
@@ -277,14 +413,17 @@ function parseToolCalls(message: Record<string, unknown>): readonly OpenRouterTo
     if (typeof rawToolCall.id !== "string" || !rawToolCall.id.trim() || !isObject(fn)) {
       throw new Error(`OpenRouter 响应工具调用格式无效：第 ${index + 1} 个 tool_call 缺少 id 或 function。`);
     }
-    if (typeof fn.name !== "string" || !fn.name.trim() || typeof fn.arguments !== "string") {
-      throw new Error(`OpenRouter 响应工具调用格式无效：第 ${index + 1} 个 tool_call 缺少 function.name 或 function.arguments。`);
+    if (typeof fn.name !== "string" || !fn.name.trim()) {
+      throw new Error(`OpenRouter 响应工具调用格式无效：第 ${index + 1} 个 tool_call 缺少 function.name。`);
+    }
+    if (fn.arguments !== undefined && fn.arguments !== null && typeof fn.arguments !== "string") {
+      throw new Error(`OpenRouter 响应工具调用格式无效：第 ${index + 1} 个 tool_call 的 function.arguments 不是字符串。`);
     }
 
     return {
       id: rawToolCall.id,
       name: fn.name,
-      argumentsJson: fn.arguments
+      argumentsJson: fn.arguments ?? "{}"
     };
   });
 }
@@ -326,20 +465,24 @@ function parseCompletionResponse(response: unknown, allowEmptyContent: boolean):
 async function defaultHttpPost(request: OpenRouterHttpRequest): Promise<unknown> {
   const response = await axios.post(request.url, request.body, {
     headers: request.headers,
-    timeout: 60_000,
+    timeout: OPENROUTER_REQUEST_TIMEOUT_MS,
     signal: request.signal
   });
   return response.data;
 }
 
 async function defaultHttpStreamPost(request: OpenRouterHttpRequest): Promise<OpenRouterHttpStream> {
-  const response = await axios.post(request.url, request.body, {
-    headers: request.headers,
-    timeout: 60_000,
-    responseType: "stream",
-    signal: request.signal
-  });
-  return response.data as OpenRouterHttpStream;
+  try {
+    const response = await axios.post(request.url, request.body, {
+      headers: request.headers,
+      timeout: OPENROUTER_STREAM_TIMEOUT_MS,
+      responseType: "stream",
+      signal: request.signal
+    });
+    return response.data as OpenRouterHttpStream;
+  } catch (error) {
+    throw await normalizeStreamTransportError(error);
+  }
 }
 
 class ReasoningAccumulator {
@@ -408,7 +551,7 @@ class ToolCallAccumulator {
 
 async function defaultHttpGet(request: OpenRouterHttpGetRequest): Promise<unknown> {
   const response = await axios.get(request.url, {
-    timeout: 60_000
+    timeout: OPENROUTER_REQUEST_TIMEOUT_MS
   });
   return response.data;
 }
@@ -479,7 +622,7 @@ export class OpenRouterClient {
     }
 
     return {
-      url: OPENROUTER_CHAT_COMPLETIONS_URL,
+      url: buildOpenRouterUrl(this.options.baseUrl, OPENROUTER_CHAT_COMPLETIONS_PATH),
       headers: {
         Authorization: `Bearer ${this.options.apiKey}`,
         "Content-Type": "application/json",
@@ -495,8 +638,7 @@ export class OpenRouterClient {
     try {
       return parseCompletionResponse(await this.httpPost(request), Boolean(input.allowEmptyContent));
     } catch (error) {
-      const provider = extractProviderMessage(error);
-      throw new Error(formatOpenRouterRequestError(provider, this.options.apiKey));
+      throw toOpenRouterError(error, this.options.apiKey);
     }
   }
 
@@ -553,20 +695,21 @@ export class OpenRouterClient {
 
       return buildCompletionResult(content, truncated, reasoning, toolCallAccumulator.toToolCalls());
     } catch (error) {
-      const provider = extractProviderMessage(error);
-      throw new Error(formatOpenRouterRequestError(provider, this.options.apiKey));
+      throw await toOpenRouterStreamError(error, this.options.apiKey);
     }
   }
 }
 
 export class OpenRouterModelCatalogClient {
   private readonly httpGet: (request: OpenRouterHttpGetRequest) => Promise<unknown>;
+  private readonly baseUrl?: string;
 
-  constructor(options: { readonly httpGet?: (request: OpenRouterHttpGetRequest) => Promise<unknown> } = {}) {
+  constructor(options: { readonly baseUrl?: string; readonly httpGet?: (request: OpenRouterHttpGetRequest) => Promise<unknown> } = {}) {
+    this.baseUrl = options.baseUrl;
     this.httpGet = options.httpGet ?? defaultHttpGet;
   }
 
   async listModels(): Promise<OpenRouterModelSummary[]> {
-    return parseModelList(await this.httpGet({ url: OPENROUTER_MODELS_URL }));
+    return parseModelList(await this.httpGet({ url: buildOpenRouterUrl(this.baseUrl, OPENROUTER_MODELS_PATH) }));
   }
 }

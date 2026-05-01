@@ -54,7 +54,7 @@ export function resolvePackagedElectronBinary(buildPath: string, platform: strin
 async function applyElectronFuses(buildPath: string, _electronVersion: string, platform: string, arch: string): Promise<void> {
   await flipFuses(resolvePackagedElectronBinary(buildPath, platform), {
     version: FuseVersion.V1,
-    resetAdHocDarwinSignature: platform === "darwin" && arch === "arm64",
+    resetAdHocDarwinSignature: platform === "darwin",
     [FuseV1Options.RunAsNode]: false,
     [FuseV1Options.EnableNodeOptionsEnvironmentVariable]: false,
     [FuseV1Options.EnableNodeCliInspectArguments]: false

@@ -247,21 +247,21 @@ export function useTaskStore({ projectId, chapterId, taskType, presetId, selecti
   }, [api, cancelActiveStream, task]);
 
   const rejectCandidate = useCallback(async () => {
-    if (!candidate) {
+    if (!projectId || !candidate) {
       return;
     }
 
     setBusy(true);
     setError(null);
     try {
-      const rejected = (await api.ai.rejectCandidate({ candidateId: candidate.id })) as AiTaskCandidateRecord;
+      const rejected = (await api.ai.rejectCandidate({ projectId, candidateId: candidate.id })) as AiTaskCandidateRecord;
       setCandidate(rejected);
     } catch (reason) {
       setError(formatIpcErrorMessage(reason, "拒绝候选失败"));
     } finally {
       setBusy(false);
     }
-  }, [api, candidate]);
+  }, [api, candidate, projectId]);
 
   const saveCandidateToScratchpad = useCallback(async () => {
     if (!projectId || !candidate || !task) {
@@ -278,7 +278,7 @@ export function useTaskStore({ projectId, chapterId, taskType, presetId, selecti
         sourceTaskId: task.id,
         pinned: false
       });
-      const result = (await api.ai.saveCandidateToScratchpad({ candidateId: candidate.id })) as PreviewResult;
+      const result = (await api.ai.saveCandidateToScratchpad({ projectId, candidateId: candidate.id })) as PreviewResult;
       setTask(result.task);
       setCandidate(result.candidate);
     } catch (reason) {
@@ -305,7 +305,7 @@ export function useTaskStore({ projectId, chapterId, taskType, presetId, selecti
           pinned: false
         });
         if (candidate) {
-          const result = (await api.ai.saveCandidateToScratchpad({ candidateId: candidate.id })) as PreviewResult;
+          const result = (await api.ai.saveCandidateToScratchpad({ projectId, candidateId: candidate.id })) as PreviewResult;
           setTask(result.task);
           setCandidate(result.candidate);
         }

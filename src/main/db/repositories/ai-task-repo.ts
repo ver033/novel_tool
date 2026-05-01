@@ -105,6 +105,11 @@ function mapCandidate(row: AiTaskCandidateRow): AiTaskCandidateRecord {
 export class AiTaskRepository {
   constructor(private readonly db: SqliteDatabase) {}
 
+  transact<T>(fn: () => T): T {
+    const transaction = this.db.transaction(fn);
+    return transaction();
+  }
+
   createTask(input: CreateTaskRecord): AiTaskRecord {
     const createdAt = nowIso();
     const task = {

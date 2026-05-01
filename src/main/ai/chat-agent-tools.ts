@@ -380,6 +380,9 @@ function parseReadChaptersArgs(argumentsJson: string): { readonly scope: ChatAge
       `AI 工具 read_chapters 参数无效：请使用 {"scope":"all_chapters"}、{"scope":"current_chapter"}、{"scope":"chapter","ordinal":章节序号} 或 {"scope":"chapter_range","from":起始章节,"to":结束章节}。`
     );
   }
+  if (parsed.data.scope.type === "chapter_range" && parsed.data.scope.from > parsed.data.scope.to) {
+    throw new Error(`章节范围无效：第${parsed.data.scope.from}章到第${parsed.data.scope.to}章。`);
+  }
   return parsed.data;
 }
 

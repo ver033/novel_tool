@@ -12,7 +12,7 @@ import {
   projectSuggestFilePathInputSchema
 } from "../shared/schemas";
 import { ipcChannels } from "../shared/types";
-import { createValidatedIpcHandler } from "./register-ipc";
+import { createIpcHandler, createValidatedIpcHandler } from "./register-ipc";
 
 function ensureProjectFileExtension(filePath: string): string {
   return filePath.endsWith(".noveltool") ? filePath : `${filePath}.noveltool`;
@@ -29,7 +29,7 @@ export function registerProjectIpc(projectService: ProjectService): void {
     )
   );
   ipcMain.handle(ipcChannels.project.openProject, createValidatedIpcHandler(projectOpenInputSchema, (input) => projectService.openProject(input)));
-  ipcMain.handle(ipcChannels.project.selectProjectFile, async (event) => {
+  ipcMain.handle(ipcChannels.project.selectProjectFile, createIpcHandler(async (event) => {
     const parentWindow = BrowserWindow.fromWebContents(event.sender) ?? undefined;
     const options: OpenDialogOptions = {
       title: "选择墨枢项目文件",
@@ -45,7 +45,7 @@ export function registerProjectIpc(projectService: ProjectService): void {
     return {
       filePath: allowSelectedProjectFilePath(result.filePaths[0])
     };
-  });
+  }));
   ipcMain.handle(
     ipcChannels.project.selectProjectSavePath,
     createValidatedIpcHandler(projectSelectSavePathInputSchema, async (input, event) => {
@@ -89,6 +89,6 @@ export function registerProjectIpc(projectService: ProjectService): void {
     ipcChannels.project.deleteProject,
     createValidatedIpcHandler(projectDeleteInputSchema, (input) => projectService.deleteProject(input))
   );
-  ipcMain.handle(ipcChannels.project.getCurrentProject, () => projectService.getCurrentProject());
-  ipcMain.handle(ipcChannels.project.listRecentProjects, () => projectService.listRecentProjects());
+  ipcMain.handle(ipcChannels.project.getCurrentProject, createIpcHandler(() => projectService.getCurrentProject()));
+  ipcMain.handle(ipcChannels.project.listRecentProjects, createIpcHandler(() => projectService.listRecentProjects()));
 }

@@ -14,10 +14,6 @@ export class OpenRouterTaskGenerator implements AiTaskGenerator {
     this.runner = WritingOperationRunner.fromSettings(settingsService, resolveChapterRepo);
   }
 
-  async generate(task: AiTaskRecord): Promise<AiTaskGenerationResult> {
-    return this.runner.generate(task);
-  }
-
   async generateStream(task: AiTaskRecord, handlers: AiTaskStreamHandlers, options: AiGenerationOptions = {}): Promise<AiTaskGenerationResult> {
     return this.runner.generateStream(task, handlers, options);
   }

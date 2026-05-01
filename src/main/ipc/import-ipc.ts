@@ -3,10 +3,10 @@ import { TxtImporter } from "../import/txt-importer";
 import { allowSelectedTxtFilePath, assertSelectedTxtFilePathAllowed } from "../security/file-access";
 import { importConfirmTxtInputSchema, importPreviewTxtInputSchema, importUpdatePreviewInputSchema } from "../shared/schemas";
 import { ipcChannels } from "../shared/types";
-import { createValidatedIpcHandler } from "./register-ipc";
+import { createIpcHandler, createValidatedIpcHandler } from "./register-ipc";
 
 export function registerImportIpc(txtImporter: TxtImporter): void {
-  ipcMain.handle(ipcChannels.import.selectTxtFile, async (event) => {
+  ipcMain.handle(ipcChannels.import.selectTxtFile, createIpcHandler(async (event) => {
     const parentWindow = BrowserWindow.fromWebContents(event.sender) ?? undefined;
     const options: OpenDialogOptions = {
       title: "选择 TXT 小说文件",
@@ -22,7 +22,7 @@ export function registerImportIpc(txtImporter: TxtImporter): void {
     return {
       filePath: allowSelectedTxtFilePath(result.filePaths[0])
     };
-  });
+  }));
   ipcMain.handle(
     ipcChannels.import.previewTxt,
     createValidatedIpcHandler(importPreviewTxtInputSchema, (input) =>

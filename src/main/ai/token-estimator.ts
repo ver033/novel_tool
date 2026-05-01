@@ -1,4 +1,4 @@
-import type { OpenRouterMessage } from "./openrouter-client";
+import type { OpenRouterMessage, OpenRouterToolDefinition } from "./openrouter-client";
 
 const MESSAGE_OVERHEAD_TOKENS = 4;
 
@@ -23,11 +23,34 @@ export function estimateTextTokens(text: string): number {
   return Math.ceil(cjkCount * 1.1 + nonCjkCount / 3);
 }
 
-export function estimateMessagesTokens(messages: readonly OpenRouterMessage[]): number {
-  return messages.reduce(
-    (total, message) => total + MESSAGE_OVERHEAD_TOKENS + estimateTextTokens(message.role) + estimateTextTokens(message.content ?? ""),
+function estimateJsonTokens(value: unknown): number {
+  try {
+    return estimateTextTokens(JSON.stringify(value));
+  } catch {
+    return estimateTextTokens(String(value));
+  }
+}
+
+function estimateMessageExtraTokens(message: OpenRouterMessage): number {
+  if (message.role === "assistant") {
+    return message.tool_calls ? estimateJsonTokens(message.tool_calls) : 0;
+  }
+  if (message.role === "tool") {
+    return estimateTextTokens([message.tool_call_id, message.name ?? ""].filter(Boolean).join("\n"));
+  }
+  return 0;
+}
+
+export function estimateMessagesTokens(messages: readonly OpenRouterMessage[], tools: readonly OpenRouterToolDefinition[] = []): number {
+  const messageTokens = messages.reduce(
+    (total, message) =>
+      total + MESSAGE_OVERHEAD_TOKENS + estimateTextTokens(message.role) + estimateTextTokens(message.content ?? "") + estimateMessageExtraTokens(message),
     0
   );
+  if (tools.length === 0) {
+    return messageTokens;
+  }
+  return messageTokens + MESSAGE_OVERHEAD_TOKENS + estimateJsonTokens(tools);
 }
 
 export function truncateTextToTokenBudget(text: string, maxTokens: number): { readonly text: string; readonly truncated: boolean } {

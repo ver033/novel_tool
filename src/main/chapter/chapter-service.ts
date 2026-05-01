@@ -97,7 +97,8 @@ export class ChapterService {
       nextWordCount,
       nextDailyWordCount,
       today,
-      nowIso()
+      nowIso(),
+      previousContent.updatedAt
     );
   }
 

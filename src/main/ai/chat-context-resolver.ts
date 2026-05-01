@@ -1,5 +1,5 @@
 import type { ChapterRepository } from "../db/repositories/chapter-repo";
-import type { AiSendChatMessageInput, AiSendChatMessageStreamInput, ChapterSummary } from "../shared/types";
+import type { AiSendChatMessageStreamInput, ChapterSummary } from "../shared/types";
 import { estimateTextTokens, truncateTextToTokenBudget } from "./token-estimator";
 import { getTokenBudget } from "./token-budget";
 
@@ -19,7 +19,7 @@ const CHINESE_DIGITS: Record<string, number> = {
   九: 9
 };
 
-type ChatContextInput = AiSendChatMessageInput | AiSendChatMessageStreamInput;
+type ChatContextInput = AiSendChatMessageStreamInput;
 
 function normalizeFullWidthDigits(value: string): string {
   return value.replace(/[０-９]/g, (char) => String.fromCharCode(char.charCodeAt(0) - 0xfee0));

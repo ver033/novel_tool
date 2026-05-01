@@ -4,7 +4,8 @@ import type {
   ChapterSummary,
   ImportConfirmResult,
   ProjectCreateInput,
-  ProjectRecord
+  ProjectRecord,
+  RecentProjectEntry
 } from "../../main/shared/types";
 
 type CreatedProjectResult = {
@@ -31,7 +32,7 @@ export function getNovelToolApi(): NovelToolApi {
 
 export function useAppStore() {
   const api = useMemo(getNovelToolApi, []);
-  const [recentProjects, setRecentProjects] = useState<ProjectRecord[]>([]);
+  const [recentProjects, setRecentProjects] = useState<RecentProjectEntry[]>([]);
   const [currentProject, setCurrentProject] = useState<ProjectRecord | null>(null);
   const [chapters, setChapters] = useState<ChapterSummary[]>([]);
   const [activeChapterId, setActiveChapterId] = useState<string | null>(null);
@@ -39,7 +40,7 @@ export function useAppStore() {
   const activeChapter = chapters.find((chapter) => chapter.id === activeChapterId) ?? chapters[0] ?? null;
 
   const loadRecentProjects = useCallback(async () => {
-    setRecentProjects((await api.project.listRecentProjects()) as ProjectRecord[]);
+    setRecentProjects((await api.project.listRecentProjects()) as RecentProjectEntry[]);
   }, [api]);
 
   const openProject = useCallback(
@@ -92,7 +93,7 @@ export function useAppStore() {
   }, [api, loadRecentProjects]);
 
   const continueWriting = useCallback(async () => {
-    const recent = (await api.project.listRecentProjects()) as ProjectRecord[];
+    const recent = (await api.project.listRecentProjects()) as RecentProjectEntry[];
     setRecentProjects(recent);
     return recent;
   }, [api]);
@@ -105,7 +106,7 @@ export function useAppStore() {
       }
 
       const renamed = (await api.project.renameProject({ projectId, name: trimmedName })) as ProjectRecord;
-      setRecentProjects((current) => current.map((project) => (project.id === renamed.id ? renamed : project)));
+      setRecentProjects((current) => current.map((entry) => (entry.project.id === renamed.id ? { ...entry, project: renamed } : entry)));
       setCurrentProject((current) => (current?.id === renamed.id ? renamed : current));
       await loadRecentProjects();
     },
@@ -120,7 +121,7 @@ export function useAppStore() {
 
       const wasCurrentProject = currentProject?.id === projectId;
       await api.project.deleteProject({ projectId });
-      setRecentProjects((current) => current.filter((project) => project.id !== projectId));
+      setRecentProjects((current) => current.filter((entry) => entry.project.id !== projectId));
       setCurrentProject((current) => (current?.id === projectId ? null : current));
       setChapters((current) => (wasCurrentProject ? [] : current));
       setActiveChapterId((current) => (wasCurrentProject ? null : current));

@@ -166,6 +166,9 @@ function resolveChapterScope(
   }
 
   if (scope.type === "chapter_range") {
+    if (scope.from > scope.to) {
+      throw new Error(`章节范围无效：第${scope.from}章到第${scope.to}章。`);
+    }
     if (scope.to > chapters.length) {
       throw new Error(`找不到第${scope.to}章，当前项目只有 ${chapters.length} 章。`);
     }

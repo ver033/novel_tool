@@ -163,6 +163,7 @@ export class OpenRouterChatPlanner implements ChatPlanner {
     const config = this.settingsService.getOpenRouterConfig();
     const client = new OpenRouterClient({
       apiKey: config.apiKey,
+      baseUrl: config.baseUrl,
       modelName: config.modelName
     });
     const messages = buildPlannerMessages(input);

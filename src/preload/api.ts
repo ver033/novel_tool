@@ -6,7 +6,6 @@ import type {
   AiCreateChatSessionInput,
   AiCreateTaskInput,
   AiDeleteChatSessionInput,
-  AiGeneratePreviewInput,
   AiGeneratePreviewStreamInput,
   AiGetChatSessionInput,
   AiListChatSessionsInput,
@@ -14,7 +13,6 @@ import type {
   AiRenameChatSessionInput,
   AiRejectCandidateInput,
   AiSaveCandidateToScratchpadInput,
-  AiSendChatMessageInput,
   AiSendChatMessageStreamInput,
   AiStreamChunkEvent,
   AiStreamContextEvent,
@@ -99,12 +97,10 @@ export type NovelToolApi = {
   readonly ai: {
     readonly createTask: (input: AiCreateTaskInput) => Promise<unknown>;
     readonly updateTask: (input: AiUpdateTaskInput) => Promise<unknown>;
-    readonly generatePreview: (input: AiGeneratePreviewInput) => Promise<unknown>;
     readonly generatePreviewStream: (input: AiGeneratePreviewStreamInput) => Promise<unknown>;
     readonly continuePreviewStream: (input: AiGeneratePreviewStreamInput) => Promise<unknown>;
     readonly applyCandidate: (input: AiApplyCandidateInput) => Promise<unknown>;
     readonly saveCandidateToScratchpad: (input: AiSaveCandidateToScratchpadInput) => Promise<unknown>;
-    readonly sendChatMessage: (input: AiSendChatMessageInput) => Promise<unknown>;
     readonly getChatSession: (input: AiGetChatSessionInput) => Promise<unknown>;
     readonly listChatSessions: (input: AiListChatSessionsInput) => Promise<unknown>;
     readonly createChatSession: (input: AiCreateChatSessionInput) => Promise<unknown>;
@@ -174,12 +170,10 @@ export const novelToolApi: NovelToolApi = Object.freeze({
   ai: Object.freeze({
     createTask: (input: AiCreateTaskInput) => ipcRenderer.invoke(ipcChannels.ai.createTask, input),
     updateTask: (input: AiUpdateTaskInput) => ipcRenderer.invoke(ipcChannels.ai.updateTask, input),
-    generatePreview: (input: AiGeneratePreviewInput) => ipcRenderer.invoke(ipcChannels.ai.generatePreview, input),
     generatePreviewStream: (input: AiGeneratePreviewStreamInput) => ipcRenderer.invoke(ipcChannels.ai.generatePreviewStream, input),
     continuePreviewStream: (input: AiGeneratePreviewStreamInput) => ipcRenderer.invoke(ipcChannels.ai.continuePreviewStream, input),
     applyCandidate: (input: AiApplyCandidateInput) => ipcRenderer.invoke(ipcChannels.ai.applyCandidate, input),
     saveCandidateToScratchpad: (input: AiSaveCandidateToScratchpadInput) => ipcRenderer.invoke(ipcChannels.ai.saveCandidateToScratchpad, input),
-    sendChatMessage: (input: AiSendChatMessageInput) => ipcRenderer.invoke(ipcChannels.ai.sendChatMessage, input),
     getChatSession: (input: AiGetChatSessionInput) => ipcRenderer.invoke(ipcChannels.ai.getChatSession, input),
     listChatSessions: (input: AiListChatSessionsInput) => ipcRenderer.invoke(ipcChannels.ai.listChatSessions, input),
     createChatSession: (input: AiCreateChatSessionInput) => ipcRenderer.invoke(ipcChannels.ai.createChatSession, input),
@@ -226,7 +220,6 @@ export const novelToolApi: NovelToolApi = Object.freeze({
         ipcRenderer.off(ipcChannels.ai.streamContext, onContext);
         ipcRenderer.off(ipcChannels.ai.streamDone, onDone);
         ipcRenderer.off(ipcChannels.ai.streamError, onError);
-        void ipcRenderer.invoke(ipcChannels.ai.cancelStream, { requestId });
       };
     },
     rejectCandidate: (input: AiRejectCandidateInput) => ipcRenderer.invoke(ipcChannels.ai.rejectCandidate, input)

@@ -137,6 +137,7 @@ export async function applyAiCandidateToEditor({
   });
 
   return (await api.ai.applyCandidate({
+    projectId: task.projectId,
     candidateId: candidate.id,
     applyMode,
     selectionHash: task.selection?.selectionHash,

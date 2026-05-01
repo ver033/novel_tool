@@ -15,6 +15,7 @@ export class DefaultOpenRouterConnectionTester implements OpenRouterConnectionTe
   async testConnection(config: OpenRouterRuntimeConfig): Promise<OpenRouterConnectionTestResult> {
     const client = new OpenRouterClient({
       apiKey: config.apiKey,
+      baseUrl: config.baseUrl,
       modelName: config.modelName,
       httpPost: this.deps.httpPost
     });

@@ -27,8 +27,13 @@ type OpenRouterClientLike = {
 type WritingOperationRunnerOptions = {
   readonly resolveChapterRepo: (projectId: string) => ChapterRepository;
   readonly resolveTaskPreset: (presetId: string | null | undefined, taskType: AiTaskRecord["taskType"]) => TaskPromptPreset | null;
-  readonly resolveModelConfig: () => Promise<{ readonly apiKey: string; readonly modelName: string; readonly contextLength: number | null }>;
-  readonly createClient?: (config: { readonly apiKey: string; readonly modelName: string }) => OpenRouterClientLike;
+  readonly resolveModelConfig: () => Promise<{
+    readonly apiKey: string;
+    readonly baseUrl?: string;
+    readonly modelName: string;
+    readonly contextLength: number | null;
+  }>;
+  readonly createClient?: (config: { readonly apiKey: string; readonly baseUrl?: string; readonly modelName: string }) => OpenRouterClientLike;
 };
 
 function taskTarget(task: AiTaskRecord): WritingOperationTarget {
@@ -92,6 +97,7 @@ export class WritingOperationRunner {
         const config = await settingsService.getOpenRouterConfigWithModelMetadata();
         return {
           apiKey: config.apiKey,
+          baseUrl: config.baseUrl,
           modelName: config.modelName,
           contextLength: config.contextLength
         };
@@ -99,7 +105,7 @@ export class WritingOperationRunner {
     });
   }
 
-  private createClient(config: { readonly apiKey: string; readonly modelName: string }): OpenRouterClientLike {
+  private createClient(config: { readonly apiKey: string; readonly baseUrl?: string; readonly modelName: string }): OpenRouterClientLike {
     return this.options.createClient?.(config) ?? new OpenRouterClient(config);
   }
 
@@ -243,44 +249,6 @@ export class WritingOperationRunner {
       generatedText: `${partialText}${continuedText}`,
       changeSummary: response.truncated ? `OpenRouter ${operation.id} continuation（结果已截断）` : `OpenRouter ${operation.id} continuation`,
       proofreadIssues: null,
-      contextPlan,
-      truncated: response.truncated
-    };
-  }
-
-  async generate(task: AiTaskRecord): Promise<WritingOperationResult> {
-    const { config, contextPlan, operation, prompt } = await this.buildPromptForTask(task);
-    const client = this.createClient(config);
-    logDevLlmPrompt({
-      kind: `writing-operation:${operation.id}`,
-      modelName: config.modelName,
-      messages: prompt.messages,
-      meta: {
-        chapterId: task.chapterId,
-        contextMode: contextPlan.mode,
-        projectId: task.projectId,
-        taskId: task.id,
-        taskType: task.taskType
-      },
-      params: {
-        maxCompletionTokens: prompt.maxCompletionTokens,
-        reasoning: prompt.reasoning,
-        responseFormat: prompt.responseFormat,
-        temperature: prompt.temperature
-      }
-    });
-
-    const response = await client.createChatCompletion({
-      messages: prompt.messages,
-      maxCompletionTokens: prompt.maxCompletionTokens,
-      temperature: prompt.temperature,
-      responseFormat: prompt.responseFormat,
-      reasoning: prompt.reasoning
-    });
-    const parsed = response.truncated ? buildTruncatedResult(task.taskType, response.content) : parseWritingOperationResponse(operation, response.content);
-
-    return {
-      ...parsed,
       contextPlan,
       truncated: response.truncated
     };

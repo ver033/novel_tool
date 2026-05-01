@@ -79,11 +79,11 @@ jobs:
           Write-Host "No existing GitHub release found for '$env:TAG_NAME'."
           exit 0
 
+      - name: Check lockfile safety
+        run: node scripts/check-lockfile-safety.mjs
+
       - name: Install dependencies
         run: npm ci
-
-      - name: Check lockfile safety
-        run: npm run check:lockfile-safety
 
       - name: Typecheck
         run: npm run typecheck

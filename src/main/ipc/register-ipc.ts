@@ -50,6 +50,7 @@ type ValidatedHandler<TSchema extends z.ZodType, TResult> = (
   input: z.output<TSchema>,
   event: IpcMainInvokeEvent
 ) => Promise<TResult> | TResult;
+type DirectHandler<TResult> = (event: IpcMainInvokeEvent, payload: unknown) => Promise<TResult> | TResult;
 
 let registered = false;
 
@@ -80,27 +81,6 @@ function createE2eTaskGenerator(): AiTaskGenerator {
         generatedText: e2eGeneratedText[task.taskType],
         changeSummary: `E2E ${task.taskType} candidate`
       };
-    },
-    async generate(task) {
-      if (task.taskType === "proofread") {
-        return {
-          generatedText: "",
-          changeSummary: "发现 1 个问题",
-          proofreadIssues: [
-            {
-              type: "表达不顺",
-              quote: task.inputText,
-              suggestion: e2eGeneratedText.proofread,
-              reason: "E2E 校对建议"
-            }
-          ]
-        };
-      }
-
-      return {
-        generatedText: e2eGeneratedText[task.taskType],
-        changeSummary: `E2E ${task.taskType} candidate`
-      };
     }
   };
 }
@@ -115,13 +95,6 @@ function createE2eChatGenerator(): AiChatGenerator {
         content,
         createdAt: new Date().toISOString()
       };
-    },
-    async sendMessage(input) {
-      return {
-        role: "assistant",
-        content: `E2E AI 回复：${input.message}`,
-        createdAt: new Date().toISOString()
-      };
     }
   };
 }
@@ -133,6 +106,16 @@ export function createValidatedIpcHandler<TSchema extends z.ZodType, TResult>(
   return async (event: IpcMainInvokeEvent, payload: unknown): Promise<TResult> => {
     try {
       return await handler(parseIpcPayload(schema, payload), event);
+    } catch (error) {
+      throw sanitizeIpcError(error);
+    }
+  };
+}
+
+export function createIpcHandler<TResult>(handler: DirectHandler<TResult>) {
+  return async (event: IpcMainInvokeEvent, payload: unknown): Promise<TResult> => {
+    try {
+      return await handler(event, payload);
     } catch (error) {
       throw sanitizeIpcError(error);
     }
@@ -194,9 +177,12 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
     const txtImporter = new TxtImporter(importJobRepo, projectRepo, projectService);
     const txtExporter = new TxtExporter(resolveChapterRepo);
 
-    ipcMain.handle(ipcChannels.system.getDatabaseStatus, () => ({
-      ready: true
-    }));
+    ipcMain.handle(
+      ipcChannels.system.getDatabaseStatus,
+      createIpcHandler(() => ({
+        ready: true
+      }))
+    );
     registerProjectIpc(projectService);
     registerChapterIpc(chapterService);
     registerAiIpc(aiTaskService);

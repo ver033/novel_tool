@@ -122,13 +122,26 @@ export class ChapterRepository {
     wordCount: number,
     dailyWordCount: number,
     dailyWordCountDate: string,
-    updatedAt: string
+    updatedAt: string,
+    expectedUpdatedAt?: string
   ): ChapterContent {
-    this.db
-      .prepare(
-        "UPDATE chapters SET content_json = ?, plain_text = ?, word_count = ?, daily_word_count = ?, daily_word_count_date = ?, updated_at = ? WHERE id = ?"
-      )
-      .run(serializeContentJson(contentJson), plainText, wordCount, dailyWordCount, dailyWordCountDate, updatedAt, chapterId);
+    const serializedContent = serializeContentJson(contentJson);
+    const result = expectedUpdatedAt
+      ? this.db
+          .prepare(
+            `UPDATE chapters
+             SET content_json = ?, plain_text = ?, word_count = ?, daily_word_count = ?, daily_word_count_date = ?, updated_at = ?
+             WHERE id = ? AND updated_at = ?`
+          )
+          .run(serializedContent, plainText, wordCount, dailyWordCount, dailyWordCountDate, updatedAt, chapterId, expectedUpdatedAt)
+      : this.db
+          .prepare(
+            "UPDATE chapters SET content_json = ?, plain_text = ?, word_count = ?, daily_word_count = ?, daily_word_count_date = ?, updated_at = ? WHERE id = ?"
+          )
+          .run(serializedContent, plainText, wordCount, dailyWordCount, dailyWordCountDate, updatedAt, chapterId);
+    if (expectedUpdatedAt && result.changes === 0) {
+      throw new Error("章节内容已被其他操作更新，请重新载入后再保存。");
+    }
 
     const content = this.getContent(chapterId);
     if (!content) {

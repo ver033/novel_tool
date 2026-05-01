@@ -281,6 +281,12 @@ export function WritingPage({
     },
     [flushBeforeNavigation, onSelectChapter]
   );
+  const handleDeleteChapter = useCallback(
+    (chapterId: string) => {
+      flushBeforeNavigation(() => onDeleteChapter(chapterId));
+    },
+    [flushBeforeNavigation, onDeleteChapter]
+  );
   const handleExport = useCallback(() => flushBeforeNavigation(onExport), [flushBeforeNavigation, onExport]);
   const handleImport = useCallback(() => flushBeforeNavigation(onImport), [flushBeforeNavigation, onImport]);
   const handleWelcome = useCallback(() => {
@@ -465,7 +471,7 @@ export function WritingPage({
             activeChapterId={activeChapterId}
             chapters={chapters}
             onCreateChapter={handleCreateChapter}
-            onDeleteChapter={onDeleteChapter}
+            onDeleteChapter={handleDeleteChapter}
             onRenameChapter={startChapterRename}
             onSelectChapter={handleSelectChapter}
           />

@@ -230,12 +230,6 @@ export const aiUpdateTaskInputSchema = z
   })
   .strict();
 
-export const aiGeneratePreviewInputSchema = z
-  .object({
-    taskId: idSchema
-  })
-  .strict();
-
 export const aiGeneratePreviewStreamInputSchema = z
   .object({
     requestId: idSchema,
@@ -251,6 +245,7 @@ export const aiCancelStreamInputSchema = z
 
 export const aiApplyCandidateInputSchema = z
   .object({
+    projectId: idSchema,
     candidateId: idSchema,
     applyMode: z.enum(["replace_selection", "insert_below", "insert_at_cursor"]),
     selectionHash: z.string().trim().min(1).optional(),
@@ -260,19 +255,8 @@ export const aiApplyCandidateInputSchema = z
 
 export const aiSaveCandidateToScratchpadInputSchema = z
   .object({
+    projectId: idSchema,
     candidateId: idSchema
-  })
-  .strict();
-
-export const aiSendChatMessageInputSchema = z
-  .object({
-    projectId: optionalIdSchema,
-    sessionId: optionalIdSchema,
-    message: nonEmptyString.max(8000),
-    chapterId: optionalIdSchema,
-    currentChapterTitle: z.string().trim().min(1).max(160).optional(),
-    selectionText: z.string().trim().min(1).max(20000).optional(),
-    chapterExcerpt: z.string().trim().min(1).max(20000).optional()
   })
   .strict();
 
@@ -330,6 +314,7 @@ export const aiSendChatMessageStreamInputSchema = z
 
 export const aiRejectCandidateInputSchema = z
   .object({
+    projectId: idSchema,
     candidateId: idSchema
   })
   .strict();
@@ -353,6 +338,7 @@ export const scratchCreateInputSchema = z
 
 export const scratchUpdateInputSchema = z
   .object({
+    projectId: idSchema,
     noteId: idSchema,
     patch: z
       .object({
@@ -368,6 +354,7 @@ export const scratchUpdateInputSchema = z
 
 export const scratchDeleteInputSchema = z
   .object({
+    projectId: idSchema,
     noteId: idSchema
   })
   .strict();

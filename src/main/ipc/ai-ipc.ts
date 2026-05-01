@@ -7,7 +7,6 @@ import {
   aiCreateChatSessionInputSchema,
   aiCreateTaskInputSchema,
   aiDeleteChatSessionInputSchema,
-  aiGeneratePreviewInputSchema,
   aiGeneratePreviewStreamInputSchema,
   aiGetChatSessionInputSchema,
   aiListChatSessionsInputSchema,
@@ -15,7 +14,6 @@ import {
   aiRenameChatSessionInputSchema,
   aiRejectCandidateInputSchema,
   aiSaveCandidateToScratchpadInputSchema,
-  aiSendChatMessageInputSchema,
   aiSendChatMessageStreamInputSchema,
   aiUpdateTaskInputSchema
 } from "../shared/schemas";
@@ -32,7 +30,6 @@ function sendToLiveSender(event: IpcMainInvokeEvent, channel: string, payload: u
 export function registerAiIpc(aiTaskService: AiTaskService): void {
   ipcMain.handle(ipcChannels.ai.createTask, createValidatedIpcHandler(aiCreateTaskInputSchema, (input) => aiTaskService.createTask(input)));
   ipcMain.handle(ipcChannels.ai.updateTask, createValidatedIpcHandler(aiUpdateTaskInputSchema, (input) => aiTaskService.updateTask(input)));
-  ipcMain.handle(ipcChannels.ai.generatePreview, createValidatedIpcHandler(aiGeneratePreviewInputSchema, (input) => aiTaskService.generatePreview(input)));
   ipcMain.handle(
     ipcChannels.ai.generatePreviewStream,
     createValidatedIpcHandler(aiGeneratePreviewStreamInputSchema, (input, event) =>
@@ -76,7 +73,6 @@ export function registerAiIpc(aiTaskService: AiTaskService): void {
     ipcChannels.ai.saveCandidateToScratchpad,
     createValidatedIpcHandler(aiSaveCandidateToScratchpadInputSchema, (input) => aiTaskService.saveCandidateToScratchpad(input))
   );
-  ipcMain.handle(ipcChannels.ai.sendChatMessage, createValidatedIpcHandler(aiSendChatMessageInputSchema, (input) => aiTaskService.sendChatMessage(input)));
   ipcMain.handle(ipcChannels.ai.getChatSession, createValidatedIpcHandler(aiGetChatSessionInputSchema, (input) => aiTaskService.getChatSession(input)));
   ipcMain.handle(ipcChannels.ai.listChatSessions, createValidatedIpcHandler(aiListChatSessionsInputSchema, (input) => aiTaskService.listChatSessions(input)));
   ipcMain.handle(ipcChannels.ai.createChatSession, createValidatedIpcHandler(aiCreateChatSessionInputSchema, (input) => aiTaskService.createChatSession(input)));

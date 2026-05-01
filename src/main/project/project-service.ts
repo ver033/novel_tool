@@ -12,7 +12,9 @@ import type {
   ProjectOpenFileInput,
   ProjectOpenInput,
   ProjectRecord,
-  ProjectRenameInput
+  ProjectRenameInput,
+  RecentProjectAvailability,
+  RecentProjectEntry
 } from "../shared/types";
 import {
   isNovelToolProjectFile,
@@ -190,22 +192,16 @@ export class ProjectService {
     return currentProjectId ? this.projectRepo.findById(currentProjectId) : null;
   }
 
-  listRecentProjects(): ProjectRecord[] {
-    const visibleProjects: ProjectRecord[] = [];
+  listRecentProjects(): RecentProjectEntry[] {
+    const recentProjects: RecentProjectEntry[] = [];
     for (const project of this.projectRepo.listRecent(100)) {
-      if (!project.rootPath || !isNovelToolProjectFile(project.rootPath) || !existsSync(project.rootPath)) {
-        this.projectRepo.transact(() => {
-          this.projectRepo.clearCurrentProject(project.id);
-          this.projectRepo.delete(project.id);
-        });
-        continue;
-      }
-      visibleProjects.push(project);
-      if (visibleProjects.length >= 10) {
+      const availability = getRecentProjectAvailability(project);
+      recentProjects.push({ project, availability });
+      if (recentProjects.length >= 10) {
         break;
       }
     }
-    return visibleProjects;
+    return recentProjects;
   }
 
   getSuggestedProjectFilePath(projectName: string): string {
@@ -286,4 +282,11 @@ export class ProjectService {
   private resolveProjectFileDirectory(): string | undefined {
     return typeof this.options.projectFileDirectory === "function" ? this.options.projectFileDirectory() : this.options.projectFileDirectory;
   }
+}
+
+function getRecentProjectAvailability(project: ProjectRecord): RecentProjectAvailability {
+  if (!project.rootPath || !isNovelToolProjectFile(project.rootPath)) {
+    return "invalid_path";
+  }
+  return existsSync(project.rootPath) ? "available" : "missing";
 }

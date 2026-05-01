@@ -11,10 +11,17 @@ const packages = lockfile.packages ?? {};
 
 const failures = [];
 
-for (const [path, entry] of Object.entries(packages)) {
-  const packageName = path.startsWith("node_modules/")
-    ? path.slice("node_modules/".length)
+function packageNameFromLockPath(path) {
+  if (!path || path === "") {
+    return "";
+  }
+  return path.includes("node_modules/")
+    ? path.split("node_modules/").at(-1)
     : path;
+}
+
+for (const [path, entry] of Object.entries(packages)) {
+  const packageName = packageNameFromLockPath(path);
   const version = entry?.version;
 
   if (forbiddenPackages.has(packageName)) {

@@ -36,9 +36,10 @@ export const DEFAULT_TOKEN_BUDGETS: Record<AiBudgetedTaskType, TokenBudget> = {
   }
 };
 
-const MODEL_CONTEXT_INPUT_RATIO = 0.72;
-const MODEL_CONTEXT_OUTPUT_RATIO = 0.4;
-const MODEL_CONTEXT_SAFETY_RESERVE_TOKENS = 1024;
+const MODEL_CONTEXT_OUTPUT_RATIO = 0.35;
+const MODEL_CONTEXT_SAFETY_RESERVE_RATIO = 0.08;
+const MODEL_CONTEXT_MAX_SAFETY_RESERVE_TOKENS = 1024;
+const MODEL_CONTEXT_MIN_SAFETY_RESERVE_TOKENS = 256;
 const MIN_DYNAMIC_OUTPUT_TOKENS = 512;
 const MIN_VISIBLE_COMPLETION_TOKENS = 1024;
 
@@ -48,14 +49,17 @@ export function getTokenBudget(taskType: AiBudgetedTaskType, modelContextTokens?
     return { ...defaults };
   }
 
+  const safetyReserveTokens = Math.min(
+    MODEL_CONTEXT_MAX_SAFETY_RESERVE_TOKENS,
+    Math.max(MODEL_CONTEXT_MIN_SAFETY_RESERVE_TOKENS, Math.floor(modelContextTokens * MODEL_CONTEXT_SAFETY_RESERVE_RATIO))
+  );
+  const availableTokens = Math.max(1, Math.floor(modelContextTokens) - safetyReserveTokens);
   const maxOutputTokens = Math.min(
     defaults.maxOutputTokens,
-    Math.max(MIN_DYNAMIC_OUTPUT_TOKENS, Math.floor(modelContextTokens * MODEL_CONTEXT_OUTPUT_RATIO))
+    Math.max(MIN_DYNAMIC_OUTPUT_TOKENS, Math.floor(modelContextTokens * MODEL_CONTEXT_OUTPUT_RATIO)),
+    Math.max(1, availableTokens - 1)
   );
-  const dynamicInputTokens = Math.max(
-    0,
-    Math.floor(modelContextTokens * MODEL_CONTEXT_INPUT_RATIO) - maxOutputTokens - MODEL_CONTEXT_SAFETY_RESERVE_TOKENS
-  );
+  const dynamicInputTokens = Math.max(1, availableTokens - maxOutputTokens);
   const maxReasoningTokens = Math.min(
     defaults.maxReasoningTokens ?? 0,
     Math.max(0, maxOutputTokens - MIN_VISIBLE_COMPLETION_TOKENS)

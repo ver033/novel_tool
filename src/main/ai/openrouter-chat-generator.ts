@@ -18,27 +18,46 @@ import type {
   ChatContextSummaryMergeInput
 } from "./chat-agent-types";
 import { logDevLlmPrompt } from "./dev-prompt-logger";
-import type { OpenRouterMessage } from "./openrouter-client";
+import type { OpenRouterChatCompletionResult, OpenRouterMessage } from "./openrouter-client";
 import { OpenRouterClient } from "./openrouter-client";
 import { buildReasoningConfig } from "./reasoning-budget";
 import { getTokenBudget, type TokenBudget } from "./token-budget";
 import { estimateMessagesTokens, estimateTextTokens, truncateTextToTokenBudget } from "./token-estimator";
 import type { SettingsService } from "../settings/settings-service";
-import type { AiSendChatMessageInput } from "../shared/types";
 
-function hasAgentContext(input: AiSendChatMessageInput | AiChatGenerationInput): input is AiChatGenerationInput & { readonly agentContext: ChatAgentContext } {
+function hasAgentContext(input: AiChatGenerationInput): input is AiChatGenerationInput & { readonly agentContext: ChatAgentContext } {
   return "agentContext" in input && Boolean(input.agentContext);
 }
 
+const CHAPTER_SUMMARY_MAX_TOKENS = 1800;
+const CHAPTER_SUMMARY_MERGE_MAX_TOKENS = 2200;
+const CONTEXT_BATCH_SUMMARY_MAX_TOKENS = 3200;
+const CONTEXT_SUMMARY_MERGE_MAX_TOKENS = 3200;
 const CHAT_MEMORY_SUMMARY_MAX_TOKENS = 2200;
+const CHAT_MEMORY_SUMMARY_PROMPT_RATIO = 0.75;
+const CHAT_MEMORY_SUMMARY_RECOMPRESS_MAX_ROUNDS = 2;
 
-function buildUserPrompt(input: AiSendChatMessageInput | AiChatGenerationInput): string {
+function capInternalMaxCompletionTokens(requestedTokens: number, budget: TokenBudget): number {
+  return Math.max(1, Math.min(requestedTokens, budget.maxOutputTokens));
+}
+
+function formatAgentContextSource(mode: ChatAgentContext["mode"]): string {
+  if (mode === "summarized") {
+    return "分章摘要";
+  }
+  if (mode === "mixed") {
+    return "部分原文，部分摘要";
+  }
+  return "项目数据库原文";
+}
+
+function buildUserPrompt(input: AiChatGenerationInput): string {
   if (hasAgentContext(input)) {
     return [
       "用户问题：",
       input.message,
       `\n上下文范围：${input.agentContext.scopeLabel}`,
-      input.agentContext.mode === "summarized" ? "\n上下文来源：分章摘要" : "\n上下文来源：项目数据库原文",
+      `\n上下文来源：${formatAgentContextSource(input.agentContext.mode)}`,
       "\n上下文内容：",
       input.agentContext.contextText,
       input.selectionText ? `\n用户当前选中文本：\n${input.selectionText}` : ""
@@ -135,56 +154,9 @@ export class OpenRouterChatGenerator implements AiChatGenerator {
       chatBudget: getTokenBudget("chat", config.contextLength),
       client: new OpenRouterClient({
         apiKey: config.apiKey,
+        baseUrl: config.baseUrl,
         modelName: config.modelName
       })
-    };
-  }
-
-  async sendMessage(input: AiSendChatMessageInput): Promise<AiChatMessageResult> {
-    const { chatBudget, client, modelName } = await this.createClient();
-    const reasoning = buildReasoningConfig(chatBudget, { exclude: false, fallbackEffort: "medium" });
-    const messages = [
-      {
-        role: "system",
-        content: buildSystemPrompt()
-      },
-      {
-        role: "user",
-        content: buildUserPrompt(input)
-      }
-    ] satisfies readonly OpenRouterMessage[];
-    assertChatMessagesWithinBudget(messages, chatBudget.maxInputTokens);
-    logDevLlmPrompt({
-      kind: "chat",
-      modelName,
-      messages,
-      meta: {
-        chapterId: input.chapterId,
-        currentChapterTitle: input.currentChapterTitle,
-        projectId: input.projectId,
-        sessionId: input.sessionId
-      },
-      params: {
-        maxCompletionTokens: chatBudget.maxOutputTokens,
-        reasoning,
-        temperature: 0.55
-      }
-    });
-    const result = await client.createChatCompletion({
-      messages,
-      maxCompletionTokens: chatBudget.maxOutputTokens,
-      reasoning,
-      temperature: 0.55
-    });
-    const content = result.content.trim();
-    if (!content) {
-      throw new Error("OpenRouter 返回了空对话内容。");
-    }
-
-    return {
-      role: "assistant",
-      content,
-      createdAt: new Date().toISOString()
     };
   }
 
@@ -332,7 +304,8 @@ export class OpenRouterChatGenerator implements AiChatGenerator {
 
   async summarizeChapterForContext(input: ChatChapterSummaryInput, options: AiGenerationOptions = {}): Promise<string> {
     const { chatBudget: budget, client, modelName } = await this.createClient();
-    const chunkBudget = Math.max(1200, budget.maxInputTokens - estimateTextTokens(input.userMessage) - 1800);
+    const maxCompletionTokens = capInternalMaxCompletionTokens(CHAPTER_SUMMARY_MAX_TOKENS, budget);
+    const chunkBudget = Math.max(1200, budget.maxInputTokens - estimateTextTokens(input.userMessage) - maxCompletionTokens);
     const chunks = splitTextIntoTokenChunks(input.plainText, chunkBudget);
     const chunkSummaries: string[] = [];
 
@@ -351,13 +324,13 @@ export class OpenRouterChatGenerator implements AiChatGenerator {
           scopeLabel: input.scopeLabel
         },
         params: {
-          maxCompletionTokens: 1800,
+          maxCompletionTokens,
           temperature: 0.2
         }
       });
-      const result = await client.createChatCompletion({
+      const result = await this.runInternalStreamingCompletion(client, {
         messages,
-        maxCompletionTokens: 1800,
+        maxCompletionTokens,
         temperature: 0.2,
         signal: options.signal
       });
@@ -376,6 +349,7 @@ export class OpenRouterChatGenerator implements AiChatGenerator {
     }
 
     const messages = buildChapterSummaryMergeMessages(input, chunkSummaries);
+    const mergeMaxCompletionTokens = capInternalMaxCompletionTokens(CHAPTER_SUMMARY_MERGE_MAX_TOKENS, budget);
     logDevLlmPrompt({
       kind: "chat:chapter-summary-merge",
       modelName,
@@ -388,13 +362,13 @@ export class OpenRouterChatGenerator implements AiChatGenerator {
         scopeLabel: input.scopeLabel
       },
       params: {
-        maxCompletionTokens: 2200,
+        maxCompletionTokens: mergeMaxCompletionTokens,
         temperature: 0.2
       }
     });
-    const result = await client.createChatCompletion({
+    const result = await this.runInternalStreamingCompletion(client, {
       messages,
-      maxCompletionTokens: 2200,
+      maxCompletionTokens: mergeMaxCompletionTokens,
       temperature: 0.2,
       signal: options.signal
     });
@@ -428,7 +402,8 @@ export class OpenRouterChatGenerator implements AiChatGenerator {
       );
     }
 
-    const { client, modelName } = await this.createClient();
+    const { chatBudget, client, modelName } = await this.createClient();
+    const maxCompletionTokens = capInternalMaxCompletionTokens(CONTEXT_BATCH_SUMMARY_MAX_TOKENS, chatBudget);
     const messages = buildContextBatchSummaryMessages(input);
     const first = input.chapters[0];
     const last = input.chapters.at(-1) ?? first;
@@ -444,13 +419,13 @@ export class OpenRouterChatGenerator implements AiChatGenerator {
         scopeLabel: input.scopeLabel
       },
       params: {
-        maxCompletionTokens: 3200,
+        maxCompletionTokens,
         temperature: 0.2
       }
     });
-    const result = await client.createChatCompletion({
+    const result = await this.runInternalStreamingCompletion(client, {
       messages,
-      maxCompletionTokens: 3200,
+      maxCompletionTokens,
       temperature: 0.2,
       signal: options.signal
     });
@@ -470,18 +445,28 @@ export class OpenRouterChatGenerator implements AiChatGenerator {
 
   async summarizeChatHistoryForMemory(input: AiChatHistoryMemorySummaryInput, options: AiGenerationOptions = {}): Promise<{ readonly summary: string }> {
     const { chatBudget, client, modelName } = await this.createClient();
+    const maxCompletionTokens = capInternalMaxCompletionTokens(CHAT_MEMORY_SUMMARY_MAX_TOKENS, chatBudget);
     let currentSummary = input.previousSummary?.trim() ?? "";
     const formatted = input.messages.map(formatChatMemoryMessage).join("\n\n");
-    const chunkBudget = Math.max(1200, chatBudget.maxInputTokens - estimateTextTokens(currentSummary) - 1800);
-    const chunks = splitTextIntoTokenChunks(formatted, chunkBudget);
+    let remaining = formatted.trim();
+    let chunkIndex = 0;
 
-    for (const [index, chunk] of chunks.entries()) {
+    while (remaining) {
+      chunkIndex += 1;
+      const chunk = buildBudgetedChatMemoryChunk({
+        input,
+        currentSummary,
+        maxCompletionTokens,
+        maxInputTokens: chatBudget.maxInputTokens,
+        remaining,
+        chunkIndex
+      });
       const messages = buildChatHistoryMemorySummaryMessages({
         ...input,
         previousSummary: currentSummary || null,
         messagesText: chunk,
-        chunkIndex: index + 1,
-        chunkCount: chunks.length
+        chunkIndex,
+        chunkCount: estimateRemainingChunkCount(remaining, chunk, chunkIndex)
       });
       logDevLlmPrompt({
         kind: "chat:memory-compaction",
@@ -491,17 +476,17 @@ export class OpenRouterChatGenerator implements AiChatGenerator {
           projectId: input.projectId,
           sessionId: input.sessionId,
           messageCount: input.messages.length,
-          chunkIndex: index + 1,
-          chunkCount: chunks.length
+          chunkIndex,
+          chunkCount: estimateRemainingChunkCount(remaining, chunk, chunkIndex)
         },
         params: {
-          maxCompletionTokens: CHAT_MEMORY_SUMMARY_MAX_TOKENS,
+          maxCompletionTokens,
           temperature: 0.2
         }
       });
-      const result = await client.createChatCompletion({
+      const result = await this.runInternalStreamingCompletion(client, {
         messages,
-        maxCompletionTokens: CHAT_MEMORY_SUMMARY_MAX_TOKENS,
+        maxCompletionTokens,
         temperature: 0.2,
         signal: options.signal
       });
@@ -512,6 +497,16 @@ export class OpenRouterChatGenerator implements AiChatGenerator {
       if (result.truncated) {
         throw new Error("AI 对话记忆压缩结果被截断，请换用输出额度更高的模型后重试。");
       }
+      currentSummary = await this.recompressMemorySummaryIfNeeded({
+        chatBudget,
+        client,
+        input,
+        maxCompletionTokens,
+        modelName,
+        options,
+        summary: currentSummary
+      });
+      remaining = remaining.slice(chunk.length).trimStart();
     }
 
     return {
@@ -533,7 +528,8 @@ export class OpenRouterChatGenerator implements AiChatGenerator {
     }
 
     const { chatBudget, client, modelName } = await this.createClient();
-    const batches = buildSummaryMergeBatches(input, summaries, chatBudget);
+    const maxCompletionTokens = capInternalMaxCompletionTokens(CONTEXT_SUMMARY_MERGE_MAX_TOKENS, chatBudget);
+    const batches = buildSummaryMergeBatches(input, summaries, chatBudget, maxCompletionTokens);
     const merged: ChatContextSummaryItem[] = [];
 
     for (const [index, batch] of batches.entries()) {
@@ -551,13 +547,13 @@ export class OpenRouterChatGenerator implements AiChatGenerator {
           summaryCount: batch.length
         },
         params: {
-          maxCompletionTokens: 3200,
+          maxCompletionTokens,
           temperature: 0.2
         }
       });
-      const result = await client.createChatCompletion({
+      const result = await this.runInternalStreamingCompletion(client, {
         messages,
-        maxCompletionTokens: 3200,
+        maxCompletionTokens,
         temperature: 0.2,
         signal: options.signal
       });
@@ -584,6 +580,70 @@ export class OpenRouterChatGenerator implements AiChatGenerator {
 
     return this.mergeSummaryItems(input, merged, options, depth + 1);
   }
+
+  private async runInternalStreamingCompletion(
+    client: OpenRouterClient,
+    input: {
+      readonly messages: readonly OpenRouterMessage[];
+      readonly maxCompletionTokens: number;
+      readonly temperature: number;
+      readonly signal?: AbortSignal;
+    }
+  ): Promise<OpenRouterChatCompletionResult> {
+    return client.streamChatCompletion({
+      messages: input.messages,
+      maxCompletionTokens: input.maxCompletionTokens,
+      temperature: input.temperature,
+      signal: input.signal
+    });
+  }
+
+  private async recompressMemorySummaryIfNeeded(input: {
+    readonly client: OpenRouterClient;
+    readonly chatBudget: TokenBudget;
+    readonly input: AiChatHistoryMemorySummaryInput;
+    readonly maxCompletionTokens: number;
+    readonly modelName: string;
+    readonly options: AiGenerationOptions;
+    readonly summary: string;
+  }): Promise<string> {
+    const summaryBudget = getChatMemorySummaryBudget(input.chatBudget);
+    let summary = input.summary;
+    for (let round = 1; round <= CHAT_MEMORY_SUMMARY_RECOMPRESS_MAX_ROUNDS && estimateTextTokens(summary) > summaryBudget; round += 1) {
+      const messages = buildChatMemoryRecompressionMessages(summary, summaryBudget, round);
+      logDevLlmPrompt({
+        kind: "chat:memory-recompression",
+        modelName: input.modelName,
+        messages,
+        meta: {
+          projectId: input.input.projectId,
+          sessionId: input.input.sessionId,
+          round
+        },
+        params: {
+          maxCompletionTokens: input.maxCompletionTokens,
+          temperature: 0.2
+        }
+      });
+      const result = await this.runInternalStreamingCompletion(input.client, {
+        messages,
+        maxCompletionTokens: input.maxCompletionTokens,
+        temperature: 0.2,
+        signal: input.options.signal
+      });
+      summary = result.content.trim();
+      if (!summary) {
+        throw new Error("AI 对话记忆二次压缩结果为空。");
+      }
+      if (result.truncated) {
+        throw new Error("AI 对话记忆二次压缩结果被截断，请换用输出额度更高的模型后重试。");
+      }
+    }
+    if (estimateTextTokens(summary) > summaryBudget) {
+      throw new Error("AI 对话记忆压缩结果仍然超过输入预算，请开启新对话，或换用上下文更大的模型后重试。");
+    }
+    return summary;
+  }
 }
 
 function splitTextIntoTokenChunks(text: string, maxTokens: number): string[] {
@@ -600,6 +660,52 @@ function splitTextIntoTokenChunks(text: string, maxTokens: number): string[] {
   }
 
   return chunks.length > 0 ? chunks : ["（本章暂无正文）"];
+}
+
+function estimateRemainingChunkCount(remaining: string, chunk: string, chunkIndex: number): number {
+  const rest = remaining.slice(chunk.length).trimStart();
+  if (!rest) {
+    return chunkIndex;
+  }
+  const chunkTokens = Math.max(1, estimateTextTokens(chunk));
+  return chunkIndex + Math.ceil(estimateTextTokens(rest) / chunkTokens);
+}
+
+function buildBudgetedChatMemoryChunk(input: {
+  readonly input: AiChatHistoryMemorySummaryInput;
+  readonly currentSummary: string;
+  readonly maxCompletionTokens: number;
+  readonly maxInputTokens: number;
+  readonly remaining: string;
+  readonly chunkIndex: number;
+}): string {
+  const reserveTokens = estimateTextTokens(input.currentSummary) + input.maxCompletionTokens + 400;
+  let chunkBudget = Math.max(1, input.maxInputTokens - reserveTokens);
+  let chunk = truncateTextToTokenBudget(input.remaining, chunkBudget).text;
+
+  while (chunk) {
+    const messages = buildChatHistoryMemorySummaryMessages({
+      ...input.input,
+      previousSummary: input.currentSummary || null,
+      messagesText: chunk,
+      chunkIndex: input.chunkIndex,
+      chunkCount: estimateRemainingChunkCount(input.remaining, chunk, input.chunkIndex)
+    });
+    const estimatedTokens = estimateMessagesTokens(messages);
+    if (estimatedTokens <= input.maxInputTokens) {
+      return chunk;
+    }
+
+    const overage = estimatedTokens - input.maxInputTokens;
+    chunkBudget = Math.max(0, estimateTextTokens(chunk) - overage - 64);
+    const nextChunk = truncateTextToTokenBudget(chunk, chunkBudget).text;
+    if (!nextChunk || nextChunk === chunk) {
+      break;
+    }
+    chunk = nextChunk;
+  }
+
+  throw new Error("AI 对话记忆压缩输入超过模型窗口，请开启新对话，或换用上下文更大的模型后重试。");
 }
 
 function buildChapterSummaryMessages(input: ChatChapterSummaryInput, chunk: string, chunkIndex: number, chunkCount: number): OpenRouterMessage[] {
@@ -686,9 +792,10 @@ function formatSummaryItem(item: ChatContextSummaryItem): string {
 function buildSummaryMergeBatches(
   input: ChatContextSummaryMergeInput,
   summaries: readonly ChatContextSummaryItem[],
-  budget: TokenBudget = getTokenBudget("chat")
+  budget: TokenBudget = getTokenBudget("chat"),
+  maxCompletionTokens = capInternalMaxCompletionTokens(CONTEXT_SUMMARY_MERGE_MAX_TOKENS, budget)
 ): readonly (readonly ChatContextSummaryItem[])[] {
-  const maxBatchTokens = Math.max(1200, budget.maxInputTokens - estimateTextTokens(input.userMessage) - 1800);
+  const maxBatchTokens = Math.max(1200, budget.maxInputTokens - estimateTextTokens(input.userMessage) - maxCompletionTokens);
   const batches: ChatContextSummaryItem[][] = [];
   let current: ChatContextSummaryItem[] = [];
   let currentTokens = 0;
@@ -779,6 +886,35 @@ function buildChatHistoryMemorySummaryMessages(input: AiChatHistoryMemorySummary
         input.messagesText,
         "",
         "请输出更新后的完整压缩记忆。"
+      ].join("\n")
+    }
+  ];
+}
+
+function getChatMemorySummaryBudget(chatBudget: TokenBudget): number {
+  return Math.max(400, Math.floor(chatBudget.maxInputTokens * CHAT_MEMORY_SUMMARY_PROMPT_RATIO) - 120);
+}
+
+function buildChatMemoryRecompressionMessages(summary: string, targetTokens: number, round: number): OpenRouterMessage[] {
+  return [
+    {
+      role: "system",
+      content: [
+        "你是中文小说写作 agent 的对话记忆二次压缩器。",
+        "上一轮压缩记忆仍然过长，必须进一步压缩到更短。",
+        "保留用户长期目标、章节范围、剧情结论、人物特征、设定结论、用户偏好和未完成事项。",
+        "不要编造正文内容，不要加入新信息。"
+      ].join("\n")
+    },
+    {
+      role: "user",
+      content: [
+        `目标上限：约 ${targetTokens} tokens`,
+        `压缩轮次：${round}`,
+        "上一轮压缩记忆：",
+        summary,
+        "",
+        "请输出更短的完整压缩记忆。"
       ].join("\n")
     }
   ];

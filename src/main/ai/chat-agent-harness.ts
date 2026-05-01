@@ -7,6 +7,7 @@ import type {
   OpenRouterToolDefinition
 } from "./openrouter-client";
 import { buildChatAgentMemoryText } from "./chat-agent-memory";
+import { isOpenRouterCanceledError } from "./openrouter-error";
 import { buildReasoningConfig } from "./reasoning-budget";
 import { estimateMessagesTokens, estimateTextTokens } from "./token-estimator";
 import type { TokenBudget } from "./token-budget";
@@ -94,6 +95,36 @@ function assertNotCanceled(signal?: AbortSignal): void {
   }
 }
 
+function isCancellationReason(reason: unknown): boolean {
+  if (isOpenRouterCanceledError(reason)) {
+    return true;
+  }
+  if (!reason || typeof reason !== "object") {
+    return String(reason) === "canceled" || String(reason) === "AI 对话已取消。";
+  }
+
+  const record = reason as { readonly code?: unknown; readonly isCanceled?: unknown; readonly message?: unknown; readonly name?: unknown };
+  return (
+    record.isCanceled === true ||
+    record.code === "canceled" ||
+    record.code === "ERR_CANCELED" ||
+    record.name === "AbortError" ||
+    record.name === "CanceledError" ||
+    record.message === "canceled" ||
+    record.message === "AI 对话已取消。"
+  );
+}
+
+function formatToolExecutionError(call: OpenRouterToolCall, reason: unknown): string {
+  return JSON.stringify({
+    ok: false,
+    error: {
+      tool: call.name,
+      message: reason instanceof Error ? reason.message : String(reason)
+    }
+  });
+}
+
 function buildSystemPrompt(): string {
   return [
     "你是墨枢的中文小说写作 agent，服务对象是正在写长篇中文小说的作者。",
@@ -173,7 +204,7 @@ function emitContextUsage(
 ): void {
   handlers.onContext?.({
     requestId: input.requestId,
-    estimatedInputTokens: estimateMessagesTokens(messages),
+    estimatedInputTokens: estimateMessagesTokens(messages, input.tools),
     maxInputTokens: input.tokenBudget.maxInputTokens,
     maxOutputTokens: input.tokenBudget.maxOutputTokens,
     modelContextTokens: input.modelContextTokens,
@@ -183,8 +214,8 @@ function emitContextUsage(
   });
 }
 
-function assertMessagesWithinBudget(messages: readonly OpenRouterMessage[], maxInputTokens: number): void {
-  const estimated = estimateMessagesTokens(messages);
+function assertMessagesWithinBudget(messages: readonly OpenRouterMessage[], tools: readonly OpenRouterToolDefinition[], maxInputTokens: number): void {
+  const estimated = estimateMessagesTokens(messages, tools);
   if (estimated <= maxInputTokens) {
     return;
   }
@@ -193,7 +224,7 @@ function assertMessagesWithinBudget(messages: readonly OpenRouterMessage[], maxI
 }
 
 function flushFinalContent(input: ChatAgentLoopInput, handlers: ChatAgentLoopHandlers, streamedContent: string, content: string): void {
-  const text = streamedContent ? "" : content;
+  const text = content || streamedContent;
   if (text) {
     handlers.onChunk?.({
       requestId: input.requestId,
@@ -217,7 +248,7 @@ function finishTruncatedFinalContent(
   const content = `${partialContent}${CHAT_AGENT_TRUNCATED_FINAL_NOTICE}`;
   handlers.onChunk?.({
     requestId: input.requestId,
-    content: streamedContent ? CHAT_AGENT_TRUNCATED_FINAL_NOTICE : content
+    content
   });
 
   return {
@@ -370,7 +401,7 @@ export async function runChatAgentLoop(input: ChatAgentLoopInput, handlers: Chat
 
   for (let iteration = 0; iteration < CHAT_AGENT_MAX_ITERATIONS; iteration += 1) {
     assertNotCanceled(input.signal);
-    assertMessagesWithinBudget(messages, input.tokenBudget.maxInputTokens);
+    assertMessagesWithinBudget(messages, input.tools, input.tokenBudget.maxInputTokens);
     if (hasAuthorContext) {
       emitContextUsage(input, handlers, messages, contextStatus);
     }
@@ -388,10 +419,6 @@ export async function runChatAgentLoop(input: ChatAgentLoopInput, handlers: Chat
       {
         onToken(token) {
           streamedContent += token;
-          handlers.onChunk?.({
-            requestId: input.requestId,
-            content: token
-          });
         },
         onReasoning(token) {
           handlers.onReasoning?.({
@@ -412,28 +439,43 @@ export async function runChatAgentLoop(input: ChatAgentLoopInput, handlers: Chat
       let authoritativeToolResultPresentation: string | null = null;
       for (const call of toolCalls) {
         assertNotCanceled(input.signal);
-        const toolResult = await input.executeTool(call);
-        if (toolResult.action) {
-          actions.push(toolResult.action);
+        let toolContent: string;
+        try {
+          const toolResult = await input.executeTool(call);
+          toolContent = toolResult.content;
+          if (toolResult.action) {
+            actions.push(toolResult.action);
+          }
+          const writingToolPresentation = call.name === "run_writing_operation" ? formatWritingOperationToolResult(toolContent) : null;
+          if (writingToolPresentation) {
+            lastToolResultPresentation = writingToolPresentation;
+            authoritativeToolResultPresentation = writingToolPresentation;
+          }
+          const nextContextStatus = readToolContextStatus(toolContent);
+          if (nextContextStatus) {
+            contextStatus = nextContextStatus;
+            hasAuthorContext = true;
+          }
+          if (writingToolPresentation && !canSaveToScratchpad) {
+            if (hasAuthorContext) {
+              emitContextUsage(input, handlers, messages, contextStatus);
+            }
+            return finishWithToolResultContent(input, handlers, writingToolPresentation, actions);
+          }
+        } catch (reason) {
+          if (input.signal?.aborted || isCancellationReason(reason)) {
+            throw reason;
+          }
+          toolContent = formatToolExecutionError(call, reason);
         }
-        const writingToolPresentation = call.name === "run_writing_operation" ? formatWritingOperationToolResult(toolResult.content) : null;
-        if (writingToolPresentation) {
-          lastToolResultPresentation = writingToolPresentation;
-          authoritativeToolResultPresentation = writingToolPresentation;
-        }
-        const nextContextStatus = readToolContextStatus(toolResult.content);
-        if (nextContextStatus) {
-          contextStatus = nextContextStatus;
-          hasAuthorContext = true;
-        }
-        if (estimateTextTokens(toolResult.content) > input.tokenBudget.maxInputTokens) {
+        if (estimateTextTokens(toolContent) > input.tokenBudget.maxInputTokens) {
           throw new Error(`AI 工具 ${call.name} 返回内容超过模型输入预算。`);
         }
         messages.push({
           role: "tool",
           tool_call_id: call.id,
           name: call.name,
-          content: toolResult.content
+          content: toolContent
         });
       }
       if (authoritativeToolResultPresentation && !canSaveToScratchpad) {

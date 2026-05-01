@@ -27,6 +27,12 @@ export function registerScratchIpc(scratchRepo: ScratchNoteRepository | ScratchR
       })
     )
   );
-  ipcMain.handle(ipcChannels.scratch.update, createValidatedIpcHandler(scratchUpdateInputSchema, (input) => resolveScratchRepo().update(input)));
-  ipcMain.handle(ipcChannels.scratch.delete, createValidatedIpcHandler(scratchDeleteInputSchema, (input) => resolveScratchRepo().delete(input)));
+  ipcMain.handle(
+    ipcChannels.scratch.update,
+    createValidatedIpcHandler(scratchUpdateInputSchema, (input) => resolveScratchRepo(input.projectId).update(input))
+  );
+  ipcMain.handle(
+    ipcChannels.scratch.delete,
+    createValidatedIpcHandler(scratchDeleteInputSchema, (input) => resolveScratchRepo(input.projectId).delete(input))
+  );
 }

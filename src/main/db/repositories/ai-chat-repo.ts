@@ -294,14 +294,18 @@ export class AiChatRepository {
   }
 
   clearSession(input: ClearSessionInput): void {
-    this.db.prepare("DELETE FROM ai_chat_messages WHERE project_id = ? AND session_id = ?").run(input.projectId, input.sessionId);
-    this.db
-      .prepare(
-        `UPDATE ai_chat_sessions
-         SET context_usage_json = NULL, memory_summary = NULL, memory_compacted_through_message_id = NULL, memory_updated_at = NULL, updated_at = ?
-         WHERE id = ? AND project_id = ?`
-      )
-      .run(nowIso(), input.sessionId, input.projectId);
+    const clearedAt = nowIso();
+    const transaction = this.db.transaction(() => {
+      this.db.prepare("DELETE FROM ai_chat_messages WHERE project_id = ? AND session_id = ?").run(input.projectId, input.sessionId);
+      this.db
+        .prepare(
+          `UPDATE ai_chat_sessions
+           SET context_usage_json = NULL, memory_summary = NULL, memory_compacted_through_message_id = NULL, memory_updated_at = NULL, updated_at = ?
+           WHERE id = ? AND project_id = ?`
+        )
+        .run(clearedAt, input.sessionId, input.projectId);
+    });
+    transaction();
   }
 
   deleteSession(input: DeleteSessionInput): void {

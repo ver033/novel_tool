@@ -61,7 +61,7 @@ export type ChatAgentScope = z.output<typeof chatAgentScopeSchema>;
 export type ChatAgentAction = z.output<typeof chatAgentActionSchema>;
 export type ChatAgentPlan = z.output<typeof chatAgentPlanSchema>;
 
-export type ChatAgentContextMode = "direct" | "summarized";
+export type ChatAgentContextMode = "direct" | "summarized" | "mixed";
 
 export type ChatAgentContext = {
   readonly scopeLabel: string;

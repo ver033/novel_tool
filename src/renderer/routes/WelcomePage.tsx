@@ -4,7 +4,7 @@ import { Button } from "../components/Button";
 import { Input } from "../components/Input";
 import { Modal } from "../components/Modal";
 import { TopBar } from "../layout/TopBar";
-import type { ProjectRecord } from "../../main/shared/types";
+import type { ProjectRecord, RecentProjectEntry } from "../../main/shared/types";
 
 type WelcomePageProps = {
   readonly onContinueWriting: () => void;
@@ -14,7 +14,7 @@ type WelcomePageProps = {
   readonly onNewProject: () => void;
   readonly onImport: () => void;
   readonly onSettings: () => void;
-  readonly recentProjects: readonly ProjectRecord[];
+  readonly recentProjects: readonly RecentProjectEntry[];
   readonly welcomeNotice: string | null;
 };
 
@@ -25,6 +25,16 @@ function formatProjectTime(value: string): string {
     hour: "2-digit",
     minute: "2-digit"
   }).format(new Date(value));
+}
+
+function getProjectAvailabilityLabel(entry: RecentProjectEntry): string {
+  if (entry.availability === "missing") {
+    return "项目文件不可用";
+  }
+  if (entry.availability === "invalid_path") {
+    return "项目路径无效";
+  }
+  return "本地项目";
 }
 
 export function WelcomePage({
@@ -144,16 +154,19 @@ export function WelcomePage({
               <h2 className="section-title">最近项目</h2>
             </div>
             {recentProjects.length === 0 ? <p className="muted">暂无最近项目。可以新建作品，或从 TXT 导入开始。</p> : null}
-            {recentProjects.map((project) => (
+            {recentProjects.map((entry) => {
+              const project = entry.project;
+              const available = entry.availability === "available";
+              return (
               <div className="project-row" key={project.id}>
-                <button className="project-main-button" onClick={() => onOpenProject(project.id)} type="button">
+                <button className="project-main-button" disabled={!available} onClick={() => onOpenProject(project.id)} type="button">
                   <span className="cover" />
                   <span>
                     <span className="project-title">《{project.name}》</span>
                     <br />
                     <span className="muted">上次编辑：{formatProjectTime(project.updatedAt)}</span>
                   </span>
-                  <span className="muted">本地项目</span>
+                  <span className="muted">{getProjectAvailabilityLabel(entry)}</span>
                 </button>
                 <span className="project-actions">
                   <button className="project-menu-button" onClick={(event) => toggleProjectMenu(event, project.id)} type="button" aria-label={`打开《${project.name}》项目菜单`}>
@@ -171,7 +184,8 @@ export function WelcomePage({
                   ) : null}
                 </span>
               </div>
-            ))}
+              );
+            })}
             <p className="muted">点击项目可直接打开</p>
           </div>
         </section>
@@ -190,15 +204,21 @@ export function WelcomePage({
               <h2 className="section-title">最近打开</h2>
             </div>
             <div className="tips compact">
-              {recentProjects.slice(0, 2).map((project) => (
-                <button className="recent-open-row link-row" key={project.id} onClick={() => onOpenProject(project.id)} type="button">
+              {recentProjects.slice(0, 2).map((entry) => (
+                <button
+                  className="recent-open-row link-row"
+                  disabled={entry.availability !== "available"}
+                  key={entry.project.id}
+                  onClick={() => onOpenProject(entry.project.id)}
+                  type="button"
+                >
                   <span className="line-icon">
                     <FileText size={21} />
                   </span>
                   <span>
-                    《{project.name}》
+                    《{entry.project.name}》
                     <br />
-                    <span className="muted">{formatProjectTime(project.updatedAt)}</span>
+                    <span className="muted">{entry.availability === "available" ? formatProjectTime(entry.project.updatedAt) : getProjectAvailabilityLabel(entry)}</span>
                   </span>
                 </button>
               ))}

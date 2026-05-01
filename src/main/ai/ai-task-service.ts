@@ -22,6 +22,7 @@ import { executeChatAgentToolWithAction, MOSHU_CHAT_AGENT_TOOLS } from "./chat-a
 import { selectChatMemoryCompactionTarget } from "./chat-agent-memory";
 import { enrichChatInputWithReferencedChapter } from "./chat-context-resolver";
 import { parseChatScopeReference } from "./chat-reference-parser";
+import { isOpenRouterCanceledError } from "./openrouter-error";
 import type { OpenRouterToolCall, OpenRouterToolDefinition } from "./openrouter-client";
 import { estimateTextTokens } from "./token-estimator";
 import { WritingOperationRunner } from "./writing-operation-runner";
@@ -41,7 +42,6 @@ import type {
   AiCreateChatSessionInput,
   AiCreateTaskInput,
   AiDeleteChatSessionInput,
-  AiGeneratePreviewInput,
   AiGeneratePreviewStreamInput,
   AiGetChatSessionInput,
   AiListChatSessionsInput,
@@ -49,7 +49,6 @@ import type {
   AiRenameChatSessionInput,
   AiRejectCandidateInput,
   AiSaveCandidateToScratchpadInput,
-  AiSendChatMessageInput,
   AiSendChatMessageStreamInput,
   AiStreamContextEvent,
   AiTaskCandidateRecord,
@@ -71,7 +70,6 @@ export type AiGenerationOptions = {
 };
 
 export type AiTaskGenerator = {
-  readonly generate: (task: AiTaskRecord) => Promise<AiTaskGenerationResult>;
   readonly generateStream?: (task: AiTaskRecord, handlers: AiTaskStreamHandlers, options?: AiGenerationOptions) => Promise<AiTaskGenerationResult>;
   readonly continueStream?: (
     task: AiTaskRecord,
@@ -116,7 +114,6 @@ export type AiChatHistoryMemorySummaryResult = {
 };
 
 export type AiChatGenerator = {
-  readonly sendMessage: (input: AiSendChatMessageInput) => Promise<AiChatMessageResult>;
   readonly sendMessageStream?: (input: AiChatGenerationInput, handlers: AiChatStreamHandlers, options?: AiGenerationOptions) => Promise<AiChatMessageResult>;
   readonly sendAgentMessageStream?: (
     input: AiChatAgentGenerationInput,
@@ -200,12 +197,17 @@ function truncatedTaskError(task: AiTaskRecord): string {
 }
 
 function isCancellationReason(reason: unknown): boolean {
+  if (isOpenRouterCanceledError(reason)) {
+    return true;
+  }
   if (!reason || typeof reason !== "object") {
     return String(reason) === "canceled";
   }
 
-  const record = reason as { readonly code?: unknown; readonly message?: unknown; readonly name?: unknown };
+  const record = reason as { readonly code?: unknown; readonly isCanceled?: unknown; readonly message?: unknown; readonly name?: unknown };
   return (
+    record.isCanceled === true ||
+    record.code === "canceled" ||
     record.code === "ERR_CANCELED" ||
     record.name === "AbortError" ||
     record.name === "CanceledError" ||
@@ -224,11 +226,8 @@ function isSameContextMeterModel(previous: AiStreamContextEvent, next: AiStreamC
   );
 }
 
-function mergeSessionContextUsage(previous: AiStreamContextEvent | null, next: AiStreamContextEvent, options: { readonly allowDecrease: boolean }): AiStreamContextEvent {
+function mergeSessionContextUsage(previous: AiStreamContextEvent | null, next: AiStreamContextEvent): AiStreamContextEvent {
   if (!previous || !isSameContextMeterModel(previous, next)) {
-    return next;
-  }
-  if (options.allowDecrease) {
     return next;
   }
   if (next.estimatedInputTokens >= previous.estimatedInputTokens) {
@@ -238,7 +237,7 @@ function mergeSessionContextUsage(previous: AiStreamContextEvent | null, next: A
   return {
     ...next,
     estimatedInputTokens: previous.estimatedInputTokens,
-    contextMode: previous.contextMode,
+    contextMode: next.contextMode,
     scopeLabel: "会话背景窗口"
   };
 }
@@ -372,7 +371,7 @@ export class AiTaskService {
     return this.resolveAiChatRepo(projectId);
   }
 
-  private resolveReferencedChapterInput<T extends AiSendChatMessageInput | AiSendChatMessageStreamInput>(input: T): T {
+  private resolveReferencedChapterInput<T extends AiSendChatMessageStreamInput>(input: T): T {
     if (!input.projectId || !this.resolveChapterRepo) {
       return input;
     }
@@ -789,62 +788,6 @@ export class AiTaskService {
     });
   }
 
-  async generatePreview(input: AiGeneratePreviewInput): Promise<GeneratedPreview> {
-    const aiTaskRepo = this.resolveAiTaskRepo();
-    const task = aiTaskRepo.findTaskById(input.taskId);
-    if (!this.generator) {
-      const error = "OpenRouter 服务未初始化，无法生成预览。";
-      aiTaskRepo.updateTask(task.id, {
-        status: "failed",
-        error
-      });
-      throw new Error(error);
-    }
-
-    aiTaskRepo.updateTask(task.id, {
-      status: "generating",
-      error: null
-    });
-
-    try {
-      const generated = await this.generator.generate(task);
-      if (generated.truncated) {
-        const error = truncatedTaskError(task);
-        aiTaskRepo.updateTask(task.id, {
-          status: "failed",
-          outputText: generated.generatedText,
-          error
-        });
-        throw new Error(error);
-      }
-      const candidate = aiTaskRepo.createCandidate({
-        taskId: task.id,
-        kind: task.taskType,
-        originalText: task.inputText,
-        generatedText: generated.generatedText,
-        changeSummary: generated.changeSummary,
-        proofreadIssues: generated.proofreadIssues ?? null,
-        writingContextPlan: generated.contextPlan ?? null
-      });
-      const updatedTask = aiTaskRepo.updateTask(task.id, {
-        status: "preview_ready",
-        outputText: generated.proofreadIssues ? generated.changeSummary : generated.generatedText,
-        error: null
-      });
-      return {
-        task: updatedTask,
-        candidate
-      };
-    } catch (reason) {
-      const error = reason instanceof Error ? reason.message : String(reason);
-      aiTaskRepo.updateTask(task.id, {
-        status: "failed",
-        error
-      });
-      throw new Error(error);
-    }
-  }
-
   async generatePreviewStream(input: AiGeneratePreviewStreamInput, handlers: AiTaskStreamHandlers = {}): Promise<GeneratedPreview> {
     const aiTaskRepo = this.resolveAiTaskRepo();
     const task = aiTaskRepo.findTaskById(input.taskId);
@@ -885,24 +828,7 @@ export class AiTaskService {
         });
         throw new Error(error);
       }
-      const candidate = aiTaskRepo.createCandidate({
-        taskId: task.id,
-        kind: task.taskType,
-        originalText: task.inputText,
-        generatedText: generated.generatedText,
-        changeSummary: generated.changeSummary,
-        proofreadIssues: generated.proofreadIssues ?? null,
-        writingContextPlan: generated.contextPlan ?? null
-      });
-      const updatedTask = aiTaskRepo.updateTask(task.id, {
-        status: "preview_ready",
-        outputText: generated.proofreadIssues ? generated.changeSummary : generated.generatedText,
-        error: null
-      });
-      const result = {
-        task: updatedTask,
-        candidate
-      };
+      const result = this.createPreviewResult(aiTaskRepo, task, generated, generated.proofreadIssues ? generated.changeSummary : generated.generatedText);
       handlers.onDone?.({ requestId: input.requestId, payload: result });
       return result;
     } catch (reason) {
@@ -922,7 +848,7 @@ export class AiTaskService {
       handlers.onError?.({ requestId: input.requestId, error });
       throw new Error(error);
     } finally {
-      this.activeStreams.delete(input.requestId);
+      this.unregisterStreamIfCurrent(input.requestId, abortController);
     }
   }
 
@@ -976,24 +902,7 @@ export class AiTaskService {
         });
         throw new Error(error);
       }
-      const candidate = aiTaskRepo.createCandidate({
-        taskId: task.id,
-        kind: task.taskType,
-        originalText: task.inputText,
-        generatedText: generated.generatedText,
-        changeSummary: generated.changeSummary,
-        proofreadIssues: generated.proofreadIssues ?? null,
-        writingContextPlan: generated.contextPlan ?? null
-      });
-      const updatedTask = aiTaskRepo.updateTask(task.id, {
-        status: "preview_ready",
-        outputText: generated.generatedText,
-        error: null
-      });
-      const result = {
-        task: updatedTask,
-        candidate
-      };
+      const result = this.createPreviewResult(aiTaskRepo, task, generated, generated.generatedText);
       handlers.onDone?.({ requestId: input.requestId, payload: result });
       return result;
     } catch (reason) {
@@ -1013,7 +922,7 @@ export class AiTaskService {
       handlers.onError?.({ requestId: input.requestId, error });
       throw new Error(error);
     } finally {
-      this.activeStreams.delete(input.requestId);
+      this.unregisterStreamIfCurrent(input.requestId, abortController);
     }
   }
 
@@ -1027,118 +936,50 @@ export class AiTaskService {
   }
 
   applyCandidate(input: AiApplyCandidateInput): GeneratedPreview {
-    const aiTaskRepo = this.resolveAiTaskRepo();
+    const aiTaskRepo = this.resolveAiTaskRepo(input.projectId);
     const candidate = aiTaskRepo.findCandidateById(input.candidateId);
     const task = aiTaskRepo.findTaskById(candidate.taskId);
+    if (task.projectId !== input.projectId) {
+      throw new Error("AI 候选不属于当前项目。");
+    }
     if (task.selection && input.selectionHash !== task.selection.selectionHash) {
       throw new Error("AI 选区校验失败，请重新选择文本后再应用。");
     }
 
-    const inserted = input.applyMode === "insert_below" || input.applyMode === "insert_at_cursor";
-    const updatedCandidate = aiTaskRepo.updateCandidateStatus(candidate.id, inserted ? "inserted" : "applied");
-    const updatedTask = aiTaskRepo.updateTask(candidate.taskId, {
-      status: inserted ? "inserted" : "applied",
-      error: null
-    });
+    return aiTaskRepo.transact(() => {
+      const inserted = input.applyMode === "insert_below" || input.applyMode === "insert_at_cursor";
+      const updatedCandidate = aiTaskRepo.updateCandidateStatus(candidate.id, inserted ? "inserted" : "applied");
+      const updatedTask = aiTaskRepo.updateTask(candidate.taskId, {
+        status: inserted ? "inserted" : "applied",
+        error: null
+      });
 
-    return {
-      task: updatedTask,
-      candidate: updatedCandidate
-    };
+      return {
+        task: updatedTask,
+        candidate: updatedCandidate
+      };
+    });
   }
 
   saveCandidateToScratchpad(input: AiSaveCandidateToScratchpadInput): GeneratedPreview {
-    const aiTaskRepo = this.resolveAiTaskRepo();
-    const candidate = aiTaskRepo.updateCandidateStatus(input.candidateId, "inserted_to_scratchpad");
-    const task = aiTaskRepo.updateTask(candidate.taskId, {
-      status: "saved_to_scratchpad",
-      error: null
-    });
-
-    return {
-      task,
-      candidate
-    };
-  }
-
-  async sendChatMessage(input: AiSendChatMessageInput): Promise<AiChatMessageResult> {
-    if (!this.chatGenerator) {
-      throw new Error("OpenRouter 对话服务未初始化。");
-    }
-
-    if (!input.projectId) {
-      return this.chatGenerator.sendMessage(input);
-    }
-
-    const chatRepo = this.getAiChatRepo(input.projectId);
-    const session = chatRepo.getOrCreateDefaultSession(input.projectId);
-    const sessionId = input.sessionId ?? session.id;
-
-    chatRepo.createMessage({
-      projectId: input.projectId,
-      sessionId,
-      role: "user",
-      content: input.message,
-      action: null
-    });
-    chatRepo.renameSessionFromFirstMessage({
-      projectId: input.projectId,
-      sessionId,
-      message: input.message
-    });
-
-    try {
-      const generationInput = this.resolveReferencedChapterInput({
-        ...input,
-        projectId: input.projectId,
-        sessionId
-      });
-      const streamLikeInput = {
-        projectId: input.projectId,
-        sessionId,
-        requestId: `chat_non_stream_${Date.now()}`,
-        message: generationInput.message,
-        chapterId: generationInput.chapterId,
-        currentChapterTitle: generationInput.currentChapterTitle,
-        selectionText: generationInput.selectionText,
-        chapterExcerpt: generationInput.chapterExcerpt
-      } satisfies AiSendChatMessageStreamInput;
-      const generated = await this.chatGenerator.sendMessage(generationInput);
-      const assistantMessage = chatRepo.createMessage({
-        projectId: input.projectId,
-        sessionId,
-        role: "assistant",
-        content: generated.content,
-        action: {
-          type: "none"
-        }
-      });
-      const action = this.chatActionService?.executeSafeActionFromChat(streamLikeInput, generated.content) ?? null;
-      if (action) {
-        chatRepo.createMessage({
-          projectId: input.projectId,
-          sessionId,
-          role: "tool",
-          content: "已加入草稿纸。",
-          action
-        });
+    const aiTaskRepo = this.resolveAiTaskRepo(input.projectId);
+    return aiTaskRepo.transact(() => {
+      const existingCandidate = aiTaskRepo.findCandidateById(input.candidateId);
+      const existingTask = aiTaskRepo.findTaskById(existingCandidate.taskId);
+      if (existingTask.projectId !== input.projectId) {
+        throw new Error("AI 候选不属于当前项目。");
       }
-      return {
-        role: "assistant",
-        content: assistantMessage.content,
-        createdAt: assistantMessage.createdAt
-      };
-    } catch (reason) {
-      const error = reason instanceof Error ? reason.message : String(reason);
-      chatRepo.createMessage({
-        projectId: input.projectId,
-        sessionId,
-        role: "error",
-        content: error,
-        action: null
+      const candidate = aiTaskRepo.updateCandidateStatus(input.candidateId, "inserted_to_scratchpad");
+      const task = aiTaskRepo.updateTask(candidate.taskId, {
+        status: "saved_to_scratchpad",
+        error: null
       });
-      throw new Error(error);
-    }
+
+      return {
+        task,
+        candidate
+      };
+    });
   }
 
   getChatSession(input: AiGetChatSessionInput): AiChatSessionRecord {
@@ -1200,24 +1041,36 @@ export class AiTaskService {
       throw new Error(error);
     };
 
-    if (!this.chatGenerator?.sendMessageStream && !this.chatGenerator?.sendAgentMessageStream) {
-      return fail("OpenRouter 对话流式服务未初始化。");
+    if (!this.chatGenerator?.sendAgentMessageStream) {
+      return fail("OpenRouter 对话工具调用服务未初始化。");
     }
 
     const abortController = this.registerStream(input.requestId);
 
     try {
       const memory = await this.compactChatMemoryIfNeeded(input, chatRepo, history, abortController.signal);
-      const toolCallAgentInput = await this.buildToolCallAgentGenerationInput(input, history, memory, abortController.signal);
-      const legacyAgenticGeneration = toolCallAgentInput ? null : await this.buildAgenticChatGenerationInput(input, history, memory, abortController.signal);
-      const generationInput =
-        toolCallAgentInput ??
-        legacyAgenticGeneration?.generationInput ?? {
-          ...this.resolveReferencedChapterInput(input),
-          history,
-          compactedMemorySummary: memory.compactedMemorySummary,
-          compactedMemoryThroughMessageId: memory.compactedMemoryThroughMessageId
-        };
+      let legacyAgenticGeneration: Awaited<ReturnType<AiTaskService["buildAgenticChatGenerationInput"]>> = null;
+      try {
+        legacyAgenticGeneration = await this.buildAgenticChatGenerationInput(input, history, memory, abortController.signal);
+      } catch (reason) {
+        const message = reason instanceof Error ? reason.message : String(reason);
+        if (!message.includes("当前没有打开章节")) {
+          throw reason;
+        }
+      }
+      const toolCallAgentBaseInput = await this.buildToolCallAgentGenerationInput(input, history, memory, abortController.signal);
+      if (!toolCallAgentBaseInput) {
+        return fail("AI 对话工具调用上下文服务未初始化。");
+      }
+      const toolCallAgentInput = legacyAgenticGeneration
+        ? {
+            ...toolCallAgentBaseInput,
+            chapterId: legacyAgenticGeneration.generationInput.chapterId,
+            currentChapterTitle: legacyAgenticGeneration.generationInput.currentChapterTitle,
+            chapterExcerpt: legacyAgenticGeneration.generationInput.chapterExcerpt,
+            agentContext: legacyAgenticGeneration.generationInput.agentContext
+          }
+        : toolCallAgentBaseInput;
       const streamHandlers = {
         onChunk: (event: { readonly content: string }) => {
           handlers.onChunk?.({ requestId: input.requestId, content: event.content });
@@ -1230,7 +1083,7 @@ export class AiTaskService {
             projectId: input.projectId,
             sessionId: input.sessionId
           }).lastContextUsage;
-          const contextUsage = mergeSessionContextUsage(previousUsage, { ...event, requestId: input.requestId }, { allowDecrease: memory.memoryCompacted });
+          const contextUsage = mergeSessionContextUsage(previousUsage, { ...event, requestId: input.requestId });
           chatRepo.updateSessionContextUsage({
             projectId: input.projectId,
             sessionId: input.sessionId,
@@ -1239,9 +1092,7 @@ export class AiTaskService {
           handlers.onContext?.(contextUsage);
         }
       } satisfies AiChatStreamHandlers;
-      const generated = toolCallAgentInput
-        ? await this.chatGenerator.sendAgentMessageStream!(toolCallAgentInput, streamHandlers, { signal: abortController.signal })
-        : await this.chatGenerator.sendMessageStream!(generationInput, streamHandlers, { signal: abortController.signal });
+      const generated = await this.chatGenerator.sendAgentMessageStream(toolCallAgentInput, streamHandlers, { signal: abortController.signal });
       const assistantMessage = chatRepo.createMessage({
         projectId: input.projectId,
         sessionId: input.sessionId,
@@ -1254,10 +1105,8 @@ export class AiTaskService {
       const action =
         generated.actions?.[0] ??
         (legacyAgenticGeneration
-          ? this.chatActionService?.executePlannedActionFromChat(generationInput, legacyAgenticGeneration.plan, generated.content) ?? null
-          : toolCallAgentInput
-            ? null
-            : this.chatActionService?.executeSafeActionFromChat(generationInput, generated.content) ?? null);
+          ? this.chatActionService?.executePlannedActionFromChat(legacyAgenticGeneration.generationInput, legacyAgenticGeneration.plan, generated.content) ?? null
+          : null);
       const toolMessage = action
         ? chatRepo.createMessage({
             projectId: input.projectId,
@@ -1298,12 +1147,20 @@ export class AiTaskService {
       }
       return fail(reason instanceof Error ? reason.message : String(reason));
     } finally {
-      this.activeStreams.delete(input.requestId);
+      this.unregisterStreamIfCurrent(input.requestId, abortController);
     }
   }
 
   rejectCandidate(input: AiRejectCandidateInput): AiTaskCandidateRecord {
-    return this.resolveAiTaskRepo().updateCandidateStatus(input.candidateId, "rejected");
+    const aiTaskRepo = this.resolveAiTaskRepo(input.projectId);
+    return aiTaskRepo.transact(() => {
+      const candidate = aiTaskRepo.findCandidateById(input.candidateId);
+      const task = aiTaskRepo.findTaskById(candidate.taskId);
+      if (task.projectId !== input.projectId) {
+        throw new Error("AI 候选不属于当前项目。");
+      }
+      return aiTaskRepo.updateCandidateStatus(input.candidateId, "rejected");
+    });
   }
 
   private registerStream(requestId: string): AbortController {
@@ -1311,5 +1168,39 @@ export class AiTaskService {
     const abortController = new AbortController();
     this.activeStreams.set(requestId, abortController);
     return abortController;
+  }
+
+  private createPreviewResult(
+    aiTaskRepo: AiTaskRepository,
+    task: AiTaskRecord,
+    generated: AiTaskGenerationResult,
+    outputText: string | null
+  ): GeneratedPreview {
+    return aiTaskRepo.transact(() => {
+      const candidate = aiTaskRepo.createCandidate({
+        taskId: task.id,
+        kind: task.taskType,
+        originalText: task.inputText,
+        generatedText: generated.generatedText,
+        changeSummary: generated.changeSummary,
+        proofreadIssues: generated.proofreadIssues ?? null,
+        writingContextPlan: generated.contextPlan ?? null
+      });
+      const updatedTask = aiTaskRepo.updateTask(task.id, {
+        status: "preview_ready",
+        outputText,
+        error: null
+      });
+      return {
+        task: updatedTask,
+        candidate
+      };
+    });
+  }
+
+  private unregisterStreamIfCurrent(requestId: string, abortController: AbortController): void {
+    if (this.activeStreams.get(requestId) === abortController) {
+      this.activeStreams.delete(requestId);
+    }
   }
 }

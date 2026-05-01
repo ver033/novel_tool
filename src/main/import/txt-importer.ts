@@ -188,14 +188,16 @@ export class TxtImporter {
     const shouldCloseProjectDb = !this.projectService;
     try {
       const chapterRepo = new ChapterRepository(projectDb);
-      const startOrder = chapterRepo.nextSortOrder(project.id);
-      const chapters = preview.chapters.map((chapter, index) => chapterRepo.create(chapterContentFromPreview(project.id, chapter, startOrder + index)));
-      this.completeImport(importJobId, project);
-      return {
-        project: this.projectRepo.findById(project.id) ?? project,
-        chapters,
-        firstChapterId: chapters[0]?.id ?? null
-      };
+      return chapterRepo.transact(() => {
+        const startOrder = chapterRepo.nextSortOrder(project.id);
+        const chapters = preview.chapters.map((chapter, index) => chapterRepo.create(chapterContentFromPreview(project.id, chapter, startOrder + index)));
+        this.completeImport(importJobId, project);
+        return {
+          project: this.projectRepo.findById(project.id) ?? project,
+          chapters,
+          firstChapterId: chapters[0]?.id ?? null
+        };
+      });
     } finally {
       if (shouldCloseProjectDb) {
         projectDb.close();
@@ -205,11 +207,13 @@ export class TxtImporter {
 
   private completeImport(importJobId: string, project: ProjectRecord): void {
     const openedAt = nowIso();
-    this.projectRepo.upsert({
-      ...project,
-      updatedAt: openedAt
+    this.projectRepo.transact(() => {
+      this.projectRepo.upsert({
+        ...project,
+        updatedAt: openedAt
+      });
+      this.projectRepo.setCurrentProject(project.id, openedAt);
+      this.importJobRepo.markCompleted(importJobId, project.id);
     });
-    this.projectRepo.setCurrentProject(project.id, openedAt);
-    this.importJobRepo.markCompleted(importJobId, project.id);
   }
 }

@@ -73,6 +73,22 @@ export function getVisibleDailyWordCount(input: {
   return Math.max(0, baseDailyWordCount + input.wordCount - input.savedWordCount);
 }
 
+export function resolveSaveCompletionStatus(input: {
+  readonly currentRevision: number;
+  readonly saveStartedAtRevision: number;
+}): SaveStatus {
+  return input.currentRevision === input.saveStartedAtRevision ? "saved" : "dirty";
+}
+
+type SaveSnapshot = {
+  readonly chapterId: string | null;
+  readonly contentJson: TiptapDocument;
+  readonly plainText: string;
+  readonly projectId: string | null;
+  readonly scopeId: number;
+  readonly wordCount: number;
+};
+
 export function useEditorStore(activeChapter: ChapterSummary | null) {
   const api = useMemo(getNovelToolApi, []);
   const [contentJson, setContentJson] = useState<TiptapDocument>(() => createTiptapDocumentFromPlainText(""));
@@ -87,9 +103,28 @@ export function useEditorStore(activeChapter: ChapterSummary | null) {
   const [dailyWordCountDate, setDailyWordCountDate] = useState<string | null>(null);
   const [savedWordCount, setSavedWordCount] = useState(0);
   const saveInFlight = useRef<Promise<void> | null>(null);
+  const editRevision = useRef(0);
+  const savedRevision = useRef(0);
+  const editorScope = useRef(0);
 
   const chapterId = activeChapter?.id ?? null;
   const projectId = activeChapter?.projectId ?? null;
+  const latestSaveSnapshot = useRef<SaveSnapshot>({
+    chapterId,
+    contentJson,
+    plainText,
+    projectId,
+    scopeId: editorScope.current,
+    wordCount
+  });
+  latestSaveSnapshot.current = {
+    chapterId,
+    contentJson,
+    plainText,
+    projectId,
+    scopeId: editorScope.current,
+    wordCount
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -114,6 +149,10 @@ export function useEditorStore(activeChapter: ChapterSummary | null) {
   }, [api]);
 
   useEffect(() => {
+    editorScope.current += 1;
+    editRevision.current = 0;
+    savedRevision.current = 0;
+
     if (!chapterId || !projectId) {
       const emptyDocument = createTiptapDocumentFromPlainText("");
       setContentJson(emptyDocument);
@@ -131,6 +170,7 @@ export function useEditorStore(activeChapter: ChapterSummary | null) {
 
     const currentChapterId = chapterId;
     const currentProjectId = projectId;
+    const currentScopeId = editorScope.current;
     let cancelled = false;
 
     async function loadChapterContent() {
@@ -141,9 +181,14 @@ export function useEditorStore(activeChapter: ChapterSummary | null) {
         if (cancelled) {
           return;
         }
+        if (editorScope.current !== currentScopeId) {
+          return;
+        }
         if (!content) {
           throw new Error(`章节内容不存在：${currentChapterId}`);
         }
+        editRevision.current = 0;
+        savedRevision.current = 0;
         const nextPlainText = content.plainText;
         const nextDocument = normalizeTiptapDocument(content.contentJson, nextPlainText);
         setContentJson(nextDocument);
@@ -158,6 +203,11 @@ export function useEditorStore(activeChapter: ChapterSummary | null) {
         if (cancelled) {
           return;
         }
+        if (editorScope.current !== currentScopeId) {
+          return;
+        }
+        editRevision.current = 0;
+        savedRevision.current = 0;
         const nextDocument = createTiptapDocumentFromPlainText("");
         setContentJson(nextDocument);
         setContentVersion((current) => current + 1);
@@ -179,6 +229,7 @@ export function useEditorStore(activeChapter: ChapterSummary | null) {
   }, [api, chapterId, projectId]);
 
   const handleContentChange = useCallback((nextContentJson: TiptapDocument) => {
+    editRevision.current += 1;
     const nextPlainText = extractPlainTextFromTiptapJson(nextContentJson);
     setContentJson(nextContentJson);
     setPlainText(nextPlainText);
@@ -203,42 +254,62 @@ export function useEditorStore(activeChapter: ChapterSummary | null) {
   );
 
   const flushPendingSave = useCallback(async () => {
-    if (!chapterId || !projectId || saveStatus !== "dirty") {
-      return;
-    }
     if (saveInFlight.current) {
-      return saveInFlight.current;
+      await saveInFlight.current;
     }
 
-    setSaveStatus("saving");
-    const savePromise = (async () => {
-      const content = (await api.chapter.saveContent({
-        projectId,
-        chapterId,
-        contentJson,
-        plainText,
-        wordCount
-      })) as ChapterContent | undefined;
-      setSaveStatus("saved");
-      setDailyWordCount(content?.dailyWordCount ?? 0);
-      setDailyWordCountDate(content?.dailyWordCountDate ?? localDateKey());
-      setSavedWordCount(content?.wordCount ?? wordCount);
-      setLastSavedAt(content?.updatedAt ? new Date(content.updatedAt) : new Date());
-    })();
+    while (savedRevision.current < editRevision.current) {
+      const snapshot = latestSaveSnapshot.current;
+      if (!snapshot.chapterId || !snapshot.projectId) {
+        return;
+      }
 
-    saveInFlight.current = savePromise;
-    try {
-      await savePromise;
-    } catch (reason) {
-      setErrorMessage(formatError(reason));
-      setSaveStatus("failed");
-      throw reason;
-    } finally {
-      if (saveInFlight.current === savePromise) {
-        saveInFlight.current = null;
+      const snapshotChapterId = snapshot.chapterId;
+      const snapshotProjectId = snapshot.projectId;
+      const saveStartedAtRevision = editRevision.current;
+      setSaveStatus("saving");
+      const savePromise = (async () => {
+        const content = (await api.chapter.saveContent({
+          projectId: snapshotProjectId,
+          chapterId: snapshotChapterId,
+          contentJson: snapshot.contentJson,
+          plainText: snapshot.plainText,
+          wordCount: snapshot.wordCount
+        })) as ChapterContent | undefined;
+
+        if (editorScope.current !== snapshot.scopeId) {
+          return;
+        }
+
+        savedRevision.current = Math.max(savedRevision.current, saveStartedAtRevision);
+        setDailyWordCount(content?.dailyWordCount ?? 0);
+        setDailyWordCountDate(content?.dailyWordCountDate ?? localDateKey());
+        setSavedWordCount(content?.wordCount ?? snapshot.wordCount);
+        setLastSavedAt(content?.updatedAt ? new Date(content.updatedAt) : new Date());
+        setSaveStatus(
+          resolveSaveCompletionStatus({
+            currentRevision: editRevision.current,
+            saveStartedAtRevision
+          })
+        );
+      })();
+
+      saveInFlight.current = savePromise;
+      try {
+        await savePromise;
+      } catch (reason) {
+        if (editorScope.current === snapshot.scopeId) {
+          setErrorMessage(formatError(reason));
+          setSaveStatus("failed");
+        }
+        throw reason;
+      } finally {
+        if (saveInFlight.current === savePromise) {
+          saveInFlight.current = null;
+        }
       }
     }
-  }, [api, chapterId, contentJson, plainText, projectId, saveStatus, wordCount]);
+  }, [api]);
 
   useEffect(() => {
     if (!chapterId || saveStatus !== "dirty") {

@@ -87,24 +87,38 @@ export class ScratchNoteRepository {
   }
 
   update(input: ScratchUpdateInput): ScratchNoteRecord {
-    const current = this.findById(input.noteId);
+    const current = this.findByProjectAndId(input.projectId, input.noteId);
     const nextContent = input.patch.content ?? current.content;
     const nextPinned = input.patch.pinned ?? current.pinned;
     const updatedAt = nowIso();
 
-    this.db
-      .prepare("UPDATE scratch_notes SET content = ?, pinned = ?, updated_at = ? WHERE id = ?")
-      .run(nextContent, nextPinned ? 1 : 0, updatedAt, input.noteId);
+    const result = this.db
+      .prepare("UPDATE scratch_notes SET content = ?, pinned = ?, updated_at = ? WHERE id = ? AND project_id = ?")
+      .run(nextContent, nextPinned ? 1 : 0, updatedAt, input.noteId, input.projectId);
+    if (result.changes === 0) {
+      throw new Error("Scratch note not found");
+    }
 
-    return this.findById(input.noteId);
+    return this.findByProjectAndId(input.projectId, input.noteId);
   }
 
   delete(input: ScratchDeleteInput): void {
-    this.db.prepare("DELETE FROM scratch_notes WHERE id = ?").run(input.noteId);
+    const result = this.db.prepare("DELETE FROM scratch_notes WHERE id = ? AND project_id = ?").run(input.noteId, input.projectId);
+    if (result.changes === 0) {
+      throw new Error("Scratch note not found");
+    }
   }
 
   findById(noteId: string): ScratchNoteRecord {
     const row = this.db.prepare("SELECT * FROM scratch_notes WHERE id = ?").get(noteId) as ScratchNoteRow | undefined;
+    if (!row) {
+      throw new Error("Scratch note not found");
+    }
+    return mapScratchNote(row);
+  }
+
+  private findByProjectAndId(projectId: string, noteId: string): ScratchNoteRecord {
+    const row = this.db.prepare("SELECT * FROM scratch_notes WHERE project_id = ? AND id = ?").get(projectId, noteId) as ScratchNoteRow | undefined;
     if (!row) {
       throw new Error("Scratch note not found");
     }

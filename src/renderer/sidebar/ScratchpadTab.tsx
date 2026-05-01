@@ -77,8 +77,12 @@ export function ScratchpadTab({ chapterId, projectId, refreshToken }: Scratchpad
 
   async function togglePin(note: ScratchNoteRecord): Promise<void> {
     const targetProjectId = projectId;
+    if (!targetProjectId) {
+      return;
+    }
     try {
       const updated = (await api.scratch.update({
+        projectId: targetProjectId,
         noteId: note.id,
         patch: {
           pinned: !note.pinned
@@ -95,13 +99,16 @@ export function ScratchpadTab({ chapterId, projectId, refreshToken }: Scratchpad
   }
 
   async function deleteNote(note: ScratchNoteRecord): Promise<void> {
+    const targetProjectId = projectId;
+    if (!targetProjectId) {
+      return;
+    }
     if (!window.confirm("删除这条草稿？")) {
       return;
     }
 
-    const targetProjectId = projectId;
     try {
-      await api.scratch.delete({ noteId: note.id });
+      await api.scratch.delete({ projectId: targetProjectId, noteId: note.id });
       if (latestProjectId.current !== targetProjectId) {
         return;
       }

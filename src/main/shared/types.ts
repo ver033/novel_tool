@@ -7,7 +7,6 @@ import type {
   aiClearChatInputSchema,
   aiCancelStreamInputSchema,
   aiDeleteChatSessionInputSchema,
-  aiGeneratePreviewInputSchema,
   aiGeneratePreviewStreamInputSchema,
   aiGetChatSessionInputSchema,
   aiListChatSessionsInputSchema,
@@ -15,7 +14,6 @@ import type {
   aiRenameChatSessionInputSchema,
   aiRejectCandidateInputSchema,
   aiSaveCandidateToScratchpadInputSchema,
-  aiSendChatMessageInputSchema,
   aiSendChatMessageStreamInputSchema,
   aiUpdateTaskInputSchema,
   chapterCreateInputSchema,
@@ -206,6 +204,13 @@ export type ProjectRecord = {
   readonly updatedAt: string;
 };
 
+export type RecentProjectAvailability = "available" | "missing" | "invalid_path";
+
+export type RecentProjectEntry = {
+  readonly project: ProjectRecord;
+  readonly availability: RecentProjectAvailability;
+};
+
 export type ChapterSummary = {
   readonly id: string;
   readonly projectId: string;
@@ -275,13 +280,11 @@ export type SettingsTestConnectionInput = z.input<typeof settingsTestConnectionI
 export type SettingsListModelsInput = z.input<typeof settingsListModelsInputSchema>;
 export type AiCreateTaskInput = z.input<typeof aiCreateTaskInputSchema>;
 export type AiUpdateTaskInput = z.input<typeof aiUpdateTaskInputSchema>;
-export type AiGeneratePreviewInput = z.input<typeof aiGeneratePreviewInputSchema>;
 export type AiGeneratePreviewStreamInput = z.input<typeof aiGeneratePreviewStreamInputSchema>;
 export type AiContinuePreviewStreamInput = AiGeneratePreviewStreamInput;
 export type AiCancelStreamInput = z.input<typeof aiCancelStreamInputSchema>;
 export type AiApplyCandidateInput = z.input<typeof aiApplyCandidateInputSchema>;
 export type AiSaveCandidateToScratchpadInput = z.input<typeof aiSaveCandidateToScratchpadInputSchema>;
-export type AiSendChatMessageInput = z.input<typeof aiSendChatMessageInputSchema>;
 export type AiGetChatSessionInput = z.input<typeof aiGetChatSessionInputSchema>;
 export type AiListChatSessionsInput = z.input<typeof aiListChatSessionsInputSchema>;
 export type AiCreateChatSessionInput = z.input<typeof aiCreateChatSessionInputSchema>;
@@ -342,12 +345,10 @@ export const ipcChannels = {
   ai: {
     createTask: "novelTool:ai:createTask",
     updateTask: "novelTool:ai:updateTask",
-    generatePreview: "novelTool:ai:generatePreview",
     generatePreviewStream: "novelTool:ai:generatePreviewStream",
     continuePreviewStream: "novelTool:ai:continuePreviewStream",
     applyCandidate: "novelTool:ai:applyCandidate",
     saveCandidateToScratchpad: "novelTool:ai:saveCandidateToScratchpad",
-    sendChatMessage: "novelTool:ai:sendChatMessage",
     getChatSession: "novelTool:ai:getChatSession",
     listChatSessions: "novelTool:ai:listChatSessions",
     createChatSession: "novelTool:ai:createChatSession",

@@ -56,6 +56,22 @@ function formatChatMessages(messages: readonly AiChatMessageRecord[]): string {
   return messages.map(formatChatMessage).filter((line) => line.trim()).join("\n");
 }
 
+function buildMemoryText(compactedSummary: string, recentMessages: readonly AiChatMessageRecord[]): string {
+  const recentText = formatChatMessages(recentMessages);
+  if (!compactedSummary && !recentText) {
+    return "（无）";
+  }
+
+  const sections: string[] = [];
+  if (compactedSummary) {
+    sections.push(["【已压缩的较早对话】", compactedSummary].join("\n"));
+  }
+  if (recentText) {
+    sections.push(["【最近对话原文】", recentText].join("\n"));
+  }
+  return sections.join("\n\n");
+}
+
 function findCompactedThroughIndex(messages: readonly AiChatMessageRecord[], compactedThroughMessageId?: string | null): number {
   if (!compactedThroughMessageId) {
     return -1;
@@ -70,7 +86,8 @@ export function selectChatMemoryCompactionTarget(input: ChatAgentMemoryInput): C
   }
   const memoryPolicy = getChatAgentMemoryPolicy(input.tokenBudget, input.reservedInputTokens);
   const compactedThroughIndex = findCompactedThroughIndex(messages, input.compactedThroughMessageId);
-  const existingMemoryText = [input.compactedSummary?.trim(), formatChatMessages(messages.slice(compactedThroughIndex + 1))].filter(Boolean).join("\n\n");
+  const compactedSummary = input.compactedSummary?.trim() ?? "";
+  const existingMemoryText = buildMemoryText(compactedSummary, messages.slice(compactedThroughIndex + 1));
   if (estimateTextTokens(existingMemoryText) <= memoryPolicy.memoryTokenBudget) {
     return null;
   }
@@ -79,7 +96,7 @@ export function selectChatMemoryCompactionTarget(input: ChatAgentMemoryInput): C
   let tailTokens = 0;
   for (let index = messages.length - 1; index >= compactedThroughIndex + 1; index -= 1) {
     const nextTokens = estimateTextTokens(formatChatMessage(messages[index]));
-    if (tailStartIndex < messages.length && tailTokens + nextTokens > memoryPolicy.recentTailTokenBudget) {
+    if (tailTokens + nextTokens > memoryPolicy.recentTailTokenBudget) {
       break;
     }
     tailStartIndex = index;
@@ -102,20 +119,8 @@ export function buildChatAgentMemoryText(input: ChatAgentMemoryInput): string {
   const messages = relevantChatMessages(input.history);
   const compactedThroughIndex = findCompactedThroughIndex(messages, input.compactedThroughMessageId);
   const recentMessages = messages.slice(compactedThroughIndex + 1);
-  const recentText = formatChatMessages(recentMessages);
   const compactedSummary = input.compactedSummary?.trim() ?? "";
-  if (!compactedSummary && !recentText) {
-    return "（无）";
-  }
-
-  const sections: string[] = [];
-  if (compactedSummary) {
-    sections.push(["【已压缩的较早对话】", compactedSummary].join("\n"));
-  }
-  if (recentText) {
-    sections.push(["【最近对话原文】", recentText].join("\n"));
-  }
-  const memoryText = sections.join("\n\n");
+  const memoryText = buildMemoryText(compactedSummary, recentMessages);
   const memoryPolicy = getChatAgentMemoryPolicy(input.tokenBudget, input.reservedInputTokens);
   if (estimateTextTokens(memoryText) > memoryPolicy.memoryTokenBudget) {
     throw new Error("AI 对话记忆超过预算，需要先压缩上下文。");
