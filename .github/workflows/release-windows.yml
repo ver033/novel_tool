@@ -142,14 +142,11 @@ jobs:
 
           $artifactRootPath = (Resolve-Path $artifactRoot).Path
           $installers = @(Get-ChildItem $artifactRootPath -File -Filter "*.exe")
-          $packages = @(Get-ChildItem $artifactRootPath -File -Filter "*.nupkg")
-          $releaseIndexes = @(Get-ChildItem $artifactRootPath -File -Filter "RELEASES")
           $zips = @(Get-ChildItem $artifactRootPath -File -Filter "*.zip")
           $checksums = @(Get-ChildItem $artifactRootPath -File -Filter "SHA256SUMS.txt")
 
-          $hasCompleteSquirrelSet = $installers.Count -ge 1 -and $packages.Count -ge 1 -and $releaseIndexes.Count -eq 1
-          if ($zips.Count -lt 1 -and -not $hasCompleteSquirrelSet) {
-            throw "Downloaded Windows release assets must include either a portable .zip or a complete Squirrel set (.exe, .nupkg, RELEASES)."
+          if ($installers.Count -ne 1 -or $zips.Count -ne 1) {
+            throw "Windows release assets must include exactly one installer .exe and one portable .zip."
           }
           if ($checksums.Count -ne 1) {
             throw "Downloaded Windows release assets must include exactly one SHA256SUMS.txt file."
@@ -176,7 +173,7 @@ jobs:
             @(
               "# 墨枢 $env:TAG_NAME"
               ""
-              "Windows 安装包。"
+              "Windows 安装包和便携版。"
             ) | Set-Content -Path $notesPath -Encoding utf8
           }
 

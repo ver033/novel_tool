@@ -56,6 +56,22 @@ describe("TXT chapter detector", () => {
     expect(detected[0].text).toContain("斗之力");
   });
 
+  it("does not create an empty chapter when word-count metadata has a page marker before the real title", () => {
+    const detected = detectTxtChapters(`
+
+第一章 7433字 
+
+第一章
+
+“怎么今晚又不回来吃饭？”妈妈停下手里的筷子。
+`);
+
+    expect(detected.map((chapter) => chapter.title)).toEqual(["第一章"]);
+    expect(detected).toHaveLength(1);
+    expect(detected[0].wordCount).toBeGreaterThan(0);
+    expect(detected[0].text).toContain("怎么今晚又不回来吃饭");
+  });
+
   it("supports rename, merge with previous, split from line, and redetect operations", () => {
     const chapters = detectTxtChapters("第一章 旧名\n第一行\n第二行\n第三行\n\n第二章 夜归\n第四行");
 

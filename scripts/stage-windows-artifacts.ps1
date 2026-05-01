@@ -25,33 +25,36 @@ if (Test-Path $artifactRoot) {
 }
 New-Item -ItemType Directory -Force -Path $artifactRoot | Out-Null
 
-$makeAssetFiles = @(
-  Get-ChildItem $makeRoot -Recurse -File |
-    Where-Object { $_.Extension -in @(".exe", ".nupkg", ".zip") -or $_.Name -eq "RELEASES" } |
-    Sort-Object FullName -Unique
-)
-
-$duplicateNames = @($makeAssetFiles | Group-Object Name | Where-Object { $_.Count -gt 1 })
-if ($duplicateNames.Count -gt 0) {
-  $names = ($duplicateNames | ForEach-Object { $_.Name }) -join ", "
-  throw "Duplicate Windows artifact file names would collide in staging: $names"
+$packageVersion = (node -p "require('./package.json').version").Trim()
+if (-not $packageVersion) {
+  throw "Unable to resolve package.json version for Windows artifact names."
 }
 
-foreach ($file in $makeAssetFiles) {
-  Copy-Item $file.FullName -Destination (Join-Path $artifactRoot $file.Name) -Force
+$installerArtifactName = "Moshu-$packageVersion-Setup.exe"
+$portableArtifactName = "Moshu-$packageVersion-win32-x64-portable.zip"
+$installerSources = @(Get-ChildItem $makeRoot -Recurse -File -Filter "*.exe" | Sort-Object FullName)
+$portableSources = @(Get-ChildItem $makeRoot -Recurse -File -Filter "*.zip" | Sort-Object FullName)
+
+if ($installerSources.Count -ne 1) {
+  Write-ForgeOutputTree
+  throw "Expected exactly one Windows installer .exe under $makeRoot, found $($installerSources.Count)."
 }
+if ($portableSources.Count -ne 1) {
+  Write-ForgeOutputTree
+  throw "Expected exactly one Windows portable .zip under $makeRoot, found $($portableSources.Count)."
+}
+
+Copy-Item $installerSources[0].FullName -Destination (Join-Path $artifactRoot $installerArtifactName) -Force
+Copy-Item $portableSources[0].FullName -Destination (Join-Path $artifactRoot $portableArtifactName) -Force
 
 $artifactRootPath = (Resolve-Path $artifactRoot).Path
 $artifactFiles = @(Get-ChildItem $artifactRootPath -File | Sort-Object FullName)
 $installers = @($artifactFiles | Where-Object { $_.Extension -eq ".exe" })
-$packages = @($artifactFiles | Where-Object { $_.Extension -eq ".nupkg" })
-$releaseIndexes = @($artifactFiles | Where-Object { $_.Name -eq "RELEASES" })
 $zips = @($artifactFiles | Where-Object { $_.Extension -eq ".zip" })
-$hasCompleteSquirrelSet = $installers.Count -ge 1 -and $packages.Count -ge 1 -and $releaseIndexes.Count -ge 1
 
-if ($zips.Count -lt 1 -and -not $hasCompleteSquirrelSet) {
+if ($installers.Count -ne 1 -or $zips.Count -ne 1) {
   Write-ForgeOutputTree
-  throw "Electron Forge make did not produce a Windows distributable under $makeRoot."
+  throw "Windows release assets must include exactly one installer .exe and one portable .zip."
 }
 
 $checksumPath = Join-Path $artifactRootPath "SHA256SUMS.txt"

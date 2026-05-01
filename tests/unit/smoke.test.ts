@@ -69,6 +69,8 @@ describe("phase 0 desktop skeleton", () => {
     expect(forgeConfig).toContain('"node_modules/file-uri-to-path"');
     expect(forgeConfig).toContain('authors: "Moshu"');
     expect(forgeConfig).toContain('owners: "Moshu"');
+    expect(forgeConfig).toContain('name: "moshu"');
+    expect(forgeConfig).toContain("setupExe: windowsSetupExeName");
     expect(forgeConfig).toContain("skipUpdateIcon: true");
     expect(forgeConfig).toContain('new MakerZIP({}, ["darwin", "win32"])');
   });
