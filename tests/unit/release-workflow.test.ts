@@ -62,6 +62,10 @@ describe("release workflow hardening", () => {
   });
 
   it("runs the test suite before packaging Windows artifacts", () => {
+    const packageJson = JSON.parse(readRepoFile("package.json")) as { scripts?: Record<string, string> };
+
+    expect(packageJson.scripts?.test).toContain("--testTimeout=30000");
+
     for (const workflowPath of [".github/workflows/package-windows.yml", ".github/workflows/release-windows.yml"]) {
       const workflow = readRepoFile(workflowPath);
       const testIndex = workflow.indexOf("npm test");

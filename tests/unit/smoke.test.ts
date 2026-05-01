@@ -42,9 +42,11 @@ describe("phase 0 desktop skeleton", () => {
       build: "electron-forge package",
       prepackage: "npm run rebuild:electron",
       premake: "npm run rebuild:electron",
+      "premake:windows": "npm run rebuild:electron",
+      "make:windows": "electron-forge make --platform=win32 --arch=x64 --targets=squirrel",
       typecheck: "tsc --noEmit",
       pretest: "npm run rebuild:node",
-      test: "vitest run --exclude 'tests/e2e/**'",
+      test: "vitest run --testTimeout=30000 --exclude 'tests/e2e/**'",
       "test:e2e": "playwright test tests/e2e",
       "check:lockfile-safety": "node scripts/check-lockfile-safety.mjs",
     });

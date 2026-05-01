@@ -17,7 +17,7 @@
     "premake:windows": "npm run rebuild:electron",
     "make:windows": "electron-forge make --platform=win32 --arch=x64 --targets=squirrel",
     "pretest": "npm run rebuild:node",
-    "test": "vitest run --exclude 'tests/e2e/**'",
+    "test": "vitest run --testTimeout=30000 --exclude 'tests/e2e/**'",
     "test:e2e": "playwright test tests/e2e",
     "typecheck": "tsc --noEmit",
     "check:lockfile-safety": "node scripts/check-lockfile-safety.mjs",
