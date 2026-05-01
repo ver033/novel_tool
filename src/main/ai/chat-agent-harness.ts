@@ -7,15 +7,12 @@ import type {
   OpenRouterToolDefinition
 } from "./openrouter-client";
 import { buildChatAgentMemoryText } from "./chat-agent-memory";
+import { buildReasoningConfig } from "./reasoning-budget";
 import { estimateMessagesTokens, estimateTextTokens } from "./token-estimator";
 import type { TokenBudget } from "./token-budget";
 import type { AiChatAction, AiChatMessageRecord } from "../shared/types";
 
 const CHAT_AGENT_MAX_ITERATIONS = 8;
-const CHAT_AGENT_REASONING: OpenRouterReasoningConfig = {
-  effort: "medium",
-  exclude: false
-};
 const CHAT_AGENT_TRUNCATED_FINAL_NOTICE = "\n\n（回答已被模型截断，以上是已生成的部分。建议缩小范围，或按章节继续校对。）";
 
 export type ChatAgentDirectoryItem = {
@@ -31,7 +28,7 @@ export type ChatAgentModelInput = {
   readonly tools: readonly OpenRouterToolDefinition[];
   readonly maxCompletionTokens: number;
   readonly temperature: number;
-  readonly reasoning: OpenRouterReasoningConfig;
+  readonly reasoning?: OpenRouterReasoningConfig;
   readonly signal?: AbortSignal;
 };
 
@@ -59,6 +56,7 @@ export type ChatAgentLoopInput = {
   readonly tools: readonly OpenRouterToolDefinition[];
   readonly model: ChatAgentModel;
   readonly tokenBudget: TokenBudget;
+  readonly reasoning?: OpenRouterReasoningConfig;
   readonly modelContextTokens: number | null;
   readonly modelName: string;
   readonly signal?: AbortSignal;
@@ -384,7 +382,7 @@ export async function runChatAgentLoop(input: ChatAgentLoopInput, handlers: Chat
         tools: input.tools,
         maxCompletionTokens: input.tokenBudget.maxOutputTokens,
         temperature: 0.55,
-        reasoning: CHAT_AGENT_REASONING,
+        reasoning: input.reasoning ?? buildReasoningConfig(input.tokenBudget, { exclude: false, fallbackEffort: "medium" }),
         signal: input.signal
       },
       {

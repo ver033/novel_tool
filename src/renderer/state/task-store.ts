@@ -27,6 +27,11 @@ type UseTaskStoreOptions = {
   readonly flushPendingSave: () => Promise<void>;
 };
 
+function isCanceledIpcError(reason: unknown): boolean {
+  const message = formatIpcErrorMessage(reason, "");
+  return message.includes("canceled") || message.includes("AI 任务已取消");
+}
+
 export function useTaskStore({ projectId, chapterId, taskType, presetId, selectionSnapshot, instruction, editor, flushPendingSave }: UseTaskStoreOptions) {
   const api = useMemo(getNovelToolApi, []);
   const [task, setTask] = useState<AiTaskRecord | null>(null);
@@ -36,18 +41,24 @@ export function useTaskStore({ projectId, chapterId, taskType, presetId, selecti
   const [streamingText, setStreamingText] = useState("");
   const configuredKey = useRef<string | null>(null);
   const activeRequestId = useRef<string | null>(null);
+  const canceledRequestIds = useRef<Set<string>>(new Set());
 
-  const cancelActiveStream = useCallback(() => {
+  const cancelActiveStream = useCallback((options: { readonly detach?: boolean } = {}) => {
     const requestId = activeRequestId.current;
     if (!requestId) {
       return;
     }
-    activeRequestId.current = null;
+    canceledRequestIds.current.add(requestId);
+    if (options.detach) {
+      activeRequestId.current = null;
+    }
     void api.ai.cancelStream({ requestId });
+    setBusy(false);
+    setStreamingText("");
   }, [api]);
 
   useEffect(() => {
-    cancelActiveStream();
+    cancelActiveStream({ detach: true });
     setTask(null);
     setCandidate(null);
     setError(null);
@@ -55,7 +66,7 @@ export function useTaskStore({ projectId, chapterId, taskType, presetId, selecti
     configuredKey.current = null;
   }, [cancelActiveStream, projectId, chapterId, taskType, presetId, selectionSnapshot?.selectionHash]);
 
-  useEffect(() => () => cancelActiveStream(), [cancelActiveStream]);
+  useEffect(() => () => cancelActiveStream({ detach: true }), [cancelActiveStream]);
 
   useEffect(() => {
     if (!projectId || !selectionSnapshot) {
@@ -115,36 +126,59 @@ export function useTaskStore({ projectId, chapterId, taskType, presetId, selecti
       })) as AiTaskRecord;
       setTask(updatedTask);
       requestId = `task_stream_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-      cancelActiveStream();
-      activeRequestId.current = requestId;
-      unsubscribe = api.ai.subscribeAiStream(requestId, {
+      const currentRequestId = requestId;
+      cancelActiveStream({ detach: true });
+      activeRequestId.current = currentRequestId;
+      unsubscribe = api.ai.subscribeAiStream(currentRequestId, {
         onChunk(event) {
+          if (activeRequestId.current !== currentRequestId || canceledRequestIds.current.has(currentRequestId)) {
+            return;
+          }
           setStreamingText((current) => `${current}${event.content}`);
         },
         onDone(event) {
+          if (activeRequestId.current !== currentRequestId || canceledRequestIds.current.has(currentRequestId)) {
+            return;
+          }
           const result = event.payload as PreviewResult;
           setTask(result.task);
           setCandidate(result.candidate);
           setStreamingText("");
         },
         onError(event) {
+          if (activeRequestId.current !== currentRequestId || canceledRequestIds.current.has(currentRequestId)) {
+            return;
+          }
           setError(event.error);
         }
       });
-      const result = (await api.ai.generatePreviewStream({ requestId, taskId: updatedTask.id })) as PreviewResult;
+      const result = (await api.ai.generatePreviewStream({ requestId: currentRequestId, taskId: updatedTask.id })) as PreviewResult;
+      if (canceledRequestIds.current.has(currentRequestId)) {
+        setStreamingText("");
+        return;
+      }
       setTask(result.task);
       setCandidate(result.candidate);
       setStreamingText("");
     } catch (reason) {
+      if (requestId && (isCanceledIpcError(reason) || canceledRequestIds.current.has(requestId))) {
+        if (activeRequestId.current === requestId) {
+          setStreamingText("");
+        }
+        return;
+      }
       setError(formatIpcErrorMessage(reason, "生成预览失败"));
     } finally {
       if (requestId && activeRequestId.current === requestId) {
         activeRequestId.current = null;
       }
       unsubscribe?.();
+      if (requestId) {
+        canceledRequestIds.current.delete(requestId);
+      }
       setBusy(false);
     }
-  }, [api, instruction, presetId, task]);
+  }, [api, cancelActiveStream, instruction, presetId, task]);
 
   const continuePreview = useCallback(async () => {
     if (!task) {
@@ -158,33 +192,56 @@ export function useTaskStore({ projectId, chapterId, taskType, presetId, selecti
     let requestId: string | null = null;
     try {
       requestId = `task_continue_stream_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-      cancelActiveStream();
-      activeRequestId.current = requestId;
-      unsubscribe = api.ai.subscribeAiStream(requestId, {
+      const currentRequestId = requestId;
+      cancelActiveStream({ detach: true });
+      activeRequestId.current = currentRequestId;
+      unsubscribe = api.ai.subscribeAiStream(currentRequestId, {
         onChunk(event) {
+          if (activeRequestId.current !== currentRequestId || canceledRequestIds.current.has(currentRequestId)) {
+            return;
+          }
           setStreamingText((current) => `${current}${event.content}`);
         },
         onDone(event) {
+          if (activeRequestId.current !== currentRequestId || canceledRequestIds.current.has(currentRequestId)) {
+            return;
+          }
           const result = event.payload as PreviewResult;
           setTask(result.task);
           setCandidate(result.candidate);
           setStreamingText("");
         },
         onError(event) {
+          if (activeRequestId.current !== currentRequestId || canceledRequestIds.current.has(currentRequestId)) {
+            return;
+          }
           setError(event.error);
         }
       });
-      const result = (await api.ai.continuePreviewStream({ requestId, taskId: task.id })) as PreviewResult;
+      const result = (await api.ai.continuePreviewStream({ requestId: currentRequestId, taskId: task.id })) as PreviewResult;
+      if (canceledRequestIds.current.has(currentRequestId)) {
+        setStreamingText("");
+        return;
+      }
       setTask(result.task);
       setCandidate(result.candidate);
       setStreamingText("");
     } catch (reason) {
+      if (requestId && (isCanceledIpcError(reason) || canceledRequestIds.current.has(requestId))) {
+        if (activeRequestId.current === requestId) {
+          setStreamingText("");
+        }
+        return;
+      }
       setError(formatIpcErrorMessage(reason, "继续生成失败"));
     } finally {
       if (requestId && activeRequestId.current === requestId) {
         activeRequestId.current = null;
       }
       unsubscribe?.();
+      if (requestId) {
+        canceledRequestIds.current.delete(requestId);
+      }
       setBusy(false);
     }
   }, [api, cancelActiveStream, task]);
@@ -301,6 +358,7 @@ export function useTaskStore({ projectId, chapterId, taskType, presetId, selecti
   return {
     applyCandidate,
     busy,
+    cancelActiveStream,
     candidate,
     continuePreview,
     error,

@@ -1,6 +1,7 @@
 import { proofreadIssueTypes, proofreadResultSchema, type ProofreadIssue } from "../shared/proofread";
 import type { AiTaskRecord, TaskPromptPreset } from "../shared/types";
 import type { OpenRouterMessage, OpenRouterReasoningConfig, OpenRouterResponseFormat } from "./openrouter-client";
+import { buildReasoningConfig } from "./reasoning-budget";
 import { estimateMessagesTokens } from "./token-estimator";
 import { getTokenBudget } from "./token-budget";
 
@@ -20,16 +21,6 @@ type GeneratedCandidateText = {
 
 type PromptBuildContext = {
   readonly taskPreset?: TaskPromptPreset | null;
-};
-
-const defaultReasoning: OpenRouterReasoningConfig = {
-  effort: "high",
-  exclude: true
-};
-
-const proofreadReasoning: OpenRouterReasoningConfig = {
-  effort: "medium",
-  exclude: true
 };
 
 const actionableProofreadIssueTypes = proofreadIssueTypes.filter((type) => type !== "无问题");
@@ -175,7 +166,7 @@ export function buildAiTaskPrompt(task: AiTaskRecord, context: PromptBuildContex
       ...base,
       maxCompletionTokens: budget.maxOutputTokens,
       temperature: 0.2,
-      reasoning: proofreadReasoning,
+      reasoning: buildReasoningConfig(budget, { exclude: true, fallbackEffort: "medium" }),
       responseFormat: {
         type: "json_schema",
         json_schema: {
@@ -191,7 +182,7 @@ export function buildAiTaskPrompt(task: AiTaskRecord, context: PromptBuildContex
     ...base,
     maxCompletionTokens: budget.maxOutputTokens,
     temperature: task.taskType === "polish" ? 0.45 : 0.65,
-    reasoning: defaultReasoning
+    reasoning: buildReasoningConfig(budget, { exclude: true, fallbackEffort: "medium" })
   };
 }
 
@@ -233,7 +224,7 @@ export function buildAiTaskContinuationPrompt(task: AiTaskRecord, partialText: s
     messages,
     maxCompletionTokens: budget.maxOutputTokens,
     temperature: task.taskType === "polish" ? 0.45 : 0.65,
-    reasoning: defaultReasoning
+    reasoning: buildReasoningConfig(budget, { exclude: true, fallbackEffort: "medium" })
   };
 }
 

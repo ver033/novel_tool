@@ -242,6 +242,11 @@ export function CurrentTaskTab({
           </div>
         )}
         <div className="task-actions two">
+          {taskStore.busy ? (
+            <Button onClick={() => taskStore.cancelActiveStream()} variant="secondary">
+              停止生成
+            </Button>
+          ) : null}
           <Button disabled={!taskStore.task || taskStore.busy} onClick={() => void taskStore.generatePreview()} variant="ghost">
             {taskStore.candidate ? "重新校对" : "开始校对"}
           </Button>
@@ -291,6 +296,11 @@ export function CurrentTaskTab({
         )}
       </div>
       <div className="task-actions">
+        {taskStore.busy ? (
+          <Button onClick={() => taskStore.cancelActiveStream()} variant="secondary">
+            停止生成
+          </Button>
+        ) : null}
         <Button disabled={!taskStore.task || taskStore.busy} onClick={() => void taskStore.generatePreview()} variant="ghost">
           {taskStore.candidate ? "重新生成" : "生成预览"}
         </Button>

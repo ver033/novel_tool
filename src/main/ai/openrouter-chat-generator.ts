@@ -18,8 +18,9 @@ import type {
   ChatContextSummaryMergeInput
 } from "./chat-agent-types";
 import { logDevLlmPrompt } from "./dev-prompt-logger";
-import type { OpenRouterMessage, OpenRouterReasoningConfig } from "./openrouter-client";
+import type { OpenRouterMessage } from "./openrouter-client";
 import { OpenRouterClient } from "./openrouter-client";
+import { buildReasoningConfig } from "./reasoning-budget";
 import { getTokenBudget, type TokenBudget } from "./token-budget";
 import { estimateMessagesTokens, estimateTextTokens, truncateTextToTokenBudget } from "./token-estimator";
 import type { SettingsService } from "../settings/settings-service";
@@ -28,11 +29,6 @@ import type { AiSendChatMessageInput } from "../shared/types";
 function hasAgentContext(input: AiSendChatMessageInput | AiChatGenerationInput): input is AiChatGenerationInput & { readonly agentContext: ChatAgentContext } {
   return "agentContext" in input && Boolean(input.agentContext);
 }
-
-const CHAT_REASONING: OpenRouterReasoningConfig = {
-  effort: "medium",
-  exclude: false
-};
 
 const CHAT_MEMORY_SUMMARY_MAX_TOKENS = 2200;
 
@@ -146,6 +142,7 @@ export class OpenRouterChatGenerator implements AiChatGenerator {
 
   async sendMessage(input: AiSendChatMessageInput): Promise<AiChatMessageResult> {
     const { chatBudget, client, modelName } = await this.createClient();
+    const reasoning = buildReasoningConfig(chatBudget, { exclude: false, fallbackEffort: "medium" });
     const messages = [
       {
         role: "system",
@@ -169,14 +166,14 @@ export class OpenRouterChatGenerator implements AiChatGenerator {
       },
       params: {
         maxCompletionTokens: chatBudget.maxOutputTokens,
-        reasoning: CHAT_REASONING,
+        reasoning,
         temperature: 0.55
       }
     });
     const result = await client.createChatCompletion({
       messages,
       maxCompletionTokens: chatBudget.maxOutputTokens,
-      reasoning: CHAT_REASONING,
+      reasoning,
       temperature: 0.55
     });
     const content = result.content.trim();
@@ -193,6 +190,7 @@ export class OpenRouterChatGenerator implements AiChatGenerator {
 
   async sendMessageStream(input: AiChatGenerationInput, handlers: AiChatStreamHandlers, options: AiGenerationOptions = {}): Promise<AiChatMessageResult> {
     const { chatBudget, client, contextLength, modelName } = await this.createClient();
+    const reasoning = buildReasoningConfig(chatBudget, { exclude: false, fallbackEffort: "medium" });
     const messages = buildChatCompletionMessages(input, chatBudget);
     handlers.onContext?.({
       requestId: input.requestId,
@@ -220,7 +218,7 @@ export class OpenRouterChatGenerator implements AiChatGenerator {
       },
       params: {
         maxCompletionTokens: chatBudget.maxOutputTokens,
-        reasoning: CHAT_REASONING,
+        reasoning,
         temperature: 0.55
       }
     });
@@ -228,7 +226,7 @@ export class OpenRouterChatGenerator implements AiChatGenerator {
       {
         messages,
         maxCompletionTokens: chatBudget.maxOutputTokens,
-        reasoning: CHAT_REASONING,
+        reasoning,
         temperature: 0.55,
         signal: options.signal
       },
@@ -259,6 +257,7 @@ export class OpenRouterChatGenerator implements AiChatGenerator {
     options: AiGenerationOptions = {}
   ): Promise<AiChatMessageResult> {
     const { chatBudget, client, contextLength, modelName } = await this.createClient();
+    const reasoning = buildReasoningConfig(chatBudget, { exclude: false, fallbackEffort: "medium" });
     let iteration = 0;
     const model = {
       stream: async (agentInput, streamHandlers) => {
@@ -317,6 +316,7 @@ export class OpenRouterChatGenerator implements AiChatGenerator {
         tokenBudget: chatBudget,
         modelContextTokens: contextLength,
         modelName,
+        reasoning,
         signal: options.signal
       },
       handlers

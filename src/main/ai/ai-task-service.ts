@@ -210,7 +210,8 @@ function isCancellationReason(reason: unknown): boolean {
     record.name === "AbortError" ||
     record.name === "CanceledError" ||
     record.message === "canceled" ||
-    record.message === "AI 对话已取消。"
+    record.message === "AI 对话已取消。" ||
+    record.message === "AI 任务已取消。"
   );
 }
 
@@ -905,6 +906,14 @@ export class AiTaskService {
       handlers.onDone?.({ requestId: input.requestId, payload: result });
       return result;
     } catch (reason) {
+      if (abortController.signal.aborted || isCancellationReason(reason)) {
+        aiTaskRepo.updateTask(task.id, {
+          status: task.status,
+          outputText: task.outputText,
+          error: task.error
+        });
+        throw new Error("AI 任务已取消。");
+      }
       const error = reason instanceof Error ? reason.message : String(reason);
       aiTaskRepo.updateTask(task.id, {
         status: "failed",
@@ -988,6 +997,14 @@ export class AiTaskService {
       handlers.onDone?.({ requestId: input.requestId, payload: result });
       return result;
     } catch (reason) {
+      if (abortController.signal.aborted || isCancellationReason(reason)) {
+        aiTaskRepo.updateTask(task.id, {
+          status: task.status,
+          outputText: task.outputText,
+          error: task.error
+        });
+        throw new Error("AI 任务已取消。");
+      }
       const error = reason instanceof Error ? reason.message : String(reason);
       aiTaskRepo.updateTask(task.id, {
         status: "failed",

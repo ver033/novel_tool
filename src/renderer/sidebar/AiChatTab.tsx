@@ -1,4 +1,4 @@
-import { PaperPlaneRight, Plus, Trash } from "@phosphor-icons/react";
+import { PaperPlaneRight, Plus, Stop, Trash } from "@phosphor-icons/react";
 import { type CSSProperties, type KeyboardEvent, type ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { AiChatMessageRecord, ChapterSummary, SelectionSnapshot } from "../../main/shared/types";
 import { Button } from "../components/Button";
@@ -450,15 +450,28 @@ export function AiChatTab({ chapters, currentChapterId, currentChapterTitle, cur
                 </div>
               ) : null}
             </div>
-            <button
-              className="send"
-              disabled={!draft.trim() || chatStore.busy || chatStore.loading || !chatStore.session || !currentProjectId}
-              onClick={() => void sendMessage()}
-              type="button"
-              aria-label="发送"
-            >
-              <PaperPlaneRight size={20} weight="regular" />
-            </button>
+            {chatStore.busy ? (
+              <button
+                className="send stop"
+                disabled={chatStore.loading}
+                onClick={() => chatStore.cancelActiveStream()}
+                type="button"
+                aria-label="停止 AI 回答"
+                title="停止 AI 回答"
+              >
+                <Stop size={20} weight="fill" />
+              </button>
+            ) : (
+              <button
+                className="send"
+                disabled={!draft.trim() || chatStore.loading || !chatStore.session || !currentProjectId}
+                onClick={() => void sendMessage()}
+                type="button"
+                aria-label="发送"
+              >
+                <PaperPlaneRight size={20} weight="regular" />
+              </button>
+            )}
           </div>
         </div>
       </section>

@@ -15,6 +15,8 @@ const packagedRuntimeDependencyRoots = [
 ];
 const appBundleName = "墨枢";
 const executableName = "novel-tool";
+const appIconPath = path.resolve(__dirname, "build", "icon");
+const windowsSetupIconPath = path.resolve(__dirname, "build", "icon.ico");
 
 export function shouldPackageRuntimeFile(file: string): boolean {
   if (!file) {
@@ -64,13 +66,16 @@ const config: ForgeConfig = {
     asar: {
       unpack: "**/*.node"
     },
+    icon: appIconPath,
     ignore: shouldIgnorePackageFile,
     executableName,
     afterComplete: [applyElectronFuses]
   },
   rebuildConfig: {},
   makers: [
-    new MakerSquirrel({}),
+    new MakerSquirrel({
+      setupIcon: windowsSetupIconPath
+    }),
     new MakerZIP({}, ["darwin"]),
     new MakerDMG({})
   ],

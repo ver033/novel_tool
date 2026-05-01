@@ -64,14 +64,22 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const activeRequestId = useRef<string | null>(null);
+  const canceledRequestIds = useRef<Set<string>>(new Set());
 
-  const cancelActiveStream = useCallback(() => {
+  const cancelActiveStream = useCallback((options: { readonly detach?: boolean } = {}) => {
     const requestId = activeRequestId.current;
     if (!requestId) {
       return;
     }
-    activeRequestId.current = null;
+    canceledRequestIds.current.add(requestId);
+    if (options.detach) {
+      activeRequestId.current = null;
+    }
     void api.ai.cancelStream({ requestId });
+    setBusy(false);
+    setStreamingText("");
+    setStreamingReasoning("");
+    setContextUsagePending(false);
   }, [api]);
 
   const loadMessages = useCallback(
@@ -103,9 +111,9 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
 
   useEffect(() => {
     let disposed = false;
+    cancelActiveStream({ detach: true });
 
     if (!projectId) {
-      cancelActiveStream();
       setSession(null);
       setSessions([]);
       setMessages([]);
@@ -170,7 +178,7 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
     };
   }, [api, cancelActiveStream, projectId]);
 
-  useEffect(() => () => cancelActiveStream(), [cancelActiveStream]);
+  useEffect(() => () => cancelActiveStream({ detach: true }), [cancelActiveStream]);
 
   const clearChat = useCallback(async () => {
     if (!projectId || !session || busy) {
@@ -286,7 +294,7 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
       }
 
       const requestId = createRequestId("chat_stream");
-      cancelActiveStream();
+      cancelActiveStream({ detach: true });
       activeRequestId.current = requestId;
       const pendingUser = createPendingMessage("user", message);
       let unsubscribe: (() => void) | null = null;
@@ -315,32 +323,32 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
             : undefined;
         unsubscribe = api.ai.subscribeAiStream(requestId, {
           onChunk(event) {
-            if (activeRequestId.current !== requestId) {
+            if (activeRequestId.current !== requestId || canceledRequestIds.current.has(requestId)) {
               return;
             }
             setStreamingText((current) => `${current}${event.content}`);
           },
           onReasoning(event) {
-            if (activeRequestId.current !== requestId) {
+            if (activeRequestId.current !== requestId || canceledRequestIds.current.has(requestId)) {
               return;
             }
             setStreamingReasoning((current) => `${current}${event.content}`);
           },
           onContext(event) {
-            if (activeRequestId.current !== requestId) {
+            if (activeRequestId.current !== requestId || canceledRequestIds.current.has(requestId)) {
               return;
             }
             setContextUsage(event);
             setContextUsagePending(false);
           },
           onDone(event) {
-            if (activeRequestId.current !== requestId) {
+            if (activeRequestId.current !== requestId || canceledRequestIds.current.has(requestId)) {
               return;
             }
             applyResult(event.payload as ChatStreamPayload);
           },
           onError(event) {
-            if (activeRequestId.current !== requestId) {
+            if (activeRequestId.current !== requestId || canceledRequestIds.current.has(requestId)) {
               return;
             }
             setError(event.error);
@@ -359,10 +367,27 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
         if (activeRequestId.current !== requestId) {
           return;
         }
+        if (canceledRequestIds.current.has(requestId)) {
+          if (activeRequestId.current === requestId) {
+            setContextUsagePending(false);
+            await loadMessages(session).catch(() => {
+              setMessages((current) => current.filter((item) => item.id !== pendingUser.id));
+            });
+          }
+          return;
+        }
         applyResult(result);
         await refreshSessions(session.id);
       } catch (reason) {
-        if (activeRequestId.current !== requestId && isCanceledIpcError(reason)) {
+        if (isCanceledIpcError(reason) || canceledRequestIds.current.has(requestId)) {
+          if (activeRequestId.current === requestId) {
+            setContextUsagePending(false);
+            setStreamingText("");
+            setStreamingReasoning("");
+            await loadMessages(session).catch(() => {
+              setMessages((current) => current.filter((item) => item.id !== pendingUser.id));
+            });
+          }
           return;
         }
         setContextUsagePending(false);
@@ -376,6 +401,7 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
           activeRequestId.current = null;
         }
         unsubscribe?.();
+        canceledRequestIds.current.delete(requestId);
         if (isCurrentRequest) {
           setBusy(false);
           setStreamingText("");
@@ -384,7 +410,7 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
         }
       }
     },
-    [api, busy, currentChapterId, currentChapterTitle, loadMessages, projectId, refreshSessions, selectionSnapshot, session]
+    [api, busy, cancelActiveStream, currentChapterId, currentChapterTitle, loadMessages, projectId, refreshSessions, selectionSnapshot, session]
   );
 
   return {
@@ -392,6 +418,7 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
     clearChat,
     contextUsage,
     contextUsagePending,
+    cancelActiveStream,
     createSession,
     deleteCurrentSession,
     error,

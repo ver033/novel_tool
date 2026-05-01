@@ -2548,6 +2548,10 @@ select:focus-visible {
   color: white;
 }
 
+.send.stop {
+  background: #d84b40;
+}
+
 .send:disabled {
   opacity: 0.45;
 }

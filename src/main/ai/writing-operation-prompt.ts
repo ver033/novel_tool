@@ -1,6 +1,7 @@
 import { proofreadIssueTypes, proofreadResultSchema } from "../shared/proofread";
 import type { TaskPromptPreset } from "../shared/types";
-import type { OpenRouterMessage, OpenRouterReasoningConfig, OpenRouterResponseFormat } from "./openrouter-client";
+import type { OpenRouterMessage, OpenRouterResponseFormat } from "./openrouter-client";
+import { buildReasoningConfig } from "./reasoning-budget";
 import type { TokenBudget } from "./token-budget";
 import type {
   BuiltWritingOperationPrompt,
@@ -17,16 +18,6 @@ type BuildWritingOperationPromptInput = {
   readonly userInstruction: string;
   readonly preset: TaskPromptPreset | null;
   readonly tokenBudget: TokenBudget;
-};
-
-const candidateReasoning: OpenRouterReasoningConfig = {
-  effort: "high",
-  exclude: true
-};
-
-const proofreadReasoning: OpenRouterReasoningConfig = {
-  effort: "medium",
-  exclude: true
 };
 
 const actionableProofreadIssueTypes = proofreadIssueTypes.filter((type) => type !== "无问题");
@@ -115,7 +106,7 @@ export function buildWritingOperationPrompt(input: BuildWritingOperationPromptIn
     maxCompletionTokens: input.tokenBudget.maxOutputTokens,
     temperature: input.operation.id === "polish" ? 0.45 : input.operation.id === "proofread" ? 0.2 : 0.65,
     responseFormat: input.operation.outputKind === "proofread_issues" ? proofreadResponseFormat : undefined,
-    reasoning: input.operation.outputKind === "proofread_issues" ? proofreadReasoning : candidateReasoning,
+    reasoning: buildReasoningConfig(input.tokenBudget, { exclude: true, fallbackEffort: "medium" }),
     tokenBudget: input.tokenBudget
   };
 }
