@@ -76,7 +76,7 @@ const config: ForgeConfig = {
     new MakerSquirrel({
       setupIcon: windowsSetupIconPath
     }),
-    new MakerZIP({}, ["darwin"]),
+    new MakerZIP({}, ["darwin", "win32"]),
     new MakerDMG({})
   ],
   plugins: [
