@@ -22,20 +22,24 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  release-windows:
-    name: Build and draft Windows release
+  build-windows:
+    name: Build Windows release assets
     runs-on: windows-2022
     timeout-minutes: 60
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag_name: ${{ steps.version.outputs.tag_name }}
+      artifact_name: ${{ steps.version.outputs.artifact_name }}
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 22.14.0
           cache: npm
@@ -61,23 +65,12 @@ jobs:
           }
 
           $tagName = "v$version"
+          $artifactName = "moshu-release-windows-$tagName"
           "version=$version" >> $env:GITHUB_OUTPUT
           "tag_name=$tagName" >> $env:GITHUB_OUTPUT
+          "artifact_name=$artifactName" >> $env:GITHUB_OUTPUT
           Write-Host "Release version: $version"
           Write-Host "Release tag: $tagName"
-
-      - name: Ensure release does not already exist
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG_NAME: ${{ steps.version.outputs.tag_name }}
-        run: |
-          gh release view $env:TAG_NAME *> $null
-          if ($LASTEXITCODE -eq 0) {
-            throw "GitHub release '$env:TAG_NAME' already exists."
-          }
-          Write-Host "No existing GitHub release found for '$env:TAG_NAME'."
-          exit 0
 
       - name: Check lockfile safety
         run: node scripts/check-lockfile-safety.mjs
@@ -88,16 +81,18 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Test
+        run: npm test
+
       - name: Build Windows installer
         run: npm run make
 
       - name: Validate and checksum Windows release assets
-        id: assets
         shell: pwsh
         run: |
-          $makeRoot = Join-Path $PWD "out\make\squirrel.windows"
+          $makeRoot = Join-Path $PWD "out\make"
           if (-not (Test-Path $makeRoot)) {
-            throw "Expected Windows Squirrel output directory was not created: $makeRoot"
+            throw "Expected Electron Forge make output directory was not created: $makeRoot"
           }
 
           $installers = @(Get-ChildItem $makeRoot -Recurse -File -Filter "*.exe")
@@ -114,38 +109,116 @@ jobs:
             throw "Squirrel RELEASES index was not found under $makeRoot"
           }
 
-          $makeRootPath = (Resolve-Path $makeRoot).Path
-          $artifactFiles = @(Get-ChildItem $makeRootPath -Recurse -File | Sort-Object FullName)
-          $checksumPath = Join-Path $makeRootPath "SHA256SUMS.txt"
+          $artifactRoot = Join-Path $PWD "out\artifacts\windows-package"
+          if (Test-Path $artifactRoot) {
+            Remove-Item $artifactRoot -Recurse -Force
+          }
+          New-Item -ItemType Directory -Force -Path $artifactRoot | Out-Null
+
+          $assetFiles = @($installers + $packages + $releaseIndexes) | Sort-Object FullName -Unique
+          $duplicateNames = @($assetFiles | Group-Object Name | Where-Object { $_.Count -gt 1 })
+          if ($duplicateNames.Count -gt 0) {
+            $names = ($duplicateNames | ForEach-Object { $_.Name }) -join ", "
+            throw "Duplicate Windows artifact file names would collide in staging: $names"
+          }
+
+          foreach ($file in $assetFiles) {
+            Copy-Item $file.FullName -Destination (Join-Path $artifactRoot $file.Name) -Force
+          }
+
+          $artifactRootPath = (Resolve-Path $artifactRoot).Path
+          $artifactFiles = @(Get-ChildItem $artifactRootPath -File | Sort-Object FullName)
+          $checksumPath = Join-Path $artifactRootPath "SHA256SUMS.txt"
           $checksums = foreach ($file in $artifactFiles) {
-            $relativePath = $file.FullName.Substring($makeRootPath.Length + 1).Replace("\", "/")
+            $relativePath = $file.FullName.Substring($artifactRootPath.Length + 1).Replace("\", "/")
             $hash = (Get-FileHash -Algorithm SHA256 $file.FullName).Hash.ToLowerInvariant()
             "$hash  $relativePath"
           }
           $checksums | Set-Content -Path $checksumPath -Encoding ascii
 
-          $assetFiles = @(
-            Get-ChildItem $makeRootPath -Recurse -File -Filter "*.exe"
-            Get-ChildItem $makeRootPath -Recurse -File -Filter "*.nupkg"
-            Get-ChildItem $makeRootPath -Recurse -File -Filter "RELEASES"
-            Get-Item $checksumPath
-          ) | Sort-Object FullName -Unique
+          Write-Host "Windows release assets:"
+          Get-ChildItem $artifactRootPath -File |
+            Sort-Object FullName |
+            ForEach-Object { Write-Host "- $($_.Name)" }
 
-          if ($assetFiles.Count -lt 4) {
-            throw "Release asset set is incomplete."
+      - name: Upload Windows release assets
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.version.outputs.artifact_name }}
+          path: out/artifacts/windows-package/**
+          if-no-files-found: error
+          retention-days: 30
+
+  create-draft-release:
+    name: Create draft GitHub release
+    runs-on: windows-2022
+    needs:
+      - build-windows
+    permissions:
+      contents: write
+    timeout-minutes: 15
+
+    steps:
+      - name: Download Windows release assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.build-windows.outputs.artifact_name }}
+          path: out/artifacts/windows-package
+
+      - name: Ensure release does not already exist
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG_NAME: ${{ needs.build-windows.outputs.tag_name }}
+        run: |
+          gh release view $env:TAG_NAME *> $null
+          if ($LASTEXITCODE -eq 0) {
+            throw "GitHub release '$env:TAG_NAME' already exists."
+          }
+          Write-Host "No existing GitHub release found for '$env:TAG_NAME'."
+          exit 0
+
+      - name: Validate downloaded release assets
+        id: assets
+        shell: pwsh
+        run: |
+          $artifactRoot = Join-Path $PWD "out\artifacts\windows-package"
+          if (-not (Test-Path $artifactRoot)) {
+            throw "Downloaded Windows release artifact directory was not created: $artifactRoot"
           }
 
+          $artifactRootPath = (Resolve-Path $artifactRoot).Path
+          $installers = @(Get-ChildItem $artifactRootPath -File -Filter "*.exe")
+          $packages = @(Get-ChildItem $artifactRootPath -File -Filter "*.nupkg")
+          $releaseIndexes = @(Get-ChildItem $artifactRootPath -File -Filter "RELEASES")
+          $checksums = @(Get-ChildItem $artifactRootPath -File -Filter "SHA256SUMS.txt")
+
+          if ($installers.Count -lt 1) {
+            throw "Downloaded Windows release assets did not include an installer .exe."
+          }
+          if ($packages.Count -lt 1) {
+            throw "Downloaded Windows release assets did not include a Squirrel .nupkg package."
+          }
+          if ($releaseIndexes.Count -ne 1) {
+            throw "Downloaded Windows release assets must include exactly one Squirrel RELEASES index."
+          }
+          if ($checksums.Count -ne 1) {
+            throw "Downloaded Windows release assets must include exactly one SHA256SUMS.txt file."
+          }
+
+          $releaseAssets = @(Get-ChildItem $artifactRootPath -File | Sort-Object FullName)
           $assetListPath = Join-Path $PWD "release-assets.txt"
-          $assetFiles.FullName | Set-Content -Path $assetListPath -Encoding utf8
+          $releaseAssets.FullName | Set-Content -Path $assetListPath -Encoding utf8
           "asset_list=$assetListPath" >> $env:GITHUB_OUTPUT
 
           Write-Host "Windows release assets:"
-          $assetFiles | ForEach-Object { Write-Host "- $($_.FullName.Substring($makeRootPath.Length + 1))" }
+          $releaseAssets | ForEach-Object { Write-Host "- $($_.Name)" }
 
       - name: Write release notes
         shell: pwsh
         env:
-          TAG_NAME: ${{ steps.version.outputs.tag_name }}
+          TAG_NAME: ${{ needs.build-windows.outputs.tag_name }}
           RELEASE_NOTES: ${{ inputs.release_notes }}
         run: |
           $notesPath = Join-Path $PWD "release-notes.md"
@@ -163,7 +236,8 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG_NAME: ${{ steps.version.outputs.tag_name }}
+          GH_REPO: ${{ github.repository }}
+          TAG_NAME: ${{ needs.build-windows.outputs.tag_name }}
           PRERELEASE: ${{ inputs.prerelease }}
           ASSET_LIST: ${{ steps.assets.outputs.asset_list }}
         run: |
@@ -187,11 +261,3 @@ jobs:
           }
 
           gh @ghArgs
-
-      - name: Upload Windows release artifacts
-        uses: actions/upload-artifact@v7
-        with:
-          name: moshu-release-windows-${{ steps.version.outputs.tag_name }}
-          path: out/make/squirrel.windows/**
-          if-no-files-found: error
-          retention-days: 30
