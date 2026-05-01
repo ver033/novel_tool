@@ -43,7 +43,7 @@ describe("phase 0 desktop skeleton", () => {
       prepackage: "npm run rebuild:electron",
       premake: "npm run rebuild:electron",
       "premake:windows": "npm run rebuild:electron",
-      "make:windows": "electron-forge make --platform=win32 --arch=x64 --targets=squirrel",
+      "make:windows": "electron-forge make --platform=win32 --arch=x64",
       typecheck: "tsc --noEmit",
       pretest: "npm run rebuild:node",
       test: "vitest run --testTimeout=30000 --exclude 'tests/e2e/**'",
@@ -67,6 +67,10 @@ describe("phase 0 desktop skeleton", () => {
     expect(forgeConfig).toContain('"node_modules/better-sqlite3"');
     expect(forgeConfig).toContain('"node_modules/bindings"');
     expect(forgeConfig).toContain('"node_modules/file-uri-to-path"');
+    expect(forgeConfig).toContain('authors: "Moshu"');
+    expect(forgeConfig).toContain('owners: "Moshu"');
+    expect(forgeConfig).toContain("skipUpdateIcon: true");
+    expect(forgeConfig).toContain('new MakerZIP({}, ["darwin", "win32"])');
   });
 
   it("keeps native dependency parent directories traversable during packaging", () => {

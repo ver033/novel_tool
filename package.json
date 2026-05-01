@@ -15,7 +15,7 @@
     "premake": "npm run rebuild:electron",
     "make": "electron-forge make",
     "premake:windows": "npm run rebuild:electron",
-    "make:windows": "electron-forge make --platform=win32 --arch=x64 --targets=squirrel",
+    "make:windows": "electron-forge make --platform=win32 --arch=x64",
     "pretest": "npm run rebuild:node",
     "test": "vitest run --testTimeout=30000 --exclude 'tests/e2e/**'",
     "test:e2e": "playwright test tests/e2e",

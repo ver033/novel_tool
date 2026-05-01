@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import forgeConfig from "../../forge.config";
 
 const repoRoot = join(__dirname, "..", "..");
 
@@ -77,27 +78,56 @@ describe("release workflow hardening", () => {
     }
   });
 
-  it("uses an explicit Windows Squirrel make target in Windows workflows", () => {
+  it("keeps Electron Packager hooks callback-style so Forge make can continue after package", () => {
+    const afterCompleteHooks = forgeConfig.packagerConfig?.afterComplete ?? [];
+
+    expect(afterCompleteHooks).toHaveLength(1);
+    expect(afterCompleteHooks[0]).toHaveLength(5);
+  });
+
+  it("lets Electron Forge resolve the configured Windows makers", () => {
     const packageJson = JSON.parse(readRepoFile("package.json")) as { scripts?: Record<string, string> };
 
     expect(packageJson.scripts?.["premake:windows"]).toBe("npm run rebuild:electron");
-    expect(packageJson.scripts?.["make:windows"]).toBe("electron-forge make --platform=win32 --arch=x64 --targets=squirrel");
+    expect(packageJson.scripts?.["make:windows"]).toBe("electron-forge make --platform=win32 --arch=x64");
+    expect(packageJson.scripts?.["make:windows"]).not.toContain("--targets=");
 
     for (const workflowPath of [".github/workflows/package-windows.yml", ".github/workflows/release-windows.yml"]) {
       const workflow = readRepoFile(workflowPath);
 
       expect(workflow, workflowPath).toContain("npm run make:windows");
       expect(workflow, workflowPath).not.toContain("npm run make\n");
+      expect(workflow, workflowPath).toContain("scripts/stage-windows-artifacts.ps1");
+    }
+
+    const stagingScript = readRepoFile("scripts/stage-windows-artifacts.ps1");
+    expect(stagingScript).not.toContain("*-win32-x64");
+    expect(stagingScript).not.toContain("Compress-Archive");
+    expect(stagingScript).not.toContain("portable.zip");
+  });
+
+  it("enables Squirrel maker debug output in Windows packaging workflows", () => {
+    for (const workflowPath of [".github/workflows/package-windows.yml", ".github/workflows/release-windows.yml"]) {
+      const workflow = readRepoFile(workflowPath);
+      const debugIndex = workflow.indexOf("DEBUG: electron-windows-installer*");
+      const makeIndex = workflow.indexOf("npm run make:windows");
+
+      expect(debugIndex, workflowPath).toBeGreaterThanOrEqual(0);
+      expect(makeIndex, workflowPath).toBeGreaterThanOrEqual(0);
+      expect(debugIndex, workflowPath).toBeLessThan(makeIndex);
     }
   });
 
-  it("stages Windows package artifacts from the actual Forge make output", () => {
+  it("stages Windows artifacts only from the actual Forge make output", () => {
     for (const workflowPath of [".github/workflows/package-windows.yml", ".github/workflows/release-windows.yml"]) {
       const workflow = readRepoFile(workflowPath);
+      const stagingScript = readRepoFile("scripts/stage-windows-artifacts.ps1");
 
-      expect(workflow, workflowPath).toContain('Join-Path $PWD "out\\make"');
-      expect(workflow, workflowPath).toContain("Electron Forge output tree:");
-      expect(workflow, workflowPath).toContain('Join-Path $PWD "out\\artifacts\\windows-package"');
+      expect(stagingScript, workflowPath).toContain('Join-Path $PWD "out\\make"');
+      expect(stagingScript, workflowPath).toContain('Join-Path $PWD "out"');
+      expect(stagingScript, workflowPath).toContain("Electron Forge output tree:");
+      expect(stagingScript, workflowPath).toContain('Join-Path $PWD "out\\artifacts\\windows-package"');
+      expect(stagingScript, workflowPath).toContain("Expected Electron Forge make output directory was not created");
       expect(workflow, workflowPath).toContain("out/artifacts/windows-package/**");
       expect(workflow, workflowPath).not.toContain("out/make/squirrel.windows/**");
     }

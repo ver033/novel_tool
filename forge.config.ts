@@ -17,6 +17,7 @@ const appBundleName = "墨枢";
 const executableName = "novel-tool";
 const appIconPath = path.resolve(__dirname, "build", "icon");
 const windowsSetupIconPath = path.resolve(__dirname, "build", "icon.ico");
+type PackagerHookCallback = (error?: Error | null) => void;
 
 export function shouldPackageRuntimeFile(file: string): boolean {
   if (!file) {
@@ -51,14 +52,17 @@ export function resolvePackagedElectronBinary(buildPath: string, platform: strin
   return path.join(buildPath, executableName);
 }
 
-async function applyElectronFuses(buildPath: string, _electronVersion: string, platform: string, arch: string): Promise<void> {
-  await flipFuses(resolvePackagedElectronBinary(buildPath, platform), {
+function applyElectronFuses(buildPath: string, _electronVersion: string, platform: string, _arch: string, done: PackagerHookCallback): void {
+  void flipFuses(resolvePackagedElectronBinary(buildPath, platform), {
     version: FuseVersion.V1,
     resetAdHocDarwinSignature: platform === "darwin",
     [FuseV1Options.RunAsNode]: false,
     [FuseV1Options.EnableNodeOptionsEnvironmentVariable]: false,
     [FuseV1Options.EnableNodeCliInspectArguments]: false
-  });
+  }).then(
+    () => done(),
+    (error: unknown) => done(error instanceof Error ? error : new Error(String(error)))
+  );
 }
 
 const config: ForgeConfig = {
@@ -74,9 +78,12 @@ const config: ForgeConfig = {
   rebuildConfig: {},
   makers: [
     new MakerSquirrel({
-      setupIcon: windowsSetupIconPath
+      authors: "Moshu",
+      owners: "Moshu",
+      setupIcon: windowsSetupIconPath,
+      skipUpdateIcon: true
     }),
-    new MakerZIP({}, ["darwin"]),
+    new MakerZIP({}, ["darwin", "win32"]),
     new MakerDMG({})
   ],
   plugins: [
