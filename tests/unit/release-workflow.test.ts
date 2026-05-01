@@ -103,7 +103,6 @@ describe("release workflow hardening", () => {
     const stagingScript = readRepoFile("scripts/stage-windows-artifacts.ps1");
     expect(stagingScript).not.toContain("*-win32-x64");
     expect(stagingScript).not.toContain("Compress-Archive");
-    expect(stagingScript).not.toContain("portable.zip");
   });
 
   it("enables Squirrel maker debug output in Windows packaging workflows", () => {
@@ -131,6 +130,19 @@ describe("release workflow hardening", () => {
       expect(workflow, workflowPath).toContain("out/artifacts/windows-package/**");
       expect(workflow, workflowPath).not.toContain("out/make/squirrel.windows/**");
     }
+  });
+
+  it("publishes clean user-facing Windows artifact names", () => {
+    const stagingScript = readRepoFile("scripts/stage-windows-artifacts.ps1");
+    const releaseWorkflow = readRepoFile(".github/workflows/release-windows.yml");
+
+    expect(stagingScript).toContain('"Moshu-$packageVersion-Setup.exe"');
+    expect(stagingScript).toContain('"Moshu-$packageVersion-win32-x64-portable.zip"');
+    expect(stagingScript).not.toContain('".nupkg"');
+    expect(stagingScript).not.toContain('"RELEASES"');
+    expect(releaseWorkflow).not.toContain("-Filter \"*.nupkg\"");
+    expect(releaseWorkflow).not.toContain("-Filter \"RELEASES\"");
+    expect(releaseWorkflow).toContain("Windows release assets must include exactly one installer .exe and one portable .zip.");
   });
 
   it("keeps tests versionable", () => {

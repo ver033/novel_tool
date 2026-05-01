@@ -4,6 +4,7 @@ import { MakerSquirrel } from "@electron-forge/maker-squirrel";
 import { MakerZIP } from "@electron-forge/maker-zip";
 import { VitePlugin } from "@electron-forge/plugin-vite";
 import { flipFuses, FuseV1Options, FuseVersion } from "@electron/fuses";
+import fs from "node:fs";
 import path from "node:path";
 
 const packagedRuntimeDependencyRoots = [
@@ -19,6 +20,16 @@ const appIconPath = path.resolve(__dirname, "build", "icon");
 const windowsSetupIconPath = path.resolve(__dirname, "build", "icon.ico");
 const windowsSetupLoadingGifPath = path.resolve(__dirname, "build", "install-loading.gif");
 type PackagerHookCallback = (error?: Error | null) => void;
+
+function readPackageVersion(): string {
+  const packageMetadata = JSON.parse(fs.readFileSync(path.resolve(__dirname, "package.json"), "utf8")) as { version?: string };
+  if (!packageMetadata.version) {
+    throw new Error("package.json version is required for Windows installer naming.");
+  }
+  return packageMetadata.version;
+}
+
+const windowsSetupExeName = `Moshu-${readPackageVersion()}-Setup.exe`;
 
 export function shouldPackageRuntimeFile(file: string): boolean {
   if (!file) {
@@ -79,9 +90,12 @@ const config: ForgeConfig = {
   rebuildConfig: {},
   makers: [
     new MakerSquirrel({
+      name: "moshu",
+      title: appBundleName,
       authors: "Moshu",
       owners: "Moshu",
       loadingGif: windowsSetupLoadingGifPath,
+      setupExe: windowsSetupExeName,
       setupIcon: windowsSetupIconPath,
       skipUpdateIcon: true
     }),

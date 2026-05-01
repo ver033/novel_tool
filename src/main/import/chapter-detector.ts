@@ -55,7 +55,7 @@ function getHeadingMarker(line: string): string | null {
 }
 
 function isWordCountOnlyHeading(line: string): boolean {
-  return /^(?:第[零〇一二三四五六七八九十百千万\d]+[章节回卷部集]|卷[零〇一二三四五六七八九十百千万\d]+)[\s　、:：.-]*[0-9零〇一二三四五六七八九十百千万,.，]+\s*字$/.test(line.trim());
+  return /^(?:第[零〇一二三四五六七八九十百千万\d]+[章节回卷部集]|卷[零〇一二三四五六七八九十百千万\d]+)[\s　、:：.-]*[0-9零〇一二三四五六七八九十百千万,.，]+\s*字(?:\s*[Pp]\d+.*)?$/.test(line.trim());
 }
 
 export function detectTxtChapters(content: string): ImportPreviewChapter[] {
@@ -72,7 +72,8 @@ export function detectTxtChapters(content: string): ImportPreviewChapter[] {
 
   for (const line of lines) {
     if (isChapterHeading(line.text)) {
-      if (foundHeading && currentLines.length > 0) {
+      const currentHasContent = currentLines.some((currentLine) => currentLine.text.trim());
+      if (foundHeading && currentHasContent) {
         chapters.push(createChapter(currentTitle, currentLines, chapters.length));
       } else if (foundHeading && !isWordCountOnlyHeading(currentTitle)) {
         chapters.push(createChapter(currentTitle, currentLines, chapters.length));
