@@ -8,6 +8,7 @@ import { ProjectRepository } from "../../src/main/db/repositories/project-repo";
 import { ProjectService } from "../../src/main/project/project-service";
 
 const tempDirs: string[] = [];
+const projectServices: ProjectService[] = [];
 
 function createTempDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "novel-tool-project-create-"));
@@ -15,7 +16,15 @@ function createTempDir(): string {
   return dir;
 }
 
+function trackProjectService(projectService: ProjectService): ProjectService {
+  projectServices.push(projectService);
+  return projectService;
+}
+
 afterEach(() => {
+  for (const projectService of projectServices.splice(0)) {
+    projectService.close();
+  }
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -26,9 +35,11 @@ describe("project creation flow", () => {
     const dir = createTempDir();
     const mainDb = createDatabase(join(dir, "main.sqlite3"));
     runMigrations(mainDb);
-    const service = new ProjectService(new ProjectRepository(mainDb), {
-      projectFileDirectory: () => join(dir, "projects")
-    });
+    const service = trackProjectService(
+      new ProjectService(new ProjectRepository(mainDb), {
+        projectFileDirectory: () => join(dir, "projects")
+      })
+    );
 
     const created = service.createProject({
       name: "星河旧梦",
@@ -47,9 +58,11 @@ describe("project creation flow", () => {
     const dir = createTempDir();
     const mainDb = createDatabase(join(dir, "main.sqlite3"));
     runMigrations(mainDb);
-    const service = new ProjectService(new ProjectRepository(mainDb), {
-      projectFileDirectory: () => join(dir, "projects")
-    });
+    const service = trackProjectService(
+      new ProjectService(new ProjectRepository(mainDb), {
+        projectFileDirectory: () => join(dir, "projects")
+      })
+    );
 
     const first = service.createProject({ name: "星河旧梦" });
     const secondSuggestion = service.getSuggestedProjectFilePath("星河旧梦");
@@ -66,9 +79,11 @@ describe("project creation flow", () => {
     const dir = createTempDir();
     const mainDb = createDatabase(join(dir, "main.sqlite3"));
     runMigrations(mainDb);
-    const service = new ProjectService(new ProjectRepository(mainDb), {
-      projectFileDirectory: () => join(dir, "projects")
-    });
+    const service = trackProjectService(
+      new ProjectService(new ProjectRepository(mainDb), {
+        projectFileDirectory: () => join(dir, "projects")
+      })
+    );
     const first = service.createProject({ name: "星河旧梦" });
 
     expect(() =>
@@ -78,6 +93,25 @@ describe("project creation flow", () => {
       })
     ).toThrow("项目文件已存在");
 
+    mainDb.close();
+  });
+
+  it("closes the active project database handle before shutdown cleanup", () => {
+    const dir = createTempDir();
+    const mainDb = createDatabase(join(dir, "main.sqlite3"));
+    runMigrations(mainDb);
+    const service = trackProjectService(
+      new ProjectService(new ProjectRepository(mainDb), {
+        projectFileDirectory: () => join(dir, "projects")
+      })
+    );
+
+    service.createProject({ name: "星河旧梦" });
+    const activeDb = service.getActiveProjectDatabase();
+
+    service.close();
+
+    expect(() => activeDb.prepare("SELECT 1").get()).toThrow();
     mainDb.close();
   });
 });

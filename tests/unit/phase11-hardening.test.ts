@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -10,18 +10,19 @@ function readSource(file: string): string {
 
 describe("phase 11 V1 hardening", () => {
   it("documents the V1 run commands and core workflows", () => {
-    const guidePath = join(rootDir, "docs/USER_GUIDE_V1.md");
-    expect(existsSync(guidePath)).toBe(true);
+    const packageJson = readSource("package.json");
+    const importWizard = readSource("src/renderer/routes/ImportWizardPage.tsx");
+    const currentTask = readSource("src/renderer/sidebar/CurrentTaskTab.tsx");
+    const settingsPage = readSource("src/renderer/routes/SettingsPage.tsx");
 
-    const guide = readSource("docs/USER_GUIDE_V1.md");
-    expect(guide).toContain("npm run dev");
-    expect(guide).toContain("npm run build");
-    expect(guide).toContain("TXT 导入");
-    expect(guide).toContain("润色");
-    expect(guide).toContain("扩写");
-    expect(guide).toContain("校对");
-    expect(guide).toContain("续写");
-    expect(guide).toContain("OpenRouter");
+    expect(packageJson).toContain('"dev": "electron-forge start"');
+    expect(packageJson).toContain('"build": "electron-forge package"');
+    expect(importWizard).toContain("TXT");
+    expect(currentTask).toContain("polish");
+    expect(currentTask).toContain("expand");
+    expect(currentTask).toContain("proofread");
+    expect(currentTask).toContain("continue");
+    expect(settingsPage).toContain("OpenRouter");
   });
 
   it("does not expose incomplete V1 affordances or internal runtime terms in user-facing source", () => {
@@ -336,17 +337,9 @@ describe("phase 11 V1 hardening", () => {
     expect(css).toContain("@media (max-width: 760px)");
   });
 
-  it("marks the Phase 11 implementation checklist complete after hardening", () => {
-    const plan = readSource("docs/superpowers/plans/2026-04-27-novel-tool-v1.md");
+  it("keeps local-only docs out of the versioned test contract", () => {
+    const gitignore = readSource(".gitignore");
 
-    expect(plan).toContain("- [x] Add empty/loading/error states for welcome, writing, settings, import, and AI task surfaces.");
-    expect(plan).toContain("- [x] Verify right sidebar visual states: closed, AI chat, current task, scratchpad.");
-    expect(plan).toContain("- [x] Verify AI generation states: configured, generating, preview ready, failed.");
-    expect(plan).toContain("- [x] Verify save states: dirty, saving, saved, failed.");
-    expect(plan).toContain("- [x] Verify TXT import failure states: read failed, parse failed, write failed.");
-    expect(plan).toContain("- [x] Add keyboard-safe and responsive layout checks for common desktop sizes.");
-    expect(plan).toContain("- [x] Run full typecheck, unit, integration, and E2E test suite.");
-    expect(plan).toContain("- [x] Write V1 user guide with run commands and core workflows.");
-    expect(plan).toContain("- [x] Remove any UI copy exposing internal terms such as artifact, agent run, context package, token budget, pipeline.");
+    expect(gitignore).toMatch(/^docs\/$/m);
   });
 });

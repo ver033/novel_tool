@@ -245,6 +245,15 @@ export class ProjectService {
     return this.activeProjectDb;
   }
 
+  close(): void {
+    if (this.activeProjectDb) {
+      this.activeProjectDb.close();
+      this.activeProjectDb = null;
+      this.activeProjectFilePath = null;
+      this.activeProjectId = null;
+    }
+  }
+
   private registerRecentProject(project: ProjectRecord, updatedAt: string): void {
     this.projectRepo.upsert({
       ...project,

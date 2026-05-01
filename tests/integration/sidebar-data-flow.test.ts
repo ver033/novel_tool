@@ -11,6 +11,12 @@ import { ScratchNoteRepository } from "../../src/main/db/repositories/scratch-no
 import { ProjectService } from "../../src/main/project/project-service";
 
 const tempDirs: string[] = [];
+const projectServices: ProjectService[] = [];
+
+function trackProjectService(projectService: ProjectService): ProjectService {
+  projectServices.push(projectService);
+  return projectService;
+}
 
 function createServices() {
   const dir = mkdtempSync(join(tmpdir(), "novel-tool-sidebar-flow-"));
@@ -19,9 +25,11 @@ function createServices() {
   runMigrations(db);
 
   const projectRepo = new ProjectRepository(db);
-  const projectService = new ProjectService(projectRepo, {
-    projectFileDirectory: join(dir, "projects")
-  });
+  const projectService = trackProjectService(
+    new ProjectService(projectRepo, {
+      projectFileDirectory: join(dir, "projects")
+    })
+  );
   const resolveProjectDb = (projectId?: string) =>
     projectId ? projectService.getProjectDatabaseForProject(projectId) : projectService.getActiveProjectDatabase();
 
@@ -35,6 +43,9 @@ function createServices() {
 }
 
 afterEach(() => {
+  for (const projectService of projectServices.splice(0)) {
+    projectService.close();
+  }
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }

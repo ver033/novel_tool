@@ -11,6 +11,12 @@ import { TxtImporter } from "../../src/main/import/txt-importer";
 import { ProjectService } from "../../src/main/project/project-service";
 
 const tempDirs: string[] = [];
+const projectServices: ProjectService[] = [];
+
+function trackProjectService(projectService: ProjectService): ProjectService {
+  projectServices.push(projectService);
+  return projectService;
+}
 
 function createProjectFileServices() {
   const dir = mkdtempSync(join(tmpdir(), "novel-tool-project-file-"));
@@ -25,11 +31,14 @@ function createProjectFileServices() {
     db,
     dir,
     importer: new TxtImporter(importJobRepo, projectRepo),
-    projectService: new ProjectService(projectRepo)
+    projectService: trackProjectService(new ProjectService(projectRepo))
   };
 }
 
 afterEach(() => {
+  for (const projectService of projectServices.splice(0)) {
+    projectService.close();
+  }
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -64,7 +73,7 @@ describe("local project file flow", () => {
 
     const freshAppDb = createDatabase(join(dir, "fresh-app.sqlite3"));
     runMigrations(freshAppDb);
-    const freshProjectService = new ProjectService(new ProjectRepository(freshAppDb));
+    const freshProjectService = trackProjectService(new ProjectService(new ProjectRepository(freshAppDb)));
     const openedFromFreshAppDb = freshProjectService.openProjectFile({ filePath: confirmed.project.rootPath! });
     expect(openedFromFreshAppDb.project.id).toBe(confirmed.project.id);
     expect(openedFromFreshAppDb.chapters.map((chapter) => chapter.title)).toEqual(["第一章 回家"]);
@@ -104,6 +113,7 @@ describe("local project file flow", () => {
     const { db, dir, projectService } = createProjectFileServices();
     const projectPath = join(dir, "缺失.noveltool");
     const created = projectService.createProject({ name: "缺失", rootPath: projectPath });
+    projectService.close();
     unlinkSync(projectPath);
 
     expect(() => projectService.openProjectFile({ filePath: created.project.rootPath! })).toThrow("项目文件不存在");

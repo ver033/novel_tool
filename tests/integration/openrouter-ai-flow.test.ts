@@ -12,6 +12,7 @@ import { ProjectService } from "../../src/main/project/project-service";
 import { SettingsService, type SecretStore, type OpenRouterConnectionTester, type OpenRouterModelCatalog } from "../../src/main/settings/settings-service";
 
 const tempDirs: string[] = [];
+const projectServices: ProjectService[] = [];
 
 const memorySecretStore: SecretStore = {
   encrypt(value) {
@@ -22,15 +23,22 @@ const memorySecretStore: SecretStore = {
   }
 };
 
+function trackProjectService(projectService: ProjectService): ProjectService {
+  projectServices.push(projectService);
+  return projectService;
+}
+
 function createServices(generator?: AiTaskGenerator, tester?: OpenRouterConnectionTester, chatGenerator?: AiChatGenerator, modelCatalog?: OpenRouterModelCatalog) {
   const dir = mkdtempSync(join(tmpdir(), "novel-tool-openrouter-flow-"));
   tempDirs.push(dir);
   const db = createDatabase(join(dir, "novel-tool.sqlite3"));
   runMigrations(db);
 
-  const projectService = new ProjectService(new ProjectRepository(db), {
-    projectFileDirectory: join(dir, "projects")
-  });
+  const projectService = trackProjectService(
+    new ProjectService(new ProjectRepository(db), {
+      projectFileDirectory: join(dir, "projects")
+    })
+  );
   const resolveProjectDb = (projectId?: string) =>
     projectId ? projectService.getProjectDatabaseForProject(projectId) : projectService.getActiveProjectDatabase();
   const settingsRepo = new SettingsRepository(db);
@@ -50,6 +58,9 @@ function createServices(generator?: AiTaskGenerator, tester?: OpenRouterConnecti
 }
 
 afterEach(() => {
+  for (const projectService of projectServices.splice(0)) {
+    projectService.close();
+  }
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }

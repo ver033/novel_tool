@@ -11,6 +11,12 @@ import { TxtImporter } from "../../src/main/import/txt-importer";
 import { ProjectService } from "../../src/main/project/project-service";
 
 const tempDirs: string[] = [];
+const projectServices: ProjectService[] = [];
+
+function trackProjectService(projectService: ProjectService): ProjectService {
+  projectServices.push(projectService);
+  return projectService;
+}
 
 function createImporter() {
   const dir = mkdtempSync(join(tmpdir(), "novel-tool-import-flow-"));
@@ -21,9 +27,11 @@ function createImporter() {
   const chapterRepo = new ChapterRepository(db);
   const importJobRepo = new ImportJobRepository(db);
   const projectRepo = new ProjectRepository(db);
-  const projectService = new ProjectService(projectRepo, {
-    projectFileDirectory: join(dir, "projects")
-  });
+  const projectService = trackProjectService(
+    new ProjectService(projectRepo, {
+      projectFileDirectory: join(dir, "projects")
+    })
+  );
 
   return {
     db,
@@ -36,6 +44,9 @@ function createImporter() {
 }
 
 afterEach(() => {
+  for (const projectService of projectServices.splice(0)) {
+    projectService.close();
+  }
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }

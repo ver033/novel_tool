@@ -43,14 +43,10 @@ describe("TXT export page wiring", () => {
 
   it("documents the V1 export boundary without AI or scratchpad content", () => {
     const exportPage = readSource("src/renderer/routes/ExportPage.tsx");
-    const agents = readSource("docs/AGENTS.md");
-    const spec = readSource("docs/NOVEL_TOOL_DEVELOPMENT_SPEC.md");
 
     expect(exportPage).toContain("api.export.selectTxtFilePath");
     expect(exportPage).toContain("api.export.exportTxt");
     expect(exportPage).toContain("草稿纸和 AI 记录不会进入正文导出");
     expect(exportPage).not.toContain("RightUtilitySidebar");
-    expect(agents).toContain("导出页只做 TXT 正文导出");
-    expect(spec).toContain("V1 导出入口位于写作页顶栏");
   });
 });

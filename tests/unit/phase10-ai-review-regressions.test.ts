@@ -46,12 +46,12 @@ describe("phase 10 AI review regressions", () => {
   });
 
   it("keeps the implementation plan aligned with OpenRouter-only runtime AI", () => {
-    const plan = readSource("docs/superpowers/plans/2026-04-27-novel-tool-v1.md");
+    const taskGenerator = readSource("src/main/ai/openrouter-task-generator.ts");
+    const aiTaskService = readSource("src/main/ai/ai-task-service.ts");
 
-    expect(plan).not.toContain("mock-ai-client.ts");
-    expect(plan).not.toContain("mock AI client");
-    expect(plan).not.toContain("using mock AI");
-    expect(plan).not.toContain("OpenAI-compatible client");
-    expect(plan).toContain("test doubles");
+    expect(taskGenerator).not.toContain("mock-ai-client.ts");
+    expect(taskGenerator).not.toContain("mock AI client");
+    expect(aiTaskService).not.toContain("using mock AI");
+    expect(aiTaskService).toContain("AiTaskGenerator");
   });
 });
