@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import forgeConfig from "../../forge.config";
 
 const repoRoot = join(__dirname, "..", "..");
 
@@ -77,12 +78,19 @@ describe("release workflow hardening", () => {
     }
   });
 
-  it("uses Electron Forge make without an invalid short --targets override", () => {
+  it("keeps Electron Packager hooks callback-style so Forge make can continue after package", () => {
+    const afterCompleteHooks = forgeConfig.packagerConfig?.afterComplete ?? [];
+
+    expect(afterCompleteHooks).toHaveLength(1);
+    expect(afterCompleteHooks[0]).toHaveLength(5);
+  });
+
+  it("lets Electron Forge resolve the configured Windows makers", () => {
     const packageJson = JSON.parse(readRepoFile("package.json")) as { scripts?: Record<string, string> };
 
     expect(packageJson.scripts?.["premake:windows"]).toBe("npm run rebuild:electron");
     expect(packageJson.scripts?.["make:windows"]).toBe("electron-forge make --platform=win32 --arch=x64");
-    expect(packageJson.scripts?.["make:windows"]).not.toContain("--targets=squirrel");
+    expect(packageJson.scripts?.["make:windows"]).not.toContain("--targets=");
 
     for (const workflowPath of [".github/workflows/package-windows.yml", ".github/workflows/release-windows.yml"]) {
       const workflow = readRepoFile(workflowPath);
