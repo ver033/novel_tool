@@ -14,6 +14,8 @@
     "package": "electron-forge package",
     "premake": "npm run rebuild:electron",
     "make": "electron-forge make",
+    "premake:windows": "npm run rebuild:electron",
+    "make:windows": "electron-forge make --platform=win32 --arch=x64 --targets=squirrel",
     "pretest": "npm run rebuild:node",
     "test": "vitest run --exclude 'tests/e2e/**'",
     "test:e2e": "playwright test tests/e2e",
