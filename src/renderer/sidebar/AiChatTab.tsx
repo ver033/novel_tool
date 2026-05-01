@@ -1,0 +1,499 @@
+import { PaperPlaneRight, Plus, Stop, Trash } from "@phosphor-icons/react";
+import { type CSSProperties, type KeyboardEvent, type ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import type { AiChatMessageRecord, ChapterSummary, SelectionSnapshot } from "../../main/shared/types";
+import { Button } from "../components/Button";
+import { Modal } from "../components/Modal";
+import type { SettingsCategory } from "../routes/SettingsPage";
+import { useChatStore } from "../state/chat-store";
+import { ChatMessageContent } from "./ChatMessageContent";
+import { buildChatContextUsageDisplay } from "./chat-context-display";
+import type { AiChatDraftSeed } from "./chat-draft";
+
+type AiChatTabProps = {
+  readonly chapters: readonly ChapterSummary[];
+  readonly currentChapterId: string | null;
+  readonly currentChapterTitle: string | null;
+  readonly currentProjectId: string | null;
+  readonly draftSeed: AiChatDraftSeed | null;
+  readonly selectionSnapshot: SelectionSnapshot | null;
+  readonly onOpenSettings: (category?: SettingsCategory) => void;
+};
+
+type ChatCommandSuggestion = {
+  readonly label: string;
+  readonly detail: string;
+  readonly insertText: string;
+};
+
+type ActiveCommand = {
+  readonly trigger: "@" | "/";
+  readonly query: string;
+  readonly start: number;
+  readonly end: number;
+};
+
+const chatSkillSuggestions: readonly ChatCommandSuggestion[] = [
+  { label: "/润色", detail: "调用润色 skill，只返回候选正文", insertText: "/润色" },
+  { label: "/扩写", detail: "调用扩写 skill，补足动作、心理和承接", insertText: "/扩写" },
+  { label: "/校对", detail: "调用校对 skill，只列出问题和建议", insertText: "/校对" },
+  { label: "/续写", detail: "调用续写 skill，延续当前上下文", insertText: "/续写" }
+];
+
+const aiSettingsErrorMarkers = [
+  "OpenRouter API Key 未配置",
+  "OpenRouter 模型名称未配置",
+  "OpenRouter 对话服务未初始化",
+  "OpenRouter 连接测试未初始化",
+  "安全存储未初始化",
+  "safeStorage 不可用"
+];
+
+function messageClassName(message: AiChatMessageRecord): string {
+  if (message.role === "user") {
+    return "message user";
+  }
+  if (message.role === "tool") {
+    return "message tool";
+  }
+  if (message.role === "error") {
+    return "message error-message";
+  }
+  return "message";
+}
+
+function isAiSettingsError(error: string): boolean {
+  return aiSettingsErrorMarkers.some((marker) => error.includes(marker));
+}
+
+function isOpenRouterRateLimitError(error: string): boolean {
+  return (
+    error.includes("OpenRouter 请求失败 (429)") ||
+    error.includes("rate limited") ||
+    error.includes("Rate limit") ||
+    error.includes("Resource has been exhausted") ||
+    error.includes("限流")
+  );
+}
+
+function isMissingChapterError(error: string): boolean {
+  return error.includes("找不到第") && error.includes("章");
+}
+
+function isChatInputTooLongError(error: string): boolean {
+  return error.includes("AI 对话上下文太长") || error.includes("选区太长");
+}
+
+function chatErrorTitle(error: string): string {
+  if (isAiSettingsError(error)) {
+    return "AI 服务未配置";
+  }
+  if (isOpenRouterRateLimitError(error)) {
+    return "OpenRouter 请求被限流";
+  }
+  if (isMissingChapterError(error)) {
+    return "找不到章节";
+  }
+  if (isChatInputTooLongError(error)) {
+    return "对话上下文过长";
+  }
+  return "AI 对话失败";
+}
+
+function chatErrorHint(error: string): string | null {
+  if (isAiSettingsError(error)) {
+    return "请先填写 OpenRouter API Key 和模型名称，并测试保存。";
+  }
+  if (isOpenRouterRateLimitError(error)) {
+    return "当前模型或上游 Provider 正在限流。可以稍后重试，或在 AI 服务设置中换用其他模型。";
+  }
+  if (isMissingChapterError(error)) {
+    return "请检查章节编号是否存在；如果刚导入或重排章节，先确认左侧章节列表。";
+  }
+  if (isChatInputTooLongError(error)) {
+    return "请缩短问题、取消过长选区，或改成分章/分段提问。";
+  }
+  return null;
+}
+
+function getLastUserMessage(messages: readonly AiChatMessageRecord[]): AiChatMessageRecord | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role === "user") {
+      return message;
+    }
+  }
+  return null;
+}
+
+function getActiveCommand(value: string, cursorIndex: number): ActiveCommand | null {
+  const beforeCursor = value.slice(0, cursorIndex);
+  const match = /(^|\s)([@/][^\s@/]*)$/.exec(beforeCursor);
+  if (!match) {
+    return null;
+  }
+
+  const token = match[2];
+  const trigger = token[0] as "@" | "/";
+  return {
+    trigger,
+    query: token.slice(1),
+    start: beforeCursor.length - token.length,
+    end: cursorIndex
+  };
+}
+
+function filterCommandSuggestions(suggestions: readonly ChatCommandSuggestion[], query: string): readonly ChatCommandSuggestion[] {
+  const normalizedQuery = query.trim().toLocaleLowerCase("zh-CN");
+  if (!normalizedQuery) {
+    return suggestions.slice(0, 8);
+  }
+
+  return suggestions
+    .filter((item) => `${item.label} ${item.detail}`.toLocaleLowerCase("zh-CN").includes(normalizedQuery))
+    .slice(0, 8);
+}
+
+export function AiChatTab({ chapters, currentChapterId, currentChapterTitle, currentProjectId, draftSeed, selectionSnapshot, onOpenSettings }: AiChatTabProps) {
+  const [draft, setDraft] = useState("");
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [cursorIndex, setCursorIndex] = useState(0);
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const chatStore = useChatStore({
+    projectId: currentProjectId,
+    currentChapterId,
+    currentChapterTitle,
+    selectionSnapshot
+  });
+
+  useEffect(() => {
+    const selectedText = draftSeed?.text.trim();
+    if (!selectedText) {
+      return;
+    }
+
+    setDraft((current) => {
+      const nextDraft = current.trim() ? `${current.trimEnd()}\n\n${selectedText}\n` : `${selectedText}\n`;
+      const nextCursorIndex = nextDraft.length;
+      setCursorIndex(nextCursorIndex);
+      requestAnimationFrame(() => {
+        inputRef.current?.focus();
+        inputRef.current?.setSelectionRange(nextCursorIndex, nextCursorIndex);
+      });
+      return nextDraft;
+    });
+  }, [draftSeed?.id]);
+  const chatMentionSuggestions = useMemo(() => {
+    const suggestions: ChatCommandSuggestion[] = [];
+    if (selectionSnapshot?.text) {
+      suggestions.push({
+        label: "@选区",
+        detail: "使用当前选中的正文",
+        insertText: "@选区"
+      });
+    }
+    if (currentChapterTitle) {
+      suggestions.push({
+        label: "@当前章节",
+        detail: currentChapterTitle,
+        insertText: "@当前章节"
+      });
+    }
+    suggestions.push({
+      label: "@全部章节",
+      detail: "读取当前项目所有章节",
+      insertText: "@全部章节"
+    });
+    for (const [index, chapter] of chapters.entries()) {
+      suggestions.push({
+        label: `@第${index + 1}章`,
+        detail: chapter.title,
+        insertText: `@第${index + 1}章`
+      });
+    }
+    return suggestions;
+  }, [chapters, currentChapterTitle, selectionSnapshot?.text]);
+
+  const activeCommand = getActiveCommand(draft, cursorIndex);
+  const commandSuggestions = activeCommand
+    ? filterCommandSuggestions(activeCommand.trigger === "@" ? chatMentionSuggestions : chatSkillSuggestions, activeCommand.query)
+    : [];
+  const showCommandSuggestions = commandSuggestions.length > 0 && !chatStore.busy && !chatStore.loading;
+
+  async function sendMessage(): Promise<void> {
+    const message = draft.trim();
+    if (!message || chatStore.busy || chatStore.loading || !chatStore.session) {
+      return;
+    }
+
+    setDraft("");
+    await chatStore.sendMessage(message);
+  }
+
+  function handleDraftChange(event: ChangeEvent<HTMLTextAreaElement>): void {
+    setDraft(event.target.value);
+    setCursorIndex(event.currentTarget.selectionStart ?? event.target.value.length);
+  }
+
+  function insertCommandSuggestion(suggestion: ChatCommandSuggestion): void {
+    if (!activeCommand) {
+      return;
+    }
+    const nextDraft = `${draft.slice(0, activeCommand.start)}${suggestion.insertText} ${draft.slice(activeCommand.end)}`;
+    const nextCursor = activeCommand.start + suggestion.insertText.length + 1;
+    setDraft(nextDraft);
+    setCursorIndex(nextCursor);
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.setSelectionRange(nextCursor, nextCursor);
+    });
+  }
+
+  function handleDraftKeyDown(event: KeyboardEvent<HTMLTextAreaElement>): void {
+    if (showCommandSuggestions && event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+      event.preventDefault();
+      insertCommandSuggestion(commandSuggestions[0]);
+      return;
+    }
+    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+      event.preventDefault();
+      void sendMessage();
+    }
+  }
+
+  async function retryLastMessage(): Promise<void> {
+    const lastUserMessage = getLastUserMessage(chatStore.messages);
+    if (!lastUserMessage || chatStore.busy || chatStore.loading || !chatStore.session) {
+      return;
+    }
+
+    await chatStore.sendMessage(lastUserMessage.content);
+  }
+
+  async function deleteCurrentSession(): Promise<void> {
+    setDeleteConfirmOpen(false);
+    await chatStore.deleteCurrentSession();
+  }
+
+  const lastUserMessage = getLastUserMessage(chatStore.messages);
+  const errorHint = chatStore.error ? chatErrorHint(chatStore.error) : null;
+  const showSettingsAction = Boolean(chatStore.error && (isAiSettingsError(chatStore.error) || isOpenRouterRateLimitError(chatStore.error)));
+  const contextDisplay = chatStore.contextUsage ? buildChatContextUsageDisplay(chatStore.contextUsage) : null;
+  const showContextStatus = Boolean(contextDisplay || chatStore.contextUsagePending);
+  const contextRingStyle = contextDisplay
+    ? ({
+        "--context-used": `${contextDisplay.percent * 3.6}deg`
+      } as CSSProperties)
+    : undefined;
+
+  return (
+    <>
+      <section className="chat">
+        <div className="chat-title-row">
+          <h2 className="task-title">AI 对话</h2>
+          <div className="chat-title-actions">
+            <button
+              className="small-button blue chat-new-button"
+              disabled={chatStore.busy || chatStore.loading || !currentProjectId}
+              onClick={() => void chatStore.createSession()}
+              type="button"
+              title="新建一个空白 AI 对话"
+            >
+              <Plus size={15} />
+              新对话
+            </button>
+            <button
+              className="icon-lite-button"
+              disabled={chatStore.busy || chatStore.loading || !chatStore.session}
+              onClick={() => setDeleteConfirmOpen(true)}
+              type="button"
+              aria-label="删除当前对话"
+              title="删除当前对话"
+            >
+              <Trash size={16} />
+            </button>
+          </div>
+        </div>
+        <div className="chat-session-bar">
+          <select
+            aria-label="切换 AI 对话"
+            className="chat-session-select"
+            disabled={chatStore.busy || chatStore.loading || chatStore.sessions.length === 0}
+            onChange={(event) => void chatStore.selectSession(event.target.value)}
+            title="切换 AI 对话"
+            value={chatStore.session?.id ?? ""}
+          >
+            {chatStore.sessions.length === 0 ? <option value="">暂无对话</option> : null}
+            {chatStore.sessions.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.title}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="chips">
+          <span className="chip">当前章节：{currentChapterTitle ?? "未选择章节"}</span>
+          <span className="chip">{selectionSnapshot ? "已选中文本" : "未选中文本"}</span>
+        </div>
+        <div className="messages" aria-live="polite">
+          {chatStore.loading ? (
+            <div className="message pending" role="status">
+              <div className="message-content">正在读取 AI 对话...</div>
+            </div>
+          ) : null}
+          {!chatStore.loading && chatStore.messages.length === 0 ? (
+            <div className="message">
+              <div className="message-content">暂无对话记录。</div>
+            </div>
+          ) : null}
+          {chatStore.messages.map((message) => (
+            <div className={messageClassName(message)} key={message.id}>
+              <ChatMessageContent content={message.content} rich={message.role === "assistant"} />
+              <div className="message-time">{new Date(message.createdAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}</div>
+            </div>
+          ))}
+          {chatStore.busy ? (
+            <div className="message pending" role="status">
+              {chatStore.streamingReasoning ? (
+                <details className="chat-reasoning" open>
+                  <summary>思考</summary>
+                  <div>{chatStore.streamingReasoning}</div>
+                </details>
+              ) : null}
+              <ChatMessageContent
+                content={chatStore.streamingText ? chatStore.streamingText : chatStore.contextUsagePending ? "正在分析上下文..." : "AI 正在思考中"}
+                rich={Boolean(chatStore.streamingText)}
+              />
+            </div>
+          ) : null}
+          {chatStore.error ? (
+            <div className="chat-error-panel" role="alert">
+              <b>{chatErrorTitle(chatStore.error)}</b>
+              <p>{chatStore.error}</p>
+              {errorHint ? <p className="chat-error-hint">{errorHint}</p> : null}
+              <div className="chat-error-actions">
+                <button
+                  className="small-button blue"
+                  disabled={!lastUserMessage || chatStore.busy || chatStore.loading || !chatStore.session}
+                  onClick={() => void retryLastMessage()}
+                  type="button"
+                >
+                  重试上一条
+                </button>
+                {showSettingsAction ? (
+                  <button className="small-button" onClick={() => onOpenSettings("AI 服务")} type="button">
+                    打开 AI 服务设置
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+        </div>
+        <div className="chat-input">
+          {showCommandSuggestions ? (
+            <div className="chat-command-menu" role="listbox" aria-label={activeCommand?.trigger === "@" ? "选择上下文范围" : "选择写作操作"}>
+              <div className="chat-command-menu-title">{activeCommand?.trigger === "@" ? "选择上下文" : "调用 skill"}</div>
+              {commandSuggestions.map((suggestion) => (
+                <button className="chat-command-item" key={suggestion.label} onMouseDown={(event) => event.preventDefault()} onClick={() => insertCommandSuggestion(suggestion)} type="button">
+                  <span>{suggestion.label}</span>
+                  <small>{suggestion.detail}</small>
+                </button>
+              ))}
+            </div>
+          ) : null}
+          <textarea
+            aria-label="AI 对话输入，Enter 发送，Shift Enter 换行"
+            onChange={handleDraftChange}
+            onClick={(event) => setCursorIndex(event.currentTarget.selectionStart ?? draft.length)}
+            onKeyDown={handleDraftKeyDown}
+            onKeyUp={(event) => setCursorIndex(event.currentTarget.selectionStart ?? draft.length)}
+            placeholder="告诉 AI 你的想法..."
+            ref={inputRef}
+            value={draft}
+          />
+          <div className="chat-bottom chat-bottom-send">
+            <div className="chat-bottom-meta">
+              {showContextStatus ? (
+                <div
+                  className={`chat-context-status${chatStore.contextUsagePending ? " preparing" : ""}`}
+                  aria-label={
+                    contextDisplay
+                      ? `背景信息窗口：${chatStore.contextUsagePending ? "正在准备新上下文，" : ""}${contextDisplay.percentText} 已用，${contextDisplay.usedOfTotalLabel}`
+                      : "正在分析上下文"
+                  }
+                  tabIndex={0}
+                >
+                  <div className="chat-context-status-main">
+                    <span className="chat-context-ring" style={contextRingStyle} aria-hidden="true" />
+                    <strong>{contextDisplay?.percentText ?? "分析中"}</strong>
+                    {contextDisplay ? <span>{contextDisplay.usedLabel}</span> : null}
+                    <span className="chat-context-model-label">{contextDisplay?.modelLabel ?? "准备上下文"}</span>
+                    {chatStore.contextUsagePending ? <span className="context-updating">更新中</span> : null}
+                  </div>
+                  {contextDisplay ? (
+                    <div className="chat-context-popover" role="tooltip">
+                      <div className="chat-context-popover-title">背景信息窗口：</div>
+                      <div className="chat-context-popover-percent">{contextDisplay.percentText} 已用</div>
+                      <div className="chat-context-popover-total">{contextDisplay.usedOfTotalLabel}</div>
+                      <div className="chat-context-popover-strong">{contextDisplay.compressionLabel}</div>
+                      {chatStore.contextUsagePending ? (
+                        <div className="chat-context-popover-pending">正在准备新上下文，新用量会在最终请求开始时刷新。</div>
+                      ) : null}
+                      <div className="chat-context-popover-meta">
+                        <span>模型 {contextDisplay.modelLabel}</span>
+                        <span>范围 {contextDisplay.scopeLabel}</span>
+                        <span>模型窗口 {contextDisplay.windowLabel}</span>
+                        <span>输入预算 {contextDisplay.inputBudgetLabel}</span>
+                        <span>输出 {contextDisplay.outputBudgetLabel}</span>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+            {chatStore.busy ? (
+              <button
+                className="send stop"
+                disabled={chatStore.loading}
+                onClick={() => chatStore.cancelActiveStream()}
+                type="button"
+                aria-label="停止 AI 回答"
+                title="停止 AI 回答"
+              >
+                <Stop size={20} weight="fill" />
+              </button>
+            ) : (
+              <button
+                className="send"
+                disabled={!draft.trim() || chatStore.loading || !chatStore.session || !currentProjectId}
+                onClick={() => void sendMessage()}
+                type="button"
+                aria-label="发送"
+              >
+                <PaperPlaneRight size={20} weight="regular" />
+              </button>
+            )}
+          </div>
+        </div>
+      </section>
+      <Modal open={deleteConfirmOpen} title="删除当前对话" onClose={() => setDeleteConfirmOpen(false)}>
+        <div className="confirm-dialog-body">
+          <p>删除后，这个 AI 对话和其中的消息记录会从当前项目中移除。</p>
+          <div className="modal-actions">
+            <Button onClick={() => setDeleteConfirmOpen(false)} type="button" variant="ghost">
+              取消
+            </Button>
+            <Button
+              className="danger-button"
+              disabled={chatStore.busy || chatStore.loading}
+              onClick={() => void deleteCurrentSession()}
+              type="button"
+              variant="primary"
+            >
+              删除
+            </Button>
+          </div>
+        </div>
+      </Modal>
+    </>
+  );
+}

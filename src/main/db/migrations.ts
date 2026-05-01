@@ -1,0 +1,269 @@
+import type { SqliteDatabase } from "./database";
+
+type Migration = {
+  readonly version: number;
+  readonly name: string;
+  readonly up: (db: SqliteDatabase) => void;
+};
+
+function tableHasColumn(db: SqliteDatabase, tableName: string, columnName: string): boolean {
+  return db
+    .prepare(`PRAGMA table_info(${tableName})`)
+    .all()
+    .some((row) => row.name === columnName);
+}
+
+const migrations: readonly Migration[] = [
+  {
+    version: 1,
+    name: "v1_foundation",
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS projects (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          root_path TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS chapters (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          title TEXT NOT NULL,
+          volume_title TEXT,
+          sort_order INTEGER NOT NULL,
+          content_json TEXT NOT NULL,
+          plain_text TEXT NOT NULL,
+          word_count INTEGER NOT NULL DEFAULT 0,
+          daily_word_count INTEGER NOT NULL DEFAULT 0,
+          daily_word_count_date TEXT,
+          target_word_count INTEGER,
+          status TEXT NOT NULL DEFAULT 'draft',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_chapters_project_sort
+          ON chapters(project_id, sort_order);
+
+        CREATE TABLE IF NOT EXISTS chapter_snapshots (
+          id TEXT PRIMARY KEY,
+          chapter_id TEXT NOT NULL,
+          content_json TEXT NOT NULL,
+          plain_text TEXT NOT NULL,
+          reason TEXT,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY (chapter_id) REFERENCES chapters(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_chapter_snapshots_chapter_created
+          ON chapter_snapshots(chapter_id, created_at);
+
+        CREATE TABLE IF NOT EXISTS ai_tasks (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          chapter_id TEXT,
+          task_type TEXT NOT NULL CHECK (task_type IN ('polish', 'expand', 'proofread', 'continue')),
+          status TEXT NOT NULL CHECK (status IN ('empty', 'configured', 'generating', 'preview_ready', 'failed', 'applied', 'inserted', 'saved_to_scratchpad')),
+          selection_json TEXT,
+          input_text TEXT,
+          instruction TEXT,
+          preset_id TEXT,
+          output_text TEXT,
+          error TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+          FOREIGN KEY (chapter_id) REFERENCES chapters(id) ON DELETE SET NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_ai_tasks_project_created
+          ON ai_tasks(project_id, created_at);
+
+        CREATE TABLE IF NOT EXISTS ai_task_candidates (
+          id TEXT PRIMARY KEY,
+          task_id TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          original_text TEXT,
+          generated_text TEXT NOT NULL,
+          change_summary TEXT,
+          status TEXT NOT NULL DEFAULT 'preview'
+            CHECK (status IN ('preview', 'applied', 'inserted', 'rejected', 'copied', 'inserted_to_scratchpad')),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY (task_id) REFERENCES ai_tasks(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_ai_task_candidates_task_created
+          ON ai_task_candidates(task_id, created_at);
+
+        CREATE TABLE IF NOT EXISTS scratch_notes (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          chapter_id TEXT,
+          content TEXT NOT NULL,
+          pinned INTEGER NOT NULL DEFAULT 0,
+          source_task_id TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+          FOREIGN KEY (chapter_id) REFERENCES chapters(id) ON DELETE SET NULL,
+          FOREIGN KEY (source_task_id) REFERENCES ai_tasks(id) ON DELETE SET NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_scratch_notes_project_updated
+          ON scratch_notes(project_id, updated_at);
+
+        CREATE TABLE IF NOT EXISTS prompt_presets (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          task_type TEXT NOT NULL CHECK (task_type IN ('polish', 'expand', 'proofread', 'continue')),
+          description TEXT,
+          system_prompt TEXT NOT NULL,
+          user_template TEXT NOT NULL,
+          constraints TEXT,
+          is_builtin INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_prompt_presets_project_task
+          ON prompt_presets(project_id, task_type);
+
+        CREATE TABLE IF NOT EXISTS import_jobs (
+          id TEXT PRIMARY KEY,
+          project_id TEXT,
+          source_path TEXT NOT NULL,
+          source_type TEXT NOT NULL CHECK (source_type IN ('txt')),
+          status TEXT NOT NULL CHECK (status IN ('idle', 'reading', 'parsing', 'preview', 'editing_split', 'writing', 'completed', 'failed', 'cancelled')),
+          parsed_json TEXT,
+          error TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS settings (
+          key TEXT PRIMARY KEY,
+          value_json TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+      `);
+    }
+  },
+  {
+    version: 2,
+    name: "ai_candidate_metadata",
+    up(db) {
+      if (!tableHasColumn(db, "ai_task_candidates", "metadata_json")) {
+        db.exec("ALTER TABLE ai_task_candidates ADD COLUMN metadata_json TEXT;");
+      }
+    }
+  },
+  {
+    version: 3,
+    name: "ai_chat_persistence",
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS ai_chat_sessions (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          title TEXT NOT NULL,
+          status TEXT NOT NULL CHECK (status IN ('active', 'deleted')),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_ai_chat_sessions_project_updated
+          ON ai_chat_sessions(project_id, updated_at);
+
+        CREATE TABLE IF NOT EXISTS ai_chat_messages (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          project_id TEXT NOT NULL,
+          role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'tool', 'error')),
+          content TEXT NOT NULL,
+          action_json TEXT,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY (session_id) REFERENCES ai_chat_sessions(id) ON DELETE CASCADE,
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_ai_chat_messages_session_created
+          ON ai_chat_messages(session_id, created_at);
+      `);
+    }
+  },
+  {
+    version: 4,
+    name: "chapter_daily_word_count_date",
+    up(db) {
+      if (!tableHasColumn(db, "chapters", "daily_word_count_date")) {
+        db.exec("ALTER TABLE chapters ADD COLUMN daily_word_count_date TEXT;");
+      }
+    }
+  },
+  {
+    version: 5,
+    name: "ai_chat_session_context_usage",
+    up(db) {
+      if (!tableHasColumn(db, "ai_chat_sessions", "context_usage_json")) {
+        db.exec("ALTER TABLE ai_chat_sessions ADD COLUMN context_usage_json TEXT;");
+      }
+    }
+  },
+  {
+    version: 6,
+    name: "ai_chat_session_memory_compaction",
+    up(db) {
+      if (!tableHasColumn(db, "ai_chat_sessions", "memory_summary")) {
+        db.exec("ALTER TABLE ai_chat_sessions ADD COLUMN memory_summary TEXT;");
+      }
+      if (!tableHasColumn(db, "ai_chat_sessions", "memory_compacted_through_message_id")) {
+        db.exec("ALTER TABLE ai_chat_sessions ADD COLUMN memory_compacted_through_message_id TEXT;");
+      }
+      if (!tableHasColumn(db, "ai_chat_sessions", "memory_updated_at")) {
+        db.exec("ALTER TABLE ai_chat_sessions ADD COLUMN memory_updated_at TEXT;");
+      }
+    }
+  }
+];
+
+export function runMigrations(db: SqliteDatabase): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      version INTEGER PRIMARY KEY,
+      name TEXT NOT NULL,
+      applied_at TEXT NOT NULL
+    );
+  `);
+
+  const appliedVersions = new Set(
+    db
+      .prepare("SELECT version FROM schema_migrations")
+      .all()
+      .map((row) => Number(row.version))
+  );
+
+  for (const migration of migrations) {
+    if (appliedVersions.has(migration.version)) {
+      continue;
+    }
+
+    const applyMigration = db.transaction(() => {
+      migration.up(db);
+      db.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)").run(
+        migration.version,
+        migration.name,
+        new Date().toISOString()
+      );
+    });
+
+    applyMigration();
+  }
+}

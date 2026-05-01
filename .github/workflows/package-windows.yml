@@ -1,0 +1,85 @@
+name: Package Windows
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: package-windows-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  package-windows:
+    name: Package Windows installer
+    runs-on: windows-2022
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22.14.0
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Check lockfile safety
+        run: node scripts/check-lockfile-safety.mjs
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build Windows installer
+        run: npm run make
+
+      - name: Validate Windows package output
+        shell: pwsh
+        run: |
+          $makeRoot = Join-Path $PWD "out\make\squirrel.windows"
+          if (-not (Test-Path $makeRoot)) {
+            throw "Expected Windows Squirrel output directory was not created: $makeRoot"
+          }
+
+          $installers = @(Get-ChildItem $makeRoot -Recurse -File -Filter "*.exe")
+          $packages = @(Get-ChildItem $makeRoot -Recurse -File -Filter "*.nupkg")
+          $releaseIndexes = @(Get-ChildItem $makeRoot -Recurse -File -Filter "RELEASES")
+
+          if ($installers.Count -lt 1) {
+            throw "Windows installer .exe was not found under $makeRoot"
+          }
+          if ($packages.Count -lt 1) {
+            throw "Squirrel .nupkg package was not found under $makeRoot"
+          }
+          if ($releaseIndexes.Count -lt 1) {
+            throw "Squirrel RELEASES index was not found under $makeRoot"
+          }
+
+          $makeRootPath = (Resolve-Path $makeRoot).Path
+          $artifactFiles = @(Get-ChildItem $makeRootPath -Recurse -File | Sort-Object FullName)
+          $checksumPath = Join-Path $makeRootPath "SHA256SUMS.txt"
+          $checksums = foreach ($file in $artifactFiles) {
+            $relativePath = $file.FullName.Substring($makeRootPath.Length + 1).Replace("\", "/")
+            $hash = (Get-FileHash -Algorithm SHA256 $file.FullName).Hash.ToLowerInvariant()
+            "$hash  $relativePath"
+          }
+          $checksums | Set-Content -Path $checksumPath -Encoding ascii
+
+          Write-Host "Windows package artifacts:"
+          Get-ChildItem $makeRootPath -Recurse -File |
+            Sort-Object FullName |
+            ForEach-Object { Write-Host "- $($_.FullName.Substring($makeRootPath.Length + 1))" }
+
+      - name: Upload Windows package artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: moshu-windows-${{ github.run_number }}
+          path: out/make/squirrel.windows/**
+          if-no-files-found: error
+          retention-days: 14

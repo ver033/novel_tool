@@ -1,0 +1,120 @@
+import { emptyChapterContent } from "./default-content";
+import { ChapterRepository } from "../db/repositories/chapter-repo";
+import { createId } from "../shared/ids";
+import { countWritingUnits } from "../shared/text";
+import type {
+  ChapterContent,
+  ChapterCreateInput,
+  ChapterCreateSnapshotInput,
+  ChapterDeleteInput,
+  ChapterGetContentInput,
+  ChapterListInput,
+  ChapterRenameInput,
+  ChapterSaveContentInput,
+  ChapterSnapshot,
+  ChapterSummary,
+  ChapterUpdateTargetWordCountInput
+} from "../shared/types";
+
+type ChapterRepositoryResolver = (projectId?: string) => ChapterRepository;
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+function localDateKey(value: Date = new Date()): string {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+export class ChapterService {
+  private readonly resolveChapterRepo: ChapterRepositoryResolver;
+
+  constructor(chapterRepo: ChapterRepository | ChapterRepositoryResolver) {
+    this.resolveChapterRepo = typeof chapterRepo === "function" ? chapterRepo : () => chapterRepo;
+  }
+
+  listChapters(input: ChapterListInput): ChapterSummary[] {
+    return this.resolveChapterRepo(input.projectId).listByProject(input.projectId);
+  }
+
+  createChapter(input: ChapterCreateInput): ChapterSummary {
+    const chapterRepo = this.resolveChapterRepo(input.projectId);
+    const createdAt = nowIso();
+    return chapterRepo.create({
+      id: createId("chapter"),
+      projectId: input.projectId,
+      title: input.title,
+      volumeTitle: input.volumeTitle ?? "第一卷",
+      sortOrder: input.sortOrder ?? chapterRepo.nextSortOrder(input.projectId),
+      contentJson: emptyChapterContent,
+      plainText: "",
+      wordCount: 0,
+      dailyWordCount: 0,
+      dailyWordCountDate: null,
+      targetWordCount: input.targetWordCount ?? null,
+      status: "draft",
+      createdAt,
+      updatedAt: createdAt
+    });
+  }
+
+  renameChapter(input: ChapterRenameInput): ChapterSummary {
+    return this.resolveChapterRepo(input.projectId).rename(input.chapterId, input.title, nowIso());
+  }
+
+  deleteChapter(input: ChapterDeleteInput): void {
+    this.resolveChapterRepo(input.projectId).delete(input.chapterId);
+  }
+
+  getContent(input: ChapterGetContentInput): ChapterContent {
+    const content = this.resolveChapterRepo(input.projectId).getContent(input.chapterId);
+    if (!content) {
+      throw new Error("Chapter not found");
+    }
+    return content;
+  }
+
+  saveContent(input: ChapterSaveContentInput): ChapterContent {
+    const chapterRepo = this.resolveChapterRepo(input.projectId);
+    const previousContent = chapterRepo.getContent(input.chapterId);
+    if (!previousContent) {
+      throw new Error("Chapter not found");
+    }
+
+    const nextWordCount = input.wordCount ?? countWritingUnits(input.plainText);
+    const today = localDateKey();
+    const wordCountDelta = nextWordCount - previousContent.wordCount;
+    const nextDailyWordCount =
+      previousContent.dailyWordCountDate === today ? Math.max(0, previousContent.dailyWordCount + wordCountDelta) : Math.max(0, wordCountDelta);
+
+    return chapterRepo.saveContent(
+      input.chapterId,
+      input.contentJson,
+      input.plainText,
+      nextWordCount,
+      nextDailyWordCount,
+      today,
+      nowIso(),
+      previousContent.updatedAt
+    );
+  }
+
+  updateTargetWordCount(input: ChapterUpdateTargetWordCountInput): ChapterSummary {
+    return this.resolveChapterRepo(input.projectId).updateTargetWordCount(input.chapterId, input.targetWordCount, nowIso());
+  }
+
+  createSnapshot(input: ChapterCreateSnapshotInput): ChapterSnapshot {
+    const content = this.getContent({ projectId: input.projectId, chapterId: input.chapterId });
+    return this.resolveChapterRepo(input.projectId).createSnapshot({
+      id: createId("snapshot"),
+      chapterId: input.chapterId,
+      contentJson: content.contentJson,
+      plainText: content.plainText,
+      reason: input.reason,
+      createdAt: nowIso()
+    });
+  }
+}

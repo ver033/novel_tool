@@ -1,0 +1,197 @@
+name: Release Windows
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version. Leave empty to use package.json version. If set, it must match package.json."
+        required: false
+        type: string
+      prerelease:
+        description: "Mark the draft release as a prerelease."
+        required: true
+        default: true
+        type: boolean
+      release_notes:
+        description: "Optional release notes."
+        required: false
+        type: string
+
+concurrency:
+  group: release-windows-${{ github.ref }}-${{ inputs.version || github.run_id }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release-windows:
+    name: Build and draft Windows release
+    runs-on: windows-2022
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22.14.0
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Resolve release version
+        id: version
+        shell: pwsh
+        run: |
+          $packageVersion = (node -p "require('./package.json').version").Trim()
+          $inputVersion = "${{ inputs.version }}".Trim()
+          if ($inputVersion.StartsWith("v")) {
+            $inputVersion = $inputVersion.Substring(1)
+          }
+
+          if ($inputVersion) {
+            if ($inputVersion -ne $packageVersion) {
+              throw "Input version '$inputVersion' does not match package.json version '$packageVersion'. Update package.json first or leave version empty."
+            }
+            $version = $inputVersion
+          } else {
+            $version = $packageVersion
+          }
+
+          $tagName = "v$version"
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag_name=$tagName" >> $env:GITHUB_OUTPUT
+          Write-Host "Release version: $version"
+          Write-Host "Release tag: $tagName"
+
+      - name: Ensure release does not already exist
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ steps.version.outputs.tag_name }}
+        run: |
+          gh release view $env:TAG_NAME *> $null
+          if ($LASTEXITCODE -eq 0) {
+            throw "GitHub release '$env:TAG_NAME' already exists."
+          }
+          Write-Host "No existing GitHub release found for '$env:TAG_NAME'."
+          exit 0
+
+      - name: Check lockfile safety
+        run: node scripts/check-lockfile-safety.mjs
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build Windows installer
+        run: npm run make
+
+      - name: Validate and checksum Windows release assets
+        id: assets
+        shell: pwsh
+        run: |
+          $makeRoot = Join-Path $PWD "out\make\squirrel.windows"
+          if (-not (Test-Path $makeRoot)) {
+            throw "Expected Windows Squirrel output directory was not created: $makeRoot"
+          }
+
+          $installers = @(Get-ChildItem $makeRoot -Recurse -File -Filter "*.exe")
+          $packages = @(Get-ChildItem $makeRoot -Recurse -File -Filter "*.nupkg")
+          $releaseIndexes = @(Get-ChildItem $makeRoot -Recurse -File -Filter "RELEASES")
+
+          if ($installers.Count -lt 1) {
+            throw "Windows installer .exe was not found under $makeRoot"
+          }
+          if ($packages.Count -lt 1) {
+            throw "Squirrel .nupkg package was not found under $makeRoot"
+          }
+          if ($releaseIndexes.Count -lt 1) {
+            throw "Squirrel RELEASES index was not found under $makeRoot"
+          }
+
+          $makeRootPath = (Resolve-Path $makeRoot).Path
+          $artifactFiles = @(Get-ChildItem $makeRootPath -Recurse -File | Sort-Object FullName)
+          $checksumPath = Join-Path $makeRootPath "SHA256SUMS.txt"
+          $checksums = foreach ($file in $artifactFiles) {
+            $relativePath = $file.FullName.Substring($makeRootPath.Length + 1).Replace("\", "/")
+            $hash = (Get-FileHash -Algorithm SHA256 $file.FullName).Hash.ToLowerInvariant()
+            "$hash  $relativePath"
+          }
+          $checksums | Set-Content -Path $checksumPath -Encoding ascii
+
+          $assetFiles = @(
+            Get-ChildItem $makeRootPath -Recurse -File -Filter "*.exe"
+            Get-ChildItem $makeRootPath -Recurse -File -Filter "*.nupkg"
+            Get-ChildItem $makeRootPath -Recurse -File -Filter "RELEASES"
+            Get-Item $checksumPath
+          ) | Sort-Object FullName -Unique
+
+          if ($assetFiles.Count -lt 4) {
+            throw "Release asset set is incomplete."
+          }
+
+          $assetListPath = Join-Path $PWD "release-assets.txt"
+          $assetFiles.FullName | Set-Content -Path $assetListPath -Encoding utf8
+          "asset_list=$assetListPath" >> $env:GITHUB_OUTPUT
+
+          Write-Host "Windows release assets:"
+          $assetFiles | ForEach-Object { Write-Host "- $($_.FullName.Substring($makeRootPath.Length + 1))" }
+
+      - name: Write release notes
+        shell: pwsh
+        env:
+          TAG_NAME: ${{ steps.version.outputs.tag_name }}
+          RELEASE_NOTES: ${{ inputs.release_notes }}
+        run: |
+          $notesPath = Join-Path $PWD "release-notes.md"
+          if ($env:RELEASE_NOTES.Trim()) {
+            $env:RELEASE_NOTES | Set-Content -Path $notesPath -Encoding utf8
+          } else {
+            @(
+              "# 墨枢 $env:TAG_NAME"
+              ""
+              "Windows 安装包。"
+            ) | Set-Content -Path $notesPath -Encoding utf8
+          }
+
+      - name: Create draft GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ steps.version.outputs.tag_name }}
+          PRERELEASE: ${{ inputs.prerelease }}
+          ASSET_LIST: ${{ steps.assets.outputs.asset_list }}
+        run: |
+          $assets = @(Get-Content $env:ASSET_LIST | Where-Object { $_.Trim() })
+          if ($assets.Count -eq 0) {
+            throw "No release assets were found."
+          }
+
+          $ghArgs = @(
+            "release", "create", $env:TAG_NAME
+          )
+          $ghArgs += $assets
+          $ghArgs += @(
+            "--draft",
+            "--title", "墨枢 $env:TAG_NAME",
+            "--notes-file", "release-notes.md",
+            "--target", "${{ github.sha }}"
+          )
+          if ($env:PRERELEASE -eq "true") {
+            $ghArgs += "--prerelease"
+          }
+
+          gh @ghArgs
+
+      - name: Upload Windows release artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: moshu-release-windows-${{ steps.version.outputs.tag_name }}
+          path: out/make/squirrel.windows/**
+          if-no-files-found: error
+          retention-days: 30
