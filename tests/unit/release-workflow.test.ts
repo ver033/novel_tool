@@ -25,7 +25,7 @@ describe("release workflow hardening", () => {
     const buildJobIndex = workflow.indexOf("  build-windows:");
     const releaseJobIndex = workflow.indexOf("  create-draft-release:");
     const writePermissionIndex = workflow.indexOf("      contents: write");
-    const makeIndex = workflow.indexOf("npm run make");
+    const makeIndex = workflow.indexOf("npm run make:windows");
     const downloadIndex = workflow.indexOf("actions/download-artifact@");
 
     expect(workflow).toContain("permissions:\n  contents: read");
@@ -65,11 +65,25 @@ describe("release workflow hardening", () => {
     for (const workflowPath of [".github/workflows/package-windows.yml", ".github/workflows/release-windows.yml"]) {
       const workflow = readRepoFile(workflowPath);
       const testIndex = workflow.indexOf("npm test");
-      const makeIndex = workflow.indexOf("npm run make");
+      const makeIndex = workflow.indexOf("npm run make:windows");
 
       expect(testIndex, workflowPath).toBeGreaterThanOrEqual(0);
       expect(makeIndex, workflowPath).toBeGreaterThanOrEqual(0);
       expect(testIndex, workflowPath).toBeLessThan(makeIndex);
+    }
+  });
+
+  it("uses an explicit Windows Squirrel make target in Windows workflows", () => {
+    const packageJson = JSON.parse(readRepoFile("package.json")) as { scripts?: Record<string, string> };
+
+    expect(packageJson.scripts?.["premake:windows"]).toBe("npm run rebuild:electron");
+    expect(packageJson.scripts?.["make:windows"]).toBe("electron-forge make --platform=win32 --arch=x64 --targets=squirrel");
+
+    for (const workflowPath of [".github/workflows/package-windows.yml", ".github/workflows/release-windows.yml"]) {
+      const workflow = readRepoFile(workflowPath);
+
+      expect(workflow, workflowPath).toContain("npm run make:windows");
+      expect(workflow, workflowPath).not.toContain("npm run make\n");
     }
   });
 
@@ -78,6 +92,7 @@ describe("release workflow hardening", () => {
       const workflow = readRepoFile(workflowPath);
 
       expect(workflow, workflowPath).toContain('Join-Path $PWD "out\\make"');
+      expect(workflow, workflowPath).toContain("Electron Forge output tree:");
       expect(workflow, workflowPath).toContain('Join-Path $PWD "out\\artifacts\\windows-package"');
       expect(workflow, workflowPath).toContain("out/artifacts/windows-package/**");
       expect(workflow, workflowPath).not.toContain("out/make/squirrel.windows/**");
