@@ -17,8 +17,7 @@ build/icon-24.png
 build/icon-48.png
 build/icon-256.png
 
-# Tests and local QA artifacts
-tests/
+# Test and local QA artifacts
 coverage/
 test-results/
 playwright-report/
