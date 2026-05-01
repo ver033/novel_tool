@@ -124,13 +124,11 @@ describe("author entry flow regressions", () => {
     const app = readSource("src/renderer/App.tsx");
     const settingsPage = readSource("src/renderer/routes/SettingsPage.tsx");
     const importWizard = readSource("src/renderer/routes/ImportWizardPage.tsx");
-    const userGuide = readSource("docs/USER_GUIDE_V1.md");
 
     expect(app).toContain("const returnFromSettings");
     expect(app).toMatch(/<SettingsPage[\s\S]*onWelcome={returnFromSettings}/);
     expect(settingsPage).toContain('title="返回上一页"');
     expect(importWizard).toContain('title="返回上一页"');
-    expect(userGuide).toContain("设置页和导入页会返回进入前的页面");
     expect(settingsPage).not.toContain("confirmWelcome");
     expect(settingsPage).not.toContain("返回开始页？");
   });

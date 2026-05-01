@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 const repoRoot = join(__dirname, "..", "..");
 
 function readRepoFile(relativePath: string): string {
-  return readFileSync(join(repoRoot, relativePath), "utf8");
+  return readFileSync(join(repoRoot, relativePath), "utf8").replace(/\r\n/g, "\n");
 }
 
 describe("release workflow hardening", () => {

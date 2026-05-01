@@ -10,6 +10,12 @@ import { ChapterService } from "../../src/main/chapter/chapter-service";
 import { ProjectService } from "../../src/main/project/project-service";
 
 const tempDirs: string[] = [];
+const projectServices: ProjectService[] = [];
+
+function trackProjectService(projectService: ProjectService): ProjectService {
+  projectServices.push(projectService);
+  return projectService;
+}
 
 function createServices() {
   const dir = mkdtempSync(join(tmpdir(), "novel-tool-project-flow-"));
@@ -18,9 +24,11 @@ function createServices() {
   runMigrations(db);
 
   const projectRepo = new ProjectRepository(db);
-  const projectService = new ProjectService(projectRepo, {
-    projectFileDirectory: join(dir, "projects")
-  });
+  const projectService = trackProjectService(
+    new ProjectService(projectRepo, {
+      projectFileDirectory: join(dir, "projects")
+    })
+  );
 
   return {
     db,
@@ -37,6 +45,9 @@ function recentProjectIds(projectService: ProjectService): string[] {
 }
 
 afterEach(() => {
+  for (const projectService of projectServices.splice(0)) {
+    projectService.close();
+  }
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -93,9 +104,11 @@ describe("project and chapter lifecycle", () => {
 
     const first = projectService.createProject({ name: "第一部" });
     const second = projectService.createProject({ name: "第二部" });
-    const reopenedProjectService = new ProjectService(new ProjectRepository(db), {
-      projectFileDirectory: join(dir, "projects")
-    });
+    const reopenedProjectService = trackProjectService(
+      new ProjectService(new ProjectRepository(db), {
+        projectFileDirectory: join(dir, "projects")
+      })
+    );
 
     expect(reopenedProjectService.getCurrentProject()).toMatchObject({ id: second.project.id, name: "第二部" });
     expect(recentProjectIds(reopenedProjectService)).toEqual([second.project.id, first.project.id]);
@@ -122,9 +135,11 @@ describe("project and chapter lifecycle", () => {
     const db = createDatabase(join(dir, "novel-tool.sqlite3"));
     runMigrations(db);
     const configuredDirectory = join(dir, "configured-projects");
-    const projectService = new ProjectService(new ProjectRepository(db), {
-      projectFileDirectory: () => configuredDirectory
-    });
+    const projectService = trackProjectService(
+      new ProjectService(new ProjectRepository(db), {
+        projectFileDirectory: () => configuredDirectory
+      })
+    );
 
     const created = projectService.createProject({ name: "归途" });
 
@@ -248,9 +263,11 @@ describe("project and chapter lifecycle", () => {
       wordCount: 5
     });
 
-    const reopenedProjectService = new ProjectService(new ProjectRepository(db), {
-      projectFileDirectory: join(dir, "projects")
-    });
+    const reopenedProjectService = trackProjectService(
+      new ProjectService(new ProjectRepository(db), {
+        projectFileDirectory: join(dir, "projects")
+      })
+    );
     const reopenedChapterService = new ChapterService((projectId) =>
       new ChapterRepository(projectId ? reopenedProjectService.getProjectDatabaseForProject(projectId) : reopenedProjectService.getActiveProjectDatabase())
     );

@@ -20,6 +20,12 @@ import { estimateTextTokens } from "../../src/main/ai/token-estimator";
 import { getTokenBudget } from "../../src/main/ai/token-budget";
 
 const tempDirs: string[] = [];
+const projectServices: ProjectService[] = [];
+
+function trackProjectService(projectService: ProjectService): ProjectService {
+  projectServices.push(projectService);
+  return projectService;
+}
 
 function createServices() {
   const dir = mkdtempSync(join(tmpdir(), "novel-tool-ai-chat-"));
@@ -27,9 +33,11 @@ function createServices() {
   const db = createDatabase(join(dir, "novel-tool.sqlite3"));
   runMigrations(db);
 
-  const projectService = new ProjectService(new ProjectRepository(db), {
-    projectFileDirectory: join(dir, "projects")
-  });
+  const projectService = trackProjectService(
+    new ProjectService(new ProjectRepository(db), {
+      projectFileDirectory: join(dir, "projects")
+    })
+  );
   const projectDb = (projectId: string) => projectService.getProjectDatabaseForProject(projectId);
 
   return {
@@ -43,6 +51,9 @@ function createServices() {
 }
 
 afterEach(() => {
+  for (const projectService of projectServices.splice(0)) {
+    projectService.close();
+  }
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
