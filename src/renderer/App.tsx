@@ -147,11 +147,13 @@ export function App() {
   const previousImportStep = useCallback(() => setImportStep((current) => Math.max(current - 1, 1)), []);
   const finishImport = useCallback(
     (result: ImportConfirmResult | null) => {
-      if (result) {
-        appStore.acceptImportedProject(result);
-      }
-      setWelcomeNotice(null);
-      openWriting();
+      void (async () => {
+        if (result) {
+          await appStore.acceptImportedProject(result);
+        }
+        setWelcomeNotice(null);
+        openWriting();
+      })();
     },
     [appStore, openWriting]
   );
@@ -174,6 +176,7 @@ export function App() {
       <AppShell>
         <ImportWizardPage
           currentProjectId={appStore.currentProject?.id ?? null}
+          initialMode={importReturnPage === "writing" ? "import_into_current_project" : "create_new_project"}
           step={importStep}
           onBack={previousImportStep}
           onCancel={returnFromImport}

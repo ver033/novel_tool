@@ -201,12 +201,17 @@ export function useAppStore() {
     setActiveChapterId(chapterId);
   }, []);
 
-  const acceptImportedProject = useCallback((result: ImportConfirmResult) => {
+  const acceptImportedProject = useCallback(async (result: ImportConfirmResult) => {
+    const refreshedChapters = (await api.chapter.list({ projectId: result.project.id })) as ChapterSummary[];
     setCurrentProject(result.project);
-    setChapters([...result.chapters]);
-    setActiveChapterId(result.firstChapterId ?? result.chapters[0]?.id ?? null);
+    setChapters(refreshedChapters);
+    setActiveChapterId(
+      result.firstChapterId && refreshedChapters.some((chapter) => chapter.id === result.firstChapterId)
+        ? result.firstChapterId
+        : refreshedChapters[0]?.id ?? null
+    );
     void loadRecentProjects();
-  }, [loadRecentProjects]);
+  }, [api, loadRecentProjects]);
 
   return useMemo(() => ({
     acceptImportedProject,

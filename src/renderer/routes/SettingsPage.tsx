@@ -5,7 +5,7 @@ import {
   X
 } from "@phosphor-icons/react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import type { AiProviderSettingsState, EditorSettings, OpenRouterModelSummary, SettingsSaveInput, SettingsState, TaskPromptPreset } from "../../main/shared/types";
+import type { AiProviderSettingsState, EditorSettings, OpenRouterModelSummary, SettingsSaveInput, SettingsState, SettingsTestConnectionInput, TaskPromptPreset } from "../../main/shared/types";
 import { Button } from "../components/Button";
 import { IconButton } from "../components/IconButton";
 import { Input } from "../components/Input";
@@ -48,6 +48,7 @@ type SettingsContentProps = {
   readonly onAiProviderChange: (patch: Partial<EditableAiProviderSettings>) => void;
   readonly onTaskPromptPresetsChange: (taskPromptPresets: readonly TaskPromptPreset[]) => void;
   readonly onTestConnection: () => void;
+  readonly onSaveSettings: () => void;
 };
 
 const visibleCategories = ["AI 服务", "提示词预设"] as const satisfies readonly SettingsCategory[];
@@ -137,6 +138,17 @@ function buildSaveInput(form: SettingsFormState): SettingsSaveInput {
   };
 }
 
+function buildConnectionTestInput(form: SettingsFormState): SettingsTestConnectionInput {
+  const apiKey = form.aiProvider.apiKey.trim();
+  return {
+    aiProvider: {
+      providerType: form.aiProvider.providerType,
+      baseUrl: form.aiProvider.baseUrl.trim(),
+      ...(apiKey ? { apiKey } : {})
+    }
+  };
+}
+
 function createTaskPromptPresetId(): string {
   if (globalThis.crypto?.randomUUID) {
     return `preset_${globalThis.crypto.randomUUID()}`;
@@ -209,9 +221,26 @@ export function SettingsPage({ activeCategory, onCategoryChange, onWelcome, onCl
   }, [api]);
 
   const saveSettings = async () => {
+    const selectedModel = form.aiProvider.modelName.trim();
+    if (!selectedModel) {
+      setStatus({ kind: "error", message: "请选择模型后保存。" });
+      return;
+    }
+
     setStatus({ kind: "saving", message: "正在保存设置" });
     try {
-      const saved = (await api.settings.save(buildSaveInput(form))) as SettingsState;
+      const matchedModel = findExactModel(modelOptions, selectedModel);
+      const formToSave = matchedModel
+        ? {
+            ...form,
+            aiProvider: {
+              ...form.aiProvider,
+              contextLength: matchedModel.contextLength,
+              supportsTools: matchedModel.supportsTools ?? null
+            }
+          } satisfies SettingsFormState
+        : form;
+      const saved = (await api.settings.save(buildSaveInput(formToSave))) as SettingsState;
       applySettings(saved);
       setStatus({ kind: "saved", message: "设置已保存" });
     } catch (reason) {
@@ -222,45 +251,34 @@ export function SettingsPage({ activeCategory, onCategoryChange, onWelcome, onCl
   const testConnection = async () => {
     setStatus({ kind: "testing", message: "正在测试 AI 连接" });
     try {
-      await api.settings.testConnection({ aiProvider: buildSaveInput(form).aiProvider });
+      await api.settings.testConnection(buildConnectionTestInput(form));
     } catch (reason) {
       setStatus({ kind: "error", message: `连接测试失败：${formatError(reason)}` });
       return;
     }
 
-    setStatus({ kind: "saving", message: "连接测试通过，正在保存设置" });
-    try {
-      const saved = (await api.settings.save(buildSaveInput(form))) as SettingsState;
-      applySettings(saved);
-    } catch (reason) {
-      setStatus({ kind: "error", message: `连接可用，但保存设置失败：${formatError(reason)}` });
-      return;
-    }
-
-    setStatus({ kind: "testing", message: "设置已保存，正在获取模型列表" });
+    setStatus({ kind: "testing", message: "连接测试通过，正在获取模型列表" });
     try {
       const models = (await api.settings.listModels({})) as OpenRouterModelSummary[];
       const matchedModel = findExactModel(models, form.aiProvider.modelName);
-      const nextForm = {
-        ...form,
-        aiProvider: {
-          ...form.aiProvider,
-          contextLength: matchedModel?.contextLength ?? null,
-          supportsTools: matchedModel?.supportsTools ?? null
-        }
-      } satisfies SettingsFormState;
-      const saved = (await api.settings.save(buildSaveInput(nextForm))) as SettingsState;
       setModelOptions([...models]);
       setModelListLoaded(true);
-      applySettings(saved);
+      setForm((current) => ({
+        ...current,
+        aiProvider: {
+          ...current.aiProvider,
+          contextLength: matchedModel?.contextLength ?? current.aiProvider.contextLength ?? null,
+          supportsTools: matchedModel?.supportsTools ?? current.aiProvider.supportsTools ?? null
+        }
+      }));
       setStatus({
         kind: "saved",
         message: matchedModel
-          ? `AI 连接测试通过，设置已保存，已获取 ${models.length} 个可用模型，当前模型上下文 ${formatContextLength(matchedModel.contextLength)}`
-          : `AI 连接测试通过，设置已保存，已获取 ${models.length} 个可用模型；当前模型上下文未知`
+          ? `测试连接成功，已获取 ${models.length} 个可用模型。当前模型上下文 ${formatContextLength(matchedModel.contextLength)}，请选择模型后保存。`
+          : `测试连接成功，已获取 ${models.length} 个可用模型。请选择模型后保存。`
       });
     } catch (reason) {
-      setStatus({ kind: "error", message: `设置已保存，但获取模型列表失败：${formatError(reason)}` });
+      setStatus({ kind: "error", message: `连接可用，但获取模型列表失败：${formatError(reason)}` });
     }
   };
 
@@ -323,6 +341,7 @@ export function SettingsPage({ activeCategory, onCategoryChange, onWelcome, onCl
             status={status}
             onAiProviderChange={updateAiProvider}
             onTaskPromptPresetsChange={updateTaskPromptPresets}
+            onSaveSettings={() => void saveSettings()}
             onTestConnection={testConnection}
           />
           <div className="notice">
@@ -349,6 +368,7 @@ function SettingsContent({
   status,
   onAiProviderChange,
   onTaskPromptPresetsChange,
+  onSaveSettings,
   onTestConnection
 }: SettingsContentProps) {
   const [newPresetName, setNewPresetName] = useState("");
@@ -392,6 +412,8 @@ function SettingsContent({
         ? "正在测试"
         : status.kind === "error"
           ? status.message ?? "连接失败"
+          : status.kind === "saved" && status.message?.startsWith("测试连接成功")
+            ? "连接测试成功，模型列表已加载"
           : apiKeyConfigured
             ? "API Key 已保存，连接测试会使用真实 provider"
             : "未配置 API Key";
@@ -462,7 +484,8 @@ function SettingsContent({
             </div>
           </div>
           <div className="connection-row">
-            <Button variant="ghost" disabled={isBusy} onClick={onTestConnection}>测试并保存</Button>
+            <Button variant="ghost" disabled={isBusy} onClick={onTestConnection}>测试连接</Button>
+            <Button variant="secondary" disabled={isBusy} onClick={onSaveSettings}>保存 AI 设置</Button>
             <span className={status.kind === "error" ? "settings-message error" : "muted"}>{connectionText}</span>
           </div>
         </div>

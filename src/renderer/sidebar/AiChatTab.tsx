@@ -158,12 +158,21 @@ export function AiChatTab({ chapters, currentChapterId, currentChapterTitle, cur
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [cursorIndex, setCursorIndex] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const chatStore = useChatStore({
     projectId: currentProjectId,
     currentChapterId,
     currentChapterTitle,
     selectionSnapshot
   });
+
+  useEffect(() => {
+    const animationFrame = requestAnimationFrame(() => {
+      messagesEndRef.current?.scrollIntoView({ block: "end" });
+    });
+
+    return () => cancelAnimationFrame(animationFrame);
+  }, [chatStore.busy, chatStore.error, chatStore.loading, chatStore.messages, chatStore.streamingReasoning, chatStore.streamingText]);
 
   useEffect(() => {
     const selectedText = draftSeed?.text.trim();
@@ -387,6 +396,7 @@ export function AiChatTab({ chapters, currentChapterId, currentChapterTitle, cur
               </div>
             </div>
           ) : null}
+          <div className="chat-scroll-anchor" ref={messagesEndRef} aria-hidden="true" />
         </div>
         <div className="chat-input">
           {showCommandSuggestions ? (

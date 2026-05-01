@@ -10,11 +10,12 @@ type ImportFileStepProps = {
   readonly mode: ImportMode;
   readonly preview: ImportPreview | null;
   readonly showDropZone?: boolean;
-  readonly onModeChange: (mode: ImportMode) => void;
   readonly onSelectFile: () => void;
 };
 
-export function ImportFileStep({ busy, currentProjectId, error, mode, preview, showDropZone = true, onModeChange, onSelectFile }: ImportFileStepProps) {
+export function ImportFileStep({ busy, currentProjectId, error, mode, preview, showDropZone = true, onSelectFile }: ImportFileStepProps) {
+  const isAppendingToOpenedProject = mode === "import_into_current_project";
+
   return (
     <>
       {showDropZone ? (
@@ -31,24 +32,17 @@ export function ImportFileStep({ busy, currentProjectId, error, mode, preview, s
         </div>
       ) : null}
       <div className="panel import-options">
-        <label className={`radio ${mode === "create_new_project" ? "active" : ""}`}>
-          <input checked={mode === "create_new_project"} onChange={() => onModeChange("create_new_project")} type="radio" />
-          <span className="radio-mark" />
-          <span>
-            <b>作为新项目导入</b>
-            <br />
-            <span className="muted">将文件导入为一个新的小说项目</span>
+        <div className="import-mode-note">
+          <b>{isAppendingToOpenedProject ? "追加到当前项目" : "作为新项目导入"}</b>
+          <br />
+          <span className="muted">
+            {isAppendingToOpenedProject
+              ? currentProjectId
+                ? "会把识别到的章节追加到当前作品末尾。"
+                : "需要先打开一个项目。"
+              : "会把 TXT 创建为一个新的本地小说项目。"}
           </span>
-        </label>
-        <label className={`radio ${mode === "import_into_current_project" ? "active" : ""} ${currentProjectId ? "" : "disabled"}`}>
-          <input checked={mode === "import_into_current_project"} disabled={!currentProjectId} onChange={() => onModeChange("import_into_current_project")} type="radio" />
-          <span className="radio-mark" />
-          <span>
-            <b>导入到当前项目</b>
-            <br />
-            <span className="muted">{currentProjectId ? "将内容追加到当前项目末尾" : "需要先打开一个项目"}</span>
-          </span>
-        </label>
+        </div>
       </div>
     </>
   );

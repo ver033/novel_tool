@@ -5,6 +5,7 @@ import type {
   OpenRouterModelSummary,
   SettingsListModelsInput,
   SettingsSaveInput,
+  SettingsTestConnectionInput,
   SettingsState,
   TaskPromptPreset,
   TaskType
@@ -15,6 +16,7 @@ const AI_PROVIDER_SETTINGS_KEY = "aiProvider";
 const PROJECT_PATH_SETTINGS_KEY = "projectPath";
 const TASK_PROMPT_PRESETS_SETTINGS_KEY = "taskPromptPresets";
 export const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+export const OPENROUTER_CONNECTION_TEST_MODEL = "openrouter/auto";
 
 const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
   fontSize: 20,
@@ -284,8 +286,28 @@ export class SettingsService {
     };
   }
 
-  async testConnection(input?: { readonly aiProvider?: SettingsSaveInput["aiProvider"] }): Promise<OpenRouterConnectionTestResult> {
-    return this.connectionTester.testConnection(await this.getOpenRouterConfigWithModelMetadata(input?.aiProvider, { requireTools: true }));
+  async testConnection(input?: SettingsTestConnectionInput): Promise<OpenRouterConnectionTestResult> {
+    const override = input?.aiProvider;
+    if (!override) {
+      return this.connectionTester.testConnection(await this.getOpenRouterConfigWithModelMetadata(undefined, { requireTools: true }));
+    }
+    if (!override.modelName?.trim()) {
+      return this.connectionTester.testConnection(this.getOpenRouterConnectionTestConfig(override));
+    }
+
+    return this.connectionTester.testConnection(
+      await this.getOpenRouterConfigWithModelMetadata(
+        {
+          providerType: override.providerType,
+          baseUrl: override.baseUrl,
+          modelName: override.modelName,
+          contextLength: override.contextLength,
+          supportsTools: override.supportsTools,
+          apiKey: override.apiKey
+        },
+        { requireTools: true }
+      )
+    );
   }
 
   async listOpenRouterModels(input?: SettingsListModelsInput): Promise<OpenRouterModelSummary[]> {
@@ -310,6 +332,24 @@ export class SettingsService {
       return this.secretStore.decrypt(settings.encryptedApiKey);
     }
     return settings.apiKey ?? null;
+  }
+
+  private getOpenRouterConnectionTestConfig(
+    override: NonNullable<NonNullable<SettingsTestConnectionInput>["aiProvider"]>
+  ): OpenRouterRuntimeConfig {
+    const settings = this.getStoredAiProviderSettings();
+    const apiKey = override.apiKey?.trim() || this.getStoredApiKey(settings);
+    if (!apiKey) {
+      throw new Error("OpenRouter API Key 未配置。");
+    }
+
+    return {
+      apiKey,
+      baseUrl: override.baseUrl?.trim() || settings?.baseUrl || OPENROUTER_BASE_URL,
+      modelName: OPENROUTER_CONNECTION_TEST_MODEL,
+      contextLength: null,
+      supportsTools: null
+    };
   }
 
   private getStoredAiProviderSettings(): StoredAiProviderSettings | null {

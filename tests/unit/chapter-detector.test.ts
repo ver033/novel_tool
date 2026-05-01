@@ -41,6 +41,21 @@ describe("TXT chapter detector", () => {
     });
   });
 
+  it("does not create an empty chapter from consecutive metadata and title headings", () => {
+    const detected = detectTxtChapters(`
+第一章 2363字
+第一章 陨落的天才
+“斗之力，三段！”
+
+第二章 斗气大陆
+斗气大陆正文。
+`);
+
+    expect(detected.map((chapter) => chapter.title)).toEqual(["第一章 陨落的天才", "第二章 斗气大陆"]);
+    expect(detected.map((chapter) => chapter.wordCount)).not.toContain(0);
+    expect(detected[0].text).toContain("斗之力");
+  });
+
   it("supports rename, merge with previous, split from line, and redetect operations", () => {
     const chapters = detectTxtChapters("第一章 旧名\n第一行\n第二行\n第三行\n\n第二章 夜归\n第四行");
 

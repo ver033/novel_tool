@@ -61,4 +61,14 @@ describe("AI chat author interaction regressions", () => {
     expect(chat).toContain("setDraft((current)");
     expect(css).toContain(".send-to-chat-option");
   });
+
+  it("keeps the AI chat message list pinned to the newest output", () => {
+    const chat = readSource("src/renderer/sidebar/AiChatTab.tsx");
+
+    expect(chat).toContain("messagesEndRef");
+    expect(chat).toContain("scrollIntoView");
+    expect(chat).toContain("chatStore.streamingText");
+    expect(chat).toContain("chatStore.streamingReasoning");
+    expect(chat).toContain("chat-scroll-anchor");
+  });
 });

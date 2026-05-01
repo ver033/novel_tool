@@ -26,4 +26,15 @@ describe("settings page scope", () => {
     expect(settings).not.toContain("默认行动风格");
     expect(settings).not.toContain("上下文范围");
   });
+
+  it("keeps OpenRouter connection testing separate from saving the selected model", () => {
+    const settings = readSource("src/renderer/routes/SettingsPage.tsx");
+
+    expect(settings).toContain("测试连接");
+    expect(settings).toContain("保存 AI 设置");
+    expect(settings).toContain("onSaveSettings");
+    expect(settings).not.toContain("测试并保存");
+    expect(settings).toContain("测试连接成功，已获取");
+    expect(settings).toContain("请选择模型后保存");
+  });
 });
