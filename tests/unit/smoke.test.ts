@@ -67,6 +67,7 @@ describe("phase 0 desktop skeleton", () => {
     expect(forgeConfig).toContain('"node_modules/better-sqlite3"');
     expect(forgeConfig).toContain('"node_modules/bindings"');
     expect(forgeConfig).toContain('"node_modules/file-uri-to-path"');
+    expect(forgeConfig).toContain("skipUpdateIcon: true");
     expect(forgeConfig).toContain('new MakerZIP({}, ["darwin", "win32"])');
   });
 

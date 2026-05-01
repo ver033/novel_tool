@@ -106,6 +106,18 @@ describe("release workflow hardening", () => {
     expect(stagingScript).not.toContain("portable.zip");
   });
 
+  it("enables Squirrel maker debug output in Windows packaging workflows", () => {
+    for (const workflowPath of [".github/workflows/package-windows.yml", ".github/workflows/release-windows.yml"]) {
+      const workflow = readRepoFile(workflowPath);
+      const debugIndex = workflow.indexOf("DEBUG: electron-windows-installer*");
+      const makeIndex = workflow.indexOf("npm run make:windows");
+
+      expect(debugIndex, workflowPath).toBeGreaterThanOrEqual(0);
+      expect(makeIndex, workflowPath).toBeGreaterThanOrEqual(0);
+      expect(debugIndex, workflowPath).toBeLessThan(makeIndex);
+    }
+  });
+
   it("stages Windows artifacts only from the actual Forge make output", () => {
     for (const workflowPath of [".github/workflows/package-windows.yml", ".github/workflows/release-windows.yml"]) {
       const workflow = readRepoFile(workflowPath);

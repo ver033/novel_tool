@@ -40,6 +40,8 @@ jobs:
         run: npm test
 
       - name: Build Windows installer
+        env:
+          DEBUG: electron-windows-installer*
         run: npm run make:windows
 
       - name: Validate Windows package output

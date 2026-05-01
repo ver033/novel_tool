@@ -78,7 +78,8 @@ const config: ForgeConfig = {
   rebuildConfig: {},
   makers: [
     new MakerSquirrel({
-      setupIcon: windowsSetupIconPath
+      setupIcon: windowsSetupIconPath,
+      skipUpdateIcon: true
     }),
     new MakerZIP({}, ["darwin", "win32"]),
     new MakerDMG({})
