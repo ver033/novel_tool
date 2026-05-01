@@ -49,6 +49,15 @@ function isChapterHeading(line: string): boolean {
   return trimmed.length <= 80 && headingPattern.test(trimmed);
 }
 
+function getHeadingMarker(line: string): string | null {
+  const trimmed = line.trim();
+  return trimmed.match(/^(第[零〇一二三四五六七八九十百千万\d]+[章节回卷部集]|卷[零〇一二三四五六七八九十百千万\d]+|序章|楔子|番外|后记)/)?.[1] ?? null;
+}
+
+function isWordCountOnlyHeading(line: string): boolean {
+  return /^(?:第[零〇一二三四五六七八九十百千万\d]+[章节回卷部集]|卷[零〇一二三四五六七八九十百千万\d]+)[\s　、:：.-]*[0-9零〇一二三四五六七八九十百千万,.，]+\s*字$/.test(line.trim());
+}
+
 export function detectTxtChapters(content: string): ImportPreviewChapter[] {
   const normalized = normalizeTxtContent(content);
   if (!normalized) {
@@ -63,7 +72,11 @@ export function detectTxtChapters(content: string): ImportPreviewChapter[] {
 
   for (const line of lines) {
     if (isChapterHeading(line.text)) {
-      if (foundHeading) {
+      if (foundHeading && currentLines.length > 0) {
+        chapters.push(createChapter(currentTitle, currentLines, chapters.length));
+      } else if (foundHeading && !isWordCountOnlyHeading(currentTitle)) {
+        chapters.push(createChapter(currentTitle, currentLines, chapters.length));
+      } else if (foundHeading && getHeadingMarker(currentTitle) !== getHeadingMarker(line.text)) {
         chapters.push(createChapter(currentTitle, currentLines, chapters.length));
       }
       foundHeading = true;

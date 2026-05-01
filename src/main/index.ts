@@ -2,6 +2,7 @@ import { app, BrowserWindow } from "electron";
 import path from "node:path";
 import { registerIpcHandlers } from "./ipc/register-ipc";
 import { initializeMainLogger, installMainProcessErrorHandlers, logMainError } from "./logger";
+import { handleWindowsSquirrelStartupEvent } from "./windows-squirrel-startup";
 
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
 declare const MAIN_WINDOW_VITE_NAME: string;
@@ -54,10 +55,10 @@ function isAllowedRendererNavigation(navigationUrl: string): boolean {
 
 function createMainWindow(): void {
   const mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 860,
-    minWidth: 1040,
-    minHeight: 720,
+    width: 1600,
+    height: 1000,
+    minWidth: 1120,
+    minHeight: 760,
     backgroundColor: "#fafaf8",
     title: "墨枢",
     webPreferences: {
@@ -78,23 +79,25 @@ function createMainWindow(): void {
   }
 }
 
-app.whenReady().then(() => {
-  initializeMainLogger(app.getPath("userData"));
-  installMainProcessErrorHandlers();
-  try {
-    registerIpcHandlers();
-  } catch (error) {
-    logMainError("registerIpcHandlers failed", error);
-    throw error;
-  }
-  createMainWindow();
-
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createMainWindow();
+if (!handleWindowsSquirrelStartupEvent({ quit: () => app.quit() })) {
+  app.whenReady().then(() => {
+    initializeMainLogger(app.getPath("userData"));
+    installMainProcessErrorHandlers();
+    try {
+      registerIpcHandlers();
+    } catch (error) {
+      logMainError("registerIpcHandlers failed", error);
+      throw error;
     }
+    createMainWindow();
+
+    app.on("activate", () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        createMainWindow();
+      }
+    });
   });
-});
+}
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {

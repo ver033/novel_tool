@@ -163,6 +163,17 @@ export const aiProviderSettingsSchema = z
   })
   .strict();
 
+export const aiProviderConnectionTestSchema = z
+  .object({
+    providerType: z.enum(["openrouter"]),
+    baseUrl: nonEmptyString.max(2048),
+    modelName: nonEmptyString.max(160).optional(),
+    contextLength: z.number().int().positive().nullable().optional(),
+    supportsTools: z.boolean().nullable().optional(),
+    apiKey: z.string().min(1).max(4096).optional()
+  })
+  .strict();
+
 export const taskPromptPresetSchema = z
   .object({
     id: idSchema,
@@ -187,7 +198,7 @@ export const settingsSaveInputSchema = z
 
 export const settingsTestConnectionInputSchema = z
   .object({
-    aiProvider: aiProviderSettingsSchema.optional()
+    aiProvider: aiProviderConnectionTestSchema.optional()
   })
   .strict()
   .optional();

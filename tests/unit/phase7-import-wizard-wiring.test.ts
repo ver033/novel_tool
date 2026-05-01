@@ -26,6 +26,7 @@ describe("phase 7 import wizard wiring", () => {
 
   it("uses the typed preload import API instead of static import data", () => {
     const page = readSource("src/renderer/routes/ImportWizardPage.tsx");
+    const app = readSource("src/renderer/App.tsx");
     const fileStep = readSource("src/renderer/import/ImportFileStep.tsx");
     const previewStep = readSource("src/renderer/import/ImportPreviewStep.tsx");
 
@@ -34,10 +35,23 @@ describe("phase 7 import wizard wiring", () => {
     expect(page).toContain("api.import.updatePreview");
     expect(page).toContain("api.import.confirmTxtImport");
     expect(fileStep).toContain("作为新项目导入");
-    expect(fileStep).toContain("导入到当前项目");
+    expect(fileStep).not.toContain("导入到当前项目");
+    expect(app).toContain('initialMode={importReturnPage === "writing" ? "import_into_current_project" : "create_new_project"}');
+    expect(page).toContain("当前为追加模式");
+    expect(page).toContain("不会新建项目");
     expect(`${page}\n${previewStep}`).toContain("merge_with_previous");
     expect(`${page}\n${previewStep}`).toContain("split_from_line");
     expect(`${page}\n${previewStep}`).toContain("rename_chapter");
+    expect(previewStep).not.toContain("显示前 10 段");
+    expect(previewStep).not.toContain("slice(0, 10)");
+  });
+
+  it("refreshes the full chapter list after importing into the active writing project", () => {
+    const app = readSource("src/renderer/App.tsx");
+    const appStore = readSource("src/renderer/state/app-store.ts");
+
+    expect(app).toContain("await appStore.acceptImportedProject(result)");
+    expect(appStore).toContain("api.chapter.list({ projectId: result.project.id })");
   });
 
   it("keeps import accessible from the active writing project and returns to the caller", () => {

@@ -71,10 +71,10 @@ export function ImportPreviewStep({ preview, onMerge, onRedetect, onRename, onSp
         <div className="preview-pane">
           <div className="box-header">
             <span>内容预览 · {activeChapter?.title ?? "未选择章节"}（{(activeChapter?.wordCount ?? 0).toLocaleString("zh-CN")} 字）</span>
-            <span className="muted">显示前 10 段</span>
+            <span className="muted">可滚动全文预览</span>
           </div>
           <div className="preview-text">
-            {(activeChapter?.text.split(/\n{2,}/).slice(0, 10) ?? ["暂无内容"]).map((paragraph, index) => (
+            {(activeChapter?.text.split(/\n{2,}/) ?? ["暂无内容"]).map((paragraph, index) => (
               <p key={`${index}-${paragraph.slice(0, 12)}`}>{paragraph}</p>
             ))}
           </div>

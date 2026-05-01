@@ -73,9 +73,9 @@ describe("project and chapter lifecycle", () => {
     expect(settingsPage).toContain("api.settings.save");
     expect(settingsPage).toContain("api.settings.testConnection");
     expect(settingsPage).toContain("api.settings.listModels");
-    expect(settingsPage).toMatch(
-      /const testConnection = async \(\) => \{[\s\S]*api\.settings\.testConnection[\s\S]*api\.settings\.save\(buildSaveInput\(form\)\)[\s\S]*api\.settings\.listModels/
-    );
+    expect(settingsPage).toMatch(/const saveSettings = async \(\) => \{[\s\S]*api\.settings\.save\(buildSaveInput\(formToSave\)\)/);
+    expect(settingsPage).toMatch(/const testConnection = async \(\) => \{[\s\S]*api\.settings\.testConnection[\s\S]*api\.settings\.listModels/);
+    expect(settingsPage).not.toMatch(/const testConnection = async \(\) => \{[\s\S]*api\.settings\.save\(buildSaveInput\(form\)\)/);
     expect(settingsPage).toContain("model-suggestion-list");
     expect(settingsPage).toContain("selectModel(model.id)");
     expect(settingsIpc).toContain("settingsService.listOpenRouterModels");

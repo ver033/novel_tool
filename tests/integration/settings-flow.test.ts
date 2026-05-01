@@ -225,6 +225,32 @@ describe("settings flow", () => {
     db.close();
   });
 
+  it("can test an OpenRouter API key before the user selects an exact model", async () => {
+    const testedModels: string[] = [];
+    const { db, settingsService } = createSettingsService({
+      async testConnection(config) {
+        testedModels.push(config.modelName);
+        return { ok: true, modelName: config.modelName };
+      }
+    });
+
+    await expect(
+      settingsService.testConnection({
+        aiProvider: {
+          providerType: "openrouter",
+          baseUrl: "https://openrouter.ai/api/v1",
+          apiKey: "secret_key"
+        }
+      })
+    ).resolves.toEqual({
+      ok: true,
+      modelName: "openrouter/auto"
+    });
+    expect(testedModels).toEqual(["openrouter/auto"]);
+
+    db.close();
+  });
+
   it("rejects saved OpenRouter models that do not support tools before agent chat calls OpenRouter", async () => {
     let connectionCalled = false;
     const { db, settingsService } = createSettingsService(

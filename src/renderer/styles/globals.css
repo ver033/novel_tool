@@ -2432,6 +2432,10 @@ select:focus-visible {
   margin-top: 10px;
 }
 
+.chat-scroll-anchor {
+  height: 1px;
+}
+
 .message-time {
   margin-top: 8px;
   color: var(--muted);
@@ -2640,11 +2644,24 @@ select:focus-visible {
   font-weight: 650;
 }
 
+.import-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
 .import-page {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
   padding: 20px 48px 32px;
 }
 
 .wizard {
+  width: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   padding: 28px 32px;
 }
 
@@ -2690,6 +2707,23 @@ select:focus-visible {
   border-color: var(--blue);
   background: var(--blue);
   color: white;
+}
+
+.import-mode-banner {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: -8px 0 22px;
+  padding: 13px 16px;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  line-height: 1.5;
+}
+
+.import-mode-banner b {
+  color: #1e40af;
 }
 
 .import-summary {
@@ -2753,6 +2787,9 @@ select:focus-visible {
 }
 
 .import-split {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: clamp(560px, calc(100vh - 340px), 940px);
   display: grid;
   grid-template-columns: 490px 1fr;
   gap: 20px;
@@ -2761,11 +2798,22 @@ select:focus-visible {
 
 .detected-list,
 .preview-pane {
-  min-height: 560px;
+  min-height: 0;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: white;
   overflow: hidden;
+}
+
+.detected-list,
+.preview-pane {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.detected-list {
+  overflow-y: auto;
 }
 
 .box-header {
@@ -2917,7 +2965,9 @@ select:focus-visible {
 }
 
 .preview-text {
-  height: 492px;
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
   overflow: auto;
   padding: 22px 24px;
   font-size: 18px;
@@ -2930,6 +2980,10 @@ select:focus-visible {
   gap: 70px;
   margin-top: 20px;
   padding: 22px;
+}
+
+.import-mode-note {
+  line-height: 1.7;
 }
 
 .radio {

@@ -1,5 +1,5 @@
 import { BookOpen } from "@phosphor-icons/react";
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import type { ImportConfirmResult, ImportPreview } from "../../main/shared/types";
 import { Button } from "../components/Button";
 import { Input } from "../components/Input";
@@ -19,6 +19,7 @@ type ImportWizardPageProps = {
   readonly onStepChange: (step: number) => void;
   readonly onCancel: () => void;
   readonly onFinish: (result: ImportConfirmResult | null) => void;
+  readonly initialMode: ImportMode;
 };
 
 const steps = [
@@ -28,11 +29,11 @@ const steps = [
   ["完成导入", "开始导入到项目中"]
 ] as const;
 
-export function ImportWizardPage({ currentProjectId, step, onBack, onNext, onStepChange, onCancel, onFinish }: ImportWizardPageProps) {
+export function ImportWizardPage({ currentProjectId, step, onBack, onNext, onStepChange, onCancel, onFinish, initialMode }: ImportWizardPageProps) {
   const api = useMemo(getNovelToolApi, []);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [mode, setMode] = useState<ImportMode>("create_new_project");
+  const [mode, setMode] = useState<ImportMode>(initialMode);
   const [preview, setPreview] = useState<ImportPreview | null>(null);
   const [result, setResult] = useState<ImportConfirmResult | null>(null);
   const [renameChapterDraft, setRenameChapterDraft] = useState<{ index: number; title: string } | null>(null);
@@ -47,6 +48,10 @@ export function ImportWizardPage({ currentProjectId, step, onBack, onNext, onSte
           ? "正在写入项目"
           : "正在处理导入结果";
   const statusText = error ?? (busy ? busyStatus : null);
+
+  useEffect(() => {
+    setMode(initialMode);
+  }, [initialMode]);
 
   async function selectAndPreviewTxt(): Promise<void> {
     setBusy(true);
@@ -93,7 +98,7 @@ export function ImportWizardPage({ currentProjectId, step, onBack, onNext, onSte
       return;
     }
     if (mode === "import_into_current_project" && !currentProjectId) {
-      setError("需要先打开一个项目，才能导入到当前项目");
+      setError("需要先从编辑器打开导入入口，才能追加到当前作品");
       return;
     }
 
@@ -200,6 +205,13 @@ export function ImportWizardPage({ currentProjectId, step, onBack, onNext, onSte
             })}
           </div>
 
+          {mode === "import_into_current_project" ? (
+            <div className="import-mode-banner append" role="status">
+              <b>当前为追加模式</b>
+              <span>识别到的章节会追加到当前作品末尾，不会新建项目。</span>
+            </div>
+          ) : null}
+
           {step === 1 ? (
             <ImportFileStep
               busy={busy}
@@ -207,7 +219,6 @@ export function ImportWizardPage({ currentProjectId, step, onBack, onNext, onSte
               error={error}
               mode={mode}
               preview={preview}
-              onModeChange={setMode}
               onSelectFile={selectAndPreviewTxt}
             />
           ) : null}
@@ -222,7 +233,7 @@ export function ImportWizardPage({ currentProjectId, step, onBack, onNext, onSte
                   onSplit={(chapterIndex, lineNumber) => void updatePreview([{ type: "split_from_line", chapterIndex, lineNumber }])}
                 />
               ) : null}
-              {!preview ? <ImportFileStep busy={busy} currentProjectId={currentProjectId} error={error} mode={mode} preview={preview} onModeChange={setMode} onSelectFile={selectAndPreviewTxt} /> : null}
+              {!preview ? <ImportFileStep busy={busy} currentProjectId={currentProjectId} error={error} mode={mode} preview={preview} onSelectFile={selectAndPreviewTxt} /> : null}
             </>
           ) : null}
           {step === 3 ? (
@@ -234,7 +245,7 @@ export function ImportWizardPage({ currentProjectId, step, onBack, onNext, onSte
                 onRename={renameChapter}
                 onSplit={(chapterIndex, lineNumber) => void updatePreview([{ type: "split_from_line", chapterIndex, lineNumber }])}
               />
-              <ImportFileStep busy={busy} currentProjectId={currentProjectId} error={error} mode={mode} preview={preview} showDropZone={false} onModeChange={setMode} onSelectFile={selectAndPreviewTxt} />
+              <ImportFileStep busy={busy} currentProjectId={currentProjectId} error={error} mode={mode} preview={preview} showDropZone={false} onSelectFile={selectAndPreviewTxt} />
             </>
           ) : null}
           {step === 4 ? <ImportConfirmStep preview={preview} result={result} /> : null}

@@ -17,6 +17,7 @@ const appBundleName = "墨枢";
 const executableName = "novel-tool";
 const appIconPath = path.resolve(__dirname, "build", "icon");
 const windowsSetupIconPath = path.resolve(__dirname, "build", "icon.ico");
+const windowsSetupLoadingGifPath = path.resolve(__dirname, "build", "install-loading.gif");
 type PackagerHookCallback = (error?: Error | null) => void;
 
 export function shouldPackageRuntimeFile(file: string): boolean {
@@ -80,6 +81,7 @@ const config: ForgeConfig = {
     new MakerSquirrel({
       authors: "Moshu",
       owners: "Moshu",
+      loadingGif: windowsSetupLoadingGifPath,
       setupIcon: windowsSetupIconPath,
       skipUpdateIcon: true
     }),
