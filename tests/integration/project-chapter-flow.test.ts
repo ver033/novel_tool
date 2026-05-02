@@ -70,6 +70,7 @@ describe("project and chapter lifecycle", () => {
 
     expect(registerIpc).toContain("registerProjectIpc");
     expect(registerIpc).toContain("registerChapterIpc");
+    expect(registerIpc).toContain("projectService.getRuntimeActiveProject()");
   });
 
   it("registers settings ipc handlers from the central ipc entrypoint", () => {
@@ -123,6 +124,32 @@ describe("project and chapter lifecycle", () => {
 
     expect(reopenedProjectService.getCurrentProject()).toMatchObject({ id: second.project.id, name: "第二部" });
     expect(recentProjectIds(reopenedProjectService)).toEqual([second.project.id, first.project.id]);
+
+    db.close();
+  });
+
+  it("keeps persisted current project separate from the runtime opened project", () => {
+    const { db, dir, projectService } = createServices();
+
+    const created = projectService.createProject({ name: "第一部" });
+    expect(projectService.getCurrentProject()).toMatchObject({ id: created.project.id });
+    expect(projectService.getRuntimeActiveProject()).toMatchObject({ id: created.project.id });
+
+    projectService.close();
+    expect(projectService.getCurrentProject()).toMatchObject({ id: created.project.id });
+    expect(projectService.getRuntimeActiveProject()).toBeNull();
+
+    const reopenedProjectService = trackProjectService(
+      new ProjectService(new ProjectRepository(db), {
+        projectFileDirectory: join(dir, "projects")
+      })
+    );
+
+    expect(reopenedProjectService.getCurrentProject()).toMatchObject({ id: created.project.id });
+    expect(reopenedProjectService.getRuntimeActiveProject()).toBeNull();
+
+    reopenedProjectService.openProject({ projectId: created.project.id });
+    expect(reopenedProjectService.getRuntimeActiveProject()).toMatchObject({ id: created.project.id });
 
     db.close();
   });

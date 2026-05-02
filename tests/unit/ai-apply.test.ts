@@ -5,12 +5,12 @@ import { createTiptapDocumentFromPlainText, extractPlainTextFromTiptapJson } fro
 import type { AiTaskCandidateRecord, AiTaskRecord } from "../../src/main/shared/types";
 import type { Editor } from "@tiptap/react";
 
-function createTask(selectionText = "他勒住马缰"): AiTaskRecord {
+function createTask(selectionText = "他勒住马缰", taskType: AiTaskRecord["taskType"] = "polish"): AiTaskRecord {
   return {
     id: "task_1",
     projectId: "project_1",
     chapterId: "chapter_1",
-    taskType: "polish",
+    taskType,
     status: "preview_ready",
     selection: {
       chapterId: "chapter_1",
@@ -31,11 +31,11 @@ function createTask(selectionText = "他勒住马缰"): AiTaskRecord {
   };
 }
 
-function createCandidate(generatedText = "他轻轻勒住马缰。"): AiTaskCandidateRecord {
+function createCandidate(generatedText = "他轻轻勒住马缰。", kind: AiTaskCandidateRecord["kind"] = "polish"): AiTaskCandidateRecord {
   return {
     id: "candidate_1",
     taskId: "task_1",
-    kind: "polish",
+    kind,
     originalText: "他勒住马缰",
     generatedText,
     changeSummary: "语言更顺滑",
@@ -193,9 +193,9 @@ describe("applyAiCandidateToEditor", () => {
     ).rejects.toThrow("原选区已变化，请重新选择文本后再应用。");
   });
 
-  it("inserts expand output after the containing paragraph instead of directly after the selected words", async () => {
-    const task = createTask();
-    const candidate = createCandidate("风里带着潮湿的泥土气。");
+  it("inserts continuation output after the containing paragraph instead of directly after the selected words", async () => {
+    const task = createTask("他勒住马缰", "continue");
+    const candidate = createCandidate("风里带着潮湿的泥土气。", "continue");
     const editor = createFakeEditor("他勒住马缰", { paragraphEndPosition: 9 }) as Editor & { readonly __insertPositions: unknown[] };
 
     await applyAiCandidateToEditor({

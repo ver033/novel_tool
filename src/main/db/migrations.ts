@@ -373,6 +373,27 @@ const migrations: readonly Migration[] = [
         DELETE FROM arc_ai_summaries;
       `);
     }
+  },
+  {
+    version: 11,
+    name: "invalidate_legacy_proofread_metadata",
+    up(db) {
+      db.prepare(
+        `
+          UPDATE ai_task_candidates
+          SET
+            metadata_json = NULL,
+            status = 'rejected',
+            change_summary = '旧版校对结果已失效，请重新生成。',
+            updated_at = ?
+          WHERE kind = 'proofread'
+            AND metadata_json IS NOT NULL
+            AND metadata_json LIKE '%"type"%'
+            AND metadata_json LIKE '%"quote"%'
+            AND metadata_json LIKE '%"suggestion"%'
+        `
+      ).run(new Date().toISOString());
+    }
   }
 ];
 

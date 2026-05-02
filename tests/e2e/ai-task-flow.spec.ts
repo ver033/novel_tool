@@ -29,7 +29,7 @@ const taskCases: readonly TaskCase[] = [
     label: /扩写/,
     input: "他勒住马缰。",
     expectedText: "他勒住马缰，马蹄在碎石上轻轻一顿，暮色从山口压下来。",
-    applyButton: /插入下方/
+    applyButton: /替换原文/
   },
   {
     name: "proofread",
@@ -45,7 +45,7 @@ const taskCases: readonly TaskCase[] = [
     label: /续写/,
     input: "他勒住马缰。",
     expectedText: "远处的钟声忽然响起，他意识到追兵已经逼近。",
-    applyButton: /插入到光标处/
+    applyButton: /插入下方/
   }
 ];
 

@@ -17,7 +17,7 @@ const WRITING_OPERATION_DEFINITIONS = [
   {
     id: "expand",
     label: "扩写",
-    description: "围绕选中文本补足动作、心理、环境和承接，让片段更饱满。",
+    description: "把选中文本扩写为可替换原选区的完整版本，补足动作、心理、环境和承接。",
     skillId: "moshu.expand",
     outputKind: "candidate_text",
     sideEffectPolicy: "none",
@@ -36,14 +36,14 @@ const WRITING_OPERATION_DEFINITIONS = [
     sideEffectPolicy: "none",
     tokenBudgetTaskType: "proofread",
     contextPolicy: {
-      includeLocalBeforeChars: 0,
-      includeLocalAfterChars: 0
+      includeLocalBeforeChars: 2200,
+      includeLocalAfterChars: 2200
     }
   },
   {
     id: "continue",
     label: "续写",
-    description: "基于当前上下文延续正文，不越权改动既有文本。",
+    description: "基于当前上下文生成插入到目标文本之后的新正文，不越权改动既有文本。",
     skillId: "moshu.continue",
     outputKind: "candidate_text",
     sideEffectPolicy: "none",

@@ -87,7 +87,7 @@ export function resolveAvailableProjectFilePath(directoryPath: string, projectNa
 }
 
 export function resolveImportedProjectFilePath(sourceFilePath: string, projectName: string): string {
-  return resolveProjectFilePath(path.dirname(sourceFilePath), projectName);
+  return resolveAvailableProjectFilePath(path.dirname(sourceFilePath), projectName);
 }
 
 export function openProjectDatabase(filePath: string): SqliteDatabase {

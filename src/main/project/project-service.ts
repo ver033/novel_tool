@@ -192,6 +192,10 @@ export class ProjectService {
     return currentProjectId ? this.projectRepo.findById(currentProjectId) : null;
   }
 
+  getRuntimeActiveProject(): ProjectRecord | null {
+    return this.activeProjectId ? this.projectRepo.findById(this.activeProjectId) : null;
+  }
+
   listRecentProjects(): RecentProjectEntry[] {
     const recentProjects: RecentProjectEntry[] = [];
     for (const project of this.projectRepo.listRecent(100)) {

@@ -344,14 +344,13 @@ describe("summary service generation", () => {
     db.close();
   });
 
-  it("indexes long chapters through chunk summaries and a merge step", async () => {
+  it("indexes long chapters by locally aggregating chunk summaries without a model merge step", async () => {
     const db = createDb();
     const { chapterRepo, summaryRepo } = seedProject(db);
     const content = Array.from({ length: 14 }, (_, index) => `第${index + 1}段。${"春".repeat(650)}`).join("\n\n");
     createChapter(chapterRepo, "chapter_1", content);
     const expectedChunks = splitChapterForSummaryIndex(content);
     const chunkInputs: number[] = [];
-    let mergeChunkCount = 0;
     const service = new SummaryService(summaryRepo, chapterRepo, {
       generator: {
         summarizeChapterForIndex: async () => {
@@ -359,11 +358,37 @@ describe("summary service generation", () => {
         },
         summarizeChapterChunkForIndex: async (input) => {
           chunkInputs.push(input.chunkIndex);
-          return chapterChunkIndexPayload({ chunkIndex: input.chunkIndex, chunkCount: input.chunkCount });
+          return {
+            ...chapterChunkIndexPayload({
+            chunkIndex: input.chunkIndex,
+            chunkCount: input.chunkCount,
+            summary: `第${input.chunkIndex + 1}个片段缓存摘要`
+            }),
+            空间与行动逻辑: [
+              {
+                人物: "林远",
+                移动或行动: `第${input.chunkIndex + 1}个片段中穿过旧宅走廊`,
+                起点: "旧宅门口",
+                终点: "旧宅内室",
+                耗时或距离: "片刻",
+                是否可能需要核对: "是",
+                风险说明: "后文若声称林远未进入旧宅，需要核对移动线。",
+                证据短句: ["穿过旧宅走廊"]
+              }
+            ],
+            限制与否定事实: [
+              {
+                对象: "林远",
+                限制或否定: `第${input.chunkIndex + 1}个片段尚未找到旧信来源`,
+                影响范围: "旧信线索",
+                后文检查意义: "后文不能直接声称旧信来源已经确认。",
+                证据短句: ["旧信来源仍未解释"]
+              }
+            ]
+          } as ReturnType<typeof chapterChunkIndexPayload>;
         },
-        mergeChapterChunksForIndex: async (input) => {
-          mergeChunkCount = input.chunks.length;
-          return summaryPayloadV2();
+        mergeChapterChunksForIndex: async () => {
+          throw new Error("long chapter chunk merge should be deterministic and local");
         }
       }
     });
@@ -371,8 +396,31 @@ describe("summary service generation", () => {
     const summary = await service.summarizeChapter("project_1", "chapter_1", computeChapterContentHash(content), "2026-05-01T00:10:00.000Z");
 
     expect(chunkInputs).toEqual(expectedChunks.map((chunk) => chunk.chunkIndex));
-    expect(mergeChunkCount).toBe(expectedChunks.length);
     expect(summary).toMatchObject({ status: "ready", contentHash: computeChapterContentHash(content) });
+    expect(summary.structured.章节信息).toMatchObject({
+      章节标题: "第1章",
+      正文覆盖: "完整章节",
+      缓存版本: "二"
+    });
+    expect(summary.structured.详细梗概).toContain("第1个片段缓存摘要");
+    expect(summary.structured.详细梗概).toContain(`第${expectedChunks.length}个片段缓存摘要`);
+    expect(summary.structured.关键事件.length).toBeGreaterThan(0);
+    expect(summary.structured.可核对事实.length).toBeGreaterThan(0);
+    expect(summary.structured.空间与行动逻辑).toHaveLength(expectedChunks.length);
+    expect(summary.structured.空间与行动逻辑[0]).toMatchObject({
+      人物: "林远",
+      移动或行动: "第1个片段中穿过旧宅走廊"
+    });
+    expect(summary.structured.限制与否定事实).toHaveLength(expectedChunks.length);
+    expect(summary.structured.限制与否定事实[0]).toMatchObject({
+      对象: "林远",
+      限制或否定: "第1个片段尚未找到旧信来源"
+    });
+    expect(summary.structured.缓存质量).toMatchObject({
+      覆盖完整度: "完整",
+      需要回读原文: "否",
+      缺失说明: []
+    });
     expect(summaryRepo.listChapterSummaryChunks("project_1", "chapter_1", computeChapterContentHash(content))).toHaveLength(expectedChunks.length);
     db.close();
   });
@@ -400,7 +448,9 @@ describe("summary service generation", () => {
           }
           return chapterChunkIndexPayload({ chunkIndex: input.chunkIndex, chunkCount: input.chunkCount });
         },
-        mergeChapterChunksForIndex: async () => summaryPayloadV2()
+        mergeChapterChunksForIndex: async () => {
+          throw new Error("changed source must stop before local chunk aggregation");
+        }
       }
     });
 
@@ -478,7 +528,9 @@ describe("summary service generation", () => {
           generatedChunkIndexes.push(input.chunkIndex);
           return chapterChunkIndexPayload({ chunkIndex: input.chunkIndex, chunkCount: input.chunkCount });
         },
-        mergeChapterChunksForIndex: async () => summaryPayloadV2()
+        mergeChapterChunksForIndex: async () => {
+          throw new Error("ready chunks should be aggregated locally");
+        }
       }
     });
 

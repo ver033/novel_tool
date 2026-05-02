@@ -58,10 +58,22 @@ describe("AI candidate metadata", () => {
     const metadata = {
       proofreadIssues: [
         {
-          type: "表达不顺" as const,
+          code: "awkward_expression" as const,
+          severity: "medium" as const,
           quote: "雨声里停下脚步",
+          locationHint: "选区第 1 句",
+          explanation: "语序不自然，主语和动作关系不够清楚。",
           suggestion: "林远听着雨声停下脚步。",
-          reason: "语序更自然"
+          suggestedReplacement: "林远听着雨声停下脚步。",
+          evidence: [
+            {
+              source: "target" as const,
+              quote: "雨声里停下脚步",
+              note: "目标文本中的原句"
+            }
+          ],
+          canAutoApply: true,
+          needsAuthorJudgment: false
         }
       ],
       writingContextPlan: {
@@ -75,6 +87,23 @@ describe("AI candidate metadata", () => {
     };
 
     expect(parseAiCandidateMetadata(stringifyAiCandidateMetadata(metadata))).toEqual(metadata);
+  });
+
+  it("rejects obsolete proofread issue metadata instead of silently converting it", () => {
+    expect(() =>
+      parseAiCandidateMetadata(
+        JSON.stringify({
+          proofreadIssues: [
+            {
+              type: "表达不顺",
+              quote: "雨声里停下脚步",
+              suggestion: "林远听着雨声停下脚步。",
+              reason: "语序更自然"
+            }
+          ]
+        })
+      )
+    ).toThrow();
   });
 });
 

@@ -4,7 +4,7 @@ import { DEFAULT_TOKEN_BUDGETS, getTokenBudget } from "../../src/main/ai/token-b
 describe("AI token budgets", () => {
   it("defines separate input and output budgets by AI task type", () => {
     expect(DEFAULT_TOKEN_BUDGETS).toEqual({
-      chat: { maxInputTokens: 12000, maxOutputTokens: 12000, maxReasoningTokens: 4000 },
+      chat: { maxInputTokens: 12000, maxOutputTokens: 24000, maxReasoningTokens: 4000 },
       polish: { maxInputTokens: 8000, maxOutputTokens: 8000, maxReasoningTokens: 2000 },
       expand: { maxInputTokens: 10000, maxOutputTokens: 12000, maxReasoningTokens: 3000 },
       proofread: { maxInputTokens: 12000, maxOutputTokens: 12000, maxReasoningTokens: 4000 },
@@ -26,7 +26,7 @@ describe("AI token budgets", () => {
   it("expands chat input budget when the selected model has a large context window", () => {
     const budget = getTokenBudget("chat", 1_048_576);
 
-    expect(budget.maxOutputTokens).toBe(12000);
+    expect(budget.maxOutputTokens).toBe(24000);
     expect(budget.maxReasoningTokens).toBe(4000);
     expect(budget.maxInputTokens).toBeGreaterThan(700_000);
   });

@@ -31,7 +31,7 @@ describe("chat context usage display", () => {
     expect(usage).toMatchObject({
       requestId: "idle_context",
       estimatedInputTokens: 0,
-      maxOutputTokens: 12000,
+      maxOutputTokens: 24000,
       modelContextTokens: 1_048_576,
       modelName: "google/gemini-2.5-pro",
       contextMode: "direct",

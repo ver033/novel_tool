@@ -110,9 +110,12 @@ describe("chat agent tools", () => {
     const parameters = JSON.stringify(tool?.function.parameters);
 
     expect(tool?.function.description).toContain("润色");
+    expect(tool?.function.description).toContain("自然语言请求也可以调用");
+    expect(tool?.function.description).toContain("没有明确目标时不要调用本工具");
     expect(parameters).toContain('"operation"');
     expect(parameters).toContain('"polish"');
     expect(parameters).toContain('"target"');
+    expect(parameters).toContain("用户当前消息里直接粘贴的正文必须原样放入 text");
     expect(parameters).not.toContain("add_to_scratchpad");
   });
 
