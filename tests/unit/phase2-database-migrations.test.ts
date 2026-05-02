@@ -38,6 +38,7 @@ describe("phase 2 database migrations", () => {
       "arc_ai_summaries",
       "book_ai_summaries",
       "chapter_ai_summaries",
+      "chapter_ai_summary_chunks",
       "chapter_snapshots",
       "chapters",
       "import_jobs",
@@ -55,7 +56,10 @@ describe("phase 2 database migrations", () => {
       { version: 4 },
       { version: 5 },
       { version: 6 },
-      { version: 7 }
+      { version: 7 },
+      { version: 8 },
+      { version: 9 },
+      { version: 10 }
     ]);
     expect(db.prepare("PRAGMA table_info(import_jobs)").all().find((row) => row.name === "project_id")).toMatchObject({ notnull: 0 });
     expect(db.prepare("PRAGMA table_info(ai_task_candidates)").all().find((row) => row.name === "metadata_json")).toMatchObject({
@@ -86,7 +90,55 @@ describe("phase 2 database migrations", () => {
     runMigrations(db);
     runMigrations(db);
 
-    expect(db.prepare("SELECT COUNT(*) AS count FROM schema_migrations").get()).toEqual({ count: 7 });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM schema_migrations").get()).toEqual({ count: 10 });
+
+    db.close();
+  });
+
+  it("clears persisted summary caches when moving to the V2 chapter fact index", () => {
+    const db = createDatabase(createTempDbPath());
+
+    runMigrations(db);
+    db.prepare("INSERT INTO projects (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)").run(
+      "project_1",
+      "归途",
+      "2026-05-01T00:00:00.000Z",
+      "2026-05-01T00:00:00.000Z"
+    );
+    db.prepare(
+      `INSERT INTO chapters
+       (id, project_id, title, sort_order, content_json, plain_text, word_count, daily_word_count, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run("chapter_1", "project_1", "第1章", 0, JSON.stringify({ type: "doc", content: [] }), "正文", 2, 0, "2026-05-01T00:00:00.000Z", "2026-05-01T00:00:00.000Z");
+    db.prepare(
+      `INSERT INTO chapter_ai_summaries
+       (id, project_id, chapter_id, chapter_title, chapter_order, content_hash, summary_short, summary_long, structured_json, token_count, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run("summary_1", "project_1", "chapter_1", "第1章", 1, "old_hash", "旧摘要", "旧摘要", JSON.stringify({ oneLine: "旧摘要" }), 1, "ready", "2026-05-01T00:00:00.000Z", "2026-05-01T00:00:00.000Z");
+    db.prepare(
+      `INSERT INTO arc_ai_summaries
+       (id, project_id, arc_key, chapter_from, chapter_to, source_hash, summary, structured_json, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run("arc_1", "project_1", "auto:001-001", 1, 1, "old_source", "旧阶段", JSON.stringify({ synopsis: "旧阶段" }), "ready", "2026-05-01T00:00:00.000Z", "2026-05-01T00:00:00.000Z");
+    db.prepare(
+      `INSERT INTO book_ai_summaries
+       (id, project_id, source_hash, summary_short, summary_long, structured_json, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run("book_1", "project_1", "old_source", "旧全书", "旧全书", JSON.stringify({ synopsis: "旧全书" }), "ready", "2026-05-01T00:00:00.000Z", "2026-05-01T00:00:00.000Z");
+    db.prepare(
+      `INSERT INTO summary_jobs
+       (id, project_id, job_type, target_id, source_hash, status, priority, attempt_count, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run("job_1", "project_1", "chapter_summary", "chapter_1", "old_hash", "queued", 1, 0, "2026-05-01T00:00:00.000Z", "2026-05-01T00:00:00.000Z");
+
+    db.prepare("DELETE FROM schema_migrations WHERE version = ?").run(8);
+    runMigrations(db);
+
+    expect(db.prepare("SELECT COUNT(*) AS count FROM chapter_ai_summaries").get()).toEqual({ count: 0 });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM arc_ai_summaries").get()).toEqual({ count: 0 });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM book_ai_summaries").get()).toEqual({ count: 0 });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM summary_jobs").get()).toEqual({ count: 0 });
+    expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").get()).toEqual({ version: 10 });
 
     db.close();
   });

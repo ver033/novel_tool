@@ -30,7 +30,11 @@ import type { TaskType } from "../shared/types";
 import {
   IpcPayloadValidationError,
   parseIpcPayload,
+  summaryCancelCurrentJobInputSchema,
+  summaryClearAndRetryChapterCacheInputSchema,
+  summaryGetChapterCacheInputSchema,
   summaryIndexStatusInputSchema,
+  summaryListCacheEntriesInputSchema,
   summaryRebuildProjectIndexInputSchema
 } from "../shared/schemas";
 import type { z } from "zod";
@@ -167,14 +171,17 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
     const resolveProjectDb = (projectId?: string): SqliteDatabase =>
       projectId ? projectService.getProjectDatabaseForProject(projectId) : projectService.getActiveProjectDatabase();
     const resolveChapterRepo = (projectId: string): ChapterRepository => new ChapterRepository(resolveProjectDb(projectId));
-    const writingOperationRunner = useE2eAiGenerators() ? undefined : WritingOperationRunner.fromSettings(settingsService, resolveChapterRepo);
+    const resolveSummaryRepo = (projectId: string): SummaryRepository => new SummaryRepository(resolveProjectDb(projectId));
+    const writingOperationRunner = useE2eAiGenerators()
+      ? undefined
+      : WritingOperationRunner.fromSettings(settingsService, resolveChapterRepo, resolveSummaryRepo);
     const summaryServices = new Map<string, SummaryService>();
     const createSummaryService = (projectId: string): SummaryService => {
       const existing = summaryServices.get(projectId);
       if (existing) {
         return existing;
       }
-      const service = new SummaryService(new SummaryRepository(resolveProjectDb(projectId)), resolveChapterRepo(projectId), {
+      const service = new SummaryService(resolveSummaryRepo(projectId), resolveChapterRepo(projectId), {
         generator: new OpenRouterChatGenerator(settingsService)
       });
       summaryServices.set(projectId, service);
@@ -191,7 +198,7 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
       (projectId) => new AiTaskRepository(resolveProjectDb(projectId)),
       useE2eAiGenerators()
         ? createE2eTaskGenerator()
-        : new OpenRouterTaskGenerator(settingsService, resolveChapterRepo),
+        : new OpenRouterTaskGenerator(settingsService, resolveChapterRepo, resolveSummaryRepo),
       useE2eAiGenerators() ? createE2eChatGenerator() : new OpenRouterChatGenerator(settingsService),
       (projectId) => new AiChatRepository(resolveProjectDb(projectId)),
       (projectId) => new ScratchNoteRepository(resolveProjectDb(projectId)),
@@ -218,9 +225,18 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
     const txtImporter = new TxtImporter(importJobRepo, projectRepo, projectService);
     const txtExporter = new TxtExporter(resolveChapterRepo);
     const recoveredSummaryJobProjects = new Set<string>();
+    let activeSummaryWorker:
+      | {
+          readonly projectId: string;
+          readonly controller: AbortController;
+        }
+      | null = null;
     const summaryWorkerInterval = setInterval(() => {
       const currentProject = projectService.getCurrentProject();
       if (!currentProject?.rootPath) {
+        return;
+      }
+      if (activeSummaryWorker) {
         return;
       }
       const now = new Date().toISOString();
@@ -239,9 +255,21 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
           await settingsService.getOpenRouterConfigWithModelMetadata();
         }
       });
-      worker.runOnce(currentProject.id, now).catch((error: unknown) => {
-        console.error("Summary worker failed", error);
-      });
+      const controller = new AbortController();
+      activeSummaryWorker = {
+        projectId: currentProject.id,
+        controller
+      };
+      worker
+        .runOnce(currentProject.id, now, { signal: controller.signal })
+        .catch((error: unknown) => {
+          console.error("Summary worker failed", error);
+        })
+        .finally(() => {
+          if (activeSummaryWorker?.controller === controller) {
+            activeSummaryWorker = null;
+          }
+        });
     }, 30_000);
     summaryWorkerInterval.unref?.();
 
@@ -266,9 +294,43 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
       ipcChannels.summary.rebuildProjectIndex,
       createValidatedIpcHandler(summaryRebuildProjectIndexInputSchema, (input) =>
         createSummaryService(input.projectId).rebuildProjectIndex(input.projectId, new Date().toISOString(), {
+          force: input.force,
           pausedReason: getSummaryIndexPausedReason()
         })
       )
+    );
+    ipcMain.handle(
+      ipcChannels.summary.listCacheEntries,
+      createValidatedIpcHandler(summaryListCacheEntriesInputSchema, (input) =>
+        createSummaryService(input.projectId).listChapterCacheEntries(input.projectId, new Date().toISOString())
+      )
+    );
+    ipcMain.handle(
+      ipcChannels.summary.getChapterCache,
+      createValidatedIpcHandler(summaryGetChapterCacheInputSchema, (input) =>
+        createSummaryService(input.projectId).getChapterCacheDetail(input.projectId, input.chapterId)
+      )
+    );
+    ipcMain.handle(
+      ipcChannels.summary.clearAndRetryChapterCache,
+      createValidatedIpcHandler(summaryClearAndRetryChapterCacheInputSchema, (input) =>
+        createSummaryService(input.projectId).clearAndRetryChapterCache(input.projectId, input.chapterId, new Date().toISOString(), {
+          pausedReason: getSummaryIndexPausedReason()
+        })
+      )
+    );
+    ipcMain.handle(
+      ipcChannels.summary.cancelCurrentJob,
+      createValidatedIpcHandler(summaryCancelCurrentJobInputSchema, (input) => {
+        const now = new Date().toISOString();
+        if (activeSummaryWorker?.projectId === input.projectId) {
+          activeSummaryWorker.controller.abort();
+        }
+        new SummaryRepository(resolveProjectDb(input.projectId)).cancelQueuedAndRunningJobs(input.projectId, "用户停止后台索引任务。", now);
+        return createSummaryService(input.projectId).getIndexStatus(input.projectId, now, {
+          pausedReason: getSummaryIndexPausedReason()
+        });
+      })
     );
     registerScratchIpc((projectId) => new ScratchNoteRepository(resolveProjectDb(projectId)));
     registerImportIpc(txtImporter);

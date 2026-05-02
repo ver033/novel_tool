@@ -4,6 +4,7 @@ import { getTokenBudget, type TokenBudget } from "./token-budget";
 import { estimateTextTokens, truncateTextToTokenBudget } from "./token-estimator";
 import type { ChapterRepository } from "../db/repositories/chapter-repo";
 import type { ArcAiSummaryRecord, BookAiSummaryRecord, ChapterAiSummaryRecord, SummaryRepository } from "../db/repositories/summary-repo";
+import { getBookSummaryCoverage, type BookSummaryCoverage } from "../shared/summary-index";
 import type { ChapterContent, ChapterSummary } from "../shared/types";
 
 const CHAT_AGENT_CONTEXT_RESERVE_TOKENS = 500;
@@ -29,7 +30,10 @@ export type ResolvedChatAgentContext = {
 
 export type ChatAgentContextOptions = {
   readonly summaryRepo?: SummaryRepository;
+  readonly summaryFocus?: SummaryIndexFocus;
 };
+
+export type SummaryIndexFocus = "overview" | "characters" | "foreshadowing" | "facts";
 
 function findChapterSummaryByOrdinal(chapters: readonly ChapterSummary[], ordinal: number): ChapterSummary | null {
   return chapters.find((chapter) => parseChapterOrdinalFromText(chapter.title) === ordinal) ?? chapters[ordinal - 1] ?? null;
@@ -48,6 +52,13 @@ function loadChapterContent(chapterRepo: ChapterRepository, chapter: ChapterSumm
 
 function buildChapterContextText(chapters: readonly ChapterContextItem[]): string {
   return chapters.map((chapter) => buildChapterContextBlock(chapter, chapter.content.plainText)).join("\n\n");
+}
+
+function formatChapterCoverageLabel(chapterOrder: number, title: string): string {
+  if (title.startsWith(`第${chapterOrder}章`)) {
+    return title;
+  }
+  return `第${chapterOrder}章 ${title}`;
 }
 
 function buildChapterContextBlock(chapter: ChapterContextItem, plainText: string): string {
@@ -96,14 +107,7 @@ function formatList(title: string, items: readonly string[]): string {
   return [`${title}：`, ...cleaned.map((item) => `- ${item}`)].join("\n");
 }
 
-function formatMajorCharacters(items: readonly { readonly name: string; readonly summary: string }[]): string {
-  if (items.length === 0) {
-    return "";
-  }
-  return ["主要人物：", ...items.map((item) => `- ${item.name}：${item.summary}`)].join("\n");
-}
-
-function formatCoverageStatus(coverage: BookAiSummaryRecord["structured"]["coverage"]): string {
+function formatCoverageStatus(coverage: BookSummaryCoverage): string {
   const warnings: string[] = [];
   if (coverage.staleChapterIds.length > 0) {
     warnings.push(`过期 ${coverage.staleChapterIds.length} 章`);
@@ -117,18 +121,40 @@ function formatCoverageStatus(coverage: BookAiSummaryRecord["structured"]["cover
   return warnings.length > 0 ? warnings.join("，") : "最新";
 }
 
-function getCoverageStaleCount(coverage: BookAiSummaryRecord["structured"]["coverage"]): number {
+function formatLimitedLabels(labels: readonly string[]): string {
+  const cleaned = labels.map((label) => label.trim()).filter(Boolean);
+  if (cleaned.length <= 12) {
+    return cleaned.join("、");
+  }
+  return `${cleaned.slice(0, 12).join("、")} 等 ${cleaned.length} 章`;
+}
+
+function formatCoverageWarnings(coverage: BookSummaryCoverage): string[] {
+  const warnings: string[] = [];
+  if (coverage.staleChapterIds.length > 0) {
+    warnings.push(`过期章节：${formatLimitedLabels(coverage.staleChapterIds)}`);
+  }
+  if (coverage.missingChapterIds.length > 0) {
+    warnings.push(`缺失章节：${formatLimitedLabels(coverage.missingChapterIds)}`);
+  }
+  if (coverage.skippedTooShortChapterIds.length > 0) {
+    warnings.push(`过短跳过章节：${formatLimitedLabels(coverage.skippedTooShortChapterIds)}`);
+  }
+  return warnings;
+}
+
+function getCoverageStaleCount(coverage: BookSummaryCoverage): number {
   return coverage.staleChapterIds.length + coverage.missingChapterIds.length;
 }
 
-function getCoverageIndexMode(coverage: BookAiSummaryRecord["structured"]["coverage"], hasReadyBookSummary: boolean): ChatAgentContext["indexMode"] {
+function getCoverageIndexMode(coverage: BookSummaryCoverage, hasReadyBookSummary: boolean): ChatAgentContext["indexMode"] {
   if (!hasReadyBookSummary) {
     return coverage.indexedChapterCount > 0 ? "hybrid" : "missing";
   }
   return getCoverageStaleCount(coverage) > 0 ? "stale" : "summary_cache";
 }
 
-function buildComputedCoverage(chapters: readonly ChapterSummary[], summaries: readonly ChapterAiSummaryRecord[]): BookAiSummaryRecord["structured"]["coverage"] {
+function buildComputedCoverage(chapters: readonly ChapterSummary[], summaries: readonly ChapterAiSummaryRecord[]): BookSummaryCoverage {
   const byChapterId = new Map(summaries.map((summary) => [summary.chapterId, summary]));
   const staleChapterIds: string[] = [];
   const missingChapterIds: string[] = [];
@@ -138,7 +164,7 @@ function buildComputedCoverage(chapters: readonly ChapterSummary[], summaries: r
   for (const chapter of chapters) {
     const summary = byChapterId.get(chapter.id);
     if (!summary) {
-      missingChapterIds.push(chapter.id);
+      missingChapterIds.push(formatChapterCoverageLabel(chapter.sortOrder + 1, chapter.title));
       continue;
     }
     if (summary.status === "ready") {
@@ -146,10 +172,10 @@ function buildComputedCoverage(chapters: readonly ChapterSummary[], summaries: r
       continue;
     }
     if (summary.status === "skipped_too_short") {
-      skippedTooShortChapterIds.push(chapter.id);
+      skippedTooShortChapterIds.push(formatChapterCoverageLabel(chapter.sortOrder + 1, chapter.title));
       continue;
     }
-    staleChapterIds.push(chapter.id);
+    staleChapterIds.push(formatChapterCoverageLabel(chapter.sortOrder + 1, chapter.title));
   }
 
   return {
@@ -177,24 +203,28 @@ function buildBookSummaryIndexText(input: {
   readonly message: string;
   readonly budget: TokenBudget;
 }): string {
-  const coverage = input.bookSummary?.structured.coverage ?? buildComputedCoverage(input.chapters, input.chapterSummaries);
+  const coverage = input.bookSummary ? getBookSummaryCoverage(input.bookSummary.structured) : buildComputedCoverage(input.chapters, input.chapterSummaries);
   const sections: string[] = [
     "[全书摘要索引]",
     `覆盖：${coverage.indexedChapterCount}/${coverage.totalChapterCount} 章`,
     `状态：${input.bookSummary?.status === "ready" ? formatCoverageStatus(coverage) : "全书摘要尚未生成"}`
   ];
+  sections.push(...formatCoverageWarnings(coverage));
 
   if (input.bookSummary?.status === "ready") {
     const structured = input.bookSummary.structured;
     sections.push(
       `短摘要：${input.bookSummary.summaryShort}`,
       `全书摘要：${input.bookSummary.summaryLong}`,
-      formatList("主线", structured.mainPlot),
-      formatMajorCharacters(structured.majorCharacters),
-      formatList("主要冲突", structured.majorConflicts),
-      formatList("关系变化", structured.relationshipChanges),
-      formatList("伏笔线索", structured.foreshadowingHints),
-      formatList("未解决问题", structured.unresolvedQuestions)
+      formatList("主线剧情", structured.主线剧情),
+      formatList("主要人物线", structured.主要人物线),
+      formatList("重要关系线", structured.重要关系线),
+      formatList("人物认知线", structured.人物认知线),
+      formatList("伏笔线", structured.伏笔线),
+      formatList("道具线", structured.道具线),
+      formatList("世界规则与设定", structured.世界规则与设定),
+      formatList("核心冲突", structured.核心冲突),
+      formatList("未解决问题", structured.未解决问题)
     );
   } else {
     sections.push("全书摘要索引还在建立或尚未建立。回答时必须说明当前只能基于已完成的章节/阶段摘要，不能声称已经阅读全文。");
@@ -231,6 +261,204 @@ function buildBookSummaryIndexText(input: {
 
   const textBudget = Math.max(0, input.budget.maxInputTokens - estimateTextTokens(input.message) - CHAT_AGENT_CONTEXT_RESERVE_TOKENS);
   return truncateTextToTokenBudget(compactText, textBudget).text;
+}
+
+function getSummaryFocusLabel(focus: SummaryIndexFocus): string {
+  switch (focus) {
+    case "characters":
+      return "人物";
+    case "foreshadowing":
+      return "伏笔";
+    case "facts":
+      return "事实";
+    case "overview":
+      return "概览";
+  }
+}
+
+function selectFocusScopeChapters(input: {
+  readonly scope: Exclude<ChatAgentScope, { readonly type: "selection" }>;
+  readonly chapters: readonly ChapterSummary[];
+  readonly currentChapterId?: string;
+}): readonly ChapterSummary[] {
+  if (input.scope.type === "all_chapters") {
+    return input.chapters;
+  }
+  if (input.scope.type === "current_chapter") {
+    if (!input.currentChapterId) {
+      throw new Error("当前没有打开章节，请先选择章节，或使用 @第N章 指定范围。");
+    }
+    const current = input.chapters.find((chapter) => chapter.id === input.currentChapterId) ?? null;
+    if (!current) {
+      throw new Error("当前章节不在项目中，请重新打开章节后再试。");
+    }
+    return [current];
+  }
+  if (input.scope.type === "chapter") {
+    const chapter = findChapterSummaryByOrdinal(input.chapters, input.scope.ordinal);
+    if (!chapter) {
+      throw new Error(`找不到第${input.scope.ordinal}章，无法读取摘要索引。`);
+    }
+    return [chapter];
+  }
+  if (input.scope.from > input.scope.to) {
+    throw new Error(`章节范围无效：第${input.scope.from}章到第${input.scope.to}章。`);
+  }
+  if (input.scope.to > input.chapters.length) {
+    throw new Error(`找不到第${input.scope.to}章，当前项目只有 ${input.chapters.length} 章。`);
+  }
+  return input.chapters.slice(input.scope.from - 1, input.scope.to);
+}
+
+function filterSummaryFacts(summary: ChapterAiSummaryRecord, focus: SummaryIndexFocus): ChapterAiSummaryRecord["structured"]["可核对事实"] {
+  if (focus === "facts" || focus === "overview") {
+    return summary.structured.可核对事实;
+  }
+  const factTypes = focus === "characters" ? new Set(["人物状态", "人物认知", "关系"]) : new Set(["伏笔"]);
+  return summary.structured.可核对事实.filter((fact) => factTypes.has(fact.事实类型));
+}
+
+function buildFocusedSummaryBlock(summary: ChapterAiSummaryRecord, focus: SummaryIndexFocus): string {
+  const base = {
+    章节: formatChapterCoverageLabel(summary.chapterOrder, summary.chapterTitle),
+    短摘要: summary.summaryShort
+  };
+
+  if (focus === "overview") {
+    return JSON.stringify(
+      {
+        ...base,
+        长摘要: summary.summaryLong,
+        关键事件: summary.structured.关键事件,
+        不可丢失信息: summary.structured.不可丢失信息,
+        未解决问题: summary.structured.未解决问题
+      },
+      null,
+      2
+    );
+  }
+
+  if (focus === "characters") {
+    return JSON.stringify(
+      {
+        ...base,
+        人物状态: summary.structured.人物状态,
+        人物认知边界: summary.structured.人物认知边界,
+        关系动态: summary.structured.关系动态,
+        可核对事实: filterSummaryFacts(summary, focus)
+      },
+      null,
+      2
+    );
+  }
+
+  if (focus === "foreshadowing") {
+    return JSON.stringify(
+      {
+        ...base,
+        伏笔与线索: summary.structured.伏笔与线索,
+        未解决问题: summary.structured.未解决问题,
+        连续性风险: summary.structured.连续性风险,
+        可核对事实: filterSummaryFacts(summary, focus)
+      },
+      null,
+      2
+    );
+  }
+
+  return JSON.stringify(
+    {
+      ...base,
+      人物状态: summary.structured.人物状态,
+      人物认知边界: summary.structured.人物认知边界,
+      关系动态: summary.structured.关系动态,
+      伏笔与线索: summary.structured.伏笔与线索,
+      可核对事实: summary.structured.可核对事实
+    },
+    null,
+    2
+  );
+}
+
+function resolveFocusedSummaryIndexContext(
+  request: ChatContextRequest,
+  scope: Exclude<ChatAgentScope, { readonly type: "selection" }>,
+  chapterRepo: ChapterRepository,
+  summaryRepo: SummaryRepository,
+  budget: TokenBudget,
+  focus: SummaryIndexFocus
+): ResolvedChatAgentContext {
+  const chapters = chapterRepo.listByProject(request.projectId);
+  if (chapters.length === 0) {
+    throw new Error("当前项目没有章节，无法读取摘要索引。");
+  }
+
+  const selectedChapters = selectFocusScopeChapters({
+    scope,
+    chapters,
+    currentChapterId: request.chapterId
+  });
+  const summaryByChapterId = new Map(summaryRepo.listChapterSummaries(request.projectId).map((summary) => [summary.chapterId, summary]));
+  const readySummaries: ChapterAiSummaryRecord[] = [];
+  const missingLabels: string[] = [];
+  const staleLabels: string[] = [];
+  const skippedLabels: string[] = [];
+
+  for (const chapter of selectedChapters) {
+    const summary = summaryByChapterId.get(chapter.id);
+    const label = formatChapterCoverageLabel(chapter.sortOrder + 1, chapter.title);
+    if (summary?.status === "ready") {
+      readySummaries.push(summary);
+      continue;
+    }
+    if (summary?.status === "skipped_too_short") {
+      skippedLabels.push(label);
+      continue;
+    }
+    if (summary) {
+      staleLabels.push(label);
+    } else {
+      missingLabels.push(label);
+    }
+  }
+
+  const focusLabel = getSummaryFocusLabel(focus);
+  const header = [
+    `[${focusLabel}摘要索引]`,
+    `范围：${buildScopeLabel(scope)}`,
+    `覆盖：${readySummaries.length}/${selectedChapters.length} 章`,
+    missingLabels.length + staleLabels.length > 0 ? "状态：摘要索引缺失或过期" : "状态：最新",
+    missingLabels.length > 0 ? `缺失章节：${formatLimitedLabels(missingLabels)}` : "",
+    staleLabels.length > 0 ? `过期章节：${formatLimitedLabels(staleLabels)}` : "",
+    skippedLabels.length > 0 ? `过短跳过章节：${formatLimitedLabels(skippedLabels)}` : "",
+    "请只根据以下章节摘要索引回答；缺失或过期章节必须说明，不能编造。"
+  ];
+  const body =
+    readySummaries.length > 0
+      ? readySummaries.map((summary) => buildFocusedSummaryBlock(summary, focus))
+      : ["当前范围没有可用章节摘要索引。回答时请提示作者先建立摘要索引，不能声称已经读取正文。"];
+  const rawText = [...header.filter(Boolean), ...body].join("\n");
+  const contextText = isChatAgentContextTooLarge(request.message, rawText, budget)
+    ? `${truncateTextToTokenBudget(rawText, Math.max(0, budget.maxInputTokens - estimateTextTokens(request.message) - CHAT_AGENT_CONTEXT_RESERVE_TOKENS)).text}\n（摘要索引已按输入预算截断；需要更完整结果时请缩小章节范围。）`
+    : rawText;
+  const missingOrStaleCount = missingLabels.length + staleLabels.length;
+
+  return {
+    agentContext: {
+      scopeLabel: `${buildScopeLabel(scope)}${focusLabel}索引`,
+      contextText,
+      sourceChapterIds: selectedChapters.map((chapter) => chapter.id),
+      mode: "summarized",
+      indexMode: readySummaries.length === 0 ? "missing" : missingOrStaleCount > 0 ? "hybrid" : "summary_cache",
+      indexedChapterCount: readySummaries.length,
+      totalChapterCount: selectedChapters.length,
+      staleChapterCount: missingOrStaleCount,
+      skippedTooShortChapterCount: skippedLabels.length
+    },
+    chapters: [],
+    primaryChapterId: selectedChapters.length === 1 ? selectedChapters[0].id : null,
+    requiresSummaries: false
+  };
 }
 
 function resolveSummaryIndexContext(
@@ -291,7 +519,7 @@ function resolveSummaryIndexContext(
       requiresSummaries: false
     };
   }
-  const coverage = bookSummary?.structured.coverage ?? buildComputedCoverage(chapters, chapterSummaries);
+  const coverage = bookSummary ? getBookSummaryCoverage(bookSummary.structured) : buildComputedCoverage(chapters, chapterSummaries);
   const readyBookSummary = bookSummary?.status === "ready" ? bookSummary : null;
 
   return {
@@ -340,6 +568,9 @@ function resolveChapterRangeSummaryIndexContext(
   const rangeChapters = chapters.slice(scope.from - 1, scope.to);
   const summaryByChapterId = new Map(summaryRepo.listChapterSummaries(request.projectId).map((summary) => [summary.chapterId, summary]));
   const readySummaries: ChapterAiSummaryRecord[] = [];
+  const staleChapterLabels: string[] = [];
+  const missingChapterLabels: string[] = [];
+  const skippedTooShortChapterLabels: string[] = [];
   let staleChapterCount = 0;
   let skippedTooShortChapterCount = 0;
   for (const chapter of rangeChapters) {
@@ -350,9 +581,15 @@ function resolveChapterRangeSummaryIndexContext(
     }
     if (summary?.status === "skipped_too_short") {
       skippedTooShortChapterCount += 1;
+      skippedTooShortChapterLabels.push(formatChapterCoverageLabel(chapter.sortOrder + 1, chapter.title));
       continue;
     }
     staleChapterCount += 1;
+    if (summary) {
+      staleChapterLabels.push(formatChapterCoverageLabel(chapter.sortOrder + 1, chapter.title));
+    } else {
+      missingChapterLabels.push(formatChapterCoverageLabel(chapter.sortOrder + 1, chapter.title));
+    }
   }
   const hasCompleteCachedCoverage = readySummaries.length + skippedTooShortChapterCount === rangeChapters.length && staleChapterCount === 0;
   const shouldPreferSummaryIndex = hasCompleteCachedCoverage || rangeChapters.length > 3;
@@ -381,13 +618,16 @@ function resolveChapterRangeSummaryIndexContext(
     "[章节范围摘要索引]",
     `范围：第${scope.from}-${scope.to}章`,
     `覆盖：${readySummaries.length}/${rangeChapters.length} 章`,
-    staleChapterCount > 0 ? `状态：摘要缺失或过期 ${staleChapterCount} 章` : "状态：最新"
+    staleChapterCount > 0 ? `状态：摘要缺失或过期 ${staleChapterCount} 章` : "状态：最新",
+    staleChapterLabels.length > 0 ? `过期章节：${formatLimitedLabels(staleChapterLabels)}` : "",
+    missingChapterLabels.length > 0 ? `缺失章节：${formatLimitedLabels(missingChapterLabels)}` : "",
+    skippedTooShortChapterLabels.length > 0 ? `过短跳过章节：${formatLimitedLabels(skippedTooShortChapterLabels)}` : ""
   ];
   const summaryLines =
     readySummaries.length > 0
       ? readySummaries.flatMap((summary) => [`[第${summary.chapterOrder}章 ${summary.chapterTitle}]`, `短摘要：${summary.summaryShort}`, `长摘要：${summary.summaryLong}`])
       : ["当前范围摘要索引尚未建立。回答时必须说明不能声称已经读取这些章节原文。"];
-  const contextText = [...header, ...summaryLines].join("\n");
+  const contextText = [...header.filter(Boolean), ...summaryLines].join("\n");
 
   return {
     agentContext: {
@@ -529,6 +769,10 @@ export function resolveChatAgentContext(
       primaryChapterId: request.chapterId ?? null,
       requiresSummaries: false
     };
+  }
+
+  if (options.summaryRepo && options.summaryFocus) {
+    return resolveFocusedSummaryIndexContext(request, plan.scope, chapterRepo, options.summaryRepo, budget, options.summaryFocus);
   }
 
   if (plan.scope.type === "all_chapters" && options.summaryRepo) {

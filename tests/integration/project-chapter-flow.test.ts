@@ -10,6 +10,7 @@ import { SummaryRepository } from "../../src/main/db/repositories/summary-repo";
 import { ChapterService } from "../../src/main/chapter/chapter-service";
 import { ProjectService } from "../../src/main/project/project-service";
 import { computeChapterContentHash, type ChapterAiSummaryPayload } from "../../src/main/shared/summary-index";
+import { chapterIndexPayloadV2 } from "../helpers/summary-index-fixtures";
 
 const tempDirs: string[] = [];
 const projectServices: ProjectService[] = [];
@@ -47,18 +48,11 @@ function recentProjectIds(projectService: ProjectService): string[] {
 }
 
 function chapterSummaryPayload(): ChapterAiSummaryPayload {
-  return {
+  return chapterIndexPayloadV2({
     oneLine: "旧正文摘要。",
     synopsis: "旧正文的摘要内容。",
-    keyEvents: ["旧事件"],
-    characterMentions: [{ name: "林远", roleInChapter: "主角" }],
-    relationshipHints: [],
-    timeAndPlace: [],
-    foreshadowingHints: [],
-    unresolvedQuestions: [],
-    emotionalArc: "平静。",
-    importantQuotes: []
-  };
+    detail: "旧正文的摘要内容用于测试章节修改后摘要缓存会被正确标记过期，并保留中文章节事实索引结构，避免继续依赖旧摘要格式。"
+  });
 }
 
 afterEach(() => {

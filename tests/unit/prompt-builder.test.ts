@@ -65,7 +65,7 @@ describe("prompt builder", () => {
         schema: {
           properties: {
             issues: {
-              maxItems: 3
+              maxItems: 20
             }
           }
         }
@@ -163,7 +163,7 @@ describe("prompt builder", () => {
     const joined = proofreadPrompt.messages.map((message) => message.content).join("\n");
 
     expect(joined).toContain('如果没有明确问题，只输出 {"issues":[]}');
-    expect(joined).toContain("最多返回 3 个最重要的问题");
+    expect(joined).toContain("最多返回 20 个最重要的问题");
   });
 
   it("rejects malformed proofread JSON instead of healing or falling back", () => {

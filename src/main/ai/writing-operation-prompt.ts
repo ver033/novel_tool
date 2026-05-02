@@ -32,14 +32,20 @@ const proofreadResponseFormat: OpenRouterResponseFormat = {
       properties: {
         issues: {
           type: "array",
-          maxItems: 3,
+          maxItems: 20,
           items: {
             type: "object",
             properties: {
               type: { type: "string", enum: actionableProofreadIssueTypes },
               quote: { type: "string" },
               suggestion: { type: "string" },
-              reason: { type: "string" }
+              reason: { type: "string" },
+              严重程度: { type: "string", enum: ["低", "中", "高", "严重"] },
+              置信度: { type: "string", enum: ["低", "中", "高"] },
+              缓存证据: { type: "array", items: { type: "string" } },
+              是否可自动应用: { type: "string", enum: ["是", "否"] },
+              是否需要作者判断: { type: "string", enum: ["是", "否"] },
+              是否需要回读原文: { type: "string", enum: ["是", "否"] }
             },
             required: ["type", "quote", "suggestion", "reason"],
             additionalProperties: false
@@ -93,7 +99,7 @@ function buildMessages(input: BuildWritingOperationPromptInput): readonly OpenRo
         "",
         "【输出要求】",
         input.operation.outputKind === "proofread_issues"
-          ? '只输出符合 JSON Schema 的校对结果；没有明确问题时输出 {"issues":[]}。'
+          ? '只输出符合 JSON Schema 的校对结果；没有明确问题时输出 {"issues":[]}。逻辑/连续性问题必须标注是否需要作者判断或回读原文，不要自动改正文。'
           : "只输出可直接使用的候选正文，不要解释，不要建议清单。"
       ].join("\n")
     }

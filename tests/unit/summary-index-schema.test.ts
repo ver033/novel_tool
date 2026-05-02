@@ -4,62 +4,376 @@ import {
   chapterAiSummaryPayloadSchema,
   computeChapterContentHash,
   computeSourceHash,
+  continuityCheckResultSchema,
+  getBookSummaryCoverage,
+  getChapterSummaryLongText,
+  getChapterSummaryShortText,
   summaryJobStatusSchema,
   summaryStatusSchema
 } from "../../src/main/shared/summary-index";
 
-const validChapterPayload = {
-  oneLine: "少年在测试中失利，承受众人的嘲讽。",
-  synopsis: "本章围绕萧炎的斗气测试展开，展现他跌落天才光环后的处境。",
-  keyEvents: ["萧炎斗之力测试结果为三段", "广场众人议论并嘲讽他"],
-  characterMentions: [
+const validChapterIndexPayloadV2 = {
+  章节信息: {
+    章节序号: 1,
+    章节标题: "第1章 陨落的天才",
+    正文覆盖: "完整章节",
+    缓存类型: "章节缓存",
+    缓存版本: "二",
+    语言: "简体中文"
+  },
+  缓存质量: {
+    覆盖完整度: "完整",
+    信息密度: "高",
+    需要回读原文: "否",
+    缺失说明: []
+  },
+  一句话摘要: "萧炎在家族测试中暴露低谷，承受众人嘲讽。",
+  短摘要: "萧炎测试结果低微，家族众人态度冷淡，萧薰儿仍然维护他。",
+  详细梗概: "本章以萧炎的斗气测试为核心，展现他从昔日天才跌落后的尴尬处境。测试结果公布后，广场上的族人议论和嘲笑加重了他的屈辱感，萧薰儿的态度则保留了重要情感支撑。",
+  本章功能: {
+    章节类型: "开局低谷",
+    剧情功能: "确立主角当前困境",
+    情绪功能: "压抑和屈辱",
+    结构作用: "建立主线冲突起点",
+    对后文的作用: "为主角恢复实力和查明原因埋下动机"
+  },
+  场景列表: [
     {
-      name: "萧炎",
-      roleInChapter: "测试失败的少年主角",
-      stateOrChange: "从昔日天才变成被嘲笑的低级修炼者"
+      场景序号: 1,
+      场景标题: "测试广场",
+      时间: "未明确",
+      地点: "萧家测试广场",
+      出场人物: ["萧炎", "测试中年男子", "萧薰儿"],
+      场景目标: "公布斗气测试结果",
+      冲突或阻力: "萧炎结果低微并遭到嘲笑",
+      关键事件: ["萧炎被公布斗之力三段", "族人议论嘲讽", "萧薰儿态度支持"],
+      场景结果: "萧炎处境被进一步公开化",
+      情绪变化: "从强忍平静转为苦涩自嘲",
+      承接关系: "引出萧炎低谷原因的悬念",
+      证据短句: ["斗之力，三段"]
     }
   ],
-  relationshipHints: ["族人对萧炎的态度冷淡且带有轻视"],
-  timeAndPlace: ["萧家测试广场"],
-  foreshadowingHints: ["萧炎异常跌落的原因尚未解释"],
-  unresolvedQuestions: ["萧炎为何从天才变成斗之力三段"],
-  emotionalArc: "从强忍平静到苦涩自嘲。",
-  importantQuotes: ["斗之力，三段！"]
+  关键事件: [
+    {
+      事件: "萧炎斗气测试结果为斗之力三段",
+      涉及人物: ["萧炎"],
+      时间地点: "萧家测试广场",
+      事件原因: "家族进行斗气测试",
+      事件结果: "萧炎被公开评价为低级",
+      后续影响: "加深萧炎恢复实力的压力",
+      证据短句: ["斗之力，三段"]
+    }
+  ],
+  人物状态: [
+    {
+      人物: "萧炎",
+      本章出场状态: "正在参加家族测试",
+      本章结束状态: "承受嘲讽但仍压抑情绪",
+      身体状态: "紧握手掌导致指甲刺入掌心",
+      情绪状态: "自嘲、屈辱、苦涩",
+      行动: ["参加测试", "强忍众人嘲笑"],
+      动机: "证明自己或承受测试结果",
+      目标: "恢复尊严",
+      阻力: "斗气低微和族人轻视",
+      位置变化: "未明确",
+      新获得信息: ["测试结果被公开"],
+      仍不知道的信息: ["修为跌落的根本原因"],
+      误解或错误判断: [],
+      与他人关系变化: ["与族人的距离进一步拉开"],
+      需要后文承接: "是",
+      证据短句: ["斗之力，三段"]
+    }
+  ],
+  人物认知边界: [
+    {
+      人物: "萧炎",
+      已经知道: ["自己的测试结果低微"],
+      尚不知道: ["修为异常原因"],
+      新得知: ["众人对他的轻视仍然存在"],
+      误以为: [],
+      不能知道但后文需注意: [],
+      证据短句: ["斗之力，三段"]
+    }
+  ],
+  关系动态: [
+    {
+      关系双方: ["萧炎", "萧薰儿"],
+      关系类型: "支持关系",
+      本章开始状态: "萧炎处于被嘲笑境地",
+      本章结束状态: "萧薰儿仍对萧炎保持支持",
+      变化原因: "萧薰儿没有随众人轻视萧炎",
+      是否需要后文承接: "是",
+      证据短句: []
+    }
+  ],
+  时间与地点: {
+    本章时间: "未明确",
+    时间跨度: "一次测试过程",
+    主要地点: ["萧家测试广场"],
+    地点移动: [],
+    明确时间锚点: [],
+    相对时间锚点: ["测试期间"],
+    可能的时间线风险: [],
+    证据短句: []
+  },
+  空间与行动逻辑: [],
+  道具状态: [
+    {
+      道具: "测验魔石碑",
+      当前持有者: "萧家测试场",
+      所在位置: "测试广场",
+      本章开始状态: "用于测试斗气等级",
+      本章结束状态: "显示萧炎测试结果",
+      状态变化: "无明显变化",
+      剧情作用: "公开萧炎低谷",
+      是否需要后文追踪: "否",
+      证据短句: ["测验魔石碑"]
+    }
+  ],
+  设定与规则: [
+    {
+      设定项: "斗气测试等级",
+      本章信息: "斗之力三段被判为低级",
+      是否新增: "是",
+      适用范围: "萧家测试体系",
+      限制或例外: "未明确",
+      是否影响后文: "是",
+      证据短句: ["斗之力，三段"]
+    }
+  ],
+  限制与否定事实: [
+    {
+      对象: "萧炎",
+      限制或否定: "当前不是家族认可的高等级修炼者",
+      影响范围: "家族评价与个人处境",
+      后文检查意义: "后文若突然获得尊重需要解释",
+      证据短句: []
+    }
+  ],
+  伏笔与线索: [
+    {
+      线索: "萧炎从天才跌落的原因未解释",
+      类型: "明确伏笔",
+      涉及对象: ["萧炎"],
+      本章状态: "埋下",
+      可能指向: "修为异常原因",
+      置信度: "高",
+      需要作者判断: "否",
+      证据短句: []
+    }
+  ],
+  因果链: [
+    {
+      原因: "测试结果显示低级",
+      结果: "众人嘲讽萧炎",
+      中间动作: ["中年男子公布结果"],
+      是否充分: "充分",
+      缺口说明: "",
+      证据短句: []
+    }
+  ],
+  可核对事实: [
+    {
+      事实编号: "事实-1",
+      事实类型: "人物状态",
+      主体: "萧炎",
+      属性: "斗气测试结果",
+      取值: "斗之力三段",
+      时间范围: "本章测试时",
+      地点: "萧家测试广场",
+      确定性: "确定",
+      后文核对意义: "后文实力变化需要有过程或解释",
+      证据短句: ["斗之力，三段"]
+    }
+  ],
+  连续性风险: [
+    {
+      风险: "后文若直接让萧炎恢复高等级，需要解释修为变化原因",
+      风险类型: "人物状态",
+      原因: "本章明确他测试结果低微",
+      严重程度: "中",
+      需要回看前文: "否",
+      需要作者判断: "否",
+      建议回读范围: [],
+      证据短句: ["斗之力，三段"]
+    }
+  ],
+  未解决问题: [
+    {
+      问题: "萧炎修为跌落的原因是什么",
+      涉及人物或事件: ["萧炎", "斗气测试"],
+      后续需要回答: "是",
+      证据短句: []
+    }
+  ],
+  文风与叙事: {
+    叙事视角: "第三人称",
+    主要语气: "压抑、讽刺",
+    节奏特点: "以测试结果快速制造冲突",
+    对白特点: "公告式对白带来压迫感",
+    描写侧重: "心理屈辱和外界嘲讽",
+    续写时应保持: ["主角压抑情绪", "外界轻视氛围"]
+  },
+  不可丢失信息: ["萧炎测试结果为斗之力三段", "萧炎修为异常原因未揭示", "萧薰儿仍支持萧炎"],
+  适合回答的问题: ["本章萧炎状态如何", "本章埋下了哪些伏笔", "萧炎和族人的关系如何"],
+  不确定项: []
 };
 
 describe("summary index schemas", () => {
-  it("accepts a complete structured chapter summary payload", () => {
-    expect(chapterAiSummaryPayloadSchema.parse(validChapterPayload)).toEqual(validChapterPayload);
+  it("rejects legacy V1 structured chapter summary payloads", () => {
+    expect(() =>
+      chapterAiSummaryPayloadSchema.parse({
+        oneLine: "少年在测试中失利，承受众人的嘲讽。",
+        synopsis: "本章围绕萧炎的斗气测试展开，展现他跌落天才光环后的处境。",
+        keyEvents: ["萧炎斗之力测试结果为三段"],
+        characterMentions: [{ name: "萧炎", roleInChapter: "测试失败的少年主角" }],
+        relationshipHints: [],
+        timeAndPlace: [],
+        foreshadowingHints: [],
+        unresolvedQuestions: [],
+        emotionalArc: "从强忍平静到苦涩自嘲。",
+        importantQuotes: []
+      })
+    ).toThrow();
+  });
+
+  it("accepts a V2 Chinese chapter fact index payload and derives display summaries from it", () => {
+    const parsed = chapterAiSummaryPayloadSchema.parse(validChapterIndexPayloadV2);
+
+    expect(parsed).toEqual(validChapterIndexPayloadV2);
+    expect(getChapterSummaryShortText(parsed)).toBe(validChapterIndexPayloadV2.一句话摘要);
+    expect(getChapterSummaryLongText(parsed)).toBe(validChapterIndexPayloadV2.详细梗概);
+  });
+
+  it("normalizes common model shape drift without accepting legacy chapter indexes", () => {
+    const payload = JSON.parse(JSON.stringify(validChapterIndexPayloadV2));
+    payload.场景列表[0].场景序号 = 0;
+    payload.人物状态[0].新获得信息 = "测试结果被公开";
+    payload.人物状态[0].仍不知道的信息 = "未明确";
+    payload.人物认知边界[0].新得知 = "众人对他的轻视仍然存在";
+
+    const parsed = chapterAiSummaryPayloadSchema.parse(payload);
+
+    expect(parsed.章节信息.缓存版本).toBe("二");
+    expect(parsed.场景列表[0].场景序号).toBe(1);
+    expect(parsed.人物状态[0].新获得信息).toEqual(["测试结果被公开"]);
+    expect(parsed.人物状态[0].仍不知道的信息).toEqual([]);
+    expect(parsed.人物认知边界[0].新得知).toEqual(["众人对他的轻视仍然存在"]);
+  });
+
+  it("rejects thin V2 chapter fact indexes without continuity facts", () => {
+    expect(() =>
+      chapterAiSummaryPayloadSchema.parse({
+        ...validChapterIndexPayloadV2,
+        可核对事实: []
+      })
+    ).toThrow();
+  });
+
+  it("rejects generated English text in V2 chapter fact indexes outside evidence quotes", () => {
+    expect(() =>
+      chapterAiSummaryPayloadSchema.parse({
+        ...validChapterIndexPayloadV2,
+        缓存质量: {
+          ...validChapterIndexPayloadV2.缓存质量,
+          缺失说明: ["missing character state"]
+        }
+      })
+    ).toThrow();
   });
 
   it("rejects empty required chapter summary fields", () => {
     expect(() =>
       chapterAiSummaryPayloadSchema.parse({
-        ...validChapterPayload,
-        oneLine: ""
+        ...validChapterIndexPayloadV2,
+        一句话摘要: ""
       })
     ).toThrow();
   });
 
   it("accepts book summary coverage with stale, missing, and skipped chapter ids", () => {
     const payload = {
-      coverage: {
-        totalChapterCount: 4,
-        indexedChapterCount: 2,
-        staleChapterIds: ["chapter_stale"],
-        missingChapterIds: ["chapter_missing"],
-        skippedTooShortChapterIds: ["chapter_short"]
+      全书信息: {
+        覆盖阶段: ["第1章至第2章"],
+        覆盖章节范围: "第1章至第4章",
+        总章节数: 4,
+        已索引章节数: 2,
+        过期章节: ["第2章"],
+        缺失章节: ["第3章"],
+        过短跳过章节: ["第4章"],
+        覆盖限制: ["第2章摘要过期", "第3章摘要缺失", "第4章正文过短"]
       },
-      synopsis: "全书当前围绕少年失势后的处境展开。",
-      mainPlot: ["萧炎在家族测试中暴露修炼低谷"],
-      majorCharacters: [{ name: "萧炎", summary: "主角，当前处于低谷。" }],
-      majorConflicts: ["萧炎与家族评价之间的冲突"],
-      relationshipChanges: ["族人对萧炎的尊重下降"],
-      foreshadowingHints: ["修为倒退原因未揭示"],
-      unresolvedQuestions: ["萧炎能否恢复实力"]
+      全文一句话摘要: "全书当前围绕少年失势后的处境展开。",
+      全文短摘要: "萧炎在家族测试中暴露修炼低谷，外界评价和自身困境形成主要压力。",
+      全文详细梗概: "故事目前集中在萧炎失去昔日天才光环后的处境。测试结果公开后，族人态度变化让他的低谷更加明显，也为后续恢复实力和查明原因留下动力。",
+      主线剧情: ["萧炎在家族测试中暴露修炼低谷"],
+      主要人物线: ["萧炎处于低谷并承受外界评价"],
+      重要关系线: ["族人对萧炎的尊重下降"],
+      人物认知线: ["萧炎知道自己处境尴尬"],
+      伏笔线: ["修为倒退原因未揭示"],
+      道具线: [],
+      世界规则与设定: ["斗之力等级会影响家族评价"],
+      时间地点结构: ["开篇主要发生在家族测试场景"],
+      核心冲突: ["萧炎与家族评价之间的冲突"],
+      主题与情绪基调: "低谷、压抑和不甘",
+      未解决问题: ["萧炎能否恢复实力"],
+      连续性风险: [],
+      可核对事实: ["萧炎当前测试结果低微"],
+      不可丢失信息: ["萧炎处于低谷"],
+      适合回答的问题: ["全文目前讲了什么"]
     };
 
     expect(bookAiSummaryPayloadSchema.parse(payload)).toEqual(payload);
+    expect(getBookSummaryCoverage(payload)).toEqual({
+      totalChapterCount: 4,
+      indexedChapterCount: 2,
+      staleChapterIds: ["第2章"],
+      missingChapterIds: ["第3章"],
+      skippedTooShortChapterIds: ["第4章"]
+    });
+  });
+
+  it("accepts continuity check results with no obvious conflict", () => {
+    const payload = {
+      结论: "无明显冲突",
+      问题列表: [],
+      需要回读的章节: [],
+      给作者的简短说明: "根据当前章节缓存，暂未发现明确连续性冲突。"
+    };
+
+    expect(continuityCheckResultSchema.parse(payload)).toEqual(payload);
+  });
+
+  it("keeps possible foreshadowing separate from definite continuity errors", () => {
+    const payload = {
+      结论: "疑似冲突",
+      问题列表: [
+        {
+          问题类型: "人物认知",
+          严重程度: "中",
+          涉及章节: ["第3章", "第20章"],
+          冲突说明: "人物后文似乎知道了前文未公开的信息。",
+          证据一: {
+            章节: "第3章",
+            字段: "人物认知边界",
+            证据短句: "他尚不知道旧信的来源"
+          },
+          证据二: {
+            章节: "第20章",
+            字段: "人物状态",
+            证据短句: "他直接说出旧信来自祠堂"
+          },
+          为什么可能冲突: "缓存显示前文未建立该信息来源，后文直接使用该信息。",
+          是否可能是伏笔或误导: "是",
+          是否需要回读原文: "是",
+          建议处理: "回读第3章和第20章，确认中间是否有补充信息。"
+        }
+      ],
+      需要回读的章节: ["第3章", "第20章"],
+      给作者的简短说明: "这更像需要核对的信息差，不应直接判定为错误。"
+    };
+
+    expect(continuityCheckResultSchema.parse(payload).问题列表[0].是否可能是伏笔或误导).toBe("是");
   });
 
   it("rejects unknown summary and job statuses", () => {

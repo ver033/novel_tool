@@ -1,21 +1,35 @@
 import {
+  Database,
   GearSix,
   Robot,
   Sliders,
   X
 } from "@phosphor-icons/react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import type { AiProviderSettingsState, EditorSettings, OpenRouterModelSummary, SettingsSaveInput, SettingsState, SettingsTestConnectionInput, TaskPromptPreset } from "../../main/shared/types";
+import type {
+  AiProviderSettingsState,
+  EditorSettings,
+  OpenRouterModelSummary,
+  ProjectRecord,
+  SettingsSaveInput,
+  SettingsState,
+  SettingsTestConnectionInput,
+  SummaryChapterCacheDetail,
+  SummaryChapterCacheEntry,
+  SummaryIndexStatus,
+  TaskPromptPreset
+} from "../../main/shared/types";
 import { Button } from "../components/Button";
 import { IconButton } from "../components/IconButton";
 import { Input } from "../components/Input";
 import { Textarea } from "../components/Textarea";
 import { getNovelToolApi } from "../state/app-store";
 
-export type SettingsCategory = "通用" | "编辑器" | "AI 服务" | "提示词预设" | "导入导出" | "备份与数据" | "快捷键";
+export type SettingsCategory = "通用" | "编辑器" | "AI 服务" | "提示词预设" | "章节索引缓存" | "导入导出" | "备份与数据" | "快捷键";
 
 type SettingsPageProps = {
   readonly activeCategory: SettingsCategory;
+  readonly currentProject: ProjectRecord | null;
   readonly onCategoryChange: (category: SettingsCategory) => void;
   readonly onWelcome: () => void;
   readonly onClose: () => void;
@@ -40,6 +54,7 @@ type StatusState = {
 type SettingsContentProps = {
   readonly apiKeyConfigured: boolean;
   readonly category: SettingsCategory;
+  readonly currentProject: ProjectRecord | null;
   readonly form: SettingsFormState;
   readonly isBusy: boolean;
   readonly modelListLoaded: boolean;
@@ -51,7 +66,7 @@ type SettingsContentProps = {
   readonly onSaveSettings: () => void;
 };
 
-const visibleCategories = ["AI 服务", "提示词预设"] as const satisfies readonly SettingsCategory[];
+const visibleCategories = ["AI 服务", "提示词预设", "章节索引缓存"] as const satisfies readonly SettingsCategory[];
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 
 const taskPromptPresetLabels: Record<TaskPromptPreset["taskType"], string> = {
@@ -70,7 +85,8 @@ type VisibleSettingsCategory = (typeof visibleCategories)[number];
 
 const categoryIcons: Record<VisibleSettingsCategory, ReactNode> = {
   "AI 服务": <Robot size={20} />,
-  提示词预设: <Sliders size={20} />
+  提示词预设: <Sliders size={20} />,
+  章节索引缓存: <Database size={20} />
 };
 
 function isVisibleCategory(category: SettingsCategory): category is VisibleSettingsCategory {
@@ -174,12 +190,72 @@ function formatContextLength(value: number | null): string {
   return `${value.toLocaleString("zh-CN")} tokens`;
 }
 
+function formatCacheState(entry: SummaryChapterCacheEntry | null): string {
+  if (!entry) {
+    return "未选择";
+  }
+  const labels: Record<SummaryChapterCacheEntry["cacheState"], string> = {
+    ready: "已缓存",
+    stale: "过期",
+    building: "构建中",
+    failed: "失败",
+    skipped_too_short: "过短跳过",
+    missing: "缺失",
+    queued: "排队中",
+    running: "正在缓存",
+    cancelled: "已停止"
+  };
+  return labels[entry.cacheState];
+}
+
+function formatDateTime(value: string | null): string {
+  if (!value) {
+    return "无";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return date.toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
+function getChapterCacheActionLabel(entry: SummaryChapterCacheEntry | null): string {
+  if (!entry) {
+    return "选择章节";
+  }
+
+  const labels: Record<SummaryChapterCacheEntry["cacheState"], string> = {
+    ready: "重新缓存",
+    stale: "重新缓存",
+    building: "正在缓存",
+    failed: "重试本章缓存",
+    skipped_too_short: "内容过短",
+    missing: "生成本章缓存",
+    queued: "已排队",
+    running: "正在缓存",
+    cancelled: "重试本章缓存"
+  };
+  return labels[entry.cacheState];
+}
+
+function canRunChapterCacheAction(entry: SummaryChapterCacheEntry | null, running: boolean): boolean {
+  if (!entry || running) {
+    return false;
+  }
+  return entry.cacheState === "ready" || entry.cacheState === "stale" || entry.cacheState === "missing" || entry.cacheState === "failed" || entry.cacheState === "cancelled";
+}
+
 function findExactModel(models: readonly OpenRouterModelSummary[], modelName: string): OpenRouterModelSummary | null {
   const normalized = modelName.trim().toLocaleLowerCase("zh-CN");
   return models.find((model) => model.id.toLocaleLowerCase("zh-CN") === normalized) ?? null;
 }
 
-export function SettingsPage({ activeCategory, onCategoryChange, onWelcome, onClose }: SettingsPageProps) {
+export function SettingsPage({ activeCategory, currentProject, onCategoryChange, onWelcome, onClose }: SettingsPageProps) {
   const api = useMemo(getNovelToolApi, []);
   const [form, setForm] = useState<SettingsFormState>(defaultForm);
   const [apiKeyConfigured, setApiKeyConfigured] = useState(false);
@@ -332,9 +408,10 @@ export function SettingsPage({ activeCategory, onCategoryChange, onWelcome, onCl
         </nav>
         <section className="settings-content">
           <SettingsContent
-            apiKeyConfigured={apiKeyConfigured}
-            category={activeVisibleCategory}
-            form={form}
+             apiKeyConfigured={apiKeyConfigured}
+             category={activeVisibleCategory}
+             currentProject={currentProject}
+             form={form}
             isBusy={isBusy}
             modelListLoaded={modelListLoaded}
             modelOptions={modelOptions}
@@ -344,14 +421,18 @@ export function SettingsPage({ activeCategory, onCategoryChange, onWelcome, onCl
             onSaveSettings={() => void saveSettings()}
             onTestConnection={testConnection}
           />
-          <div className="notice">
-            <span>你的作品和设置仅保存在本地设备，不会默认同步到云端。只有在你主动使用 AI 功能时，相关内容才会发送到所选 AI 服务。</span>
-          </div>
-          {status.message ? <p className={`settings-message ${status.kind}`}>{status.message}</p> : null}
-          <div className="wizard-actions">
-            <Button variant="ghost" onClick={onClose}>取消</Button>
-            <Button variant="primary" disabled={isBusy} onClick={() => void saveSettings()}>保存设置</Button>
-          </div>
+          {activeVisibleCategory !== "章节索引缓存" ? (
+            <>
+              <div className="notice">
+                <span>你的作品和设置仅保存在本地设备，不会默认同步到云端。只有在你主动使用 AI 功能时，相关内容才会发送到所选 AI 服务。</span>
+              </div>
+              {status.message ? <p className={`settings-message ${status.kind}`}>{status.message}</p> : null}
+              <div className="wizard-actions">
+                <Button variant="ghost" onClick={onClose}>取消</Button>
+                <Button variant="primary" disabled={isBusy} onClick={() => void saveSettings()}>保存设置</Button>
+              </div>
+            </>
+          ) : null}
         </section>
       </main>
     </div>
@@ -361,6 +442,7 @@ export function SettingsPage({ activeCategory, onCategoryChange, onWelcome, onCl
 function SettingsContent({
   apiKeyConfigured,
   category,
+  currentProject,
   form,
   isBusy,
   modelListLoaded,
@@ -576,5 +658,260 @@ function SettingsContent({
     );
   }
 
+  if (category === "章节索引缓存") {
+    return <SummaryCacheSettingsPane currentProject={currentProject} />;
+  }
+
   return null;
+}
+
+type SummaryCacheSettingsPaneProps = {
+  readonly currentProject: ProjectRecord | null;
+};
+
+function SummaryCacheSettingsPane({ currentProject }: SummaryCacheSettingsPaneProps) {
+  const api = useMemo(getNovelToolApi, []);
+  const [project, setProject] = useState<ProjectRecord | null>(null);
+  const [indexStatus, setIndexStatus] = useState<SummaryIndexStatus | null>(null);
+  const [entries, setEntries] = useState<SummaryChapterCacheEntry[]>([]);
+  const [selectedChapterId, setSelectedChapterId] = useState<string | null>(null);
+  const [detail, setDetail] = useState<SummaryChapterCacheDetail | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [actionBusy, setActionBusy] = useState(false);
+  const [forceConfirm, setForceConfirm] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const selectedEntry = entries.find((entry) => entry.chapterId === selectedChapterId) ?? entries[0] ?? null;
+  const running = Boolean(indexStatus?.runningJobLabel);
+  const hasQueuedOrRunning = Boolean(indexStatus && (indexStatus.queuedJobCount > 0 || indexStatus.runningJobLabel));
+  const fullCachePreview = detail
+    ? JSON.stringify(
+        {
+          章节: {
+            标题: detail.chapterTitle,
+            序号: detail.chapterOrder,
+            状态: formatCacheState(detail),
+            更新时间: detail.summary?.updatedAt ?? null
+          },
+          摘要: detail.summary,
+          片段缓存: detail.chunks
+        },
+        null,
+        2
+      )
+    : "请选择一个章节查看完整缓存信息。";
+
+  async function loadCache(nextSelectedChapterId?: string | null): Promise<void> {
+    setLoading(true);
+    setError(null);
+    try {
+      setProject(currentProject);
+      if (!currentProject) {
+        setEntries([]);
+        setIndexStatus(null);
+        setSelectedChapterId(null);
+        setDetail(null);
+        return;
+      }
+
+      const [status, cacheEntries] = await Promise.all([
+        api.summary.getIndexStatus({ projectId: currentProject.id }) as Promise<SummaryIndexStatus>,
+        api.summary.listCacheEntries({ projectId: currentProject.id }) as Promise<SummaryChapterCacheEntry[]>
+      ]);
+      setIndexStatus(status);
+      setEntries([...cacheEntries]);
+      const fallbackChapterId = cacheEntries[0]?.chapterId ?? null;
+      const chapterId = nextSelectedChapterId && cacheEntries.some((entry) => entry.chapterId === nextSelectedChapterId) ? nextSelectedChapterId : fallbackChapterId;
+      setSelectedChapterId(chapterId);
+      if (chapterId) {
+        setDetail((await api.summary.getChapterCache({ projectId: currentProject.id, chapterId })) as SummaryChapterCacheDetail);
+      } else {
+        setDetail(null);
+      }
+    } catch (reason) {
+      setError(formatError(reason));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void loadCache();
+  }, [currentProject?.id]);
+
+  async function selectChapter(chapterId: string): Promise<void> {
+    if (!project) {
+      return;
+    }
+    setSelectedChapterId(chapterId);
+    setError(null);
+    try {
+      setDetail((await api.summary.getChapterCache({ projectId: project.id, chapterId })) as SummaryChapterCacheDetail);
+    } catch (reason) {
+      setError(formatError(reason));
+    }
+  }
+
+  async function runAction(action: () => Promise<unknown>, successMessage: string): Promise<void> {
+    if (!project) {
+      return;
+    }
+    setActionBusy(true);
+    setMessage(null);
+    setError(null);
+    try {
+      await action();
+      setMessage(successMessage);
+      setForceConfirm(false);
+      await loadCache(selectedChapterId);
+    } catch (reason) {
+      setError(formatError(reason));
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  const selectedCanRunCacheAction = Boolean(project && canRunChapterCacheAction(selectedEntry, running));
+
+  return (
+    <div className="settings-grid summary-cache-settings">
+      <div className="settings-card wide summary-cache-overview">
+        <div className="settings-card-head">
+          <div>
+            <h3>章节索引缓存</h3>
+            <p className="muted">用于全文总结、人物查询、伏笔查询和跨章节问答。这里不手动编辑缓存，只预览完整缓存信息并调度重试。</p>
+          </div>
+          <Button variant="ghost" disabled={loading || actionBusy} onClick={() => void loadCache(selectedChapterId)}>
+            刷新
+          </Button>
+        </div>
+
+        {!project ? (
+          <div className="empty-inline">请先打开项目，再管理章节索引缓存。</div>
+        ) : (
+          <>
+            <div className="summary-cache-status-grid">
+              <span>
+                <b>{indexStatus?.readyChapterCount ?? 0}</b>
+                已缓存
+              </span>
+              <span>
+                <b>{indexStatus?.missingChapterCount ?? 0}</b>
+                缺失
+              </span>
+              <span>
+                <b>{indexStatus?.staleChapterCount ?? 0}</b>
+                过期
+              </span>
+              <span>
+                <b>{indexStatus?.failedJobCount ?? 0}</b>
+                失败
+              </span>
+              <span>
+                <b>{indexStatus?.queuedJobCount ?? 0}</b>
+                排队
+              </span>
+            </div>
+            <div className="summary-cache-actions">
+              <Button
+                variant="secondary"
+                disabled={loading || actionBusy || running}
+                onClick={() => void runAction(() => api.summary.rebuildProjectIndex({ projectId: project.id }), "后台索引任务已继续排队。")}
+              >
+                继续建立索引
+              </Button>
+              <Button
+                variant="ghost"
+                disabled={loading || actionBusy || !hasQueuedOrRunning}
+                onClick={() => void runAction(() => api.summary.cancelCurrentJob({ projectId: project.id }), "后台索引已停止。")}
+              >
+                停止后台索引
+              </Button>
+              <Button
+                variant={forceConfirm ? "primary" : "ghost"}
+                disabled={loading || actionBusy || running}
+                onClick={() => {
+                  if (!forceConfirm) {
+                    setForceConfirm(true);
+                    setMessage("再次点击“确认重建全书索引”会强制重排全部章节。");
+                    return;
+                  }
+                  void runAction(() => api.summary.rebuildProjectIndex({ projectId: project.id, force: true }), "全书索引已强制重新排队。");
+                }}
+              >
+                {forceConfirm ? "确认重建全书索引" : "强制重建全书索引"}
+              </Button>
+            </div>
+            {indexStatus?.runningJobLabel ? <p className="summary-cache-hint">当前任务：{indexStatus.runningJobLabel}</p> : null}
+            {indexStatus?.nextRetryAt ? (
+              <p className="summary-cache-hint">
+                自动重试：{indexStatus.nextRetryJobLabel ?? "摘要任务"}，{formatDateTime(indexStatus.nextRetryAt)}
+              </p>
+            ) : null}
+          </>
+        )}
+        {message ? <p className="settings-message saved">{message}</p> : null}
+        {error ? <p className="settings-message error">{error}</p> : null}
+      </div>
+
+      {project ? (
+        <div className="settings-card wide summary-cache-browser">
+          <div className="summary-cache-list" aria-label="章节缓存列表">
+            {entries.length === 0 ? (
+              <div className="empty-inline">当前项目还没有章节。</div>
+            ) : (
+              entries.map((entry) => (
+                <button
+                  className={selectedEntry?.chapterId === entry.chapterId ? "summary-cache-row active" : "summary-cache-row"}
+                  key={entry.chapterId}
+                  onClick={() => void selectChapter(entry.chapterId)}
+                  type="button"
+                >
+                  <span>
+                    <b>{entry.chapterTitle}</b>
+                    <small>{entry.wordCount.toLocaleString("zh-CN")} 字 · 点击查看完整缓存</small>
+                  </span>
+                  <em className={`cache-state ${entry.cacheState}`}>{formatCacheState(entry)}</em>
+                </button>
+              ))
+            )}
+          </div>
+          <div className="summary-cache-detail">
+            <div className="settings-card-head">
+              <div>
+                <h3>{selectedEntry?.chapterTitle ?? "未选择章节"}</h3>
+                <p className="muted">
+                  状态：{formatCacheState(selectedEntry)}；更新：{formatDateTime(selectedEntry?.summaryUpdatedAt ?? null)}
+                </p>
+              </div>
+              <Button
+                variant="secondary"
+                disabled={!selectedCanRunCacheAction || actionBusy}
+                onClick={() =>
+                  selectedEntry &&
+                  void runAction(
+                    () => api.summary.clearAndRetryChapterCache({ projectId: project.id, chapterId: selectedEntry.chapterId }),
+                    "已重新排队生成本章缓存。"
+                  )
+                }
+              >
+                {getChapterCacheActionLabel(selectedEntry)}
+              </Button>
+            </div>
+            {running ? <p className="summary-cache-hint">后台索引正在运行。本章缓存操作会等当前任务停止后才能执行，避免旧任务覆盖新缓存。</p> : null}
+            <div className="summary-cache-preview-block">
+              <h4>缓存摘要</h4>
+              <p>{detail?.summary?.summaryShort ?? "当前章节还没有可预览的缓存摘要。"}</p>
+              {detail?.summary?.summaryLong ? <p className="muted">{detail.summary.summaryLong}</p> : null}
+            </div>
+            <div className="summary-cache-preview-block">
+              <h4>完整缓存信息</h4>
+              <pre className="summary-cache-json">{fullCachePreview}</pre>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
 }

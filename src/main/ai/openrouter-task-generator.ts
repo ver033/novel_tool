@@ -1,6 +1,7 @@
 import type { AiTaskRecord } from "../shared/types";
 import type { AiGenerationOptions, AiTaskGenerationResult, AiTaskGenerator, AiTaskStreamHandlers } from "./ai-task-service";
 import type { ChapterRepository } from "../db/repositories/chapter-repo";
+import type { SummaryRepository } from "../db/repositories/summary-repo";
 import { SettingsService } from "../settings/settings-service";
 import { WritingOperationRunner } from "./writing-operation-runner";
 
@@ -9,9 +10,10 @@ export class OpenRouterTaskGenerator implements AiTaskGenerator {
 
   constructor(
     settingsService: SettingsService,
-    resolveChapterRepo: (projectId: string) => ChapterRepository
+    resolveChapterRepo: (projectId: string) => ChapterRepository,
+    resolveSummaryRepo?: (projectId: string) => SummaryRepository
   ) {
-    this.runner = WritingOperationRunner.fromSettings(settingsService, resolveChapterRepo);
+    this.runner = WritingOperationRunner.fromSettings(settingsService, resolveChapterRepo, resolveSummaryRepo);
   }
 
   async generateStream(task: AiTaskRecord, handlers: AiTaskStreamHandlers, options: AiGenerationOptions = {}): Promise<AiTaskGenerationResult> {

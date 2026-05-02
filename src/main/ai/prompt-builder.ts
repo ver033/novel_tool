@@ -30,7 +30,7 @@ const proofreadJsonSchema = {
   properties: {
     issues: {
       type: "array",
-      maxItems: 3,
+      maxItems: 20,
       items: {
         type: "object",
         properties: {
@@ -66,10 +66,11 @@ function systemPromptFor(task: AiTaskRecord): string {
     return [
       "你是中文小说校对助手。",
       "你只检查文本，不重写整段正文。",
-      "重点检查错别字、标点、病句、表达不顺、对白不自然和重复表达。",
+      "重点检查错别字、标点、病句、表达不顺、对白不自然、重复表达、指代不明，以及时间线、空间移动、人物状态、人物认知、道具状态、设定规则、因果动机、视角越界和伏笔状态问题。",
       "不要改变剧情事实、人物关系、时间地点、叙事视角。",
       '如果没有明确问题，只输出 {"issues":[]}',
-      "如果存在问题，最多返回 3 个最重要的问题。",
+      "如果存在问题，最多返回 20 个最重要的问题。",
+      "逻辑和连续性问题只作为建议列出，不要自动应用。",
       "必须输出符合 JSON Schema 的结果。"
     ].join("\n");
   }

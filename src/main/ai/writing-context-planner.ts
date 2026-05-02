@@ -1,4 +1,5 @@
 import type { ChapterRepository } from "../db/repositories/chapter-repo";
+import type { SummaryRepository } from "../db/repositories/summary-repo";
 import { estimateTextTokens, truncateTextToTokenBudget } from "./token-estimator";
 import type { TokenBudget } from "./token-budget";
 import type {
@@ -13,6 +14,7 @@ export type PlanWritingOperationContextInput = {
   readonly operation: WritingOperationDefinition;
   readonly target: WritingOperationTarget;
   readonly chapterRepo: ChapterRepository;
+  readonly summaryRepo?: SummaryRepository;
   readonly tokenBudget: TokenBudget;
 };
 
@@ -67,6 +69,34 @@ function pushContextItem(items: WritingSupportingContextItem[], item: WritingSup
   }
 }
 
+function formatChapterSummaryCacheContext(input: PlanWritingOperationContextInput, chapterId: string): WritingSupportingContextItem | null {
+  const summary = input.summaryRepo?.getChapterSummary(input.projectId, chapterId);
+  if (!summary || summary.status !== "ready") {
+    return null;
+  }
+  const structured = summary.structured;
+  const content = [
+    `短摘要：${summary.summaryShort}`,
+    `详细梗概：${summary.summaryLong}`,
+    `人物状态：${JSON.stringify(structured.人物状态)}`,
+    `人物认知边界：${JSON.stringify(structured.人物认知边界)}`,
+    `关系动态：${JSON.stringify(structured.关系动态)}`,
+    `时间与地点：${JSON.stringify(structured.时间与地点)}`,
+    `道具状态：${JSON.stringify(structured.道具状态)}`,
+    `设定与规则：${JSON.stringify(structured.设定与规则)}`,
+    `伏笔与线索：${JSON.stringify(structured.伏笔与线索)}`,
+    `可核对事实：${JSON.stringify(structured.可核对事实)}`,
+    `连续性风险：${JSON.stringify(structured.连续性风险)}`
+  ].join("\n");
+
+  return {
+    kind: "same_chapter_summary",
+    label: `${summary.chapterTitle} 章节摘要索引`,
+    content,
+    reason: "辅助校对人物认知、时间线、道具状态、设定规则、因果和伏笔连续性；不可作为修改目标"
+  };
+}
+
 function resolveSelectionTarget(
   projectId: string,
   target: Extract<WritingOperationTarget, { readonly kind: "selection" }>,
@@ -89,13 +119,18 @@ function resolveSelectionTarget(
 }
 
 function buildSelectionContext(input: PlanWritingOperationContextInput, targetText: string): readonly WritingSupportingContextItem[] {
-  if (input.operation.id === "proofread" || input.target.kind !== "selection") {
+  if (input.target.kind !== "selection") {
     return [];
   }
 
   const chapter = input.chapterRepo.getContent(input.target.chapterId);
   if (!chapter || chapter.projectId !== input.projectId) {
     return [];
+  }
+
+  if (input.operation.id === "proofread") {
+    const summaryContext = formatChapterSummaryCacheContext(input, input.target.chapterId);
+    return summaryContext ? [summaryContext] : [];
   }
 
   const range = findTargetRange(chapter.plainText, targetText);
@@ -231,7 +266,9 @@ export function planWritingOperationContext(input: PlanWritingOperationContextIn
     maxInputTokens: input.tokenBudget.maxInputTokens,
     reason:
       input.operation.id === "proofread"
-        ? "校对默认只检查目标文本，避免把参考上下文误判为可修改目标。"
+        ? supportingContext.items.length > 0
+          ? "校对目标文本为唯一检查目标；章节摘要缓存只用于逻辑和连续性判断，不写回正文。"
+          : "校对默认只检查目标文本，避免把参考上下文误判为可修改目标。"
         : "选区是唯一修改目标，前后文只作为参考上下文。"
   };
 }

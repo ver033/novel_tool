@@ -11,6 +11,7 @@ import { ProjectRepository } from "../../src/main/db/repositories/project-repo";
 import { SummaryRepository } from "../../src/main/db/repositories/summary-repo";
 import { createId } from "../../src/main/shared/ids";
 import { computeChapterContentHash, computeSourceHash, type ChapterAiSummaryPayload } from "../../src/main/shared/summary-index";
+import { arcIndexPayloadV2, bookIndexPayloadV2, chapterIndexPayloadV2 } from "../helpers/summary-index-fixtures";
 
 const tempDirs: string[] = [];
 
@@ -29,18 +30,11 @@ afterEach(() => {
 });
 
 function payload(input: { readonly oneLine: string; readonly synopsis: string }): ChapterAiSummaryPayload {
-  return {
+  return chapterIndexPayloadV2({
     oneLine: input.oneLine,
     synopsis: input.synopsis,
-    keyEvents: ["关键事件"],
-    characterMentions: [{ name: "林远", roleInChapter: "主角", stateOrChange: "完成阶段转折" }],
-    relationshipHints: [],
-    timeAndPlace: ["雨夜旧城"],
-    foreshadowingHints: ["旧信尚未揭开"],
-    unresolvedQuestions: ["旧信是谁留下的"],
-    emotionalArc: "从迟疑转向行动",
-    importantQuotes: []
-  };
+    detail: `${input.synopsis} 这个章节缓存用于上下文路由测试，保留关键事件、人物状态、伏笔线索、可核对事实和不可丢失信息。`
+  });
 }
 
 function seedChapter(repo: ChapterRepository, input: { readonly projectId: string; readonly title: string; readonly sortOrder: number; readonly text: string }) {
@@ -383,9 +377,96 @@ describe("summary-aware chat context", () => {
     expect(resolved.agentContext.totalChapterCount).toBe(10);
     expect(resolved.agentContext.staleChapterCount).toBe(1);
     expect(resolved.agentContext.contextText).toContain("摘要缺失或过期 1 章");
+    expect(resolved.agentContext.contextText).toContain("缺失章节：第5章 部分缓存5");
     expect(resolved.agentContext.contextText).toContain("第1章部分缓存短摘要。");
     expect(resolved.agentContext.contextText).toContain("第10章部分缓存长摘要。");
     expect(resolved.agentContext.contextText).not.toContain("回退读取原文");
+
+    db.close();
+  });
+
+  it("uses ready arc and chapter summaries for all-chapter context when the book summary is not ready", () => {
+    const db = createDb();
+    new ProjectRepository(db).create({
+      id: "project_no_book_index",
+      name: "无全书缓存项目",
+      rootPath: null,
+      createdAt: "2026-05-01T00:00:00.000Z",
+      updatedAt: "2026-05-01T00:00:00.000Z"
+    });
+    const chapterRepo = new ChapterRepository(db);
+    const summaryRepo = new SummaryRepository(db);
+    const chapters = [1, 2, 3].map((ordinal) =>
+      seedChapter(chapterRepo, {
+        projectId: "project_no_book_index",
+        title: `第${ordinal}章 未读${ordinal}`,
+        sortOrder: ordinal - 1,
+        text: `第${ordinal}章不应读取原文。`.repeat(4000)
+      })
+    );
+    chapters.slice(0, 2).forEach((chapter, index) => {
+      const ordinal = index + 1;
+      summaryRepo.upsertChapterSummary({
+        id: `summary_no_book_${ordinal}`,
+        projectId: "project_no_book_index",
+        chapterId: chapter.id,
+        chapterTitle: chapter.title,
+        chapterOrder: ordinal,
+        contentHash: computeChapterContentHash(`no-book-${ordinal}`),
+        summaryShort: `第${ordinal}章已有短摘要。`,
+        summaryLong: `第${ordinal}章已有长摘要。`,
+        structured: payload({ oneLine: `第${ordinal}章已有短摘要。`, synopsis: `第${ordinal}章已有长摘要。` }),
+        tokenCount: 30,
+        status: "ready",
+        error: null,
+        createdAt: "2026-05-01T00:00:00.000Z",
+        updatedAt: "2026-05-01T00:00:00.000Z"
+      });
+    });
+    summaryRepo.upsertArcSummary({
+      id: "arc_summary_no_book",
+      projectId: "project_no_book_index",
+      arcKey: "auto:001-002",
+      chapterFrom: 1,
+      chapterTo: 2,
+      sourceHash: computeSourceHash(["chapter-1", "chapter-2"]),
+      summary: "第1-2章已有阶段摘要。",
+      structured: arcIndexPayloadV2(),
+      status: "ready",
+      error: null,
+      createdAt: "2026-05-01T00:00:00.000Z",
+      updatedAt: "2026-05-01T00:00:00.000Z"
+    });
+    const guardedRepo = Object.create(chapterRepo) as ChapterRepository;
+    guardedRepo.getContent = () => {
+      throw new Error("all_chapters with partial summaries must not read raw chapter content");
+    };
+
+    const resolved = resolveChatAgentContext(
+      {
+        projectId: "project_no_book_index",
+        message: "帮我总结全部章节",
+        chapterId: chapters[0].id
+      },
+      {
+        intent: "summarize",
+        scope: { type: "all_chapters" },
+        actions: []
+      },
+      guardedRepo,
+      undefined,
+      { summaryRepo }
+    );
+
+    expect(resolved.agentContext.indexMode).toBe("hybrid");
+    expect(resolved.agentContext.indexedChapterCount).toBe(2);
+    expect(resolved.agentContext.totalChapterCount).toBe(3);
+    expect(resolved.agentContext.staleChapterCount).toBe(1);
+    expect(resolved.agentContext.contextText).toContain("全书摘要尚未生成");
+    expect(resolved.agentContext.contextText).toContain("缺失章节：第3章 未读3");
+    expect(resolved.agentContext.contextText).toContain("第1-2章已有阶段摘要。");
+    expect(resolved.agentContext.contextText).toContain("第1章已有短摘要。");
+    expect(resolved.agentContext.contextText).not.toContain("不应读取原文");
 
     db.close();
   });
@@ -453,16 +534,7 @@ describe("summary-aware chat context", () => {
       chapterTo: 2,
       sourceHash: computeSourceHash(["chapter-1", "chapter-2"]),
       summary: "第1-2章中，林远回到旧城并开始追查旧信。",
-      structured: {
-        chapterFrom: 1,
-        chapterTo: 2,
-        synopsis: "林远回到旧城并开始追查旧信。",
-        keyEvents: ["林远回城", "旧信出现"],
-        characterChanges: ["林远从迟疑转向追查"],
-        relationshipChanges: [],
-        foreshadowingHints: ["旧信来源不明"],
-        unresolvedQuestions: ["旧信是谁留下的"]
-      },
+      structured: arcIndexPayloadV2(),
       status: "ready",
       error: null,
       createdAt: "2026-05-01T00:00:00.000Z",
@@ -474,22 +546,7 @@ describe("summary-aware chat context", () => {
       sourceHash: "book-source",
       summaryShort: "林远回城后追查旧信。",
       summaryLong: "林远在雨夜回到旧城，发现旧信，并决定追查失踪故人的真相。",
-      structured: {
-        coverage: {
-          totalChapterCount: 2,
-          indexedChapterCount: 2,
-          staleChapterIds: [],
-          missingChapterIds: [],
-          skippedTooShortChapterIds: []
-        },
-        synopsis: "林远在雨夜回到旧城，发现旧信，并决定追查失踪故人的真相。",
-        mainPlot: ["回城", "旧信", "追查"],
-        majorCharacters: [{ name: "林远", summary: "主角，开始追查旧信。" }],
-        majorConflicts: ["旧信背后的失踪真相"],
-        relationshipChanges: [],
-        foreshadowingHints: ["旧信来源不明"],
-        unresolvedQuestions: ["失踪故人是否仍然活着"]
-      },
+      structured: bookIndexPayloadV2(),
       status: "ready",
       error: null,
       createdAt: "2026-05-01T00:00:00.000Z",
