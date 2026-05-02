@@ -31,6 +31,15 @@ describe("Proofread V2 UI", () => {
     expect(currentTask).not.toContain("可自动应用");
   });
 
+  it("keeps the live OpenRouter acceptance proofread schema aligned with V2 metadata", () => {
+    const liveAcceptance = readSource("scripts/live-v1-openrouter-acceptance.mjs");
+
+    expect(liveAcceptance).toContain('"code"');
+    expect(liveAcceptance).toContain('"needsAuthorJudgment"');
+    expect(liveAcceptance).not.toContain('"confidence"');
+    expect(liveAcceptance).not.toContain("confidence:");
+  });
+
   it("keeps default task instructions subordinate to the main writing skills", () => {
     const currentTask = readSource("src/renderer/sidebar/CurrentTaskTab.tsx");
 

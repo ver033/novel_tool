@@ -328,6 +328,16 @@ function mergeLongChapterChunks(content: ChapterContent, chunks: readonly Chapte
     (item) => `${item.主体}|${item.属性}|${item.取值}|${item.时间范围}`,
     48
   );
+  const spatialActions = uniqueRecords(
+    orderedChunks.flatMap((chunk) => chunk.structured.空间与行动逻辑),
+    (item) => `${item.人物}|${item.移动或行动}|${item.起点}|${item.终点}`,
+    32
+  );
+  const negativeFacts = uniqueRecords(
+    orderedChunks.flatMap((chunk) => chunk.structured.限制与否定事实),
+    (item) => `${item.对象}|${item.限制或否定}|${item.影响范围}`,
+    32
+  );
   const timePlaces = orderedChunks.map((chunk) => chunk.structured.时间与地点);
   const lostInfo = uniqueStrings(
     orderedChunks.flatMap((chunk) => chunk.structured.不可丢失信息),
@@ -468,7 +478,7 @@ function mergeLongChapterChunks(content: ChapterContent, chunks: readonly Chapte
         12
       )
     },
-    空间与行动逻辑: [],
+    空间与行动逻辑: spatialActions,
     道具状态: uniqueRecords(
       orderedChunks.flatMap((chunk) => chunk.structured.道具状态),
       (item) => `${item.道具}|${item.当前持有者}|${item.本章结束状态}`,
@@ -479,7 +489,7 @@ function mergeLongChapterChunks(content: ChapterContent, chunks: readonly Chapte
       (item) => `${item.设定项}|${item.本章信息}`,
       24
     ),
-    限制与否定事实: [],
+    限制与否定事实: negativeFacts,
     伏笔与线索: uniqueRecords(
       orderedChunks.flatMap((chunk) => chunk.structured.伏笔与线索),
       (item) => `${item.线索}|${item.本章状态}|${item.可能指向}`,

@@ -358,11 +358,34 @@ describe("summary service generation", () => {
         },
         summarizeChapterChunkForIndex: async (input) => {
           chunkInputs.push(input.chunkIndex);
-          return chapterChunkIndexPayload({
+          return {
+            ...chapterChunkIndexPayload({
             chunkIndex: input.chunkIndex,
             chunkCount: input.chunkCount,
             summary: `第${input.chunkIndex + 1}个片段缓存摘要`
-          });
+            }),
+            空间与行动逻辑: [
+              {
+                人物: "林远",
+                移动或行动: `第${input.chunkIndex + 1}个片段中穿过旧宅走廊`,
+                起点: "旧宅门口",
+                终点: "旧宅内室",
+                耗时或距离: "片刻",
+                是否可能需要核对: "是",
+                风险说明: "后文若声称林远未进入旧宅，需要核对移动线。",
+                证据短句: ["穿过旧宅走廊"]
+              }
+            ],
+            限制与否定事实: [
+              {
+                对象: "林远",
+                限制或否定: `第${input.chunkIndex + 1}个片段尚未找到旧信来源`,
+                影响范围: "旧信线索",
+                后文检查意义: "后文不能直接声称旧信来源已经确认。",
+                证据短句: ["旧信来源仍未解释"]
+              }
+            ]
+          } as ReturnType<typeof chapterChunkIndexPayload>;
         },
         mergeChapterChunksForIndex: async () => {
           throw new Error("long chapter chunk merge should be deterministic and local");
@@ -383,6 +406,21 @@ describe("summary service generation", () => {
     expect(summary.structured.详细梗概).toContain(`第${expectedChunks.length}个片段缓存摘要`);
     expect(summary.structured.关键事件.length).toBeGreaterThan(0);
     expect(summary.structured.可核对事实.length).toBeGreaterThan(0);
+    expect(summary.structured.空间与行动逻辑).toHaveLength(expectedChunks.length);
+    expect(summary.structured.空间与行动逻辑[0]).toMatchObject({
+      人物: "林远",
+      移动或行动: "第1个片段中穿过旧宅走廊"
+    });
+    expect(summary.structured.限制与否定事实).toHaveLength(expectedChunks.length);
+    expect(summary.structured.限制与否定事实[0]).toMatchObject({
+      对象: "林远",
+      限制或否定: "第1个片段尚未找到旧信来源"
+    });
+    expect(summary.structured.缓存质量).toMatchObject({
+      覆盖完整度: "完整",
+      需要回读原文: "否",
+      缺失说明: []
+    });
     expect(summaryRepo.listChapterSummaryChunks("project_1", "chapter_1", computeChapterContentHash(content))).toHaveLength(expectedChunks.length);
     db.close();
   });

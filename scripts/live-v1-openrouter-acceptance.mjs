@@ -266,7 +266,6 @@ function proofreadResponseFormat() {
               required: [
                 "code",
                 "severity",
-                "confidence",
                 "quote",
                 "locationHint",
                 "explanation",
@@ -278,7 +277,6 @@ function proofreadResponseFormat() {
               properties: {
                 code: { type: "string", enum: codes },
                 severity: { type: "string", enum: ["low", "medium", "high", "critical"] },
-                confidence: { type: "number", minimum: 0, maximum: 1 },
                 quote: { type: "string", minLength: 1, maxLength: 600 },
                 locationHint: { type: "string", minLength: 1, maxLength: 300 },
                 explanation: { type: "string", minLength: 1, maxLength: 1200 },
@@ -579,7 +577,11 @@ function mergeChunkResultsForLongChapter({ title, ordinal, chunkResults }) {
       可能的时间线风险: uniqueStrings(timePlaces.flatMap((item) => item.可能的时间线风险 ?? []), 24),
       证据短句: uniqueStrings(timePlaces.flatMap((item) => item.证据短句 ?? []), 12)
     },
-    空间与行动逻辑: [],
+    空间与行动逻辑: uniqueRecords(
+      orderedChunks.flatMap((chunk) => chunk.structured.空间与行动逻辑 ?? []),
+      (item) => `${item.人物 ?? ""}|${item.移动或行动 ?? ""}|${item.起点 ?? ""}|${item.终点 ?? ""}`,
+      32
+    ),
     道具状态: uniqueRecords(
       orderedChunks.flatMap((chunk) => chunk.structured.道具状态 ?? []),
       (item) => `${item.道具 ?? ""}|${item.当前持有者 ?? ""}|${item.本章结束状态 ?? ""}`,
@@ -590,7 +592,11 @@ function mergeChunkResultsForLongChapter({ title, ordinal, chunkResults }) {
       (item) => `${item.设定项 ?? ""}|${item.本章信息 ?? ""}`,
       24
     ),
-    限制与否定事实: [],
+    限制与否定事实: uniqueRecords(
+      orderedChunks.flatMap((chunk) => chunk.structured.限制与否定事实 ?? []),
+      (item) => `${item.对象 ?? ""}|${item.限制或否定 ?? ""}|${item.影响范围 ?? ""}`,
+      32
+    ),
     伏笔与线索: uniqueRecords(
       orderedChunks.flatMap((chunk) => chunk.structured.伏笔与线索 ?? []),
       (item) => `${item.线索 ?? ""}|${item.本章状态 ?? ""}|${item.可能指向 ?? ""}`,
