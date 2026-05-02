@@ -36,7 +36,7 @@ type SummaryIndexBanner = {
   readonly title: string;
   readonly detail: string;
   readonly variant: "ready" | "building" | "warning" | "paused";
-  readonly actionLabel: "开始建立索引" | "重建全书索引" | "打开 AI 服务设置" | "重试" | null;
+  readonly actionLabel: "开始建立索引" | "继续建立索引" | "停止后台索引" | "打开缓存设置" | "打开 AI 服务设置" | "重试" | null;
 };
 
 const chatSkillSuggestions: readonly ChatCommandSuggestion[] = [
@@ -150,53 +150,87 @@ function buildSummaryIndexBanner(
   }
 
   const indexedCount = status.readyChapterCount + status.skippedTooShortChapterCount;
+  const issueParts = [
+    status.failedJobCount > 0 ? `失败 ${status.failedJobCount}` : "",
+    status.cancelledJobCount > 0 ? `已停止 ${status.cancelledJobCount}` : "",
+    status.queuedJobCount > 0 ? `排队 ${status.queuedJobCount}` : ""
+  ].filter(Boolean);
+  const issueSuffix = issueParts.length > 0 ? `；${issueParts.join("；")}` : "";
+  const retrySuffix = status.nextRetryAt
+    ? `；${status.nextRetryJobLabel ?? "摘要任务"} 将在 ${formatSummaryIndexRetryTime(status.nextRetryAt)} 自动重试`
+    : "";
   const queuedOrRunning = status.queuedJobCount > 0 || Boolean(status.runningJobLabel);
   if (status.pausedReason === "ai_not_configured") {
     return {
       title: "AI 服务未配置，索引暂停",
-      detail: `全书索引已完成 ${indexedCount} / ${status.totalChapterCount} 章。配置 OpenRouter 后会继续后台建立。`,
+      detail: `全书索引：${indexedCount} / ${status.totalChapterCount} 章。配置 OpenRouter 后会继续后台建立。`,
       variant: "paused",
       actionLabel: "打开 AI 服务设置"
     };
   }
   if (status.pausedReason === "foreground_ai_active") {
     return {
-      title: "全书索引暂停中",
-      detail: "当前有前台 AI 任务正在运行，后台索引会等它结束后继续。",
+      title: "索引已暂停：AI 正在回答",
+      detail: `全书索引：${indexedCount} / ${status.totalChapterCount} 章。后台索引会等前台 AI 结束后继续。`,
       variant: "paused",
       actionLabel: null
     };
   }
   if (status.staleChapterCount > 0) {
     return {
-      title: `${status.staleChapterCount} 章摘要已过期`,
-      detail: `全书索引已完成 ${indexedCount} / ${status.totalChapterCount} 章。最近编辑过的章节需要重新摘要。`,
+      title: `索引过期：${status.staleChapterCount} 章需要更新`,
+      detail: `全书索引：${indexedCount} / ${status.totalChapterCount} 章${issueSuffix}。最近编辑过的章节需要重新摘要。`,
       variant: "warning",
-      actionLabel: "重建全书索引"
+      actionLabel: "打开缓存设置"
     };
   }
   if (queuedOrRunning) {
     return {
-      title: `全书索引正在建立 ${indexedCount} / ${status.totalChapterCount} 章`,
-      detail: status.runningJobLabel ?? "后台摘要任务已排队，会在不影响当前 AI 对话时继续。",
+      title: `全书索引：${indexedCount} / ${status.totalChapterCount} 章`,
+      detail: status.runningJobLabel
+        ? `正在摘要：${status.runningJobLabel.replace(/^正在摘要：/, "")}${issueSuffix}${retrySuffix}`
+        : `后台摘要任务已排队，会在不影响当前 AI 对话时继续${issueSuffix}${retrySuffix}。`,
       variant: "building",
-      actionLabel: null
+      actionLabel: "停止后台索引"
+    };
+  }
+  if (status.cancelledJobCount > 0 && status.missingChapterCount > 0) {
+    const stoppedIssueParts = [
+      `已停止 ${status.cancelledJobCount} 个任务`,
+      status.failedJobCount > 0 ? `失败 ${status.failedJobCount} 个任务` : ""
+    ].filter(Boolean);
+    return {
+      title: "后台索引已停止",
+      detail: `全书索引：${indexedCount} / ${status.totalChapterCount} 章；${stoppedIssueParts.join("；")}。`,
+      variant: "paused",
+      actionLabel: "继续建立索引"
     };
   }
   if (status.missingChapterCount > 0) {
     return {
-      title: "全书索引缺失",
-      detail: `当前只有 ${indexedCount} / ${status.totalChapterCount} 章可用于全文摘要索引。`,
+      title: `全书索引：${indexedCount} / ${status.totalChapterCount} 章`,
+      detail: `当前只有 ${indexedCount} / ${status.totalChapterCount} 章可用于全文摘要索引${issueSuffix}${retrySuffix}。`,
       variant: "warning",
       actionLabel: "开始建立索引"
     };
   }
   return {
-    title: `全书索引已完成 ${indexedCount} / ${status.totalChapterCount} 章`,
+    title: `全书索引：${indexedCount} / ${status.totalChapterCount} 章`,
     detail: "全文总结和跨章节提问会优先使用摘要索引，避免临时读取整本书。",
     variant: "ready",
-    actionLabel: "重建全书索引"
+    actionLabel: "打开缓存设置"
   };
+}
+
+function formatSummaryIndexRetryTime(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) {
+    return iso;
+  }
+  return date.toLocaleTimeString("zh-CN", {
+    hour: "2-digit",
+    minute: "2-digit"
+  });
 }
 
 function getLastUserMessage(messages: readonly AiChatMessageRecord[]): AiChatMessageRecord | null {
@@ -443,8 +477,16 @@ export function AiChatTab({ chapters, currentChapterId, currentChapterTitle, cur
                     onOpenSettings("AI 服务");
                     return;
                   }
+                  if (summaryBanner.actionLabel === "打开缓存设置") {
+                    onOpenSettings("章节索引缓存");
+                    return;
+                  }
                   if (summaryBanner.actionLabel === "重试") {
                     void chatStore.refreshSummaryIndexStatus();
+                    return;
+                  }
+                  if (summaryBanner.actionLabel === "停止后台索引") {
+                    void chatStore.cancelSummaryIndexJob();
                     return;
                   }
                   void chatStore.rebuildSummaryIndex();
@@ -454,6 +496,7 @@ export function AiChatTab({ chapters, currentChapterId, currentChapterTitle, cur
                 {summaryBanner.actionLabel}
               </button>
             ) : null}
+            {chatStore.summaryIndexNotice ? <p className="summary-index-notice">{chatStore.summaryIndexNotice}</p> : null}
           </div>
         ) : null}
         <div className="messages" aria-live="polite">
@@ -565,7 +608,7 @@ export function AiChatTab({ chapters, currentChapterId, currentChapterTitle, cur
                       <div className="chat-context-popover-meta">
                         <span>模型 {contextDisplay.modelLabel}</span>
                         <span>范围 {contextDisplay.scopeLabel}</span>
-                        <span>来源 {contextDisplay.sourceLabel}</span>
+                        <span>上下文 {contextDisplay.sourceLabel}</span>
                         {contextDisplay.coverageLabel ? <span>{contextDisplay.coverageLabel}</span> : null}
                         <span>模型窗口 {contextDisplay.windowLabel}</span>
                         <span>输入预算 {contextDisplay.inputBudgetLabel}</span>

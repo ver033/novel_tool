@@ -47,7 +47,11 @@ import type {
   SettingsListModelsInput,
   SettingsSaveInput,
   SettingsTestConnectionInput,
+  SummaryCancelCurrentJobInput,
+  SummaryClearAndRetryChapterCacheInput,
+  SummaryGetChapterCacheInput,
   SummaryIndexStatusInput,
+  SummaryListCacheEntriesInput,
   SummaryRebuildProjectIndexInput
 } from "../main/shared/types";
 import { ipcChannels } from "../main/shared/types";
@@ -99,6 +103,10 @@ export type NovelToolApi = {
   readonly summary: {
     readonly getIndexStatus: (input: SummaryIndexStatusInput) => Promise<unknown>;
     readonly rebuildProjectIndex: (input: SummaryRebuildProjectIndexInput) => Promise<unknown>;
+    readonly cancelCurrentJob: (input: SummaryCancelCurrentJobInput) => Promise<unknown>;
+    readonly listCacheEntries: (input: SummaryListCacheEntriesInput) => Promise<unknown>;
+    readonly getChapterCache: (input: SummaryGetChapterCacheInput) => Promise<unknown>;
+    readonly clearAndRetryChapterCache: (input: SummaryClearAndRetryChapterCacheInput) => Promise<unknown>;
   };
   readonly ai: {
     readonly createTask: (input: AiCreateTaskInput) => Promise<unknown>;
@@ -175,7 +183,11 @@ export const novelToolApi: NovelToolApi = Object.freeze({
   }),
   summary: Object.freeze({
     getIndexStatus: (input: SummaryIndexStatusInput) => ipcRenderer.invoke(ipcChannels.summary.getIndexStatus, input),
-    rebuildProjectIndex: (input: SummaryRebuildProjectIndexInput) => ipcRenderer.invoke(ipcChannels.summary.rebuildProjectIndex, input)
+    rebuildProjectIndex: (input: SummaryRebuildProjectIndexInput) => ipcRenderer.invoke(ipcChannels.summary.rebuildProjectIndex, input),
+    cancelCurrentJob: (input: SummaryCancelCurrentJobInput) => ipcRenderer.invoke(ipcChannels.summary.cancelCurrentJob, input),
+    listCacheEntries: (input: SummaryListCacheEntriesInput) => ipcRenderer.invoke(ipcChannels.summary.listCacheEntries, input),
+    getChapterCache: (input: SummaryGetChapterCacheInput) => ipcRenderer.invoke(ipcChannels.summary.getChapterCache, input),
+    clearAndRetryChapterCache: (input: SummaryClearAndRetryChapterCacheInput) => ipcRenderer.invoke(ipcChannels.summary.clearAndRetryChapterCache, input)
   }),
   ai: Object.freeze({
     createTask: (input: AiCreateTaskInput) => ipcRenderer.invoke(ipcChannels.ai.createTask, input),

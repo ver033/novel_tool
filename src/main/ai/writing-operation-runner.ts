@@ -1,4 +1,5 @@
 import type { ChapterRepository } from "../db/repositories/chapter-repo";
+import type { SummaryRepository } from "../db/repositories/summary-repo";
 import type { SettingsService } from "../settings/settings-service";
 import type { AiTaskRecord, TaskPromptPreset } from "../shared/types";
 import type { AiGenerationOptions, AiTaskStreamHandlers } from "./ai-task-service";
@@ -26,6 +27,7 @@ type OpenRouterClientLike = {
 
 type WritingOperationRunnerOptions = {
   readonly resolveChapterRepo: (projectId: string) => ChapterRepository;
+  readonly resolveSummaryRepo?: (projectId: string) => SummaryRepository;
   readonly resolveTaskPreset: (presetId: string | null | undefined, taskType: AiTaskRecord["taskType"]) => TaskPromptPreset | null;
   readonly resolveModelConfig: () => Promise<{
     readonly apiKey: string;
@@ -89,9 +91,14 @@ function stripContinuationDraftLabel(content: string): string {
 export class WritingOperationRunner {
   constructor(private readonly options: WritingOperationRunnerOptions) {}
 
-  static fromSettings(settingsService: SettingsService, resolveChapterRepo: (projectId: string) => ChapterRepository): WritingOperationRunner {
+  static fromSettings(
+    settingsService: SettingsService,
+    resolveChapterRepo: (projectId: string) => ChapterRepository,
+    resolveSummaryRepo?: (projectId: string) => SummaryRepository
+  ): WritingOperationRunner {
     return new WritingOperationRunner({
       resolveChapterRepo,
+      resolveSummaryRepo,
       resolveTaskPreset: (presetId, taskType) => settingsService.getTaskPromptPresetForTask(presetId, taskType),
       resolveModelConfig: async () => {
         const config = await settingsService.getOpenRouterConfigWithModelMetadata();
@@ -118,6 +125,7 @@ export class WritingOperationRunner {
       operation,
       target: request.target,
       chapterRepo: this.options.resolveChapterRepo(request.projectId),
+      summaryRepo: this.options.resolveSummaryRepo?.(request.projectId),
       tokenBudget
     });
     const prompt = buildWritingOperationPrompt({

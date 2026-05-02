@@ -1,10 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { buildChapterIndexSummaryMessages } from "../../src/main/ai/summary-prompts";
+import {
+  buildChapterChunkIndexSummaryMessages,
+  buildChapterChunkMergeSummaryMessages,
+  buildChapterIndexSummaryMessages,
+  buildContinuityCheckMessages
+} from "../../src/main/ai/summary-prompts";
 import { buildChatCompletionMessages, OpenRouterChatGenerator } from "../../src/main/ai/openrouter-chat-generator";
 import { estimateMessagesTokens } from "../../src/main/ai/token-estimator";
 import { getTokenBudget } from "../../src/main/ai/token-budget";
 import type { AiChatGenerationInput } from "../../src/main/ai/ai-task-service";
-import type { ChapterAiSummaryPayload } from "../../src/main/shared/summary-index";
+import type { ChapterAiSummaryPayload, ContinuityCheckResult } from "../../src/main/shared/summary-index";
+import { chapterChunkIndexPayload, chapterIndexPayloadV2 } from "../helpers/summary-index-fixtures";
 
 function createInput(patch: Partial<AiChatGenerationInput> = {}): AiChatGenerationInput {
   return {
@@ -369,18 +375,12 @@ describe("OpenRouter chat generator prompt assembly", () => {
 });
 
 describe("OpenRouter persistent summary index generation", () => {
-  const chapterSummary: ChapterAiSummaryPayload = {
+  const chapterSummary: ChapterAiSummaryPayload = chapterIndexPayloadV2({
+    title: "第一章 回乡",
     oneLine: "林远回到故乡。",
     synopsis: "林远在风雨中回到故乡，旧日关系重新浮出水面。",
-    keyEvents: ["林远回乡"],
-    characterMentions: [{ name: "林远", roleInChapter: "主角", stateOrChange: "回到故乡" }],
-    relationshipHints: ["林远与旧友关系待揭示"],
-    timeAndPlace: ["雨夜", "故乡"],
-    foreshadowingHints: ["旧信暗示往事未了"],
-    unresolvedQuestions: ["林远为何离乡多年"],
-    emotionalArc: "从迟疑到压抑的平静",
-    importantQuotes: ["风从旧街尽头吹来。"]
-  };
+    detail: "林远在风雨中回到故乡，旧日关系重新浮出水面。旧信和旧宅共同构成本章需要后续承接的核心线索，人物状态、关系悬念和调查动机都被建立。"
+  });
 
   it("builds long-term chapter index prompts instead of request-time user-question prompts", () => {
     const messages = buildChapterIndexSummaryMessages({
@@ -392,9 +392,13 @@ describe("OpenRouter persistent summary index generation", () => {
     });
     const joined = messages.map((message) => message.content).join("\n");
 
-    expect(joined).toContain("长期可复用的章节摘要索引");
+    expect(joined).toContain("长期可复用的章节事实索引");
+    expect(joined).toContain("人物认知边界");
+    expect(joined).toContain("可核对事实");
+    expect(joined).toContain("不可丢失信息");
     expect(joined).toContain("输出 JSON");
     expect(joined).toContain("章节标题：第一章 回乡");
+    expect(joined).not.toContain("oneLine");
     expect(joined).not.toContain("用户最终问题");
   });
 
@@ -434,7 +438,7 @@ describe("OpenRouter persistent summary index generation", () => {
     expect(result).toEqual(chapterSummary);
     expect(requests).toHaveLength(1);
     expect(requests[0].temperature).toBe(0.2);
-    expect(requests[0].messages.map((message) => message.content).join("\n")).toContain("长期可复用的章节摘要索引");
+    expect(requests[0].messages.map((message) => message.content).join("\n")).toContain("长期可复用的章节事实索引");
   });
 
   it("rejects invalid persistent chapter summary JSON instead of accepting malformed index data", async () => {
@@ -464,5 +468,228 @@ describe("OpenRouter persistent summary index generation", () => {
         plainText: "林远回到了故乡。"
       })
     ).rejects.toThrow("章节索引摘要无效");
+  });
+
+  it("builds chunk and merge prompts with strict current-fragment boundaries", () => {
+    const chunkMessages = buildChapterChunkIndexSummaryMessages({
+      projectId: "project_1",
+      chapterId: "chapter_1",
+      title: "第一章 回乡",
+      ordinal: 1,
+      chunkIndex: 0,
+      chunkCount: 2,
+      textStart: 0,
+      textEnd: 100,
+      plainText: "林远回到故乡。"
+    });
+    const mergeMessages = buildChapterChunkMergeSummaryMessages({
+      projectId: "project_1",
+      chapterId: "chapter_1",
+      title: "第一章 回乡",
+      ordinal: 1,
+      chunks: [
+        {
+          chunkIndex: 0,
+          textStart: 0,
+          textEnd: 100,
+          summaryShort: "林远回乡。",
+          structured: chapterChunkIndexPayload({ chunkIndex: 0, chunkCount: 2 })
+        },
+        {
+          chunkIndex: 1,
+          textStart: 90,
+          textEnd: 200,
+          summaryShort: "旧信出现。",
+          structured: chapterChunkIndexPayload({ chunkIndex: 1, chunkCount: 2, summary: "旧信成为新线索。" })
+        }
+      ]
+    });
+    const chunkPrompt = chunkMessages.map((message) => message.content).join("\n");
+    const mergePrompt = mergeMessages.map((message) => message.content).join("\n");
+
+    expect(chunkPrompt).toContain("只能记录当前片段中出现的信息");
+    expect(chunkPrompt).toContain("不得根据其他片段、常识或猜测补全");
+    expect(mergePrompt).toContain("不得遗漏片段缓存中明确出现的重要内容");
+    expect(chunkPrompt).not.toContain("oneLine");
+    expect(chunkPrompt).not.toContain("synopsis");
+    expect(mergePrompt).not.toContain("oneLine");
+    expect(mergePrompt).not.toContain("synopsis");
+  });
+
+  it("streams and parses persistent chapter chunk JSON", async () => {
+    const requests: Array<{ readonly messages: readonly { readonly content: string }[]; readonly responseFormat?: { readonly type: string } }> = [];
+    const chunkPayload = chapterChunkIndexPayload({ chunkIndex: 0, chunkCount: 2 });
+    const generator = new OpenRouterChatGenerator({} as never);
+    Object.assign(generator as unknown as { createClient: () => Promise<unknown> }, {
+      createClient: async () => ({
+        chatBudget: getTokenBudget("chat", 16_384),
+        contextLength: 16_384,
+        modelName: "summary/model",
+        client: {
+          streamChatCompletion: async (request: { readonly messages: readonly { readonly content: string }[]; readonly responseFormat?: { readonly type: string } }) => {
+            requests.push(request);
+            return {
+              content: JSON.stringify(chunkPayload),
+              reasoning: "",
+              truncated: false,
+              toolCalls: []
+            };
+          }
+        }
+      })
+    });
+
+    const result = await generator.summarizeChapterChunkForIndex({
+      projectId: "project_1",
+      chapterId: "chapter_1",
+      title: "第一章 回乡",
+      ordinal: 1,
+      chunkIndex: 0,
+      chunkCount: 2,
+      textStart: 0,
+      textEnd: 100,
+      plainText: "林远回到了故乡。"
+    });
+
+    expect(result).toEqual(chunkPayload);
+    expect(requests).toHaveLength(1);
+    expect(requests[0].responseFormat).toEqual({ type: "json_object" });
+  });
+
+  it("streams and parses merged chapter chunk JSON as a canonical chapter index", async () => {
+    const requests: Array<{ readonly messages: readonly { readonly content: string }[]; readonly responseFormat?: { readonly type: string } }> = [];
+    const generator = new OpenRouterChatGenerator({} as never);
+    Object.assign(generator as unknown as { createClient: () => Promise<unknown> }, {
+      createClient: async () => ({
+        chatBudget: getTokenBudget("chat", 16_384),
+        contextLength: 16_384,
+        modelName: "summary/model",
+        client: {
+          streamChatCompletion: async (request: { readonly messages: readonly { readonly content: string }[]; readonly responseFormat?: { readonly type: string } }) => {
+            requests.push(request);
+            return {
+              content: JSON.stringify(chapterSummary),
+              reasoning: "",
+              truncated: false,
+              toolCalls: []
+            };
+          }
+        }
+      })
+    });
+
+    const result = await generator.mergeChapterChunksForIndex({
+      projectId: "project_1",
+      chapterId: "chapter_1",
+      title: "第一章 回乡",
+      ordinal: 1,
+      chunks: [
+        {
+          chunkIndex: 0,
+          textStart: 0,
+          textEnd: 100,
+          summaryShort: "林远回乡。",
+          structured: chapterChunkIndexPayload({ chunkIndex: 0, chunkCount: 2 })
+        },
+        {
+          chunkIndex: 1,
+          textStart: 90,
+          textEnd: 200,
+          summaryShort: "旧信出现。",
+          structured: chapterChunkIndexPayload({ chunkIndex: 1, chunkCount: 2, summary: "旧信成为新线索。" })
+        }
+      ]
+    });
+
+    expect(result).toEqual(chapterSummary);
+    expect(requests).toHaveLength(1);
+    expect(requests[0].responseFormat).toEqual({ type: "json_object" });
+  });
+
+  it("builds continuity check prompts from chapter fact indexes without raw chapter text", () => {
+    const messages = buildContinuityCheckMessages({
+      question: "第3章和第20章人物认知有没有冲突",
+      chapters: [
+        {
+          chapterId: "chapter_3",
+          title: "第3章 客人",
+          ordinal: 3,
+          summaryShort: "第3章短摘要。",
+          summaryLong: "第3章长摘要。",
+          structured: chapterIndexPayloadV2({
+            oneLine: "第3章短摘要。",
+            synopsis: "第3章长摘要。"
+          })
+        },
+        {
+          chapterId: "chapter_20",
+          title: "第20章 旧信",
+          ordinal: 20,
+          summaryShort: "第20章短摘要。",
+          summaryLong: "第20章长摘要。",
+          structured: chapterIndexPayloadV2({
+            oneLine: "第20章短摘要。",
+            synopsis: "第20章长摘要。"
+          })
+        }
+      ]
+    });
+    const prompt = messages.map((message) => message.content).join("\n");
+
+    expect(prompt).toContain("跨章节连续性检查助手");
+    expect(prompt).toContain("不得把疑似伏笔、误导线索、角色撒谎、不可靠叙述直接判为错误");
+    expect(prompt).toContain("结构化索引");
+    expect(prompt).toContain("第3章短摘要。");
+    expect(prompt).not.toContain("章节正文");
+  });
+
+  it("streams and parses continuity check JSON", async () => {
+    const requests: Array<{ readonly messages: readonly { readonly content: string }[]; readonly responseFormat?: { readonly type: string } }> = [];
+    const continuityResult: ContinuityCheckResult = {
+      结论: "无明显冲突",
+      问题列表: [],
+      需要回读的章节: [],
+      给作者的简短说明: "根据当前章节缓存，未发现明显连续性冲突。"
+    };
+    const generator = new OpenRouterChatGenerator({} as never);
+    Object.assign(generator as unknown as { createClient: () => Promise<unknown> }, {
+      createClient: async () => ({
+        chatBudget: getTokenBudget("chat", 16_384),
+        contextLength: 16_384,
+        modelName: "summary/model",
+        client: {
+          streamChatCompletion: async (request: { readonly messages: readonly { readonly content: string }[]; readonly responseFormat?: { readonly type: string } }) => {
+            requests.push(request);
+            return {
+              content: JSON.stringify(continuityResult),
+              reasoning: "",
+              truncated: false,
+              toolCalls: []
+            };
+          }
+        }
+      })
+    });
+
+    const result = await generator.checkContinuity({
+      question: "检查前后是否矛盾",
+      chapters: [
+        {
+          chapterId: "chapter_1",
+          title: "第1章 起点",
+          ordinal: 1,
+          summaryShort: "第1章短摘要。",
+          summaryLong: "第1章长摘要。",
+          structured: chapterIndexPayloadV2({
+            oneLine: "第1章短摘要。",
+            synopsis: "第1章长摘要。"
+          })
+        }
+      ]
+    });
+
+    expect(result).toEqual(continuityResult);
+    expect(requests).toHaveLength(1);
+    expect(requests[0].responseFormat).toEqual({ type: "json_object" });
   });
 });

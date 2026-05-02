@@ -16,10 +16,14 @@ describe("AI chat summary index UI source", () => {
     expect(chatStore).toContain("SummaryIndexStatus");
     expect(chatStore).toContain("summaryIndexStatus");
     expect(chatStore).toContain("summaryIndexLoading");
+    expect(chatStore).toContain("summaryIndexNotice");
     expect(chatStore).toContain("refreshSummaryIndexStatus");
     expect(chatStore).toContain("rebuildSummaryIndex");
+    expect(chatStore).toContain("cancelSummaryIndexJob");
     expect(chatStore).toContain("api.summary.getIndexStatus");
     expect(chatStore).toContain("api.summary.rebuildProjectIndex");
+    expect(chatStore).toContain("force: true");
+    expect(chatStore).toContain("api.summary.cancelCurrentJob");
     expect(chatStore).toContain("summaryIndexStatus.queuedJobCount");
     expect(chatStore).toContain("summaryIndexStatus.runningJobLabel");
     expect(chatStore).toContain("setInterval");
@@ -32,15 +36,28 @@ describe("AI chat summary index UI source", () => {
     const css = readSource("src/renderer/styles/globals.css");
 
     expect(chatTab).toContain("buildSummaryIndexBanner");
-    expect(chatTab).toContain("全书索引已完成");
-    expect(chatTab).toContain("全书索引正在建立");
-    expect(chatTab).toContain("全书索引缺失");
+    expect(chatTab).toContain("全书索引：");
+    expect(chatTab).toContain("正在摘要：");
+    expect(chatTab).toContain("索引已暂停：AI 正在回答");
     expect(chatTab).toContain("AI 服务未配置，索引暂停");
-    expect(chatTab).toContain("章摘要已过期");
+    expect(chatTab).toContain("索引过期：");
     expect(chatTab).toContain("开始建立索引");
-    expect(chatTab).toContain("重建全书索引");
+    expect(chatTab).toContain("继续建立索引");
+    expect(chatTab).toContain("停止后台索引");
+    expect(chatTab).toContain("打开缓存设置");
+    expect(chatTab).toContain('onOpenSettings("章节索引缓存")');
+    expect(chatTab).not.toContain("void chatStore.rebuildSummaryIndex({ force: true })");
+    expect(chatTab).toContain("后台索引已停止");
+    expect(chatTab).toContain("自动重试");
+    expect(chatTab).toContain("nextRetryAt");
+    expect(chatTab).toContain("summary-index-notice");
     expect(chatTab).toContain("summary-index-banner");
     expect(css).toContain(".summary-index-banner");
+    expect(css).toContain("grid-template-columns: minmax(0, 1fr) auto");
+    expect(css).toContain(".summary-index-banner .small-button");
+    expect(css).toContain("white-space: nowrap");
+    expect(css).toContain(".summary-index-notice");
+    expect(css).toContain("grid-column: 1 / -1");
     expect(rightSidebar).not.toContain("summary-index-banner");
   });
 
@@ -54,5 +71,6 @@ describe("AI chat summary index UI source", () => {
     expect(contextDisplay).toContain("索引缺失");
     expect(chatTab).toContain("contextDisplay.sourceLabel");
     expect(chatTab).toContain("contextDisplay.coverageLabel");
+    expect(chatTab).toContain("上下文 {contextDisplay.sourceLabel}");
   });
 });

@@ -14,6 +14,7 @@ import { computeChapterContentHash, type ChapterAiSummaryPayload } from "../../s
 import type { ChapterSummary } from "../../src/main/shared/types";
 import { executeChatAgentTool, MOSHU_CHAT_AGENT_TOOLS } from "../../src/main/ai/chat-agent-tools";
 import { getTokenBudget } from "../../src/main/ai/token-budget";
+import { chapterIndexPayloadV2 } from "../helpers/summary-index-fixtures";
 
 const tempDirs: string[] = [];
 
@@ -80,18 +81,11 @@ function parseToolJson(result: string): Record<string, unknown> {
 }
 
 function createSummaryPayload(input: { readonly oneLine: string; readonly synopsis: string }): ChapterAiSummaryPayload {
-  return {
+  return chapterIndexPayloadV2({
     oneLine: input.oneLine,
     synopsis: input.synopsis,
-    keyEvents: [],
-    characterMentions: [],
-    relationshipHints: [],
-    timeAndPlace: [],
-    foreshadowingHints: [],
-    unresolvedQuestions: [],
-    emotionalArc: "稳定推进",
-    importantQuotes: []
-  };
+    detail: `${input.synopsis} 这个章节缓存用于工具测试，保留章节事实索引字段，确保 read_chapters 的 summary 模式读取的是中文 V2 结构。`
+  });
 }
 
 describe("chat agent tools", () => {
@@ -104,6 +98,9 @@ describe("chat agent tools", () => {
     expect(parameters).toContain('"chapter_range"');
     expect(parameters).toContain('"ordinal"');
     expect(parameters).toContain('"mode"');
+    expect(parameters).toContain('"focus"');
+    expect(parameters).toContain('"characters"');
+    expect(parameters).toContain('"foreshadowing"');
     expect(parameters).toContain('"summary"');
     expect(parameters).not.toContain('"oneOf"');
   });
@@ -593,9 +590,394 @@ describe("chat agent tools", () => {
     expect(result.totalChapterCount).toBe(10);
     expect(result.staleChapterCount).toBe(1);
     expect(result.contextText).toContain("摘要缺失或过期 1 章");
+    expect(result.contextText).toContain("缺失章节：第5章 长范围5");
     expect(result.contextText).toContain("第1章工具短摘要。");
     expect(result.contextText).toContain("第10章工具长摘要。");
     expect(result.contextText).not.toContain("回退读取原文");
+
+    db.close();
+  });
+
+  it("reads character-focused fields from chapter summary caches without raw text", async () => {
+    const { chapterRepo, db, scratchRepo, summaryRepo } = createRepos();
+    const projectId = "project_read_character_focus";
+    createProject(new ProjectRepository(db), projectId);
+    const first = createChapter(chapterRepo, {
+      projectId,
+      title: "第1章 起点",
+      sortOrder: 0,
+      plainText: "第一章人物原文不应被读取。"
+    });
+    const second = createChapter(chapterRepo, {
+      projectId,
+      title: "第2章 暗潮",
+      sortOrder: 1,
+      plainText: "第二章人物原文不应被读取。"
+    });
+    [first, second].forEach((chapter, index) => {
+      const ordinal = index + 1;
+      const structured = createSummaryPayload({
+        oneLine: `第${ordinal}章人物短摘要。`,
+        synopsis: `第${ordinal}章人物长摘要。`
+      });
+      structured.人物状态[0] = {
+        ...structured.人物状态[0],
+        人物: ordinal === 1 ? "林远" : "沈青",
+        情绪状态: ordinal === 1 ? "谨慎" : "犹疑",
+        新获得信息: ordinal === 1 ? ["旧信出现"] : ["祠堂线索浮出"],
+        仍不知道的信息: ordinal === 1 ? ["旧信来源"] : ["林远是否可信"]
+      };
+      structured.人物认知边界[0] = {
+        ...structured.人物认知边界[0],
+        人物: ordinal === 1 ? "林远" : "沈青",
+        已经知道: ordinal === 1 ? ["旧信存在"] : ["祠堂有异常"],
+        尚不知道: ordinal === 1 ? ["旧信来源"] : ["旧信真正持有者"]
+      };
+      structured.关系动态[0] = {
+        ...structured.关系动态[0],
+        关系双方: ["林远", "沈青"],
+        关系类型: "试探关系",
+        本章结束状态: ordinal === 1 ? "尚未接触" : "开始互相试探"
+      };
+      summaryRepo.upsertChapterSummary({
+        id: `summary_character_focus_${ordinal}`,
+        projectId,
+        chapterId: chapter.id,
+        chapterTitle: chapter.title,
+        chapterOrder: ordinal,
+        contentHash: computeChapterContentHash(`character-focus-${ordinal}`),
+        summaryShort: `第${ordinal}章人物短摘要。`,
+        summaryLong: `第${ordinal}章人物长摘要。`,
+        structured,
+        tokenCount: 60,
+        status: "ready",
+        error: null,
+        createdAt: "2026-05-01T00:00:00.000Z",
+        updatedAt: "2026-05-01T00:00:00.000Z"
+      });
+    });
+    const guardedRepo = Object.create(chapterRepo) as ChapterRepository;
+    guardedRepo.getContent = () => {
+      throw new Error("character-focused reads must use summary caches");
+    };
+
+    const result = parseToolJson(
+      await executeChatAgentTool({
+        name: "read_chapters",
+        argumentsJson: JSON.stringify({
+          scope: "chapter_range",
+          from: 1,
+          to: 2,
+          focus: "characters"
+        }),
+        runtime: {
+          projectId,
+          currentChapterId: first.id,
+          userMessage: "这些章节里出现了哪些角色，有什么特征",
+          chapterRepo: guardedRepo,
+          summaryRepo,
+          scratchRepo,
+          tokenBudget: getTokenBudget("chat")
+        }
+      })
+    );
+
+    expect(result.scopeLabel).toBe("第1-2章人物索引");
+    expect(result.indexMode).toBe("summary_cache");
+    expect(result.contextText).toContain("人物状态");
+    expect(result.contextText).toContain("人物认知边界");
+    expect(result.contextText).toContain("关系动态");
+    expect(result.contextText).toContain("林远");
+    expect(result.contextText).toContain("沈青");
+    expect(result.contextText).not.toContain("人物原文不应被读取");
+
+    db.close();
+  });
+
+  it("reports missing foreshadowing indexes instead of reading raw text or hallucinating", async () => {
+    const { chapterRepo, db, scratchRepo, summaryRepo } = createRepos();
+    const projectId = "project_read_missing_foreshadowing_focus";
+    createProject(new ProjectRepository(db), projectId);
+    const first = createChapter(chapterRepo, {
+      projectId,
+      title: "第1章 旧信",
+      sortOrder: 0,
+      plainText: "第一章伏笔原文不应被读取。"
+    });
+    createChapter(chapterRepo, {
+      projectId,
+      title: "第2章 祠堂",
+      sortOrder: 1,
+      plainText: "第二章伏笔原文不应被读取。"
+    });
+    const guardedRepo = Object.create(chapterRepo) as ChapterRepository;
+    guardedRepo.getContent = () => {
+      throw new Error("missing foreshadowing indexes must not fall back to raw text");
+    };
+
+    const result = parseToolJson(
+      await executeChatAgentTool({
+        name: "read_chapters",
+        argumentsJson: JSON.stringify({
+          scope: "chapter_range",
+          from: 1,
+          to: 2,
+          focus: "foreshadowing"
+        }),
+        runtime: {
+          projectId,
+          currentChapterId: first.id,
+          userMessage: "本章有哪些伏笔",
+          chapterRepo: guardedRepo,
+          summaryRepo,
+          scratchRepo,
+          tokenBudget: getTokenBudget("chat")
+        }
+      })
+    );
+
+    expect(result.scopeLabel).toBe("第1-2章伏笔索引");
+    expect(result.indexMode).toBe("missing");
+    expect(result.indexedChapterCount).toBe(0);
+    expect(result.contextText).toContain("摘要索引缺失或过期");
+    expect(result.contextText).toContain("缺失章节：第1章 旧信、第2章 祠堂");
+    expect(result.contextText).toContain("不能声称已经读取正文");
+    expect(result.contextText).not.toContain("伏笔原文不应被读取");
+
+    db.close();
+  });
+
+  it("checks continuity from V2 chapter caches without reading raw chapter bodies", async () => {
+    const { chapterRepo, db, scratchRepo, summaryRepo } = createRepos();
+    const projectId = "project_continuity_cache";
+    createProject(new ProjectRepository(db), projectId);
+    const first = createChapter(chapterRepo, {
+      projectId,
+      title: "第1章 旧信",
+      sortOrder: 0,
+      plainText: "第1章原文不应被连续性工具读取。"
+    });
+    const second = createChapter(chapterRepo, {
+      projectId,
+      title: "第2章 祠堂",
+      sortOrder: 1,
+      plainText: "第2章原文不应被连续性工具读取。"
+    });
+    [first, second].forEach((chapter, index) => {
+      const ordinal = index + 1;
+      summaryRepo.upsertChapterSummary({
+        id: `summary_continuity_${ordinal}`,
+        projectId,
+        chapterId: chapter.id,
+        chapterTitle: chapter.title,
+        chapterOrder: ordinal,
+        contentHash: computeChapterContentHash(`continuity-${ordinal}`),
+        summaryShort: `第${ordinal}章连续性短摘要。`,
+        summaryLong: `第${ordinal}章连续性长摘要。`,
+        structured: createSummaryPayload({
+          oneLine: `第${ordinal}章连续性短摘要。`,
+          synopsis: `第${ordinal}章连续性长摘要。`
+        }),
+        tokenCount: 30,
+        status: "ready",
+        error: null,
+        createdAt: "2026-05-01T00:00:00.000Z",
+        updatedAt: "2026-05-01T00:00:00.000Z"
+      });
+    });
+    const guardedRepo = Object.create(chapterRepo) as ChapterRepository;
+    guardedRepo.getContent = () => {
+      throw new Error("continuity check must use chapter summary caches before raw text");
+    };
+
+    const result = parseToolJson(
+      await executeChatAgentTool({
+        name: "check_continuity",
+        argumentsJson: JSON.stringify({
+          scope: "chapter_range",
+          from: 1,
+          to: 2,
+          question: "检查旧信来源是否前后矛盾"
+        }),
+        runtime: {
+          projectId,
+          currentChapterId: first.id,
+          userMessage: "检查旧信来源是否前后矛盾",
+          chapterRepo: guardedRepo,
+          summaryRepo,
+          scratchRepo,
+          tokenBudget: getTokenBudget("chat"),
+          executeContinuityCheck: async (input) => {
+            expect(input.question).toBe("检查旧信来源是否前后矛盾");
+            expect(input.chapters.map((chapter) => chapter.ordinal)).toEqual([1, 2]);
+            expect(input.chapters[0].structured.可核对事实.length).toBeGreaterThan(0);
+            return {
+              结论: "疑似冲突",
+              问题列表: [
+                {
+                  问题类型: "人物认知",
+                  严重程度: "中",
+                  涉及章节: ["第1章", "第2章"],
+                  冲突说明: "旧信来源在缓存中需要核对。",
+                  证据一: { 章节: "第1章", 字段: "人物认知边界", 证据短句: "尚不知道旧信来源" },
+                  证据二: { 章节: "第2章", 字段: "可核对事实", 证据短句: "说出旧信来自祠堂" },
+                  为什么可能冲突: "前章未建立信息来源，后章直接使用信息。",
+                  是否可能是伏笔或误导: "是",
+                  是否需要回读原文: "是",
+                  建议处理: "回读两章确认是否有中间线索。"
+                }
+              ],
+              需要回读的章节: ["第1章", "第2章"],
+              给作者的简短说明: "这属于疑似信息差，不应直接判定为错误。"
+            };
+          }
+        }
+      })
+    );
+
+    expect(result.scopeLabel).toBe("第1-2章连续性检查");
+    expect(result.source).toBe("chapter_summary_cache");
+    expect(result.result).toMatchObject({
+      结论: "疑似冲突",
+      问题列表: [
+        {
+          是否可能是伏笔或误导: "是"
+        }
+      ]
+    });
+
+    db.close();
+  });
+
+  it("accepts a clean continuity result without forcing a fake issue", async () => {
+    const { chapterRepo, db, scratchRepo, summaryRepo } = createRepos();
+    const projectId = "project_continuity_clean";
+    createProject(new ProjectRepository(db), projectId);
+    const chapter = createChapter(chapterRepo, {
+      projectId,
+      title: "第1章 起点",
+      sortOrder: 0,
+      plainText: "第一章正文"
+    });
+    summaryRepo.upsertChapterSummary({
+      id: "summary_continuity_clean",
+      projectId,
+      chapterId: chapter.id,
+      chapterTitle: chapter.title,
+      chapterOrder: 1,
+      contentHash: computeChapterContentHash("continuity-clean"),
+      summaryShort: "第1章短摘要。",
+      summaryLong: "第1章长摘要。",
+      structured: createSummaryPayload({
+        oneLine: "第1章短摘要。",
+        synopsis: "第1章长摘要。"
+      }),
+      tokenCount: 30,
+      status: "ready",
+      error: null,
+      createdAt: "2026-05-01T00:00:00.000Z",
+      updatedAt: "2026-05-01T00:00:00.000Z"
+    });
+
+    const result = parseToolJson(
+      await executeChatAgentTool({
+        name: "check_continuity",
+        argumentsJson: JSON.stringify({
+          scope: "chapter",
+          ordinal: 1
+        }),
+        runtime: {
+          projectId,
+          currentChapterId: chapter.id,
+          userMessage: "检查本章有没有明显冲突",
+          chapterRepo,
+          summaryRepo,
+          scratchRepo,
+          tokenBudget: getTokenBudget("chat"),
+          executeContinuityCheck: async () => ({
+            结论: "无明显冲突",
+            问题列表: [],
+            需要回读的章节: [],
+            给作者的简短说明: "根据当前章节缓存，未发现明显连续性冲突。"
+          })
+        }
+      })
+    );
+
+    expect(result.result).toMatchObject({
+      结论: "无明显冲突",
+      问题列表: []
+    });
+
+    db.close();
+  });
+
+  it("honors explicit raw mode for a small chapter range even when summaries exist", async () => {
+    const { chapterRepo, db, scratchRepo, summaryRepo } = createRepos();
+    const projectId = "project_read_raw_mode";
+    createProject(new ProjectRepository(db), projectId);
+    const first = createChapter(chapterRepo, {
+      projectId,
+      title: "第1章 起点",
+      sortOrder: 0,
+      plainText: "第一章应读取原文。"
+    });
+    const second = createChapter(chapterRepo, {
+      projectId,
+      title: "第2章 暗潮",
+      sortOrder: 1,
+      plainText: "第二章应读取原文。"
+    });
+    [first, second].forEach((chapter, index) => {
+      const ordinal = index + 1;
+      summaryRepo.upsertChapterSummary({
+        id: `summary_raw_mode_${ordinal}`,
+        projectId,
+        chapterId: chapter.id,
+        chapterTitle: chapter.title,
+        chapterOrder: ordinal,
+        contentHash: computeChapterContentHash(`raw-mode-${ordinal}`),
+        summaryShort: `第${ordinal}章不应使用摘要。`,
+        summaryLong: `第${ordinal}章不应使用长摘要。`,
+        structured: createSummaryPayload({
+          oneLine: `第${ordinal}章不应使用摘要。`,
+          synopsis: `第${ordinal}章不应使用长摘要。`
+        }),
+        tokenCount: 30,
+        status: "ready",
+        error: null,
+        createdAt: "2026-05-01T00:00:00.000Z",
+        updatedAt: "2026-05-01T00:00:00.000Z"
+      });
+    });
+
+    const result = parseToolJson(
+      await executeChatAgentTool({
+        name: "read_chapters",
+        argumentsJson: JSON.stringify({
+          scope: "chapter_range",
+          from: 1,
+          to: 2,
+          mode: "raw"
+        }),
+        runtime: {
+          projectId,
+          currentChapterId: first.id,
+          userMessage: "请逐字查看前两章",
+          chapterRepo,
+          summaryRepo,
+          scratchRepo,
+          tokenBudget: getTokenBudget("chat")
+        }
+      })
+    );
+
+    expect(result.scopeLabel).toBe("第1-2章");
+    expect(result.mode).toBe("direct");
+    expect(result.indexMode).toBeUndefined();
+    expect(result.contextText).toContain("第一章应读取原文。");
+    expect(result.contextText).toContain("第二章应读取原文。");
+    expect(result.contextText).not.toContain("不应使用摘要");
 
     db.close();
   });

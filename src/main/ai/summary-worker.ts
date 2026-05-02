@@ -16,11 +16,16 @@ type SummaryWorkerService = {
   readonly summarizeBook?: (projectId: string, sourceHash: string, now: string, options?: { readonly signal?: AbortSignal }) => Promise<unknown>;
 };
 
+type RetryPlan = {
+  readonly delays: readonly number[];
+};
+
 export type SummaryWorkerRunResult =
   | { readonly status: "paused_foreground_ai" }
   | { readonly status: "paused_ai_unconfigured"; readonly error: string }
   | { readonly status: "idle" }
   | { readonly status: "completed"; readonly jobId: string }
+  | { readonly status: "cancelled"; readonly jobId: string }
   | { readonly status: "retry_scheduled"; readonly jobId: string; readonly nextRunAt: string }
   | { readonly status: "failed"; readonly jobId: string; readonly error: string };
 
@@ -42,16 +47,53 @@ function formatError(reason: unknown): string {
 }
 
 function retryDelayMinutes(reason: unknown): number | null {
-  if (!(reason instanceof OpenRouterError)) {
-    return null;
-  }
-  if (reason.status === 429 || reason.code === "rate_limited") {
-    return 5;
-  }
-  if (reason.status === 503) {
-    return 2;
+  if (reason instanceof OpenRouterError) {
+    if (reason.status === 429 || reason.code === "rate_limited") {
+      return 5;
+    }
+    if (reason.status === 503) {
+      return 2;
+    }
   }
   return null;
+}
+
+function isInvalidSummaryIndexOutput(reason: unknown): boolean {
+  const message = formatError(reason);
+  const fromSummaryIndex = /章节索引摘要|章节片段索引摘要|章节片段合并索引摘要|阶段索引摘要|全书索引摘要/u.test(message);
+  if (!fromSummaryIndex) {
+    return false;
+  }
+  return /无效|为空|被截断/u.test(message);
+}
+
+function retryPlanFor(reason: unknown): RetryPlan | null {
+  if (reason instanceof OpenRouterError) {
+    if (reason.status === 429 || reason.code === "rate_limited") {
+      return { delays: [5, 15, 30] };
+    }
+    if (reason.status === 503) {
+      return { delays: [2, 15, 30] };
+    }
+    if (reason.code === "timeout" || reason.code === "network_error") {
+      return { delays: [5, 15, 30] };
+    }
+  }
+  if (isInvalidSummaryIndexOutput(reason)) {
+    return { delays: [1, 5] };
+  }
+  const legacyDelay = retryDelayMinutes(reason);
+  return legacyDelay === null ? null : { delays: [legacyDelay] };
+}
+
+function isCancellationReason(reason: unknown): boolean {
+  if (reason instanceof OpenRouterError && reason.code === "canceled") {
+    return true;
+  }
+  if (reason instanceof Error) {
+    return reason.name === "AbortError" || reason.message === "canceled" || reason.message.includes("已取消");
+  }
+  return String(reason) === "canceled";
 }
 
 function parseArcRange(arcKey: string): { readonly from: number; readonly to: number } {
@@ -95,12 +137,26 @@ export class SummaryWorker {
 
     try {
       await this.runJob(job, now, options);
+      if (options.signal?.aborted) {
+        this.deps.summaryRepo.cancelSummaryJob(job.id, "摘要索引任务已取消。", now);
+        return {
+          status: "cancelled",
+          jobId: job.id
+        };
+      }
       this.deps.summaryRepo.completeSummaryJob(job.id, now);
       return {
         status: "completed",
         jobId: job.id
       };
     } catch (error) {
+      if (options.signal?.aborted || isCancellationReason(error)) {
+        this.deps.summaryRepo.cancelSummaryJob(job.id, "摘要索引任务已取消。", now);
+        return {
+          status: "cancelled",
+          jobId: job.id
+        };
+      }
       if (error instanceof SummarySourceChangedError) {
         this.deps.summaryRepo.completeSummaryJob(job.id, now);
         return {
@@ -108,9 +164,10 @@ export class SummaryWorker {
           jobId: job.id
         };
       }
-      const retryDelay = retryDelayMinutes(error);
+      const retryPlan = retryPlanFor(error);
       const message = formatError(error);
-      if (retryDelay !== null) {
+      if (retryPlan && job.attemptCount <= retryPlan.delays.length) {
+        const retryDelay = retryPlan.delays[job.attemptCount - 1] ?? retryPlan.delays[retryPlan.delays.length - 1];
         const nextRunAt = addMinutes(now, retryDelay);
         this.deps.summaryRepo.failSummaryJob(job.id, message, nextRunAt, now);
         this.deps.summaryRepo.enqueueSummaryJob({
@@ -119,6 +176,7 @@ export class SummaryWorker {
           targetId: job.targetId,
           sourceHash: job.sourceHash,
           priority: job.priority,
+          attemptCount: job.attemptCount,
           now,
           nextRunAt
         });

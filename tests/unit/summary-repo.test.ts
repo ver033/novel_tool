@@ -5,7 +5,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createDatabase, type SqliteDatabase } from "../../src/main/db/database";
 import { runMigrations } from "../../src/main/db/migrations";
 import { SummaryRepository } from "../../src/main/db/repositories/summary-repo";
-import { computeChapterContentHash, computeSourceHash, type ChapterAiSummaryPayload } from "../../src/main/shared/summary-index";
+import {
+  computeChapterContentHash,
+  computeSourceHash,
+  getChapterSummaryLongText,
+  getChapterSummaryShortText,
+  type ChapterAiSummaryPayload
+} from "../../src/main/shared/summary-index";
+import { arcIndexPayloadV2, bookIndexPayloadV2, chapterIndexPayloadV2 } from "../helpers/summary-index-fixtures";
 
 const tempDirs: string[] = [];
 
@@ -34,18 +41,11 @@ function seedProjectAndChapter(db: SqliteDatabase): void {
 }
 
 function validChapterPayload(): ChapterAiSummaryPayload {
-  return {
+  return chapterIndexPayloadV2({
     oneLine: "少年在测试中失利。",
     synopsis: "萧炎在测试中遭遇低谷，众人态度发生变化。",
-    keyEvents: ["萧炎测试结果不佳"],
-    characterMentions: [{ name: "萧炎", roleInChapter: "被测试的少年", stateOrChange: "处于低谷" }],
-    relationshipHints: ["族人态度冷淡"],
-    timeAndPlace: ["萧家测试广场"],
-    foreshadowingHints: ["修为异常原因未解释"],
-    unresolvedQuestions: ["萧炎为何失去天赋"],
-    emotionalArc: "从平静到苦涩。",
-    importantQuotes: ["斗之力，三段！"]
-  };
+    detail: "萧炎在测试中遭遇低谷，众人态度发生变化，家族评价和主角心理状态都发生明显转折。这个章节索引用于验证仓储层可以保存并解析中文事实缓存结构。"
+  });
 }
 
 afterEach(() => {
@@ -64,9 +64,9 @@ describe("summary index migrations and repository", () => {
       .map((row) => row.name);
 
     expect(tables).toEqual(
-      expect.arrayContaining(["chapter_ai_summaries", "arc_ai_summaries", "book_ai_summaries", "summary_jobs"])
+      expect.arrayContaining(["chapter_ai_summaries", "chapter_ai_summary_chunks", "arc_ai_summaries", "book_ai_summaries", "summary_jobs"])
     );
-    expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").get()).toEqual({ version: 7 });
+    expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").get()).toEqual({ version: 10 });
     expect(db.prepare("PRAGMA table_info(chapter_ai_summaries)").all().map((row) => row.name)).toEqual(
       expect.arrayContaining(["content_hash", "summary_short", "summary_long", "structured_json", "status", "error"])
     );
@@ -89,8 +89,8 @@ describe("summary index migrations and repository", () => {
       chapterTitle: "第1章",
       chapterOrder: 1,
       contentHash: oldHash,
-      summaryShort: payload.oneLine,
-      summaryLong: payload.synopsis,
+      summaryShort: getChapterSummaryShortText(payload),
+      summaryLong: getChapterSummaryLongText(payload),
       structured: payload,
       tokenCount: 128,
       status: "ready",
@@ -125,32 +125,8 @@ describe("summary index migrations and repository", () => {
     const db = createDb();
     seedProjectAndChapter(db);
     const repo = new SummaryRepository(db);
-    const arcStructured = {
-      chapterFrom: 1,
-      chapterTo: 20,
-      synopsis: "萧炎低谷开局。",
-      keyEvents: ["测试失败"],
-      characterChanges: ["萧炎被轻视"],
-      relationshipChanges: ["族人态度转冷"],
-      foreshadowingHints: ["修为异常"],
-      unresolvedQuestions: ["原因未明"]
-    };
-    const bookStructured = {
-      coverage: {
-        totalChapterCount: 1,
-        indexedChapterCount: 1,
-        staleChapterIds: [],
-        missingChapterIds: [],
-        skippedTooShortChapterIds: []
-      },
-      synopsis: "少年低谷开局。",
-      mainPlot: ["测试失败"],
-      majorCharacters: [{ name: "萧炎", summary: "主角，处于低谷。" }],
-      majorConflicts: ["个人低谷与家族评价冲突"],
-      relationshipChanges: ["族人轻视"],
-      foreshadowingHints: ["修为异常"],
-      unresolvedQuestions: ["为何退步"]
-    };
+    const arcStructured = arcIndexPayloadV2();
+    const bookStructured = bookIndexPayloadV2();
 
     repo.upsertArcSummary({
       id: "arc_summary_1",
@@ -159,7 +135,7 @@ describe("summary index migrations and repository", () => {
       chapterFrom: 1,
       chapterTo: 20,
       sourceHash: computeSourceHash(["chapter_1:hash"]),
-      summary: "萧炎低谷开局。",
+      summary: arcStructured.阶段详细梗概,
       structured: arcStructured,
       status: "ready",
       error: null,
@@ -170,8 +146,8 @@ describe("summary index migrations and repository", () => {
       id: "book_summary_1",
       projectId: "project_1",
       sourceHash: computeSourceHash(["arc_1:hash"]),
-      summaryShort: "少年低谷开局。",
-      summaryLong: "萧炎在家族测试中失利，故事由此展开。",
+      summaryShort: bookStructured.全文短摘要,
+      summaryLong: bookStructured.全文详细梗概,
       structured: bookStructured,
       status: "ready",
       error: null,
@@ -259,11 +235,41 @@ describe("summary index migrations and repository", () => {
       now: "2026-05-01T00:11:00.000Z"
     });
     expect(requeued.id).not.toBe(low.id);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM summary_jobs WHERE id = ?").get(low.id)).toEqual({ count: 0 });
 
     repo.claimNextSummaryJob("project_1", "2026-05-01T00:12:00.000Z");
     repo.resetRunningJobs("project_1", "2026-05-01T00:13:00.000Z");
     expect(db.prepare("SELECT status FROM summary_jobs WHERE id = ?").get(requeued.id)).toEqual({ status: "queued" });
 
+    db.close();
+  });
+
+  it("drops stale cancelled jobs when the same target is requeued", () => {
+    const db = createDb();
+    seedProjectAndChapter(db);
+    const repo = new SummaryRepository(db);
+    const cancelled = repo.enqueueSummaryJob({
+      projectId: "project_1",
+      jobType: "chapter_summary",
+      targetId: "chapter_1",
+      sourceHash: "hash_cancelled",
+      priority: 1,
+      now: createdAt
+    });
+    repo.cancelQueuedAndRunningJobs("project_1", "用户停止后台索引任务。", updatedAt);
+
+    const requeued = repo.enqueueSummaryJob({
+      projectId: "project_1",
+      jobType: "chapter_summary",
+      targetId: "chapter_1",
+      sourceHash: "hash_retry",
+      priority: 2,
+      now: "2026-05-01T00:11:00.000Z"
+    });
+
+    expect(requeued.id).not.toBe(cancelled.id);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM summary_jobs WHERE status = 'cancelled'").get()).toEqual({ count: 0 });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM summary_jobs WHERE status = 'queued'").get()).toEqual({ count: 1 });
     db.close();
   });
 });

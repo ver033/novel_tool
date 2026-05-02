@@ -10,10 +10,16 @@ import type {
 import {
   buildArcIndexSummaryMessages,
   buildBookIndexSummaryMessages,
+  buildChapterChunkIndexSummaryMessages,
+  buildChapterChunkMergeSummaryMessages,
   buildChapterIndexSummaryMessages,
+  buildContinuityCheckMessages,
   type ArcIndexSummaryInput,
   type BookIndexSummaryInput,
-  type ChapterIndexSummaryInput
+  type ChapterChunkIndexSummaryInput,
+  type ChapterChunkMergeSummaryInput,
+  type ChapterIndexSummaryInput,
+  type ContinuityCheckInput
 } from "./summary-prompts";
 import { runChatAgentLoop, type ChatAgentModel } from "./chat-agent-harness";
 import { buildChatAgentMemoryText } from "./chat-agent-memory";
@@ -32,10 +38,14 @@ import { buildReasoningConfig } from "./reasoning-budget";
 import {
   arcAiSummaryPayloadSchema,
   bookAiSummaryPayloadSchema,
-  chapterAiSummaryPayloadSchema,
+  chapterAiSummaryChunkPayloadSchema,
+  chapterAiSummaryPayloadV2Schema,
+  continuityCheckResultSchema,
   type ArcAiSummaryPayload,
   type BookAiSummaryPayload,
-  type ChapterAiSummaryPayload
+  type ChapterAiSummaryChunkPayload,
+  type ChapterAiSummaryPayload,
+  type ContinuityCheckResult
 } from "../shared/summary-index";
 import { getTokenBudget, type TokenBudget } from "./token-budget";
 import { estimateMessagesTokens, estimateTextTokens, truncateTextToTokenBudget } from "./token-estimator";
@@ -51,7 +61,7 @@ const CHAPTER_SUMMARY_MERGE_MAX_TOKENS = 2200;
 const CONTEXT_BATCH_SUMMARY_MAX_TOKENS = 3200;
 const CONTEXT_SUMMARY_MERGE_MAX_TOKENS = 3200;
 const CHAT_MEMORY_SUMMARY_MAX_TOKENS = 2200;
-const SUMMARY_INDEX_MAX_TOKENS = 4096;
+const SUMMARY_INDEX_MAX_TOKENS = 12_000;
 const CHAT_MEMORY_SUMMARY_PROMPT_RATIO = 0.75;
 const CHAT_MEMORY_SUMMARY_RECOMPRESS_MAX_ROUNDS = 2;
 
@@ -581,12 +591,76 @@ export class OpenRouterChatGenerator implements AiChatGenerator {
       messages,
       maxCompletionTokens,
       temperature: 0.2,
+      responseFormat: { type: "json_object" },
       signal: options.signal
     });
     if (result.truncated) {
       throw new Error("章节索引摘要被截断，请换用输出额度更高的模型后重试。");
     }
-    return parseSummaryIndexJson("章节索引摘要", result.content, chapterAiSummaryPayloadSchema);
+    return parseSummaryIndexJson("章节索引摘要", result.content, chapterAiSummaryPayloadV2Schema);
+  }
+
+  async summarizeChapterChunkForIndex(input: ChapterChunkIndexSummaryInput, options: AiGenerationOptions = {}): Promise<ChapterAiSummaryChunkPayload> {
+    const { chatBudget, client, modelName } = await this.createClient();
+    const maxCompletionTokens = capInternalMaxCompletionTokens(SUMMARY_INDEX_MAX_TOKENS, chatBudget);
+    const messages = buildChapterChunkIndexSummaryMessages(input);
+    logDevLlmPrompt({
+      kind: "summary-index:chapter-chunk",
+      modelName,
+      messages,
+      meta: {
+        chapterTitle: input.title,
+        ordinal: input.ordinal,
+        chunkIndex: input.chunkIndex,
+        chunkCount: input.chunkCount
+      },
+      params: {
+        maxCompletionTokens,
+        temperature: 0.2
+      }
+    });
+    const result = await this.runInternalStreamingCompletion(client, {
+      messages,
+      maxCompletionTokens,
+      temperature: 0.2,
+      responseFormat: { type: "json_object" },
+      signal: options.signal
+    });
+    if (result.truncated) {
+      throw new Error("章节片段索引摘要被截断，请换用输出额度更高的模型后重试。");
+    }
+    return parseSummaryIndexJson("章节片段索引摘要", result.content, chapterAiSummaryChunkPayloadSchema);
+  }
+
+  async mergeChapterChunksForIndex(input: ChapterChunkMergeSummaryInput, options: AiGenerationOptions = {}): Promise<ChapterAiSummaryPayload> {
+    const { chatBudget, client, modelName } = await this.createClient();
+    const maxCompletionTokens = capInternalMaxCompletionTokens(SUMMARY_INDEX_MAX_TOKENS, chatBudget);
+    const messages = buildChapterChunkMergeSummaryMessages(input);
+    logDevLlmPrompt({
+      kind: "summary-index:chapter-chunk-merge",
+      modelName,
+      messages,
+      meta: {
+        chapterTitle: input.title,
+        ordinal: input.ordinal,
+        chunkCount: input.chunks.length
+      },
+      params: {
+        maxCompletionTokens,
+        temperature: 0.2
+      }
+    });
+    const result = await this.runInternalStreamingCompletion(client, {
+      messages,
+      maxCompletionTokens,
+      temperature: 0.2,
+      responseFormat: { type: "json_object" },
+      signal: options.signal
+    });
+    if (result.truncated) {
+      throw new Error("章节片段合并索引摘要被截断，请换用输出额度更高的模型后重试。");
+    }
+    return parseSummaryIndexJson("章节片段合并索引摘要", result.content, chapterAiSummaryPayloadV2Schema);
   }
 
   async summarizeArcForIndex(input: ArcIndexSummaryInput, options: AiGenerationOptions = {}): Promise<ArcAiSummaryPayload> {
@@ -648,6 +722,35 @@ export class OpenRouterChatGenerator implements AiChatGenerator {
       throw new Error("全书索引摘要被截断，请换用输出额度更高的模型后重试。");
     }
     return parseSummaryIndexJson("全书索引摘要", result.content, bookAiSummaryPayloadSchema);
+  }
+
+  async checkContinuity(input: ContinuityCheckInput, options: AiGenerationOptions = {}): Promise<ContinuityCheckResult> {
+    const { chatBudget, client, modelName } = await this.createClient();
+    const maxCompletionTokens = capInternalMaxCompletionTokens(4000, chatBudget);
+    const messages = buildContinuityCheckMessages(input);
+    logDevLlmPrompt({
+      kind: "summary-index:continuity-check",
+      modelName,
+      messages,
+      meta: {
+        chapterCount: input.chapters.length
+      },
+      params: {
+        maxCompletionTokens,
+        temperature: 0.1
+      }
+    });
+    const result = await this.runInternalStreamingCompletion(client, {
+      messages,
+      maxCompletionTokens,
+      temperature: 0.1,
+      responseFormat: { type: "json_object" },
+      signal: options.signal
+    });
+    if (result.truncated) {
+      throw new Error("连续性检查结果被截断，请缩小章节范围后重试。");
+    }
+    return parseSummaryIndexJson("连续性检查", result.content, continuityCheckResultSchema);
   }
 
   private async mergeSummaryItems(
@@ -723,6 +826,7 @@ export class OpenRouterChatGenerator implements AiChatGenerator {
       readonly messages: readonly OpenRouterMessage[];
       readonly maxCompletionTokens: number;
       readonly temperature: number;
+      readonly responseFormat?: { readonly type: "json_object" };
       readonly signal?: AbortSignal;
     }
   ): Promise<OpenRouterChatCompletionResult> {
@@ -730,6 +834,7 @@ export class OpenRouterChatGenerator implements AiChatGenerator {
       messages: input.messages,
       maxCompletionTokens: input.maxCompletionTokens,
       temperature: input.temperature,
+      responseFormat: input.responseFormat,
       signal: input.signal
     });
   }

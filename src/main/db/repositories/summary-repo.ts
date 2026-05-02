@@ -2,9 +2,11 @@ import { createId } from "../../shared/ids";
 import {
   arcAiSummaryPayloadSchema,
   bookAiSummaryPayloadSchema,
+  chapterAiSummaryChunkPayloadSchema,
   chapterAiSummaryPayloadSchema,
   type ArcAiSummaryPayload,
   type BookAiSummaryPayload,
+  type ChapterAiSummaryChunkPayload,
   type ChapterAiSummaryPayload,
   type SummaryJobStatus,
   type SummaryJobType,
@@ -24,6 +26,24 @@ type ChapterSummaryRow = {
   readonly structured_json: string;
   readonly token_count: number;
   readonly status: SummaryStatus;
+  readonly error: string | null;
+  readonly created_at: string;
+  readonly updated_at: string;
+};
+
+type ChapterSummaryChunkRow = {
+  readonly id: string;
+  readonly project_id: string;
+  readonly chapter_id: string;
+  readonly chunk_index: number;
+  readonly chunk_count: number;
+  readonly content_hash: string;
+  readonly text_start: number;
+  readonly text_end: number;
+  readonly summary_short: string;
+  readonly structured_json: string;
+  readonly token_count: number;
+  readonly status: Exclude<SummaryStatus, "skipped_too_short">;
   readonly error: string | null;
   readonly created_at: string;
   readonly updated_at: string;
@@ -91,6 +111,24 @@ export type ChapterAiSummaryRecord = {
   readonly updatedAt: string;
 };
 
+export type ChapterAiSummaryChunkRecord = {
+  readonly id: string;
+  readonly projectId: string;
+  readonly chapterId: string;
+  readonly chunkIndex: number;
+  readonly chunkCount: number;
+  readonly contentHash: string;
+  readonly textStart: number;
+  readonly textEnd: number;
+  readonly summaryShort: string;
+  readonly structured: ChapterAiSummaryChunkPayload;
+  readonly tokenCount: number;
+  readonly status: Exclude<SummaryStatus, "skipped_too_short">;
+  readonly error: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+};
+
 export type ArcAiSummaryRecord = {
   readonly id: string;
   readonly projectId: string;
@@ -140,6 +178,10 @@ export type UpsertChapterSummaryInput = Omit<ChapterAiSummaryRecord, "structured
   readonly structured: ChapterAiSummaryPayload;
 };
 
+export type UpsertChapterSummaryChunkInput = Omit<ChapterAiSummaryChunkRecord, "structured"> & {
+  readonly structured: ChapterAiSummaryChunkPayload;
+};
+
 export type UpsertArcSummaryInput = Omit<ArcAiSummaryRecord, "structured"> & {
   readonly structured: ArcAiSummaryPayload;
 };
@@ -154,6 +196,7 @@ export type EnqueueSummaryJobInput = {
   readonly targetId: string | null;
   readonly sourceHash: string;
   readonly priority: number;
+  readonly attemptCount?: number;
   readonly now: string;
   readonly nextRunAt?: string | null;
 };
@@ -173,6 +216,26 @@ function mapChapterSummary(row: ChapterSummaryRow): ChapterAiSummaryRecord {
     summaryShort: row.summary_short,
     summaryLong: row.summary_long,
     structured: chapterAiSummaryPayloadSchema.parse(parseJson(row.structured_json)),
+    tokenCount: row.token_count,
+    status: row.status,
+    error: row.error,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function mapChapterSummaryChunk(row: ChapterSummaryChunkRow): ChapterAiSummaryChunkRecord {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    chapterId: row.chapter_id,
+    chunkIndex: row.chunk_index,
+    chunkCount: row.chunk_count,
+    contentHash: row.content_hash,
+    textStart: row.text_start,
+    textEnd: row.text_end,
+    summaryShort: row.summary_short,
+    structured: chapterAiSummaryChunkPayloadSchema.parse(parseJson(row.structured_json)),
     tokenCount: row.token_count,
     status: row.status,
     error: row.error,
@@ -254,6 +317,11 @@ export class SummaryRepository {
     ).map(mapChapterSummary);
   }
 
+  deleteChapterSummary(projectId: string, chapterId: string): void {
+    this.db.prepare("DELETE FROM chapter_ai_summaries WHERE project_id = ? AND chapter_id = ?").run(projectId, chapterId);
+    this.deleteChapterSummaryChunks(projectId, chapterId);
+  }
+
   upsertChapterSummary(input: UpsertChapterSummaryInput): ChapterAiSummaryRecord {
     this.db
       .prepare(
@@ -306,6 +374,88 @@ export class SummaryRepository {
          WHERE project_id = ? AND chapter_id = ?`
       )
       .run(contentHash, updatedAt, projectId, chapterId);
+    this.markChapterSummaryChunksStale(projectId, chapterId, updatedAt);
+  }
+
+  upsertChapterSummaryChunk(input: UpsertChapterSummaryChunkInput): ChapterAiSummaryChunkRecord {
+    this.db
+      .prepare(
+        `INSERT INTO chapter_ai_summary_chunks
+         (id, project_id, chapter_id, chunk_index, chunk_count, content_hash, text_start, text_end,
+          summary_short, structured_json, token_count, status, error, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(project_id, chapter_id, content_hash, chunk_index) DO UPDATE SET
+           id = excluded.id,
+           chunk_count = excluded.chunk_count,
+           text_start = excluded.text_start,
+           text_end = excluded.text_end,
+           summary_short = excluded.summary_short,
+           structured_json = excluded.structured_json,
+           token_count = excluded.token_count,
+           status = excluded.status,
+           error = excluded.error,
+           updated_at = excluded.updated_at`
+      )
+      .run(
+        input.id,
+        input.projectId,
+        input.chapterId,
+        input.chunkIndex,
+        input.chunkCount,
+        input.contentHash,
+        input.textStart,
+        input.textEnd,
+        input.summaryShort,
+        JSON.stringify(input.structured),
+        input.tokenCount,
+        input.status,
+        input.error,
+        input.createdAt,
+        input.updatedAt
+      );
+
+    const row = this.db
+      .prepare(
+        `SELECT * FROM chapter_ai_summary_chunks
+         WHERE project_id = ? AND chapter_id = ? AND content_hash = ? AND chunk_index = ?`
+      )
+      .get(input.projectId, input.chapterId, input.contentHash, input.chunkIndex) as ChapterSummaryChunkRow | undefined;
+    if (!row) {
+      throw new Error("章节片段摘要写入失败。");
+    }
+    return mapChapterSummaryChunk(row);
+  }
+
+  listChapterSummaryChunks(projectId: string, chapterId: string, contentHash: string): ChapterAiSummaryChunkRecord[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT * FROM chapter_ai_summary_chunks
+           WHERE project_id = ? AND chapter_id = ? AND content_hash = ?
+           ORDER BY chunk_index ASC`
+        )
+        .all(projectId, chapterId, contentHash) as ChapterSummaryChunkRow[]
+    ).map(mapChapterSummaryChunk);
+  }
+
+  deleteChapterSummaryChunks(projectId: string, chapterId: string, contentHash?: string): void {
+    if (contentHash) {
+      this.db
+        .prepare("DELETE FROM chapter_ai_summary_chunks WHERE project_id = ? AND chapter_id = ? AND content_hash = ?")
+        .run(projectId, chapterId, contentHash);
+      return;
+    }
+    this.db.prepare("DELETE FROM chapter_ai_summary_chunks WHERE project_id = ? AND chapter_id = ?").run(projectId, chapterId);
+  }
+
+  markChapterSummaryChunksStale(projectId: string, chapterId: string, updatedAt: string): void {
+    this.db
+      .prepare(
+        `UPDATE chapter_ai_summary_chunks
+         SET status = 'stale', error = NULL, updated_at = ?
+         WHERE project_id = ? AND chapter_id = ? AND status != 'stale'`
+      )
+      .run(updatedAt, projectId, chapterId);
   }
 
   listArcSummaries(projectId: string): ArcAiSummaryRecord[] {
@@ -362,6 +512,17 @@ export class SummaryRepository {
       .prepare("SELECT * FROM book_ai_summaries WHERE project_id = ? ORDER BY updated_at DESC, rowid DESC LIMIT 1")
       .get(projectId) as BookSummaryRow | undefined;
     return row ? mapBookSummary(row) : null;
+  }
+
+  deleteDerivedSummaries(projectId: string): void {
+    const transaction = this.db.transaction(() => {
+      this.db.prepare("DELETE FROM arc_ai_summaries WHERE project_id = ?").run(projectId);
+      this.db.prepare("DELETE FROM book_ai_summaries WHERE project_id = ?").run(projectId);
+      this.db
+        .prepare("DELETE FROM summary_jobs WHERE project_id = ? AND job_type IN ('arc_summary', 'book_summary') AND status != 'running'")
+        .run(projectId);
+    });
+    transaction();
   }
 
   upsertBookSummary(input: UpsertBookSummaryInput): BookAiSummaryRecord {
@@ -429,6 +590,13 @@ export class SummaryRepository {
       return updated;
     }
 
+    this.db
+      .prepare(
+        `DELETE FROM summary_jobs
+         WHERE project_id = ? AND job_type = ? AND ${target.sql} AND status IN ('failed', 'cancelled')`
+      )
+      .run(input.projectId, input.jobType, ...target.params);
+
     const job: SummaryJobRecord = {
       id: createId("summary_job"),
       projectId: input.projectId,
@@ -437,7 +605,7 @@ export class SummaryRepository {
       sourceHash: input.sourceHash,
       status: "queued",
       priority: input.priority,
-      attemptCount: 0,
+      attemptCount: input.attemptCount ?? 0,
       nextRunAt: input.nextRunAt ?? null,
       error: null,
       createdAt: input.now,
@@ -515,6 +683,13 @@ export class SummaryRepository {
     ).map(mapSummaryJob);
   }
 
+  hasRunningSummaryJob(projectId: string): boolean {
+    const row = this.db.prepare("SELECT 1 AS found FROM summary_jobs WHERE project_id = ? AND status = 'running' LIMIT 1").get(projectId) as
+      | { readonly found: number }
+      | undefined;
+    return Boolean(row);
+  }
+
   completeSummaryJob(jobId: string, now: string): void {
     this.db
       .prepare("UPDATE summary_jobs SET status = 'completed', finished_at = ?, updated_at = ? WHERE id = ?")
@@ -525,6 +700,34 @@ export class SummaryRepository {
     this.db
       .prepare("UPDATE summary_jobs SET status = 'failed', error = ?, next_run_at = ?, finished_at = ?, updated_at = ? WHERE id = ?")
       .run(error, nextRunAt, now, now, jobId);
+  }
+
+  cancelSummaryJob(jobId: string, error: string, now: string): void {
+    this.db
+      .prepare("UPDATE summary_jobs SET status = 'cancelled', error = ?, next_run_at = NULL, finished_at = ?, updated_at = ? WHERE id = ?")
+      .run(error, now, now, jobId);
+  }
+
+  cancelRunningJobs(projectId: string, error: string, now: string): number {
+    const result = this.db
+      .prepare(
+        `UPDATE summary_jobs
+         SET status = 'cancelled', error = ?, next_run_at = NULL, finished_at = ?, updated_at = ?
+         WHERE project_id = ? AND status = 'running'`
+      )
+      .run(error, now, now, projectId);
+    return result.changes;
+  }
+
+  cancelQueuedAndRunningJobs(projectId: string, error: string, now: string): number {
+    const result = this.db
+      .prepare(
+        `UPDATE summary_jobs
+         SET status = 'cancelled', error = ?, next_run_at = NULL, finished_at = ?, updated_at = ?
+         WHERE project_id = ? AND status IN ('queued', 'running')`
+      )
+      .run(error, now, now, projectId);
+    return result.changes;
   }
 
   resetRunningJobs(projectId: string, now: string): void {

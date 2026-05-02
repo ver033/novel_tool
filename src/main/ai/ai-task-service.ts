@@ -24,6 +24,7 @@ import { enrichChatInputWithReferencedChapter } from "./chat-context-resolver";
 import { parseChatScopeReference } from "./chat-reference-parser";
 import { isOpenRouterCanceledError } from "./openrouter-error";
 import type { OpenRouterToolCall, OpenRouterToolDefinition } from "./openrouter-client";
+import type { ContinuityCheckInput } from "./summary-prompts";
 import { estimateTextTokens } from "./token-estimator";
 import { WritingOperationRunner } from "./writing-operation-runner";
 import type { WritingOperationOutputKind, WritingOperationResult, WritingOperationTarget } from "./writing-operation-types";
@@ -33,6 +34,7 @@ import type { ChapterRepository } from "../db/repositories/chapter-repo";
 import type { ScratchNoteRepository } from "../db/repositories/scratch-note-repo";
 import type { SummaryRepository } from "../db/repositories/summary-repo";
 import type { ProofreadIssue } from "../shared/proofread";
+import type { ContinuityCheckResult } from "../shared/summary-index";
 import { getTokenBudget, type TokenBudget } from "./token-budget";
 import type {
   AiApplyCandidateInput,
@@ -128,6 +130,7 @@ export type AiChatGenerator = {
     input: AiChatHistoryMemorySummaryInput,
     options?: AiGenerationOptions
   ) => Promise<AiChatHistoryMemorySummaryResult>;
+  readonly checkContinuity?: (input: ContinuityCheckInput, options?: AiGenerationOptions) => Promise<ContinuityCheckResult>;
 };
 
 type GeneratedPreview = {
@@ -542,6 +545,7 @@ export class AiTaskService {
     const allowedActions = inferSafeChatActions(input.message).map((action) => action.type);
     const scratchRepo = this.resolveScratchRepo?.(input.projectId);
     const summaryRepo = this.resolveSummaryRepo?.(input.projectId);
+    const checkContinuity = this.chatGenerator.checkContinuity?.bind(this.chatGenerator);
     const runtimeBase = {
       projectId: input.projectId,
       currentChapterId: currentChapter?.id ?? input.chapterId,
@@ -553,6 +557,7 @@ export class AiTaskService {
       tokenBudget,
       signal,
       allowedActions,
+      executeContinuityCheck: checkContinuity ? async (request: ContinuityCheckInput) => checkContinuity(request, { signal }) : undefined,
       executeWritingOperation: async (request: { readonly operation: TaskType; readonly target: WritingOperationTarget; readonly instruction: string }) => {
         const result = await this.runChatWritingOperation({
           projectId: input.projectId,

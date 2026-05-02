@@ -442,7 +442,19 @@ export const summaryIndexStatusInputSchema = z
   })
   .strict();
 
-export const summaryRebuildProjectIndexInputSchema = summaryIndexStatusInputSchema;
+export const summaryRebuildProjectIndexInputSchema = summaryIndexStatusInputSchema
+  .extend({
+    force: z.boolean().optional()
+  })
+  .strict();
+export const summaryCancelCurrentJobInputSchema = summaryIndexStatusInputSchema;
+export const summaryListCacheEntriesInputSchema = summaryIndexStatusInputSchema;
+export const summaryGetChapterCacheInputSchema = summaryIndexStatusInputSchema
+  .extend({
+    chapterId: idSchema
+  })
+  .strict();
+export const summaryClearAndRetryChapterCacheInputSchema = summaryGetChapterCacheInputSchema;
 
 export class IpcPayloadValidationError extends Error {
   constructor(readonly issues: z.ZodIssue[]) {

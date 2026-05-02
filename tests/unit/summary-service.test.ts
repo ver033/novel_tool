@@ -2,13 +2,14 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { SummaryService } from "../../src/main/ai/summary-service";
+import { SummaryService, splitChapterForSummaryIndex } from "../../src/main/ai/summary-service";
 import { ChapterRepository } from "../../src/main/db/repositories/chapter-repo";
 import { ProjectRepository } from "../../src/main/db/repositories/project-repo";
 import { SummaryRepository } from "../../src/main/db/repositories/summary-repo";
 import { createDatabase, type SqliteDatabase } from "../../src/main/db/database";
 import { runMigrations } from "../../src/main/db/migrations";
 import { computeChapterContentHash, computeSourceHash, type ChapterAiSummaryPayload } from "../../src/main/shared/summary-index";
+import { arcIndexPayloadV2, bookIndexPayloadV2, chapterChunkIndexPayload, chapterIndexPayloadV2 } from "../helpers/summary-index-fixtures";
 
 const tempDirs: string[] = [];
 const createdAt = "2026-05-01T00:00:00.000Z";
@@ -54,19 +55,13 @@ function createChapter(chapterRepo: ChapterRepository, chapterId: string, plainT
   });
 }
 
-function summaryPayload(): ChapterAiSummaryPayload {
-  return {
+function summaryPayloadV2(): ChapterAiSummaryPayload {
+  return chapterIndexPayloadV2({
+    title: "第1章",
     oneLine: "林远回到故乡。",
     synopsis: "林远在风雨中回到故乡，旧日关系重新浮出水面。",
-    keyEvents: ["林远回乡"],
-    characterMentions: [{ name: "林远", roleInChapter: "主角", stateOrChange: "回到故乡" }],
-    relationshipHints: [],
-    timeAndPlace: ["故乡"],
-    foreshadowingHints: [],
-    unresolvedQuestions: [],
-    emotionalArc: "从犹疑到平静",
-    importantQuotes: []
-  };
+    detail: "林远在风雨中回到故乡，旧日关系重新浮出水面。旧信和旧宅共同构成本章需要后续承接的核心线索，人物状态、关系悬念和调查动机都被建立。"
+  });
 }
 
 function upsertReadyChapterSummary(summaryRepo: SummaryRepository, input: { readonly chapterId: string; readonly title: string; readonly order: number; readonly content: string }) {
@@ -79,7 +74,7 @@ function upsertReadyChapterSummary(summaryRepo: SummaryRepository, input: { read
     contentHash: computeChapterContentHash(input.content),
     summaryShort: `${input.title}短摘要`,
     summaryLong: `${input.title}长摘要`,
-    structured: summaryPayload(),
+    structured: summaryPayloadV2(),
     tokenCount: 30,
     status: "ready",
     error: null,
@@ -209,7 +204,7 @@ describe("summary service queue policy", () => {
       contentHash: computeChapterContentHash(content),
       summaryShort: "林远回到故乡。",
       summaryLong: "林远在风雨中回到故乡，旧日关系重新浮出水面。",
-      structured: summaryPayload(),
+      structured: summaryPayloadV2(),
       tokenCount: 30,
       status: "ready",
       error: null,
@@ -306,7 +301,7 @@ describe("summary service generation", () => {
     const content = "春".repeat(620);
     createChapter(chapterRepo, "chapter_1", content);
     const generator = {
-      summarizeChapterForIndex: async () => summaryPayload()
+      summarizeChapterForIndex: async () => summaryPayloadV2()
     };
     const service = new SummaryService(summaryRepo, chapterRepo, { generator });
 
@@ -317,10 +312,180 @@ describe("summary service generation", () => {
       chapterId: "chapter_1",
       contentHash: computeChapterContentHash(content),
       summaryShort: "林远回到故乡。",
-      summaryLong: "林远在风雨中回到故乡，旧日关系重新浮出水面。",
+      summaryLong: "林远在风雨中回到故乡，旧日关系重新浮出水面。旧信和旧宅共同构成本章需要后续承接的核心线索，人物状态、关系悬念和调查动机都被建立。",
       status: "ready"
     });
-    expect(summary.structured).toEqual(summaryPayload());
+    expect(summary.structured).toEqual(summaryPayloadV2());
+    db.close();
+  });
+
+  it("stores V2 chapter fact indexes with Chinese summary fields as canonical display text", async () => {
+    const db = createDb();
+    const { chapterRepo, summaryRepo } = seedProject(db);
+    const content = "春".repeat(620);
+    createChapter(chapterRepo, "chapter_1", content);
+    const payload = chapterIndexPayloadV2({
+      title: "第1章",
+      oneLine: "林远在雨夜回到故乡并发现旧信。",
+      synopsis: "林远冒雨回到多年未归的故乡，旧宅中的旧信让他意识到失踪往事仍有线索，决定继续追查。",
+      detail: "林远在雨夜回到故乡，旧宅环境和旧信共同触发了他对失踪往事的追查。本章记录了他的回归状态、旧信作为关键道具的出现，以及后续必须承接的调查动机。"
+    });
+    const service = new SummaryService(summaryRepo, chapterRepo, {
+      generator: {
+        summarizeChapterForIndex: async () => payload
+      }
+    });
+
+    const summary = await service.summarizeChapter("project_1", "chapter_1", computeChapterContentHash(content), "2026-05-01T00:10:00.000Z");
+
+    expect(summary.summaryShort).toBe("林远在雨夜回到故乡并发现旧信。");
+    expect(summary.summaryLong).toBe("林远在雨夜回到故乡，旧宅环境和旧信共同触发了他对失踪往事的追查。本章记录了他的回归状态、旧信作为关键道具的出现，以及后续必须承接的调查动机。");
+    expect(summary.structured).toEqual(payload);
+    db.close();
+  });
+
+  it("indexes long chapters through chunk summaries and a merge step", async () => {
+    const db = createDb();
+    const { chapterRepo, summaryRepo } = seedProject(db);
+    const content = Array.from({ length: 14 }, (_, index) => `第${index + 1}段。${"春".repeat(650)}`).join("\n\n");
+    createChapter(chapterRepo, "chapter_1", content);
+    const expectedChunks = splitChapterForSummaryIndex(content);
+    const chunkInputs: number[] = [];
+    let mergeChunkCount = 0;
+    const service = new SummaryService(summaryRepo, chapterRepo, {
+      generator: {
+        summarizeChapterForIndex: async () => {
+          throw new Error("long chapters must use chunk indexing");
+        },
+        summarizeChapterChunkForIndex: async (input) => {
+          chunkInputs.push(input.chunkIndex);
+          return chapterChunkIndexPayload({ chunkIndex: input.chunkIndex, chunkCount: input.chunkCount });
+        },
+        mergeChapterChunksForIndex: async (input) => {
+          mergeChunkCount = input.chunks.length;
+          return summaryPayloadV2();
+        }
+      }
+    });
+
+    const summary = await service.summarizeChapter("project_1", "chapter_1", computeChapterContentHash(content), "2026-05-01T00:10:00.000Z");
+
+    expect(chunkInputs).toEqual(expectedChunks.map((chunk) => chunk.chunkIndex));
+    expect(mergeChunkCount).toBe(expectedChunks.length);
+    expect(summary).toMatchObject({ status: "ready", contentHash: computeChapterContentHash(content) });
+    expect(summaryRepo.listChapterSummaryChunks("project_1", "chapter_1", computeChapterContentHash(content))).toHaveLength(expectedChunks.length);
+    db.close();
+  });
+
+  it("discards long chapter chunk output when the source changes before chunk persistence", async () => {
+    const db = createDb();
+    const { chapterRepo, summaryRepo } = seedProject(db);
+    const oldContent = Array.from({ length: 14 }, (_, index) => `第${index + 1}段。${"春".repeat(650)}`).join("\n\n");
+    const newContent = `${oldContent}\n\n新正文`;
+    createChapter(chapterRepo, "chapter_1", oldContent);
+    const service = new SummaryService(summaryRepo, chapterRepo, {
+      generator: {
+        summarizeChapterForIndex: async () => summaryPayloadV2(),
+        summarizeChapterChunkForIndex: async (input) => {
+          if (input.chunkIndex === 0) {
+            chapterRepo.saveContent(
+              "chapter_1",
+              { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: newContent }] }] },
+              newContent,
+              newContent.length,
+              0,
+              "2026-05-01",
+              "2026-05-01T00:11:00.000Z"
+            );
+          }
+          return chapterChunkIndexPayload({ chunkIndex: input.chunkIndex, chunkCount: input.chunkCount });
+        },
+        mergeChapterChunksForIndex: async () => summaryPayloadV2()
+      }
+    });
+
+    await expect(
+      service.summarizeChapter("project_1", "chapter_1", computeChapterContentHash(oldContent), "2026-05-01T00:10:00.000Z")
+    ).rejects.toThrow("章节内容已变化");
+
+    expect(summaryRepo.listChapterSummaryChunks("project_1", "chapter_1", computeChapterContentHash(oldContent))).toEqual([]);
+    expect(summaryRepo.getChapterSummary("project_1", "chapter_1")).toBeNull();
+    expect(summaryRepo.claimNextSummaryJob("project_1", "2026-05-01T00:12:00.000Z")).toMatchObject({
+      jobType: "chapter_summary",
+      targetId: "chapter_1",
+      sourceHash: computeChapterContentHash(newContent)
+    });
+    db.close();
+  });
+
+  it("does not create a ready chapter summary when any long chapter chunk fails", async () => {
+    const db = createDb();
+    const { chapterRepo, summaryRepo } = seedProject(db);
+    const content = Array.from({ length: 14 }, (_, index) => `第${index + 1}段。${"春".repeat(650)}`).join("\n\n");
+    createChapter(chapterRepo, "chapter_1", content);
+    const service = new SummaryService(summaryRepo, chapterRepo, {
+      generator: {
+        summarizeChapterForIndex: async () => summaryPayloadV2(),
+        summarizeChapterChunkForIndex: async (input) => {
+          if (input.chunkIndex === 1) {
+            throw new Error("片段生成失败");
+          }
+          return chapterChunkIndexPayload({ chunkIndex: input.chunkIndex, chunkCount: input.chunkCount });
+        },
+        mergeChapterChunksForIndex: async () => {
+          throw new Error("should not merge after failed chunk");
+        }
+      }
+    });
+
+    await expect(
+      service.summarizeChapter("project_1", "chapter_1", computeChapterContentHash(content), "2026-05-01T00:10:00.000Z")
+    ).rejects.toThrow("片段生成失败");
+
+    expect(summaryRepo.getChapterSummary("project_1", "chapter_1")).toBeNull();
+    db.close();
+  });
+
+  it("reuses ready chunks with the same hash when retrying a long chapter", async () => {
+    const db = createDb();
+    const { chapterRepo, summaryRepo } = seedProject(db);
+    const content = Array.from({ length: 14 }, (_, index) => `第${index + 1}段。${"春".repeat(650)}`).join("\n\n");
+    createChapter(chapterRepo, "chapter_1", content);
+    const chunks = splitChapterForSummaryIndex(content);
+    const sourceHash = computeChapterContentHash(content);
+    summaryRepo.upsertChapterSummaryChunk({
+      id: "existing_chunk_0",
+      projectId: "project_1",
+      chapterId: "chapter_1",
+      chunkIndex: chunks[0].chunkIndex,
+      chunkCount: chunks.length,
+      contentHash: sourceHash,
+      textStart: chunks[0].textStart,
+      textEnd: chunks[0].textEnd,
+      summaryShort: "已有片段摘要",
+      structured: chapterChunkIndexPayload({ chunkIndex: chunks[0].chunkIndex, chunkCount: chunks.length }),
+      tokenCount: 20,
+      status: "ready",
+      error: null,
+      createdAt,
+      updatedAt: createdAt
+    });
+    const generatedChunkIndexes: number[] = [];
+    const service = new SummaryService(summaryRepo, chapterRepo, {
+      generator: {
+        summarizeChapterForIndex: async () => summaryPayloadV2(),
+        summarizeChapterChunkForIndex: async (input) => {
+          generatedChunkIndexes.push(input.chunkIndex);
+          return chapterChunkIndexPayload({ chunkIndex: input.chunkIndex, chunkCount: input.chunkCount });
+        },
+        mergeChapterChunksForIndex: async () => summaryPayloadV2()
+      }
+    });
+
+    await service.summarizeChapter("project_1", "chapter_1", sourceHash, "2026-05-01T00:10:00.000Z");
+
+    expect(generatedChunkIndexes).toEqual(chunks.slice(1).map((chunk) => chunk.chunkIndex));
+    expect(summaryRepo.getChapterSummary("project_1", "chapter_1")).toMatchObject({ status: "ready", contentHash: sourceHash });
     db.close();
   });
 
@@ -334,7 +499,7 @@ describe("summary service generation", () => {
     upsertReadyChapterSummary(summaryRepo, { chapterId: "chapter_2", title: "第2章", order: 2, content: content2 });
     const service = new SummaryService(summaryRepo, chapterRepo, {
       generator: {
-        summarizeChapterForIndex: async () => summaryPayload()
+        summarizeChapterForIndex: async () => summaryPayloadV2()
       }
     });
 
@@ -363,7 +528,7 @@ describe("summary service generation", () => {
       contentHash: computeChapterContentHash(oldContent),
       summaryShort: "旧摘要",
       summaryLong: "旧摘要仍应保留。",
-      structured: summaryPayload(),
+      structured: summaryPayloadV2(),
       tokenCount: 10,
       status: "ready",
       error: null,
@@ -381,11 +546,12 @@ describe("summary service generation", () => {
           "2026-05-01",
           "2026-05-01T00:11:00.000Z"
         );
-        return {
-          ...summaryPayload(),
+        return chapterIndexPayloadV2({
+          title: "第1章",
           oneLine: "不应该写入的新摘要",
-          synopsis: "不应该写入的新摘要。"
-        };
+          synopsis: "不应该写入的新摘要。",
+          detail: "不应该写入的新摘要，因为章节内容已经在生成过程中发生变化，服务应丢弃这次结果并重新排队最新内容的摘要任务。"
+        });
       }
     };
     const service = new SummaryService(summaryRepo, chapterRepo, { generator });
@@ -412,21 +578,13 @@ describe("summary service generation", () => {
     const { chapterRepo, summaryRepo } = seedProject(db);
     createChapter(chapterRepo, "chapter_1", "春".repeat(620));
     createChapter(chapterRepo, "chapter_2", "夏".repeat(620));
+    chapterRepo.rename("chapter_2", "第2章", "2026-05-01T00:09:00.000Z");
     upsertReadyChapterSummary(summaryRepo, { chapterId: "chapter_1", title: "第1章", order: 1, content: "春".repeat(620) });
     upsertReadyChapterSummary(summaryRepo, { chapterId: "chapter_2", title: "第2章", order: 2, content: "夏".repeat(620) });
     const sourceHash = computeSourceHash([computeChapterContentHash("春".repeat(620)), computeChapterContentHash("夏".repeat(620))]);
     const generator = {
-      summarizeChapterForIndex: async () => summaryPayload(),
-      summarizeArcForIndex: async () => ({
-        chapterFrom: 1,
-        chapterTo: 2,
-        synopsis: "第1-2章阶段摘要。",
-        keyEvents: ["主角回乡", "新冲突出现"],
-        characterChanges: ["林远开始面对往事"],
-        relationshipChanges: ["旧友关系重新浮现"],
-        foreshadowingHints: ["旧信仍未解释"],
-        unresolvedQuestions: ["旧信来源未知"]
-      })
+      summarizeChapterForIndex: async () => summaryPayloadV2(),
+      summarizeArcForIndex: async () => arcIndexPayloadV2()
     };
     const service = new SummaryService(summaryRepo, chapterRepo, { generator });
 
@@ -438,7 +596,7 @@ describe("summary service generation", () => {
       chapterFrom: 1,
       chapterTo: 2,
       sourceHash,
-      summary: "第1-2章阶段摘要。",
+      summary: arcIndexPayloadV2().阶段详细梗概,
       status: "ready"
     });
     expect(summaryRepo.claimNextSummaryJob("project_1", "2026-05-01T00:11:00.000Z")).toMatchObject({
@@ -456,7 +614,7 @@ describe("summary service generation", () => {
     let generatorCalls = 0;
     const service = new SummaryService(summaryRepo, chapterRepo, {
       generator: {
-        summarizeChapterForIndex: async () => summaryPayload(),
+        summarizeChapterForIndex: async () => summaryPayloadV2(),
         summarizeArcForIndex: async () => {
           generatorCalls += 1;
           throw new Error("should not generate");
@@ -487,7 +645,7 @@ describe("summary service generation", () => {
       contentHash: computeChapterContentHash("夏".repeat(620)),
       summaryShort: "过期摘要",
       summaryLong: "过期摘要",
-      structured: summaryPayload(),
+      structured: summaryPayloadV2(),
       tokenCount: 30,
       status: "stale",
       error: null,
@@ -502,55 +660,40 @@ describe("summary service generation", () => {
       chapterTo: 1,
       sourceHash: computeChapterContentHash("春".repeat(620)),
       summary: "第1章阶段摘要。",
-      structured: {
-        chapterFrom: 1,
-        chapterTo: 1,
-        synopsis: "第1章阶段摘要。",
-        keyEvents: ["主角回乡"],
-        characterChanges: [],
-        relationshipChanges: [],
-        foreshadowingHints: [],
-        unresolvedQuestions: []
-      },
+      structured: arcIndexPayloadV2(),
       status: "ready",
       error: null,
       createdAt,
       updatedAt: createdAt
     });
-    const sourceHash = computeSourceHash([
-      computeChapterContentHash("春".repeat(620)),
-      JSON.stringify({ indexed: 1, total: 2, stale: ["chapter_2"], missing: [], skipped: [] })
-    ]);
     const service = new SummaryService(summaryRepo, chapterRepo, {
       generator: {
-        summarizeChapterForIndex: async () => summaryPayload(),
+        summarizeChapterForIndex: async () => summaryPayloadV2(),
         summarizeBookForIndex: async () => ({
-          coverage: {
-            totalChapterCount: 999,
-            indexedChapterCount: 999,
-            staleChapterIds: [],
-            missingChapterIds: [],
-            skippedTooShortChapterIds: []
+          ...bookIndexPayloadV2(),
+          全书信息: {
+            ...bookIndexPayloadV2().全书信息,
+            总章节数: 999,
+            已索引章节数: 999
           },
-          synopsis: "全书摘要。",
-          mainPlot: ["主角回乡"],
-          majorCharacters: [{ name: "林远", summary: "回到故乡" }],
-          majorConflicts: ["旧事未解"],
-          relationshipChanges: [],
-          foreshadowingHints: [],
-          unresolvedQuestions: ["旧信来源未知"]
+          全文短摘要: "全书摘要。",
+          全文详细梗概: "全书摘要。林远回到旧城后发现旧信，旧事未解，追查旧信来源成为当前阶段的主线推进方向。这个全书缓存还记录了覆盖范围、过期章节和后续回答时必须说明的索引限制。"
         })
       }
     });
 
+    await expect(service.summarizeBook("project_1", "stale-source", "2026-05-01T00:09:00.000Z")).rejects.toThrow("全书摘要来源已变化");
+    const currentJob = summaryRepo.claimNextSummaryJob("project_1", "2026-05-01T00:09:30.000Z");
+    expect(currentJob).toMatchObject({ jobType: "book_summary" });
+    const sourceHash = currentJob?.sourceHash ?? "";
     const summary = await service.summarizeBook("project_1", sourceHash, "2026-05-01T00:10:00.000Z");
 
-    expect(summary.structured.coverage).toEqual({
-      totalChapterCount: 2,
-      indexedChapterCount: 1,
-      staleChapterIds: ["chapter_2"],
-      missingChapterIds: [],
-      skippedTooShortChapterIds: []
+    expect(summary.structured.全书信息).toMatchObject({
+      总章节数: 2,
+      已索引章节数: 1,
+      过期章节: ["第1章"],
+      缺失章节: [],
+      过短跳过章节: []
     });
     expect(summary.summaryShort).toBe("全书摘要。");
     db.close();
@@ -576,7 +719,7 @@ describe("summary index status and rebuild controls", () => {
       contentHash: computeChapterContentHash("夏".repeat(620)),
       summaryShort: "第2章旧摘要",
       summaryLong: "第2章旧摘要",
-      structured: summaryPayload(),
+      structured: summaryPayloadV2(),
       tokenCount: 30,
       status: "stale",
       error: null,
@@ -609,6 +752,15 @@ describe("summary index status and rebuild controls", () => {
     });
     const failed = summaryRepo.claimNextSummaryJob("project_1", "2026-05-01T00:14:00.000Z");
     summaryRepo.failSummaryJob(failed?.id ?? "missing", "上游限流", null, "2026-05-01T00:15:00.000Z");
+    summaryRepo.enqueueSummaryJob({
+      projectId: "project_1",
+      jobType: "chapter_summary",
+      targetId: "chapter_4",
+      sourceHash: "hash_4",
+      priority: 4,
+      now: "2026-05-01T00:15:30.000Z",
+      nextRunAt: "2026-05-01T00:21:00.000Z"
+    });
 
     const status = service.getIndexStatus("project_1", "2026-05-01T00:16:00.000Z", { pausedReason: "foreground_ai_active" });
 
@@ -621,8 +773,11 @@ describe("summary index status and rebuild controls", () => {
       skippedTooShortChapterCount: 1,
       missingChapterCount: 1,
       failedJobCount: 1,
-      queuedJobCount: 0,
+      cancelledJobCount: 0,
+      queuedJobCount: 1,
       runningJobLabel: "正在摘要：第2章",
+      nextRetryAt: "2026-05-01T00:21:00.000Z",
+      nextRetryJobLabel: "第1章",
       pausedReason: "foreground_ai_active",
       updatedAt: "2026-05-01T00:16:00.000Z"
     });
@@ -645,6 +800,8 @@ describe("summary index status and rebuild controls", () => {
       staleChapterCount: 0,
       skippedTooShortChapterCount: 1,
       missingChapterCount: 2,
+      failedJobCount: 0,
+      cancelledJobCount: 0,
       queuedJobCount: 2,
       runningJobLabel: null,
       pausedReason: null
@@ -652,6 +809,191 @@ describe("summary index status and rebuild controls", () => {
     expect(summaryRepo.claimNextSummaryJob("project_1", "2026-05-01T00:21:00.000Z")).toMatchObject({
       jobType: "chapter_summary",
       status: "running"
+    });
+    db.close();
+  });
+
+  it("continues indexing without requeueing ready chapters that already match the current content", () => {
+    const db = createDb();
+    const { chapterRepo, summaryRepo } = seedProject(db);
+    createChapter(chapterRepo, "chapter_1", "春".repeat(620));
+    createChapter(chapterRepo, "chapter_2", "夏".repeat(620));
+    upsertReadyChapterSummary(summaryRepo, {
+      chapterId: "chapter_1",
+      title: "第1章",
+      order: 1,
+      content: "春".repeat(620)
+    });
+    const service = new SummaryService(summaryRepo, chapterRepo);
+
+    const status = service.rebuildProjectIndex("project_1", "2026-05-01T00:30:00.000Z");
+    const nextJob = summaryRepo.claimNextSummaryJob("project_1", "2026-05-01T00:31:00.000Z");
+
+    expect(status).toMatchObject({
+      readyChapterCount: 1,
+      queuedJobCount: 1
+    });
+    expect(nextJob).toMatchObject({
+      targetId: "chapter_2"
+    });
+    db.close();
+  });
+
+  it("can force a full project index rebuild when explicitly requested", () => {
+    const db = createDb();
+    const { chapterRepo, summaryRepo } = seedProject(db);
+    createChapter(chapterRepo, "chapter_1", "春".repeat(620));
+    createChapter(chapterRepo, "chapter_2", "夏".repeat(620));
+    upsertReadyChapterSummary(summaryRepo, {
+      chapterId: "chapter_1",
+      title: "第1章",
+      order: 1,
+      content: "春".repeat(620)
+    });
+    const service = new SummaryService(summaryRepo, chapterRepo);
+
+    const status = service.rebuildProjectIndex("project_1", "2026-05-01T00:30:00.000Z", { force: true });
+
+    expect(status).toMatchObject({
+      readyChapterCount: 1,
+      queuedJobCount: 2
+    });
+    db.close();
+  });
+
+  it("lists chapter cache entries with current jobs and full summary preview details", () => {
+    const db = createDb();
+    const { chapterRepo, summaryRepo } = seedProject(db);
+    createChapter(chapterRepo, "chapter_1", "春".repeat(620));
+    createChapter(chapterRepo, "chapter_2", "夏".repeat(620));
+    upsertReadyChapterSummary(summaryRepo, {
+      chapterId: "chapter_1",
+      title: "第1章",
+      order: 1,
+      content: "春".repeat(620)
+    });
+    summaryRepo.enqueueSummaryJob({
+      projectId: "project_1",
+      jobType: "chapter_summary",
+      targetId: "chapter_2",
+      sourceHash: computeChapterContentHash("夏".repeat(620)),
+      priority: 10,
+      now: "2026-05-01T00:40:00.000Z"
+    });
+    const service = new SummaryService(summaryRepo, chapterRepo);
+
+    const entries = service.listChapterCacheEntries("project_1", "2026-05-01T00:41:00.000Z");
+    const detail = service.getChapterCacheDetail("project_1", "chapter_1");
+
+    expect(entries).toEqual([
+      expect.objectContaining({
+        chapterId: "chapter_1",
+        cacheState: "ready",
+        summaryShort: "第1章短摘要",
+        jobStatus: null
+      }),
+      expect.objectContaining({
+        chapterId: "chapter_2",
+        cacheState: "queued",
+        summaryShort: null,
+        jobStatus: "queued"
+      })
+    ]);
+    expect(detail).toMatchObject({
+      chapterId: "chapter_1",
+      cacheState: "ready",
+      summary: {
+        summaryShort: "第1章短摘要",
+        structured: summaryPayloadV2()
+      },
+      chunks: []
+    });
+    db.close();
+  });
+
+  it("clears a chapter cache and retries the chapter without leaving stale arc or book caches", () => {
+    const db = createDb();
+    const { chapterRepo, summaryRepo } = seedProject(db);
+    const content = "春".repeat(620);
+    createChapter(chapterRepo, "chapter_1", content);
+    upsertReadyChapterSummary(summaryRepo, {
+      chapterId: "chapter_1",
+      title: "第1章",
+      order: 1,
+      content
+    });
+    summaryRepo.upsertArcSummary({
+      id: "arc_summary_1",
+      projectId: "project_1",
+      arcKey: "auto:001-001",
+      chapterFrom: 1,
+      chapterTo: 1,
+      sourceHash: computeChapterContentHash(content),
+      summary: arcIndexPayloadV2().阶段详细梗概,
+      structured: arcIndexPayloadV2(),
+      status: "ready",
+      error: null,
+      createdAt,
+      updatedAt: createdAt
+    });
+    summaryRepo.upsertBookSummary({
+      id: "book_summary_1",
+      projectId: "project_1",
+      sourceHash: "book_hash",
+      summaryShort: bookIndexPayloadV2().全文短摘要,
+      summaryLong: bookIndexPayloadV2().全文详细梗概,
+      structured: bookIndexPayloadV2(),
+      status: "ready",
+      error: null,
+      createdAt,
+      updatedAt: createdAt
+    });
+    const service = new SummaryService(summaryRepo, chapterRepo);
+
+    const status = service.clearAndRetryChapterCache("project_1", "chapter_1", "2026-05-01T00:50:00.000Z");
+    const nextJob = summaryRepo.claimNextSummaryJob("project_1", "2026-05-01T00:51:00.000Z");
+
+    expect(summaryRepo.getChapterSummary("project_1", "chapter_1")).toBeNull();
+    expect(summaryRepo.listArcSummaries("project_1")).toEqual([]);
+    expect(summaryRepo.getLatestBookSummary("project_1")).toBeNull();
+    expect(status).toMatchObject({
+      readyChapterCount: 0,
+      missingChapterCount: 1,
+      queuedJobCount: 1
+    });
+    expect(nextJob).toMatchObject({
+      jobType: "chapter_summary",
+      targetId: "chapter_1",
+      sourceHash: computeChapterContentHash(content)
+    });
+    db.close();
+  });
+
+  it("refuses destructive cache retry while any summary job is running", () => {
+    const db = createDb();
+    const { chapterRepo, summaryRepo } = seedProject(db);
+    createChapter(chapterRepo, "chapter_1", "春".repeat(620));
+    createChapter(chapterRepo, "chapter_2", "夏".repeat(620));
+    upsertReadyChapterSummary(summaryRepo, {
+      chapterId: "chapter_1",
+      title: "第1章",
+      order: 1,
+      content: "春".repeat(620)
+    });
+    summaryRepo.enqueueSummaryJob({
+      projectId: "project_1",
+      jobType: "chapter_summary",
+      targetId: "chapter_2",
+      sourceHash: computeChapterContentHash("夏".repeat(620)),
+      priority: 10,
+      now: "2026-05-01T00:40:00.000Z"
+    });
+    summaryRepo.claimNextSummaryJob("project_1", "2026-05-01T00:41:00.000Z");
+    const service = new SummaryService(summaryRepo, chapterRepo);
+
+    expect(() => service.clearAndRetryChapterCache("project_1", "chapter_1", "2026-05-01T00:50:00.000Z")).toThrow("后台索引正在运行");
+    expect(summaryRepo.getChapterSummary("project_1", "chapter_1")).toMatchObject({
+      status: "ready"
     });
     db.close();
   });

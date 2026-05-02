@@ -93,12 +93,21 @@ function taskErrorHint(error: string, taskType: TaskType): string | null {
 }
 
 function formatProofreadIssueDraft(issue: ProofreadIssue): string {
-  return [
+  const lines = [
     `校对建议：${issue.type}`,
     `原文片段：${issue.quote || "未提供"}`,
     `建议改法：${issue.suggestion || "未提供"}`,
     `原因：${issue.reason || "未提供"}`
-  ].join("\n");
+  ];
+  if (issue.缓存证据?.length) {
+    lines.push(`缓存证据：${issue.缓存证据.join("；")}`);
+  }
+  if (issue.是否需要作者判断 || issue.是否需要回读原文 || issue.是否可自动应用) {
+    lines.push(
+      `处理方式：${issue.是否可自动应用 === "是" ? "可自动应用" : "建议作者手动判断"}${issue.是否需要回读原文 === "是" ? "，需要回读原文确认" : ""}`
+    );
+  }
+  return lines.join("\n");
 }
 
 export function CurrentTaskTab({
@@ -231,6 +240,21 @@ export function CurrentTaskTab({
                     <span className="issue-label">原因</span>
                     <p>{issue.reason || "未提供"}</p>
                   </div>
+                  {issue.缓存证据?.length ? (
+                    <div>
+                      <span className="issue-label">缓存证据</span>
+                      <p>{issue.缓存证据.join("；")}</p>
+                    </div>
+                  ) : null}
+                  {issue.是否需要作者判断 || issue.是否需要回读原文 || issue.是否可自动应用 ? (
+                    <div>
+                      <span className="issue-label">处理方式</span>
+                      <p>
+                        {issue.是否可自动应用 === "是" ? "可自动应用" : "建议作者手动判断"}
+                        {issue.是否需要回读原文 === "是" ? "，需要回读原文确认" : ""}
+                      </p>
+                    </div>
+                  ) : null}
                 </div>
                 <div className="small-actions">
                   <button className="small-button blue" disabled={taskStore.busy} onClick={() => void copyProofreadIssue(issue, index)} type="button">复制建议</button>

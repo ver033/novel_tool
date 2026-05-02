@@ -319,6 +319,60 @@ const migrations: readonly Migration[] = [
           ON summary_jobs(project_id, status, priority, created_at);
       `);
     }
+  },
+  {
+    version: 8,
+    name: "rebuild_chapter_fact_index_v2",
+    up(db) {
+      db.exec(`
+        DELETE FROM summary_jobs;
+        DELETE FROM book_ai_summaries;
+        DELETE FROM arc_ai_summaries;
+        DELETE FROM chapter_ai_summaries;
+      `);
+    }
+  },
+  {
+    version: 9,
+    name: "chapter_summary_chunks",
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS chapter_ai_summary_chunks (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          chapter_id TEXT NOT NULL,
+          chunk_index INTEGER NOT NULL,
+          chunk_count INTEGER NOT NULL,
+          content_hash TEXT NOT NULL,
+          text_start INTEGER NOT NULL,
+          text_end INTEGER NOT NULL,
+          summary_short TEXT NOT NULL,
+          structured_json TEXT NOT NULL,
+          token_count INTEGER NOT NULL DEFAULT 0,
+          status TEXT NOT NULL CHECK (status IN ('ready', 'stale', 'building', 'failed')),
+          error TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(project_id, chapter_id, content_hash, chunk_index),
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+          FOREIGN KEY (chapter_id) REFERENCES chapters(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_chapter_ai_summary_chunks_chapter
+          ON chapter_ai_summary_chunks(project_id, chapter_id, content_hash, chunk_index);
+      `);
+    }
+  },
+  {
+    version: 10,
+    name: "rebuild_arc_book_fact_index_v2",
+    up(db) {
+      db.exec(`
+        DELETE FROM summary_jobs WHERE job_type IN ('arc_summary', 'book_summary');
+        DELETE FROM book_ai_summaries;
+        DELETE FROM arc_ai_summaries;
+      `);
+    }
   }
 ];
 

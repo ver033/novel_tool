@@ -66,6 +66,7 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
   const [summaryIndexStatus, setSummaryIndexStatus] = useState<SummaryIndexStatus | null>(null);
   const [summaryIndexLoading, setSummaryIndexLoading] = useState(false);
   const [summaryIndexError, setSummaryIndexError] = useState<string | null>(null);
+  const [summaryIndexNotice, setSummaryIndexNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -119,12 +120,14 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
     if (!projectId) {
       setSummaryIndexStatus(null);
       setSummaryIndexError(null);
+      setSummaryIndexNotice(null);
       setSummaryIndexLoading(false);
       return;
     }
 
     setSummaryIndexLoading(true);
     setSummaryIndexError(null);
+    setSummaryIndexNotice(null);
     try {
       const status = (await api.summary.getIndexStatus({ projectId })) as SummaryIndexStatus;
       setSummaryIndexStatus(status);
@@ -135,18 +138,39 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
     }
   }, [api, projectId]);
 
-  const rebuildSummaryIndex = useCallback(async () => {
+  const rebuildSummaryIndex = useCallback(async (options: { readonly force?: boolean } = {}) => {
     if (!projectId) {
       return;
     }
 
     setSummaryIndexLoading(true);
     setSummaryIndexError(null);
+    setSummaryIndexNotice(null);
     try {
-      const status = (await api.summary.rebuildProjectIndex({ projectId })) as SummaryIndexStatus;
+      const status = (await api.summary.rebuildProjectIndex({ projectId, ...(options.force ? { force: true } : {}) })) as SummaryIndexStatus;
       setSummaryIndexStatus(status);
+      setSummaryIndexNotice(options.force ? "全书索引已强制重新排队。" : "后台索引任务已重新排队。");
     } catch (reason) {
       setSummaryIndexError(formatIpcErrorMessage(reason, "建立全书索引失败"));
+    } finally {
+      setSummaryIndexLoading(false);
+    }
+  }, [api, projectId]);
+
+  const cancelSummaryIndexJob = useCallback(async () => {
+    if (!projectId) {
+      return;
+    }
+
+    setSummaryIndexLoading(true);
+    setSummaryIndexError(null);
+    setSummaryIndexNotice(null);
+    try {
+      const status = (await api.summary.cancelCurrentJob({ projectId })) as SummaryIndexStatus;
+      setSummaryIndexStatus(status);
+      setSummaryIndexNotice("后台索引已停止；已完成的章节缓存会保留。");
+    } catch (reason) {
+      setSummaryIndexError(formatIpcErrorMessage(reason, "停止当前索引任务失败"));
     } finally {
       setSummaryIndexLoading(false);
     }
@@ -168,6 +192,7 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
       setSummaryIndexStatus(null);
       setSummaryIndexLoading(false);
       setSummaryIndexError(null);
+      setSummaryIndexNotice(null);
       setError(null);
       return () => {
         disposed = true;
@@ -483,6 +508,7 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
     contextUsage,
     contextUsagePending,
     cancelActiveStream,
+    cancelSummaryIndexJob,
     createSession,
     deleteCurrentSession,
     error,
@@ -496,6 +522,7 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
     sessions,
     summaryIndexError,
     summaryIndexLoading,
+    summaryIndexNotice,
     summaryIndexStatus,
     streamingReasoning,
     streamingText

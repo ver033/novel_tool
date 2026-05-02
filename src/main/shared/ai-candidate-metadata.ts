@@ -30,7 +30,7 @@ export const writingContextPlanMetadataSchema = z
 
 export const aiCandidateMetadataSchema = z
   .object({
-    proofreadIssues: z.array(proofreadIssueSchema).max(3).nullable().optional(),
+    proofreadIssues: z.array(proofreadIssueSchema).max(20).nullable().optional(),
     writingContextPlan: writingContextPlanMetadataSchema.nullable().optional()
   })
   .strict();

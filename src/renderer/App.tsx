@@ -163,6 +163,7 @@ export function App() {
       <AppShell>
         <SettingsPage
           activeCategory={settingsCategory}
+          currentProject={settingsReturnPage === "writing" ? appStore.currentProject : null}
           onCategoryChange={setSettingsCategory}
           onClose={returnFromSettings}
           onWelcome={returnFromSettings}

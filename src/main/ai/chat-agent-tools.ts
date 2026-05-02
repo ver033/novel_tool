@@ -1,12 +1,14 @@
 import { z } from "zod";
-import { resolveChatAgentContext, type ResolvedChatAgentContext } from "./chat-agent-context";
+import { resolveChatAgentContext, type ResolvedChatAgentContext, type SummaryIndexFocus } from "./chat-agent-context";
 import { chatAgentScopeSchema, type ChatAgentContext, type ChatAgentPlan, type ChatAgentScope } from "./chat-agent-types";
+import type { ContinuityCheckInput } from "./summary-prompts";
 import type { OpenRouterToolDefinition } from "./openrouter-client";
 import type { TokenBudget } from "./token-budget";
 import type { ChapterRepository } from "../db/repositories/chapter-repo";
 import type { ScratchNoteRepository } from "../db/repositories/scratch-note-repo";
 import type { SummaryRepository } from "../db/repositories/summary-repo";
 import type { ProofreadIssue } from "../shared/proofread";
+import type { ContinuityCheckResult } from "../shared/summary-index";
 import type { AiChatAction, TaskType } from "../shared/types";
 import type { WritingContextPlan, WritingOperationOutputKind, WritingOperationTarget } from "./writing-operation-types";
 
@@ -15,6 +17,7 @@ export type ChatAgentToolName =
   | "list_chapters"
   | "read_chapters"
   | "read_selection"
+  | "check_continuity"
   | "add_to_scratchpad"
   | "run_writing_operation";
 
@@ -42,6 +45,7 @@ export type ChatAgentToolRuntime = {
     readonly proofreadIssues: readonly ProofreadIssue[] | null;
     readonly contextPlan: WritingContextPlan;
   }>;
+  readonly executeContinuityCheck?: (input: ContinuityCheckInput) => Promise<ContinuityCheckResult>;
 };
 
 export type ChatAgentToolExecutionInput = {
@@ -61,6 +65,7 @@ const readChaptersArgsSchema = z
   .object({
     scope: chatAgentScopeSchema,
     mode: z.enum(["raw", "summary", "hybrid"]).optional(),
+    focus: z.enum(["overview", "characters", "foreshadowing", "facts"]).optional(),
     inlineText: z.string().trim().min(1).optional()
   })
   .strict();
@@ -68,6 +73,13 @@ const readChaptersArgsSchema = z
 const readSelectionArgsSchema = z
   .object({
     inlineText: z.string().trim().min(1).optional()
+  })
+  .strict();
+
+const checkContinuityArgsSchema = z
+  .object({
+    scope: chatAgentScopeSchema,
+    question: z.string().trim().min(1).optional()
   })
   .strict();
 
@@ -104,6 +116,12 @@ const readChaptersToolParameters = {
       type: "string",
       enum: ["raw", "summary", "hybrid"],
       description: "读取模式。全部章节默认 summary；章节范围如果已有完整摘要缓存也默认 summary；需要精确原文时填写 raw；hybrid 允许系统在原文和摘要之间自动选择。"
+    },
+    focus: {
+      type: "string",
+      enum: ["overview", "characters", "foreshadowing", "facts"],
+      description:
+        "摘要索引聚焦字段。问人物、角色特征或关系变化时用 characters；问伏笔、线索或未解决问题时用 foreshadowing；问可核对事实或连续性线索时用 facts；普通总结可省略或用 overview。"
     }
   },
   required: ["scope"]
@@ -189,6 +207,38 @@ const runWritingOperationToolParameters = {
   required: ["operation", "target"]
 } as const;
 
+const checkContinuityToolParameters = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    scope: {
+      type: "string",
+      enum: ["current_chapter", "all_chapters", "chapter", "chapter_range"],
+      description: "检查范围。推荐用 chapter_range 比较前后章节；单章用 chapter；全书用 all_chapters。"
+    },
+    ordinal: {
+      type: "integer",
+      minimum: 1,
+      description: "scope=chapter 时的章节序号。"
+    },
+    from: {
+      type: "integer",
+      minimum: 1,
+      description: "scope=chapter_range 时的起始章节序号。"
+    },
+    to: {
+      type: "integer",
+      minimum: 1,
+      description: "scope=chapter_range 时的结束章节序号。"
+    },
+    question: {
+      type: "string",
+      description: "作者提出的连续性或冲突检查问题。"
+    }
+  },
+  required: ["scope"]
+} as const;
+
 function toJsonSchema(schema: z.ZodType): object {
   return z.toJSONSchema(schema, {
     target: "draft-7"
@@ -217,7 +267,7 @@ export const MOSHU_CHAT_AGENT_TOOLS: readonly OpenRouterToolDefinition[] = [
     function: {
       name: "read_chapters",
       description:
-        "读取当前项目中指定章节范围的正文上下文。回答总结、人物、剧情、伏笔、设定、连续性问题前必须先调用本工具读取来源内容。参数示例：{\"scope\":\"all_chapters\"}、{\"scope\":\"chapter\",\"ordinal\":4}、{\"scope\":\"chapter_range\",\"from\":2,\"to\":5}。",
+        "读取当前项目中指定章节范围的来源上下文，可读取原文或摘要索引。回答总结、人物、剧情、伏笔、设定、连续性问题前必须先调用本工具读取来源内容；问人物/角色特征用 focus=characters，问伏笔/线索用 focus=foreshadowing，问可核对事实用 focus=facts。参数示例：{\"scope\":\"all_chapters\"}、{\"scope\":\"chapter\",\"ordinal\":4}、{\"scope\":\"chapter_range\",\"from\":2,\"to\":5,\"focus\":\"characters\"}。",
       parameters: readChaptersToolParameters
     }
   },
@@ -237,6 +287,15 @@ export const MOSHU_CHAT_AGENT_TOOLS: readonly OpenRouterToolDefinition[] = [
       description:
         "执行中文小说写作操作：润色、扩写、校对、续写。只生成候选文本或校对问题，不写回正文，不保存草稿纸。用户要求保存时必须另行调用 add_to_scratchpad。",
       parameters: runWritingOperationToolParameters
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "check_continuity",
+      description:
+        "根据章节 V2 摘要缓存检查跨章节连续性问题，适合时间线、人物认知、人物状态、道具状态、设定规则、因果和伏笔状态核对。不会修改正文。",
+      parameters: checkContinuityToolParameters
     }
   },
   {
@@ -365,6 +424,7 @@ function normalizeReadChaptersArgs(value: unknown): unknown {
         ? {
             scope,
             ...(typeof value.mode === "string" ? { mode: value.mode } : {}),
+            ...(typeof value.focus === "string" ? { focus: value.focus } : {}),
             ...(typeof value.inlineText === "string" ? { inlineText: value.inlineText } : {})
           }
         : value;
@@ -374,6 +434,7 @@ function normalizeReadChaptersArgs(value: unknown): unknown {
       ? {
           scope,
           ...(typeof value.mode === "string" ? { mode: value.mode } : {}),
+          ...(typeof value.focus === "string" ? { focus: value.focus } : {}),
           ...(typeof value.inlineText === "string" ? { inlineText: value.inlineText } : {})
         }
       : value;
@@ -383,7 +444,12 @@ function normalizeReadChaptersArgs(value: unknown): unknown {
   return scope ? { scope } : value;
 }
 
-function parseReadChaptersArgs(argumentsJson: string): { readonly scope: ChatAgentScope; readonly mode?: "raw" | "summary" | "hybrid"; readonly inlineText?: string } {
+function parseReadChaptersArgs(argumentsJson: string): {
+  readonly scope: ChatAgentScope;
+  readonly mode?: "raw" | "summary" | "hybrid";
+  readonly focus?: SummaryIndexFocus;
+  readonly inlineText?: string;
+} {
   const parsed = readChaptersArgsSchema.safeParse(normalizeReadChaptersArgs(parseJsonArguments(argumentsJson)));
   if (!parsed.success) {
     throw new Error(
@@ -394,6 +460,31 @@ function parseReadChaptersArgs(argumentsJson: string): { readonly scope: ChatAge
     throw new Error(`章节范围无效：第${parsed.data.scope.from}章到第${parsed.data.scope.to}章。`);
   }
   return parsed.data;
+}
+
+function parseCheckContinuityArgs(argumentsJson: string): { readonly scope: Exclude<ChatAgentScope, { readonly type: "selection" }>; readonly question?: string } {
+  const raw = parseJsonArguments(argumentsJson);
+  const normalized = normalizeReadChaptersArgs(raw);
+  const withQuestion =
+    isRecord(normalized) && isRecord(raw) && typeof raw.question === "string"
+      ? {
+          ...normalized,
+          question: raw.question
+        }
+      : normalized;
+  const parsed = checkContinuityArgsSchema.safeParse(withQuestion);
+  if (!parsed.success) {
+    throw new Error(
+      `AI 工具 check_continuity 参数无效：请使用 {"scope":"chapter","ordinal":章节序号}、{"scope":"chapter_range","from":起始章节,"to":结束章节} 或 {"scope":"all_chapters"}。`
+    );
+  }
+  if (parsed.data.scope.type === "selection") {
+    throw new Error("连续性检查需要章节缓存，请使用章节或章节范围。");
+  }
+  if (parsed.data.scope.type === "chapter_range" && parsed.data.scope.from > parsed.data.scope.to) {
+    throw new Error(`章节范围无效：第${parsed.data.scope.from}章到第${parsed.data.scope.to}章。`);
+  }
+  return parsed.data as { readonly scope: Exclude<ChatAgentScope, { readonly type: "selection" }>; readonly question?: string };
 }
 
 function stringifyToolResult(value: unknown): string {
@@ -454,7 +545,10 @@ function createPlanForScope(scope: z.output<typeof chatAgentScopeSchema>): ChatA
   };
 }
 
-function shouldUseSummaryIndex(args: { readonly scope: ChatAgentScope; readonly mode?: "raw" | "summary" | "hybrid" }): boolean {
+function shouldUseSummaryIndex(args: { readonly scope: ChatAgentScope; readonly mode?: "raw" | "summary" | "hybrid"; readonly focus?: SummaryIndexFocus }): boolean {
+  if (args.focus) {
+    return true;
+  }
   if (args.mode === "raw") {
     return false;
   }
@@ -551,7 +645,7 @@ async function executeReadChapters(runtime: ChatAgentToolRuntime, argumentsJson:
     };
   }
 
-  if (args.mode === "summary" && !runtime.summaryRepo) {
+  if ((args.mode === "summary" || args.focus) && !runtime.summaryRepo) {
     throw new Error("摘要索引服务未初始化，无法按 summary 模式读取章节。");
   }
   const useSummaryIndex = shouldUseSummaryIndex(args) || (args.mode !== "raw" && hasCompleteReadySummaryCoverage(runtime, args.scope));
@@ -565,7 +659,7 @@ async function executeReadChapters(runtime: ChatAgentToolRuntime, argumentsJson:
     createPlanForScope(args.scope),
     runtime.chapterRepo,
     runtime.tokenBudget,
-    { summaryRepo: useSummaryIndex ? runtime.summaryRepo : undefined }
+    { summaryRepo: useSummaryIndex ? runtime.summaryRepo : undefined, summaryFocus: args.focus }
   );
   if (args.mode === "raw" && args.scope.type === "all_chapters" && resolved.requiresSummaries) {
     throw new Error("全部章节原文超过模型输入预算，不能按 raw 模式读取。请改用 summary 模式或缩小章节范围。");
@@ -610,6 +704,91 @@ async function executeReadSelection(runtime: ChatAgentToolRuntime, argumentsJson
       mode: "direct",
       sourceChapterIds: source.sourceChapterIds,
       contextText: source.text
+    })
+  };
+}
+
+function resolveContinuityScope(
+  runtime: ChatAgentToolRuntime,
+  scope: Exclude<ChatAgentScope, { readonly type: "selection" }>
+): readonly { readonly id: string; readonly title: string; readonly ordinal: number }[] {
+  const chapters = runtime.chapterRepo.listByProject(runtime.projectId);
+  if (scope.type === "all_chapters") {
+    return chapters.map((chapter, index) => ({
+      id: chapter.id,
+      title: chapter.title,
+      ordinal: index + 1
+    }));
+  }
+  if (scope.type === "current_chapter") {
+    if (!runtime.currentChapterId) {
+      throw new Error("当前没有打开章节，无法进行连续性检查。");
+    }
+    const index = chapters.findIndex((chapter) => chapter.id === runtime.currentChapterId);
+    const chapter = index >= 0 ? chapters[index] : null;
+    if (!chapter) {
+      throw new Error("当前章节不在项目中，请重新打开章节后再试。");
+    }
+    return [{ id: chapter.id, title: chapter.title, ordinal: index + 1 }];
+  }
+  if (scope.type === "chapter") {
+    const chapter = chapters[scope.ordinal - 1] ?? null;
+    if (!chapter) {
+      throw new Error(`找不到第${scope.ordinal}章，无法进行连续性检查。`);
+    }
+    return [{ id: chapter.id, title: chapter.title, ordinal: scope.ordinal }];
+  }
+  if (scope.to > chapters.length) {
+    throw new Error(`找不到第${scope.to}章，当前项目只有 ${chapters.length} 章。`);
+  }
+  return chapters.slice(scope.from - 1, scope.to).map((chapter, index) => ({
+    id: chapter.id,
+    title: chapter.title,
+    ordinal: scope.from + index
+  }));
+}
+
+async function executeCheckContinuity(runtime: ChatAgentToolRuntime, argumentsJson: string): Promise<ChatAgentToolExecutionResult> {
+  assertNotCanceled(runtime.signal);
+  if (!runtime.summaryRepo) {
+    throw new Error("摘要索引服务未初始化，无法进行连续性检查。");
+  }
+  if (!runtime.executeContinuityCheck) {
+    throw new Error("连续性检查服务未初始化。");
+  }
+
+  const args = parseCheckContinuityArgs(argumentsJson);
+  const chapters = resolveContinuityScope(runtime, args.scope);
+  const summaryByChapterId = new Map(runtime.summaryRepo.listChapterSummaries(runtime.projectId).map((summary) => [summary.chapterId, summary]));
+  const missing = chapters.filter((chapter) => summaryByChapterId.get(chapter.id)?.status !== "ready");
+  if (missing.length > 0) {
+    throw new Error(`连续性检查需要章节摘要索引，以下章节缺失或过期：${missing.map((chapter) => `第${chapter.ordinal}章 ${chapter.title}`).join("、")}。`);
+  }
+
+  const result = await runtime.executeContinuityCheck({
+    question: args.question?.trim() || runtime.userMessage,
+    chapters: chapters.map((chapter) => {
+      const summary = summaryByChapterId.get(chapter.id);
+      if (!summary || summary.status !== "ready") {
+        throw new Error(`第${chapter.ordinal}章摘要索引不可用。`);
+      }
+      return {
+        chapterId: chapter.id,
+        title: chapter.title,
+        ordinal: chapter.ordinal,
+        summaryShort: summary.summaryShort,
+        summaryLong: summary.summaryLong,
+        structured: summary.structured
+      };
+    })
+  });
+
+  return {
+    action: null,
+    content: stringifyToolResult({
+      scopeLabel: args.scope.type === "chapter_range" ? `第${args.scope.from}-${args.scope.to}章连续性检查` : "连续性检查",
+      source: "chapter_summary_cache",
+      result
     })
   };
 }
@@ -759,6 +938,8 @@ export async function executeChatAgentToolWithAction(input: ChatAgentToolExecuti
       return executeReadChapters(input.runtime, input.argumentsJson);
     case "read_selection":
       return executeReadSelection(input.runtime, input.argumentsJson);
+    case "check_continuity":
+      return executeCheckContinuity(input.runtime, input.argumentsJson);
     case "run_writing_operation":
       return executeRunWritingOperation(input.runtime, input.argumentsJson);
     case "add_to_scratchpad":

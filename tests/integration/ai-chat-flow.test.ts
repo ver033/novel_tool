@@ -20,6 +20,7 @@ import { computeChapterContentHash, computeSourceHash, type ChapterAiSummaryPayl
 import type { AiChatMessageRecord, AiStreamContextEvent, ChapterSummary } from "../../src/main/shared/types";
 import { estimateTextTokens } from "../../src/main/ai/token-estimator";
 import { getTokenBudget } from "../../src/main/ai/token-budget";
+import { arcIndexPayloadV2, bookIndexPayloadV2, chapterIndexPayloadV2 } from "../helpers/summary-index-fixtures";
 
 const tempDirs: string[] = [];
 const projectServices: ProjectService[] = [];
@@ -91,18 +92,11 @@ function createChapter(
 }
 
 function createChapterSummaryPayload(input: { readonly oneLine: string; readonly synopsis: string }): ChapterAiSummaryPayload {
-  return {
+  return chapterIndexPayloadV2({
     oneLine: input.oneLine,
     synopsis: input.synopsis,
-    keyEvents: ["关键事件"],
-    characterMentions: [{ name: "林远", roleInChapter: "主角" }],
-    relationshipHints: [],
-    timeAndPlace: [],
-    foreshadowingHints: [],
-    unresolvedQuestions: [],
-    emotionalArc: "保持追查",
-    importantQuotes: []
-  };
+    detail: `${input.synopsis} 这个章节缓存用于集成测试，保留关键事件、人物状态、可核对事实和不可丢失信息，确保对话上下文可以读取章节索引而不回退旧摘要结构。`
+  });
 }
 
 function createPlanner(plan: ChatAgentPlan, onPlan?: (input: Parameters<ChatPlanner["plan"]>[0]) => void): ChatPlanner {
@@ -1488,16 +1482,7 @@ describe("AI chat flow", () => {
       chapterTo: 2,
       sourceHash: computeSourceHash(["chapter-1", "chapter-2"]),
       summary: "第1-2章中，林远回城并获得旧信线索。",
-      structured: {
-        chapterFrom: 1,
-        chapterTo: 2,
-        synopsis: "林远回城并获得旧信线索。",
-        keyEvents: ["回城", "旧信"],
-        characterChanges: ["林远开始追查"],
-        relationshipChanges: [],
-        foreshadowingHints: [],
-        unresolvedQuestions: []
-      },
+      structured: arcIndexPayloadV2(),
       status: "ready",
       error: null,
       createdAt: "2026-05-01T00:00:00.000Z",
@@ -1509,22 +1494,7 @@ describe("AI chat flow", () => {
       sourceHash: "book-source",
       summaryShort: "林远回城追查旧信。",
       summaryLong: "林远回到旧城，凭旧信开始追查失踪故人的真相。",
-      structured: {
-        coverage: {
-          totalChapterCount: 2,
-          indexedChapterCount: 2,
-          staleChapterIds: [],
-          missingChapterIds: [],
-          skippedTooShortChapterIds: []
-        },
-        synopsis: "林远回到旧城，凭旧信开始追查失踪故人的真相。",
-        mainPlot: ["回城", "旧信", "追查"],
-        majorCharacters: [{ name: "林远", summary: "主角，开始追查旧信。" }],
-        majorConflicts: ["旧信背后的真相"],
-        relationshipChanges: [],
-        foreshadowingHints: [],
-        unresolvedQuestions: ["失踪故人去了哪里"]
-      },
+      structured: bookIndexPayloadV2(),
       status: "ready",
       error: null,
       createdAt: "2026-05-01T00:00:00.000Z",
@@ -1558,6 +1528,134 @@ describe("AI chat flow", () => {
     expect(toolResultText).toContain("林远回到旧城，凭旧信开始追查失踪故人的真相。");
     expect(toolResultText).toContain("第1-2章中，林远回城并获得旧信线索。");
     expect(toolResultText).not.toContain("不应出现在对话上下文里的原始正文");
+
+    db.close();
+  });
+
+  it("uses character-focused summary indexes for scoped follow-up questions", async () => {
+    let toolResultText = "";
+    let plannerCalled = false;
+    const chatGenerator: AiChatGenerator = {
+      async sendAgentMessageStream(input) {
+        const agentInput = input as typeof input & { readonly agentContext?: { readonly scopeLabel?: string } };
+        expect(agentInput.agentContext?.scopeLabel).toBe("第1-2章摘要索引");
+        const toolResult = await input.executeTool({
+          id: "call_read_character_focus",
+          name: "read_chapters",
+          argumentsJson: JSON.stringify({
+            scope: "chapter_range",
+            from: 1,
+            to: 2,
+            focus: "characters"
+          })
+        });
+        toolResultText = toolResult.content;
+        return {
+          role: "assistant",
+          content: "前两章角色特征如下。",
+          createdAt: "2026-05-01T00:00:00.000Z"
+        };
+      }
+    };
+    const planner: ChatPlanner = {
+      async plan() {
+        plannerCalled = true;
+        throw new Error("follow-up scope should be resolved before asking planner");
+      }
+    };
+    const { aiTaskRepo, chapterRepo, chatRepo, db, projectService, scratchRepo, summaryRepo } = createServices();
+    const { project, initialChapter } = projectService.createProject({ name: "雨夜" });
+    const repo = chapterRepo(project.id);
+    repo.rename(initialChapter.id, "第1章 雨夜", new Date().toISOString());
+    repo.saveContent(initialChapter.id, emptyChapterContent, "第一章角色原文不应进入工具结果。", 20, 0, "2026-05-01", new Date().toISOString());
+    const second = createChapter(repo, {
+      projectId: project.id,
+      title: "第2章 旧信",
+      sortOrder: 1,
+      plainText: "第二章角色原文不应进入工具结果。"
+    });
+    const summaries = summaryRepo(project.id);
+    [
+      { chapter: initialChapter, title: "第1章 雨夜", ordinal: 1, character: "林远", state: "谨慎回城" },
+      { chapter: second, title: "第2章 旧信", ordinal: 2, character: "沈青", state: "因旧信线索开始动摇" }
+    ].forEach((item) => {
+      const structured = createChapterSummaryPayload({
+        oneLine: `${item.character}人物线推进。`,
+        synopsis: `${item.character}在本章出现关键状态变化。`
+      });
+      structured.人物状态[0] = {
+        ...structured.人物状态[0],
+        人物: item.character,
+        本章结束状态: item.state,
+        情绪状态: item.state,
+        新获得信息: [`${item.character}获得旧信相关信息`]
+      };
+      structured.人物认知边界[0] = {
+        ...structured.人物认知边界[0],
+        人物: item.character,
+        已经知道: [`${item.character}知道旧信存在`],
+        尚不知道: [`${item.character}尚不知道旧信全部来源`]
+      };
+      summaries.upsertChapterSummary({
+        id: `summary_character_followup_${item.ordinal}`,
+        projectId: project.id,
+        chapterId: item.chapter.id,
+        chapterTitle: item.title,
+        chapterOrder: item.ordinal,
+        contentHash: computeChapterContentHash(`character-followup-${item.ordinal}`),
+        summaryShort: `${item.character}人物线推进。`,
+        summaryLong: `${item.character}在本章出现关键状态变化。`,
+        structured,
+        tokenCount: 50,
+        status: "ready",
+        error: null,
+        createdAt: "2026-05-01T00:00:00.000Z",
+        updatedAt: "2026-05-01T00:00:00.000Z"
+      });
+    });
+    const session = chatRepo(project.id).getOrCreateDefaultSession(project.id);
+    chatRepo(project.id).createMessage({
+      projectId: project.id,
+      sessionId: session.id,
+      role: "user",
+      content: "帮我总结前两章的内容",
+      action: null
+    });
+    chatRepo(project.id).createMessage({
+      projectId: project.id,
+      sessionId: session.id,
+      role: "assistant",
+      content: "前两章总结如下。",
+      action: { type: "none" }
+    });
+    const aiTaskService = new AiTaskService(
+      aiTaskRepo,
+      undefined,
+      chatGenerator,
+      chatRepo,
+      scratchRepo,
+      chapterRepo,
+      planner,
+      () => getTokenBudget("chat"),
+      undefined,
+      summaryRepo
+    );
+
+    await aiTaskService.sendChatMessageStream({
+      requestId: "chat_stream_character_focus_followup",
+      projectId: project.id,
+      sessionId: session.id,
+      message: "同时告诉我出现了哪些角色，有什么特征",
+      chapterId: initialChapter.id
+    });
+
+    expect(plannerCalled).toBe(false);
+    expect(toolResultText).toContain('"scopeLabel":"第1-2章人物索引"');
+    expect(toolResultText).toContain("人物状态");
+    expect(toolResultText).toContain("人物认知边界");
+    expect(toolResultText).toContain("林远");
+    expect(toolResultText).toContain("沈青");
+    expect(toolResultText).not.toContain("角色原文不应进入工具结果");
 
     db.close();
   });

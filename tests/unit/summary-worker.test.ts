@@ -127,6 +127,111 @@ describe("summary worker", () => {
     db.close();
   });
 
+  it("cancels the running job when the worker abort signal fires", async () => {
+    const db = createDb();
+    const repo = new SummaryRepository(db);
+    const job = repo.enqueueSummaryJob({
+      projectId: "project_1",
+      jobType: "chapter_summary",
+      targetId: "chapter_1",
+      sourceHash: "hash",
+      priority: 10,
+      now: createdAt
+    });
+    const controller = new AbortController();
+    let resolveSignalReady: (signal: AbortSignal) => void = () => undefined;
+    const signalReady = new Promise<AbortSignal>((resolve) => {
+      resolveSignalReady = resolve;
+    });
+    const worker = new SummaryWorker({
+      summaryRepo: repo,
+      summaryService: {
+        summarizeChapter: async (_projectId, _chapterId, _sourceHash, _now, options) => {
+          const signal = options?.signal;
+          if (!signal) {
+            throw new Error("expected abort signal");
+          }
+          resolveSignalReady(signal);
+          await new Promise((_resolve, reject) => {
+            signal.addEventListener("abort", () => reject(new Error("canceled")), { once: true });
+          });
+        }
+      },
+      isForegroundAiActive: () => false,
+      ensureAiConfigured: async () => undefined
+    });
+
+    const pending = worker.runOnce("project_1", runAt, { signal: controller.signal });
+    const signal = await signalReady;
+    expect(signal.aborted).toBe(false);
+    controller.abort();
+
+    await expect(pending).resolves.toMatchObject({ status: "cancelled", jobId: job.id });
+    expect(db.prepare("SELECT status, error FROM summary_jobs WHERE id = ?").get(job.id)).toEqual({
+      status: "cancelled",
+      error: "摘要索引任务已取消。"
+    });
+    db.close();
+  });
+
+  it("can mark running jobs cancelled from repository controls", () => {
+    const db = createDb();
+    const repo = new SummaryRepository(db);
+    const job = repo.enqueueSummaryJob({
+      projectId: "project_1",
+      jobType: "chapter_summary",
+      targetId: "chapter_1",
+      sourceHash: "hash",
+      priority: 10,
+      now: createdAt
+    });
+    expect(repo.claimNextSummaryJob("project_1", runAt)?.id).toBe(job.id);
+
+    const changes = repo.cancelRunningJobs("project_1", "用户停止当前索引任务。", "2026-05-01T00:02:00.000Z");
+
+    expect(changes).toBe(1);
+    expect(db.prepare("SELECT status, error FROM summary_jobs WHERE id = ?").get(job.id)).toEqual({
+      status: "cancelled",
+      error: "用户停止当前索引任务。"
+    });
+    db.close();
+  });
+
+  it("can stop queued and running background jobs from repository controls", () => {
+    const db = createDb();
+    const repo = new SummaryRepository(db);
+    const runningJob = repo.enqueueSummaryJob({
+      projectId: "project_1",
+      jobType: "chapter_summary",
+      targetId: "chapter_1",
+      sourceHash: "hash_1",
+      priority: 10,
+      now: createdAt
+    });
+    const queuedJob = repo.enqueueSummaryJob({
+      projectId: "project_1",
+      jobType: "chapter_summary",
+      targetId: "chapter_2",
+      sourceHash: "hash_2",
+      priority: 5,
+      now: createdAt
+    });
+    expect(repo.claimNextSummaryJob("project_1", runAt)?.id).toBe(runningJob.id);
+
+    const changes = repo.cancelQueuedAndRunningJobs("project_1", "用户停止后台索引任务。", "2026-05-01T00:02:00.000Z");
+
+    expect(changes).toBe(2);
+    expect(db.prepare("SELECT status, error FROM summary_jobs WHERE id = ?").get(runningJob.id)).toEqual({
+      status: "cancelled",
+      error: "用户停止后台索引任务。"
+    });
+    expect(db.prepare("SELECT status, error FROM summary_jobs WHERE id = ?").get(queuedJob.id)).toEqual({
+      status: "cancelled",
+      error: "用户停止后台索引任务。"
+    });
+    db.close();
+  });
+
   it("backs off and requeues a new job after OpenRouter 429", async () => {
     const db = createDb();
     const repo = new SummaryRepository(db);
@@ -152,10 +257,68 @@ describe("summary worker", () => {
     const result = await worker.runOnce("project_1", runAt);
 
     expect(result.status).toBe("retry_scheduled");
-    expect(db.prepare("SELECT status FROM summary_jobs WHERE id = ?").get(job.id)).toEqual({ status: "failed" });
-    expect(db.prepare("SELECT status, next_run_at FROM summary_jobs WHERE id != ?").get(job.id)).toEqual({
+    expect(db.prepare("SELECT status FROM summary_jobs WHERE id = ?").get(job.id)).toBeUndefined();
+    expect(db.prepare("SELECT status, attempt_count, next_run_at FROM summary_jobs").get()).toEqual({
       status: "queued",
+      attempt_count: 1,
       next_run_at: "2026-05-01T00:06:00.000Z"
+    });
+    db.close();
+  });
+
+  it("automatically retries invalid summary index model output with short delays before failing", async () => {
+    const db = createDb();
+    const repo = new SummaryRepository(db);
+    repo.enqueueSummaryJob({
+      projectId: "project_1",
+      jobType: "chapter_summary",
+      targetId: "chapter_1",
+      sourceHash: "hash",
+      priority: 10,
+      now: createdAt
+    });
+    const worker = new SummaryWorker({
+      summaryRepo: repo,
+      summaryService: {
+        summarizeChapter: async () => {
+          throw new Error("章节索引摘要无效：Expected array, received string");
+        }
+      },
+      isForegroundAiActive: () => false,
+      ensureAiConfigured: async () => undefined
+    });
+
+    const first = await worker.runOnce("project_1", runAt);
+    expect(first).toMatchObject({
+      status: "retry_scheduled",
+      nextRunAt: "2026-05-01T00:02:00.000Z"
+    });
+    expect(db.prepare("SELECT status, attempt_count, next_run_at FROM summary_jobs").get()).toEqual({
+      status: "queued",
+      attempt_count: 1,
+      next_run_at: "2026-05-01T00:02:00.000Z"
+    });
+
+    const second = await worker.runOnce("project_1", "2026-05-01T00:02:00.000Z");
+    expect(second).toMatchObject({
+      status: "retry_scheduled",
+      nextRunAt: "2026-05-01T00:07:00.000Z"
+    });
+    expect(db.prepare("SELECT status, attempt_count, next_run_at FROM summary_jobs").get()).toEqual({
+      status: "queued",
+      attempt_count: 2,
+      next_run_at: "2026-05-01T00:07:00.000Z"
+    });
+
+    const third = await worker.runOnce("project_1", "2026-05-01T00:07:00.000Z");
+    expect(third).toMatchObject({
+      status: "failed",
+      error: "章节索引摘要无效：Expected array, received string"
+    });
+    expect(db.prepare("SELECT status, attempt_count, next_run_at FROM summary_jobs").get()).toEqual({
+      status: "failed",
+      attempt_count: 3,
+      next_run_at: null
     });
     db.close();
   });

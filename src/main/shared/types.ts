@@ -44,12 +44,17 @@ import type {
   settingsSaveInputSchema,
   settingsListModelsInputSchema,
   settingsTestConnectionInputSchema,
+  summaryCancelCurrentJobInputSchema,
+  summaryClearAndRetryChapterCacheInputSchema,
+  summaryGetChapterCacheInputSchema,
   summaryIndexStatusInputSchema,
+  summaryListCacheEntriesInputSchema,
   summaryRebuildProjectIndexInputSchema,
   taskPromptPresetSchema
 } from "./schemas";
 import type { ProofreadIssue } from "./proofread";
 import type { WritingContextPlanMetadata } from "./ai-candidate-metadata";
+import type { ChapterAiSummaryChunkPayload, ChapterAiSummaryPayload, SummaryJobStatus, SummaryStatus } from "./summary-index";
 
 export type TaskType = "polish" | "expand" | "proofread" | "continue";
 export type PromptPresetTaskType = "polish" | "expand" | "continue";
@@ -320,7 +325,48 @@ export type ExportTxtResult = {
 };
 export type SummaryIndexStatusInput = z.input<typeof summaryIndexStatusInputSchema>;
 export type SummaryRebuildProjectIndexInput = z.input<typeof summaryRebuildProjectIndexInputSchema>;
+export type SummaryCancelCurrentJobInput = z.input<typeof summaryCancelCurrentJobInputSchema>;
+export type SummaryListCacheEntriesInput = z.input<typeof summaryListCacheEntriesInputSchema>;
+export type SummaryGetChapterCacheInput = z.input<typeof summaryGetChapterCacheInputSchema>;
+export type SummaryClearAndRetryChapterCacheInput = z.input<typeof summaryClearAndRetryChapterCacheInputSchema>;
 export type SummaryIndexPausedReason = "ai_not_configured" | "foreground_ai_active" | null;
+export type SummaryChapterCacheState = SummaryStatus | "missing" | "queued" | "running" | "cancelled";
+export type SummaryChapterCacheEntry = {
+  readonly chapterId: string;
+  readonly chapterTitle: string;
+  readonly chapterOrder: number;
+  readonly wordCount: number;
+  readonly cacheState: SummaryChapterCacheState;
+  readonly summaryShort: string | null;
+  readonly summaryUpdatedAt: string | null;
+  readonly contentHash: string | null;
+  readonly jobStatus: SummaryJobStatus | null;
+  readonly jobError: string | null;
+  readonly nextRunAt: string | null;
+};
+export type SummaryChapterCacheDetail = SummaryChapterCacheEntry & {
+  readonly summary: {
+    readonly summaryShort: string;
+    readonly summaryLong: string;
+    readonly structured: ChapterAiSummaryPayload;
+    readonly tokenCount: number;
+    readonly status: SummaryStatus;
+    readonly error: string | null;
+    readonly updatedAt: string;
+  } | null;
+  readonly chunks: readonly {
+    readonly chunkIndex: number;
+    readonly chunkCount: number;
+    readonly textStart: number;
+    readonly textEnd: number;
+    readonly summaryShort: string;
+    readonly structured: ChapterAiSummaryChunkPayload;
+    readonly tokenCount: number;
+    readonly status: Exclude<SummaryStatus, "skipped_too_short">;
+    readonly error: string | null;
+    readonly updatedAt: string;
+  }[];
+};
 export type SummaryIndexStatus = {
   readonly projectId: string;
   readonly totalChapterCount: number;
@@ -329,8 +375,11 @@ export type SummaryIndexStatus = {
   readonly missingChapterCount: number;
   readonly skippedTooShortChapterCount: number;
   readonly failedJobCount: number;
+  readonly cancelledJobCount: number;
   readonly queuedJobCount: number;
   readonly runningJobLabel: string | null;
+  readonly nextRetryAt: string | null;
+  readonly nextRetryJobLabel: string | null;
   readonly pausedReason: SummaryIndexPausedReason;
   readonly updatedAt: string;
 };
@@ -392,7 +441,11 @@ export const ipcChannels = {
   },
   summary: {
     getIndexStatus: "novelTool:summary:getIndexStatus",
-    rebuildProjectIndex: "novelTool:summary:rebuildProjectIndex"
+    rebuildProjectIndex: "novelTool:summary:rebuildProjectIndex",
+    cancelCurrentJob: "novelTool:summary:cancelCurrentJob",
+    listCacheEntries: "novelTool:summary:listCacheEntries",
+    getChapterCache: "novelTool:summary:getChapterCache",
+    clearAndRetryChapterCache: "novelTool:summary:clearAndRetryChapterCache"
   },
   scratch: {
     list: "novelTool:scratch:list",

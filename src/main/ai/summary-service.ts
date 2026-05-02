@@ -11,15 +11,22 @@ import { createId } from "../shared/ids";
 import {
   computeChapterContentHash,
   computeSourceHash,
+  getArcSummaryText,
+  getBookSummaryLongText,
+  getBookSummaryShortText,
+  getChapterSummaryLongText,
+  getChapterSummaryShortText,
   type ArcAiSummaryPayload,
   type BookAiSummaryPayload,
+  type BookSummaryCoverage,
+  type ChapterAiSummaryChunkPayload,
   type ChapterAiSummaryPayload,
   type SummaryJobType
 } from "../shared/summary-index";
 import { countWritingUnits } from "../shared/text";
-import type { ChapterContent, SummaryIndexPausedReason, SummaryIndexStatus } from "../shared/types";
+import type { ChapterContent, SummaryChapterCacheDetail, SummaryChapterCacheEntry, SummaryIndexPausedReason, SummaryIndexStatus } from "../shared/types";
 import { estimateTextTokens } from "./token-estimator";
-import type { ArcIndexSummaryInput, BookIndexSummaryInput, ChapterIndexSummaryInput } from "./summary-prompts";
+import type { ArcIndexSummaryInput, BookIndexSummaryInput, ChapterChunkIndexSummaryInput, ChapterChunkMergeSummaryInput, ChapterIndexSummaryInput } from "./summary-prompts";
 
 export const MIN_AUTO_SUMMARY_UNITS = 500;
 export const MIN_MANUAL_SUMMARY_UNITS = 80;
@@ -27,6 +34,9 @@ export const ACTIVE_CHAPTER_IDLE_MS = 5 * 60 * 1000;
 export const MIN_HIGH_PRIORITY_DELTA_UNITS = 500;
 export const MIN_NORMAL_PRIORITY_DELTA_UNITS = 100;
 export const AUTO_ARC_CHAPTER_COUNT = 20;
+export const CHAPTER_INDEX_DIRECT_MAX_UNITS = 6000;
+export const CHAPTER_INDEX_CHUNK_TARGET_UNITS = 3500;
+export const CHAPTER_INDEX_CHUNK_OVERLAP_UNITS = 120;
 
 export class SummarySourceChangedError extends Error {
   constructor(message: string) {
@@ -35,10 +45,18 @@ export class SummarySourceChangedError extends Error {
   }
 }
 
-export type ChapterSummaryQueueTrigger = "auto_idle" | "chapter_inactive" | "import" | "manual_rebuild";
+export type ChapterSummaryQueueTrigger = "auto_idle" | "chapter_inactive" | "import" | "manual_continue" | "manual_rebuild";
 
 export type SummaryIndexGenerator = {
   readonly summarizeChapterForIndex: (input: ChapterIndexSummaryInput, options?: { readonly signal?: AbortSignal }) => Promise<ChapterAiSummaryPayload>;
+  readonly summarizeChapterChunkForIndex?: (
+    input: ChapterChunkIndexSummaryInput,
+    options?: { readonly signal?: AbortSignal }
+  ) => Promise<ChapterAiSummaryChunkPayload>;
+  readonly mergeChapterChunksForIndex?: (
+    input: ChapterChunkMergeSummaryInput,
+    options?: { readonly signal?: AbortSignal }
+  ) => Promise<ChapterAiSummaryPayload>;
   readonly summarizeArcForIndex?: (input: ArcIndexSummaryInput, options?: { readonly signal?: AbortSignal }) => Promise<ArcAiSummaryPayload>;
   readonly summarizeBookForIndex?: (input: BookIndexSummaryInput, options?: { readonly signal?: AbortSignal }) => Promise<BookAiSummaryPayload>;
 };
@@ -58,6 +76,18 @@ type SummaryIndexStatusOptions = {
   readonly pausedReason?: SummaryIndexPausedReason;
 };
 
+type SummaryRebuildProjectIndexOptions = SummaryIndexStatusOptions & {
+  readonly force?: boolean;
+};
+
+export type ChapterSummaryIndexChunk = {
+  readonly chunkIndex: number;
+  readonly chunkCount: number;
+  readonly text: string;
+  readonly textStart: number;
+  readonly textEnd: number;
+};
+
 function keyFor(projectId: string, chapterId: string): string {
   return `${projectId}:${chapterId}`;
 }
@@ -67,23 +97,129 @@ function parseTime(value: string): number {
   return Number.isFinite(timestamp) ? timestamp : 0;
 }
 
-function skippedTooShortPayload(): ChapterAiSummaryPayload {
+function skippedTooShortPayload(content: ChapterContent): ChapterAiSummaryPayload {
   return {
-    oneLine: "章节内容过短，未建立摘要。",
-    synopsis: "章节内容过短，未建立摘要。",
-    keyEvents: [],
-    characterMentions: [],
-    relationshipHints: [],
-    timeAndPlace: [],
-    foreshadowingHints: [],
-    unresolvedQuestions: [],
-    emotionalArc: "内容过短，未分析。",
-    importantQuotes: []
+    章节信息: {
+      章节序号: content.sortOrder + 1,
+      章节标题: content.title,
+      正文覆盖: "不完整",
+      缓存类型: "章节缓存",
+      缓存版本: "二",
+      语言: "简体中文"
+    },
+    缓存质量: {
+      覆盖完整度: "不完整",
+      信息密度: "低",
+      需要回读原文: "是",
+      缺失说明: ["章节内容过短，未建立完整事实索引"]
+    },
+    一句话摘要: "章节内容过短，暂不建立完整事实索引。",
+    短摘要: "章节内容过短，当前只记录跳过状态，等待正文成形后再建立章节缓存。",
+    详细梗概: "章节内容过短，当前只记录跳过状态，不消耗模型额度建立完整事实索引。等作者继续写到足够长度后，系统会在空闲时重新进入摘要队列。",
+    本章功能: {
+      章节类型: "未明确",
+      剧情功能: "未明确",
+      情绪功能: "未明确",
+      结构作用: "未明确",
+      对后文的作用: "未明确"
+    },
+    场景列表: [
+      {
+        场景序号: 1,
+        场景标题: "内容过短",
+        时间: "未明确",
+        地点: "未明确",
+        出场人物: [],
+        场景目标: "未明确",
+        冲突或阻力: "未明确",
+        关键事件: ["章节内容过短，暂未提取事件"],
+        场景结果: "未明确",
+        情绪变化: "未明确",
+        承接关系: "未明确",
+        证据短句: []
+      }
+    ],
+    关键事件: [
+      {
+        事件: "章节内容过短，暂未建立关键事件索引",
+        涉及人物: [],
+        时间地点: "未明确",
+        事件原因: "未明确",
+        事件结果: "未明确",
+        后续影响: "需要正文成形后重新分析",
+        证据短句: []
+      }
+    ],
+    人物状态: [
+      {
+        人物: "未明确",
+        本章出场状态: "未明确",
+        本章结束状态: "未明确",
+        身体状态: "未明确",
+        情绪状态: "未明确",
+        行动: [],
+        动机: "未明确",
+        目标: "未明确",
+        阻力: "未明确",
+        位置变化: "未明确",
+        新获得信息: [],
+        仍不知道的信息: [],
+        误解或错误判断: [],
+        与他人关系变化: [],
+        需要后文承接: "否",
+        证据短句: []
+      }
+    ],
+    人物认知边界: [],
+    关系动态: [],
+    时间与地点: {
+      本章时间: "未明确",
+      时间跨度: "未明确",
+      主要地点: [],
+      地点移动: [],
+      明确时间锚点: [],
+      相对时间锚点: [],
+      可能的时间线风险: [],
+      证据短句: []
+    },
+    空间与行动逻辑: [],
+    道具状态: [],
+    设定与规则: [],
+    限制与否定事实: [],
+    伏笔与线索: [],
+    因果链: [],
+    可核对事实: [
+      {
+        事实编号: "事实-跳过-1",
+        事实类型: "限制事实",
+        主体: "章节缓存",
+        属性: "建立状态",
+        取值: "内容过短，暂未建立完整索引",
+        时间范围: "当前版本",
+        地点: "未明确",
+        确定性: "确定",
+        后文核对意义: "正文成形后需要重新建立章节缓存",
+        证据短句: []
+      }
+    ],
+    连续性风险: [],
+    未解决问题: [],
+    文风与叙事: {
+      叙事视角: "未明确",
+      主要语气: "未明确",
+      节奏特点: "未明确",
+      对白特点: "未明确",
+      描写侧重: "未明确",
+      续写时应保持: []
+    },
+    不可丢失信息: ["章节内容过短，等待正文成形后重新建立事实索引"],
+    适合回答的问题: ["这个章节为什么没有建立摘要缓存"],
+    不确定项: ["正文信息不足"]
   };
 }
 
 function priorityFor(trigger: ChapterSummaryQueueTrigger, changedWritingUnits: number | null): number {
-  if (trigger === "manual_rebuild") {
+  if (trigger === "manual_rebuild" || trigger === "manual_continue") {
     return 10;
   }
   if (trigger === "import") {
@@ -99,8 +235,144 @@ function priorityFor(trigger: ChapterSummaryQueueTrigger, changedWritingUnits: n
   return 1;
 }
 
+function isManualSummaryTrigger(trigger: ChapterSummaryQueueTrigger): boolean {
+  return trigger === "manual_rebuild" || trigger === "manual_continue";
+}
+
 function formatAutoArcKey(chapterFrom: number, chapterTo: number): string {
   return `auto:${String(chapterFrom).padStart(3, "0")}-${String(chapterTo).padStart(3, "0")}`;
+}
+
+function isReadyChapterSummary(summary: ChapterAiSummaryRecord, sourceHash: string): boolean {
+  return summary.status === "ready" && summary.contentHash === sourceHash;
+}
+
+function formatChapterCoverageLabel(chapterOrder: number, title: string): string {
+  if (title.startsWith(`第${chapterOrder}章`)) {
+    return title;
+  }
+  return `第${chapterOrder}章 ${title}`;
+}
+
+function formatArcCoverageLabel(chapterFrom: number, chapterTo: number): string {
+  return chapterFrom === chapterTo ? `第${chapterFrom}章` : `第${chapterFrom}-${chapterTo}章`;
+}
+
+function trimBounds(text: string, start: number, end: number): { readonly start: number; readonly end: number } | null {
+  let trimmedStart = start;
+  let trimmedEnd = end;
+  while (trimmedStart < trimmedEnd && /\s/u.test(text[trimmedStart] ?? "")) {
+    trimmedStart += 1;
+  }
+  while (trimmedEnd > trimmedStart && /\s/u.test(text[trimmedEnd - 1] ?? "")) {
+    trimmedEnd -= 1;
+  }
+  return trimmedStart < trimmedEnd ? { start: trimmedStart, end: trimmedEnd } : null;
+}
+
+function findForwardWritingUnitOffset(text: string, start: number, end: number, targetUnits: number): number {
+  let offset = start;
+  let units = 0;
+  for (const char of text.slice(start, end)) {
+    const nextOffset = offset + char.length;
+    const nextUnits = units + countWritingUnits(char);
+    if (nextUnits > targetUnits && offset > start) {
+      break;
+    }
+    units = nextUnits;
+    offset = nextOffset;
+  }
+  return offset > start ? offset : end;
+}
+
+function findBackwardWritingUnitOffset(text: string, start: number, end: number, targetUnits: number): number {
+  let offset = end;
+  let units = 0;
+  while (offset > start && units < targetUnits) {
+    const previous = offset - 1;
+    const char = text.slice(previous, offset);
+    units += countWritingUnits(char);
+    offset = previous;
+  }
+  return offset;
+}
+
+function splitParagraphPieces(plainText: string): Array<{ readonly start: number; readonly end: number; readonly units: number }> {
+  const pieces: Array<{ readonly start: number; readonly end: number; readonly units: number }> = [];
+  const paragraphBreakPattern = /\n{2,}/g;
+  let start = 0;
+  let match: RegExpExecArray | null;
+  const addSegment = (rawStart: number, rawEnd: number) => {
+    const bounds = trimBounds(plainText, rawStart, rawEnd);
+    if (!bounds) {
+      return;
+    }
+    const units = countWritingUnits(plainText.slice(bounds.start, bounds.end));
+    if (units <= CHAPTER_INDEX_CHUNK_TARGET_UNITS) {
+      pieces.push({ ...bounds, units });
+      return;
+    }
+    let splitStart = bounds.start;
+    while (splitStart < bounds.end) {
+      const splitEnd = findForwardWritingUnitOffset(plainText, splitStart, bounds.end, CHAPTER_INDEX_CHUNK_TARGET_UNITS);
+      const splitBounds = trimBounds(plainText, splitStart, splitEnd);
+      if (splitBounds) {
+        pieces.push({
+          ...splitBounds,
+          units: countWritingUnits(plainText.slice(splitBounds.start, splitBounds.end))
+        });
+      }
+      if (splitEnd <= splitStart) {
+        break;
+      }
+      splitStart = splitEnd;
+    }
+  };
+
+  while ((match = paragraphBreakPattern.exec(plainText))) {
+    addSegment(start, match.index);
+    start = match.index + match[0].length;
+  }
+  addSegment(start, plainText.length);
+  return pieces;
+}
+
+export function splitChapterForSummaryIndex(plainText: string): ChapterSummaryIndexChunk[] {
+  const pieces = splitParagraphPieces(plainText);
+  if (pieces.length === 0) {
+    return [];
+  }
+
+  const ranges: Array<{ readonly start: number; readonly end: number; readonly units: number }> = [];
+  let currentStart = pieces[0].start;
+  let currentEnd = pieces[0].end;
+  let currentUnits = 0;
+
+  for (const piece of pieces) {
+    if (currentUnits > 0 && currentUnits + piece.units > CHAPTER_INDEX_CHUNK_TARGET_UNITS) {
+      ranges.push({ start: currentStart, end: currentEnd, units: currentUnits });
+      currentStart = piece.start;
+      currentEnd = piece.end;
+      currentUnits = piece.units;
+      continue;
+    }
+    currentEnd = piece.end;
+    currentUnits += piece.units;
+  }
+  ranges.push({ start: currentStart, end: currentEnd, units: currentUnits });
+
+  return ranges.map((range, index) => {
+    const textStart =
+      index === 0 ? range.start : findBackwardWritingUnitOffset(plainText, ranges[index - 1]?.start ?? 0, range.start, CHAPTER_INDEX_CHUNK_OVERLAP_UNITS);
+    const bounds = trimBounds(plainText, textStart, range.end) ?? { start: textStart, end: range.end };
+    return {
+      chunkIndex: index,
+      chunkCount: ranges.length,
+      text: plainText.slice(bounds.start, bounds.end),
+      textStart: bounds.start,
+      textEnd: bounds.end
+    };
+  });
 }
 
 export class SummaryService implements SummaryIndexInvalidator {
@@ -147,18 +419,18 @@ export class SummaryService implements SummaryIndexInvalidator {
 
     const writingUnits = countWritingUnits(content.plainText);
     const sourceHash = computeChapterContentHash(content.plainText);
-    if (input.trigger === "manual_rebuild" && writingUnits < MIN_MANUAL_SUMMARY_UNITS) {
+    if (isManualSummaryTrigger(input.trigger) && writingUnits < MIN_MANUAL_SUMMARY_UNITS) {
       this.markSkippedTooShort(content, sourceHash, input.now);
       return null;
     }
-    if (input.trigger !== "manual_rebuild" && writingUnits < MIN_AUTO_SUMMARY_UNITS) {
+    if (!isManualSummaryTrigger(input.trigger) && writingUnits < MIN_AUTO_SUMMARY_UNITS) {
       return null;
     }
     if (input.trigger === "auto_idle" && !this.isIdle(input.projectId, input.chapterId, input.now)) {
       return null;
     }
     const existingSummary = this.summaryRepo.getChapterSummary(input.projectId, input.chapterId);
-    if (input.trigger !== "manual_rebuild" && existingSummary?.contentHash === sourceHash && existingSummary.status === "ready") {
+    if (input.trigger !== "manual_rebuild" && existingSummary && isReadyChapterSummary(existingSummary, sourceHash)) {
       return null;
     }
 
@@ -234,6 +506,10 @@ export class SummaryService implements SummaryIndexInvalidator {
 
     const jobs = this.summaryRepo.listSummaryJobs(projectId);
     const runningJob = jobs.find((job) => job.status === "running") ?? null;
+    const nextRetryJob =
+      jobs
+        .filter((job) => job.status === "queued" && job.nextRunAt && job.nextRunAt > now)
+        .sort((left, right) => String(left.nextRunAt).localeCompare(String(right.nextRunAt)))[0] ?? null;
 
     return {
       projectId,
@@ -243,23 +519,131 @@ export class SummaryService implements SummaryIndexInvalidator {
       missingChapterCount,
       skippedTooShortChapterCount,
       failedJobCount: jobs.filter((job) => job.status === "failed").length,
+      cancelledJobCount: jobs.filter((job) => job.status === "cancelled").length,
       queuedJobCount: jobs.filter((job) => job.status === "queued").length,
       runningJobLabel: runningJob ? this.formatRunningJobLabel(projectId, runningJob) : null,
+      nextRetryAt: nextRetryJob?.nextRunAt ?? null,
+      nextRetryJobLabel: nextRetryJob ? this.formatPendingRetryJobLabel(projectId, nextRetryJob) : null,
       pausedReason: options.pausedReason ?? null,
       updatedAt: now
     };
   }
 
-  rebuildProjectIndex(projectId: string, now: string, options: SummaryIndexStatusOptions = {}): SummaryIndexStatus {
+  listChapterCacheEntries(projectId: string, now: string): SummaryChapterCacheEntry[] {
+    const summaries = new Map(this.summaryRepo.listChapterSummaries(projectId).map((summary) => [summary.chapterId, summary]));
+    const jobs = this.currentChapterJobs(projectId);
+    return this.chapterRepo.listByProject(projectId).map((chapter) => {
+      const summary = summaries.get(chapter.id) ?? null;
+      const job = jobs.get(chapter.id) ?? null;
+      return {
+        chapterId: chapter.id,
+        chapterTitle: chapter.title,
+        chapterOrder: chapter.sortOrder + 1,
+        wordCount: chapter.wordCount,
+        cacheState: this.deriveChapterCacheState(summary, job),
+        summaryShort: summary?.summaryShort ?? null,
+        summaryUpdatedAt: summary?.updatedAt ?? null,
+        contentHash: summary?.contentHash ?? null,
+        jobStatus: job?.status ?? null,
+        jobError: job?.error ?? null,
+        nextRunAt: job?.nextRunAt ?? null
+      } satisfies SummaryChapterCacheEntry;
+    });
+  }
+
+  getChapterCacheDetail(projectId: string, chapterId: string): SummaryChapterCacheDetail {
+    const entry = this.listChapterCacheEntries(projectId, new Date().toISOString()).find((item) => item.chapterId === chapterId);
+    if (!entry) {
+      throw new Error("找不到章节索引缓存。");
+    }
+    const summary = this.summaryRepo.getChapterSummary(projectId, chapterId);
+    const chunks = summary ? this.summaryRepo.listChapterSummaryChunks(projectId, chapterId, summary.contentHash) : [];
+    return {
+      ...entry,
+      summary: summary
+        ? {
+            summaryShort: summary.summaryShort,
+            summaryLong: summary.summaryLong,
+            structured: summary.structured,
+            tokenCount: summary.tokenCount,
+            status: summary.status,
+            error: summary.error,
+            updatedAt: summary.updatedAt
+          }
+        : null,
+      chunks: chunks.map((chunk) => ({
+        chunkIndex: chunk.chunkIndex,
+        chunkCount: chunk.chunkCount,
+        textStart: chunk.textStart,
+        textEnd: chunk.textEnd,
+        summaryShort: chunk.summaryShort,
+        structured: chunk.structured,
+        tokenCount: chunk.tokenCount,
+        status: chunk.status,
+        error: chunk.error,
+        updatedAt: chunk.updatedAt
+      }))
+    };
+  }
+
+  clearAndRetryChapterCache(projectId: string, chapterId: string, now: string, options: SummaryIndexStatusOptions = {}): SummaryIndexStatus {
+    if (this.summaryRepo.hasRunningSummaryJob(projectId)) {
+      throw new Error("后台索引正在运行。请先停止后台索引，再清除并重试章节缓存。");
+    }
+    const content = this.chapterRepo.getContent(chapterId);
+    if (!content || content.projectId !== projectId) {
+      throw new Error("找不到需要重试缓存的章节。");
+    }
+
+    this.summaryRepo.deleteChapterSummary(projectId, chapterId);
+    this.summaryRepo.deleteDerivedSummaries(projectId);
+    this.maybeEnqueueChapterSummary({
+      projectId,
+      chapterId,
+      trigger: "manual_continue",
+      now
+    });
+    return this.getIndexStatus(projectId, now, options);
+  }
+
+  rebuildProjectIndex(projectId: string, now: string, options: SummaryRebuildProjectIndexOptions = {}): SummaryIndexStatus {
+    const trigger: ChapterSummaryQueueTrigger = options.force ? "manual_rebuild" : "manual_continue";
     for (const chapter of this.chapterRepo.listByProject(projectId)) {
       this.maybeEnqueueChapterSummary({
         projectId,
         chapterId: chapter.id,
-        trigger: "manual_rebuild",
+        trigger,
         now
       });
     }
     return this.getIndexStatus(projectId, now, options);
+  }
+
+  private currentChapterJobs(projectId: string): Map<string, SummaryJobRecord> {
+    const jobs = new Map<string, SummaryJobRecord>();
+    for (const job of this.summaryRepo.listSummaryJobs(projectId)) {
+      if (job.jobType !== "chapter_summary" || !job.targetId || jobs.has(job.targetId)) {
+        continue;
+      }
+      if (job.status === "completed" || job.status === "skipped") {
+        continue;
+      }
+      jobs.set(job.targetId, job);
+    }
+    return jobs;
+  }
+
+  private deriveChapterCacheState(summary: ChapterAiSummaryRecord | null, job: SummaryJobRecord | null): SummaryChapterCacheEntry["cacheState"] {
+    if (job?.status === "running" || job?.status === "queued") {
+      return job.status;
+    }
+    if (job?.status === "failed" && summary?.status !== "ready") {
+      return "failed";
+    }
+    if (job?.status === "cancelled" && !summary) {
+      return "cancelled";
+    }
+    return summary?.status ?? "missing";
   }
 
   async summarizeChapter(projectId: string, chapterId: string, sourceHash: string, now: string, options: { readonly signal?: AbortSignal } = {}): Promise<ChapterAiSummaryRecord> {
@@ -273,6 +657,10 @@ export class SummaryService implements SummaryIndexInvalidator {
     if (currentHash !== sourceHash) {
       this.requeueChapterSummary(projectId, chapterId, currentHash, now);
       throw new SummarySourceChangedError("章节内容已变化，已重新排队最新摘要任务。");
+    }
+
+    if (countWritingUnits(content.plainText) > CHAPTER_INDEX_DIRECT_MAX_UNITS) {
+      return this.summarizeLongChapterWithChunks(projectId, chapterId, sourceHash, now, content, generator, options);
     }
 
     const structured = await generator.summarizeChapterForIndex(
@@ -299,8 +687,142 @@ export class SummaryService implements SummaryIndexInvalidator {
       chapterTitle: latestContent.title,
       chapterOrder: latestContent.sortOrder + 1,
       contentHash: sourceHash,
-      summaryShort: structured.oneLine,
-      summaryLong: structured.synopsis,
+      summaryShort: getChapterSummaryShortText(structured),
+      summaryLong: getChapterSummaryLongText(structured),
+      structured,
+      tokenCount: estimateTextTokens(JSON.stringify(structured)),
+      status: "ready",
+      error: null,
+      createdAt: now,
+      updatedAt: now
+    });
+    this.enqueueArcForChapterIfReady(projectId, summary.chapterOrder, now);
+    return summary;
+  }
+
+  private async summarizeLongChapterWithChunks(
+    projectId: string,
+    chapterId: string,
+    sourceHash: string,
+    now: string,
+    content: ChapterContent,
+    generator: SummaryIndexGenerator,
+    options: { readonly signal?: AbortSignal }
+  ): Promise<ChapterAiSummaryRecord> {
+    if (!generator.summarizeChapterChunkForIndex || !generator.mergeChapterChunksForIndex) {
+      throw new Error("AI 章节片段摘要生成器未配置。");
+    }
+
+    const chunks = splitChapterForSummaryIndex(content.plainText);
+    if (chunks.length <= 1) {
+      const structured = await generator.summarizeChapterForIndex(
+        {
+          projectId,
+          chapterId,
+          title: content.title,
+          ordinal: content.sortOrder + 1,
+          plainText: content.plainText
+        },
+        options
+      );
+      return this.persistChapterSummary(projectId, chapterId, sourceHash, now, structured);
+    }
+
+    const existingReadyChunks = new Map(
+      this.summaryRepo
+        .listChapterSummaryChunks(projectId, chapterId, sourceHash)
+        .filter((chunk) => chunk.status === "ready" && chunk.chunkCount === chunks.length)
+        .map((chunk) => [chunk.chunkIndex, chunk])
+    );
+
+    for (const chunk of chunks) {
+      if (existingReadyChunks.has(chunk.chunkIndex)) {
+        continue;
+      }
+
+      const structured = await generator.summarizeChapterChunkForIndex(
+        {
+          projectId,
+          chapterId,
+          title: content.title,
+          ordinal: content.sortOrder + 1,
+          chunkIndex: chunk.chunkIndex,
+          chunkCount: chunk.chunkCount,
+          textStart: chunk.textStart,
+          textEnd: chunk.textEnd,
+          plainText: chunk.text
+        },
+        options
+      );
+      this.assertChapterSourceUnchanged(projectId, chapterId, sourceHash, now);
+      const savedChunk = this.summaryRepo.upsertChapterSummaryChunk({
+        id: createId("summary_chunk"),
+        projectId,
+        chapterId,
+        chunkIndex: chunk.chunkIndex,
+        chunkCount: chunk.chunkCount,
+        contentHash: sourceHash,
+        textStart: chunk.textStart,
+        textEnd: chunk.textEnd,
+        summaryShort: structured.片段摘要,
+        structured,
+        tokenCount: estimateTextTokens(JSON.stringify(structured)),
+        status: "ready",
+        error: null,
+        createdAt: now,
+        updatedAt: now
+      });
+      existingReadyChunks.set(savedChunk.chunkIndex, savedChunk);
+    }
+
+    const readyChunks = this.summaryRepo.listChapterSummaryChunks(projectId, chapterId, sourceHash).filter((chunk) => chunk.status === "ready");
+    if (readyChunks.length !== chunks.length || readyChunks.some((chunk) => chunk.chunkCount !== chunks.length)) {
+      throw new Error("章节片段摘要尚未全部完成，不能合并为章节缓存。");
+    }
+
+    const structured = await generator.mergeChapterChunksForIndex(
+      {
+        projectId,
+        chapterId,
+        title: content.title,
+        ordinal: content.sortOrder + 1,
+        chunks: readyChunks.map((chunk) => ({
+          chunkIndex: chunk.chunkIndex,
+          textStart: chunk.textStart,
+          textEnd: chunk.textEnd,
+          summaryShort: chunk.summaryShort,
+          structured: chunk.structured
+        }))
+      },
+      options
+    );
+    this.assertChapterSourceUnchanged(projectId, chapterId, sourceHash, now);
+    return this.persistChapterSummary(projectId, chapterId, sourceHash, now, structured);
+  }
+
+  private persistChapterSummary(
+    projectId: string,
+    chapterId: string,
+    sourceHash: string,
+    now: string,
+    structured: ChapterAiSummaryPayload
+  ): ChapterAiSummaryRecord {
+    const latestContent = this.requireChapterContent(projectId, chapterId);
+    const latestHash = computeChapterContentHash(latestContent.plainText);
+    if (latestHash !== sourceHash) {
+      this.requeueChapterSummary(projectId, chapterId, latestHash, now);
+      throw new SummarySourceChangedError("章节内容已变化，已重新排队最新摘要任务。");
+    }
+
+    const summary = this.summaryRepo.upsertChapterSummary({
+      id: createId("summary"),
+      projectId,
+      chapterId,
+      chapterTitle: latestContent.title,
+      chapterOrder: latestContent.sortOrder + 1,
+      contentHash: sourceHash,
+      summaryShort: getChapterSummaryShortText(structured),
+      summaryLong: getChapterSummaryLongText(structured),
       structured,
       tokenCount: estimateTextTokens(JSON.stringify(structured)),
       status: "ready",
@@ -362,7 +884,7 @@ export class SummaryService implements SummaryIndexInvalidator {
       chapterFrom,
       chapterTo,
       sourceHash,
-      summary: structured.synopsis,
+      summary: getArcSummaryText(structured),
       structured,
       status: "ready",
       error: null,
@@ -409,17 +931,27 @@ export class SummaryService implements SummaryIndexInvalidator {
       this.requeueBookSummary(projectId, latestSourceHash, now);
       throw new SummarySourceChangedError("全书摘要来源已变化，已重新排队最新摘要任务。");
     }
-    const structured = {
+    const structured: BookAiSummaryPayload = {
       ...generated,
-      coverage: latestCoverage
+      全书信息: {
+        ...generated.全书信息,
+        覆盖阶段: latestReadyArcs.map((summary) => formatArcCoverageLabel(summary.chapterFrom, summary.chapterTo)),
+        覆盖章节范围: latestCoverage.totalChapterCount > 0 ? `第1-${latestCoverage.totalChapterCount}章` : "无章节",
+        总章节数: latestCoverage.totalChapterCount,
+        已索引章节数: latestCoverage.indexedChapterCount,
+        过期章节: [...latestCoverage.staleChapterIds],
+        缺失章节: [...latestCoverage.missingChapterIds],
+        过短跳过章节: [...latestCoverage.skippedTooShortChapterIds],
+        覆盖限制: [...generated.全书信息.覆盖限制]
+      }
     };
 
     return this.summaryRepo.upsertBookSummary({
       id: createId("book_summary"),
       projectId,
       sourceHash,
-      summaryShort: structured.synopsis,
-      summaryLong: structured.synopsis,
+      summaryShort: getBookSummaryShortText(structured),
+      summaryLong: getBookSummaryLongText(structured),
       structured,
       status: "ready",
       error: null,
@@ -444,6 +976,15 @@ export class SummaryService implements SummaryIndexInvalidator {
     return content;
   }
 
+  private assertChapterSourceUnchanged(projectId: string, chapterId: string, expectedHash: string, now: string): void {
+    const latestContent = this.requireChapterContent(projectId, chapterId);
+    const latestHash = computeChapterContentHash(latestContent.plainText);
+    if (latestHash !== expectedHash) {
+      this.requeueChapterSummary(projectId, chapterId, latestHash, now);
+      throw new SummarySourceChangedError("章节内容已变化，已重新排队最新摘要任务。");
+    }
+  }
+
   private requeueChapterSummary(projectId: string, chapterId: string, sourceHash: string, now: string): SummaryJobRecord {
     return this.summaryRepo.enqueueSummaryJob({
       projectId,
@@ -466,7 +1007,7 @@ export class SummaryService implements SummaryIndexInvalidator {
     const summaries = new Map(this.summaryRepo.listChapterSummaries(projectId).map((summary) => [summary.chapterId, summary]));
     const blocking = chapters.filter((chapter) => {
       const summary = summaries.get(chapter.id);
-      return !summary || (summary.status !== "ready" && summary.status !== "skipped_too_short");
+      return !summary || (summary.status !== "skipped_too_short" && summary.status !== "ready");
     });
     if (blocking.length > 0) {
       throw new Error("阶段摘要等待章节摘要完成。");
@@ -521,7 +1062,7 @@ export class SummaryService implements SummaryIndexInvalidator {
     });
   }
 
-  private buildBookCoverage(projectId: string): BookAiSummaryPayload["coverage"] {
+  private buildBookCoverage(projectId: string): BookSummaryCoverage {
     const chapters = this.chapterRepo.listByProject(projectId);
     const summaries = new Map(this.summaryRepo.listChapterSummaries(projectId).map((summary) => [summary.chapterId, summary]));
     const staleChapterIds: string[] = [];
@@ -532,7 +1073,7 @@ export class SummaryService implements SummaryIndexInvalidator {
     for (const chapter of chapters) {
       const summary = summaries.get(chapter.id);
       if (!summary) {
-        missingChapterIds.push(chapter.id);
+        missingChapterIds.push(formatChapterCoverageLabel(chapter.sortOrder + 1, chapter.title));
         continue;
       }
       if (summary.status === "ready") {
@@ -540,10 +1081,10 @@ export class SummaryService implements SummaryIndexInvalidator {
         continue;
       }
       if (summary.status === "skipped_too_short") {
-        skippedTooShortChapterIds.push(chapter.id);
+        skippedTooShortChapterIds.push(formatChapterCoverageLabel(chapter.sortOrder + 1, chapter.title));
         continue;
       }
-      staleChapterIds.push(chapter.id);
+      staleChapterIds.push(formatChapterCoverageLabel(chapter.sortOrder + 1, chapter.title));
     }
 
     return {
@@ -555,7 +1096,7 @@ export class SummaryService implements SummaryIndexInvalidator {
     };
   }
 
-  private computeBookSourceHash(arcSourceHashes: readonly string[], coverage: BookAiSummaryPayload["coverage"]): string {
+  private computeBookSourceHash(arcSourceHashes: readonly string[], coverage: BookSummaryCoverage): string {
     return computeSourceHash([
       ...arcSourceHashes,
       JSON.stringify({
@@ -617,6 +1158,23 @@ export class SummaryService implements SummaryIndexInvalidator {
     return "正在建立全书索引";
   }
 
+  private formatPendingRetryJobLabel(projectId: string, job: SummaryJobRecord): string {
+    if (job.jobType === "chapter_summary" && job.targetId) {
+      const content = this.chapterRepo.getContent(job.targetId);
+      if (content?.projectId === projectId) {
+        return content.title;
+      }
+      return "章节摘要";
+    }
+    if (job.jobType === "arc_summary") {
+      return "阶段摘要";
+    }
+    if (job.jobType === "book_summary") {
+      return "全书摘要";
+    }
+    return "全书索引";
+  }
+
   private markSkippedTooShort(content: ChapterContent, contentHash: string, now: string): void {
     this.summaryRepo.upsertChapterSummary({
       id: createId("summary"),
@@ -627,7 +1185,7 @@ export class SummaryService implements SummaryIndexInvalidator {
       contentHash,
       summaryShort: "章节内容过短，未建立摘要。",
       summaryLong: "章节内容过短，未建立摘要。",
-      structured: skippedTooShortPayload(),
+      structured: skippedTooShortPayload(content),
       tokenCount: 0,
       status: "skipped_too_short",
       error: null,
