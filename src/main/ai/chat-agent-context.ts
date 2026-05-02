@@ -3,6 +3,7 @@ import { parseChapterOrdinalFromText } from "./chat-reference-parser";
 import { getTokenBudget, type TokenBudget } from "./token-budget";
 import { estimateTextTokens, truncateTextToTokenBudget } from "./token-estimator";
 import type { ChapterRepository } from "../db/repositories/chapter-repo";
+import type { ArcAiSummaryRecord, BookAiSummaryRecord, ChapterAiSummaryRecord, SummaryRepository } from "../db/repositories/summary-repo";
 import type { ChapterContent, ChapterSummary } from "../shared/types";
 
 const CHAT_AGENT_CONTEXT_RESERVE_TOKENS = 500;
@@ -24,6 +25,10 @@ export type ResolvedChatAgentContext = {
   readonly chapters: readonly ChapterContextItem[];
   readonly primaryChapterId: string | null;
   readonly requiresSummaries: boolean;
+};
+
+export type ChatAgentContextOptions = {
+  readonly summaryRepo?: SummaryRepository;
 };
 
 function findChapterSummaryByOrdinal(chapters: readonly ChapterSummary[], ordinal: number): ChapterSummary | null {
@@ -81,6 +86,325 @@ function buildScopeLabel(scope: ChatAgentScope): string {
     case "all_chapters":
       return "全部章节";
   }
+}
+
+function formatList(title: string, items: readonly string[]): string {
+  const cleaned = items.map((item) => item.trim()).filter(Boolean);
+  if (cleaned.length === 0) {
+    return "";
+  }
+  return [`${title}：`, ...cleaned.map((item) => `- ${item}`)].join("\n");
+}
+
+function formatMajorCharacters(items: readonly { readonly name: string; readonly summary: string }[]): string {
+  if (items.length === 0) {
+    return "";
+  }
+  return ["主要人物：", ...items.map((item) => `- ${item.name}：${item.summary}`)].join("\n");
+}
+
+function formatCoverageStatus(coverage: BookAiSummaryRecord["structured"]["coverage"]): string {
+  const warnings: string[] = [];
+  if (coverage.staleChapterIds.length > 0) {
+    warnings.push(`过期 ${coverage.staleChapterIds.length} 章`);
+  }
+  if (coverage.missingChapterIds.length > 0) {
+    warnings.push(`缺失 ${coverage.missingChapterIds.length} 章`);
+  }
+  if (coverage.skippedTooShortChapterIds.length > 0) {
+    warnings.push(`过短跳过 ${coverage.skippedTooShortChapterIds.length} 章`);
+  }
+  return warnings.length > 0 ? warnings.join("，") : "最新";
+}
+
+function getCoverageStaleCount(coverage: BookAiSummaryRecord["structured"]["coverage"]): number {
+  return coverage.staleChapterIds.length + coverage.missingChapterIds.length;
+}
+
+function getCoverageIndexMode(coverage: BookAiSummaryRecord["structured"]["coverage"], hasReadyBookSummary: boolean): ChatAgentContext["indexMode"] {
+  if (!hasReadyBookSummary) {
+    return coverage.indexedChapterCount > 0 ? "hybrid" : "missing";
+  }
+  return getCoverageStaleCount(coverage) > 0 ? "stale" : "summary_cache";
+}
+
+function buildComputedCoverage(chapters: readonly ChapterSummary[], summaries: readonly ChapterAiSummaryRecord[]): BookAiSummaryRecord["structured"]["coverage"] {
+  const byChapterId = new Map(summaries.map((summary) => [summary.chapterId, summary]));
+  const staleChapterIds: string[] = [];
+  const missingChapterIds: string[] = [];
+  const skippedTooShortChapterIds: string[] = [];
+  let indexedChapterCount = 0;
+
+  for (const chapter of chapters) {
+    const summary = byChapterId.get(chapter.id);
+    if (!summary) {
+      missingChapterIds.push(chapter.id);
+      continue;
+    }
+    if (summary.status === "ready") {
+      indexedChapterCount += 1;
+      continue;
+    }
+    if (summary.status === "skipped_too_short") {
+      skippedTooShortChapterIds.push(chapter.id);
+      continue;
+    }
+    staleChapterIds.push(chapter.id);
+  }
+
+  return {
+    totalChapterCount: chapters.length,
+    indexedChapterCount,
+    staleChapterIds,
+    missingChapterIds,
+    skippedTooShortChapterIds
+  };
+}
+
+function canUseRawSmallProjectContext(message: string, chapters: readonly ChapterSummary[], budget: TokenBudget): boolean {
+  const estimatedChapterTokens = chapters.reduce((total, chapter) => {
+    return total + estimateTextTokens(chapter.title) + Math.max(0, chapter.wordCount) + 32;
+  }, 0);
+  const estimated = estimateTextTokens(message) + estimatedChapterTokens + CHAT_AGENT_CONTEXT_RESERVE_TOKENS;
+  return estimated <= budget.maxInputTokens;
+}
+
+function buildBookSummaryIndexText(input: {
+  readonly bookSummary: BookAiSummaryRecord | null;
+  readonly arcSummaries: readonly ArcAiSummaryRecord[];
+  readonly chapterSummaries: readonly ChapterAiSummaryRecord[];
+  readonly chapters: readonly ChapterSummary[];
+  readonly message: string;
+  readonly budget: TokenBudget;
+}): string {
+  const coverage = input.bookSummary?.structured.coverage ?? buildComputedCoverage(input.chapters, input.chapterSummaries);
+  const sections: string[] = [
+    "[全书摘要索引]",
+    `覆盖：${coverage.indexedChapterCount}/${coverage.totalChapterCount} 章`,
+    `状态：${input.bookSummary?.status === "ready" ? formatCoverageStatus(coverage) : "全书摘要尚未生成"}`
+  ];
+
+  if (input.bookSummary?.status === "ready") {
+    const structured = input.bookSummary.structured;
+    sections.push(
+      `短摘要：${input.bookSummary.summaryShort}`,
+      `全书摘要：${input.bookSummary.summaryLong}`,
+      formatList("主线", structured.mainPlot),
+      formatMajorCharacters(structured.majorCharacters),
+      formatList("主要冲突", structured.majorConflicts),
+      formatList("关系变化", structured.relationshipChanges),
+      formatList("伏笔线索", structured.foreshadowingHints),
+      formatList("未解决问题", structured.unresolvedQuestions)
+    );
+  } else {
+    sections.push("全书摘要索引还在建立或尚未建立。回答时必须说明当前只能基于已完成的章节/阶段摘要，不能声称已经阅读全文。");
+  }
+
+  const readyArcs = input.arcSummaries.filter((summary) => summary.status === "ready");
+  if (readyArcs.length > 0) {
+    sections.push(
+      "阶段摘要：",
+      ...readyArcs.map((summary) => `[第${summary.chapterFrom}-${summary.chapterTo}章] ${summary.summary}`)
+    );
+  }
+
+  const readyChapters = input.chapterSummaries.filter((summary) => summary.status === "ready");
+  if (readyChapters.length > 0) {
+    sections.push(
+      "章节索引：",
+      ...readyChapters.map((summary) => `[第${summary.chapterOrder}章 ${summary.chapterTitle}] ${summary.summaryShort}`)
+    );
+  }
+
+  const fullText = sections.filter(Boolean).join("\n");
+  if (!isChatAgentContextTooLarge(input.message, fullText, input.budget)) {
+    return fullText;
+  }
+
+  const compactSections = sections
+    .filter((section) => section !== "章节索引：")
+    .filter((section) => !section.startsWith("[第") || !section.includes("章 "));
+  const compactText = compactSections.filter(Boolean).join("\n");
+  if (!isChatAgentContextTooLarge(input.message, compactText, input.budget)) {
+    return `${compactText}\n章节索引因输入预算限制已省略；需要逐章细节时请指定章节范围。`;
+  }
+
+  const textBudget = Math.max(0, input.budget.maxInputTokens - estimateTextTokens(input.message) - CHAT_AGENT_CONTEXT_RESERVE_TOKENS);
+  return truncateTextToTokenBudget(compactText, textBudget).text;
+}
+
+function resolveSummaryIndexContext(
+  request: ChatContextRequest,
+  chapterRepo: ChapterRepository,
+  summaryRepo: SummaryRepository,
+  budget: TokenBudget
+): ResolvedChatAgentContext | null {
+  const chapters = chapterRepo.listByProject(request.projectId);
+  if (chapters.length === 0) {
+    throw new Error("当前项目没有章节，无法为 AI 对话提供章节上下文。");
+  }
+
+  const bookSummary = summaryRepo.getLatestBookSummary(request.projectId);
+  const chapterSummaries = summaryRepo.listChapterSummaries(request.projectId);
+  const arcSummaries = summaryRepo.listArcSummaries(request.projectId);
+  const hasAnySummary = Boolean(bookSummary) || chapterSummaries.length > 0 || arcSummaries.length > 0;
+  if (!hasAnySummary) {
+    if (canUseRawSmallProjectContext(request.message, chapters, budget)) {
+      const rawChapters = chapters.map((chapter, index) => loadChapterContent(chapterRepo, chapter, index + 1));
+      return {
+        agentContext: {
+          scopeLabel: "全部章节",
+          contextText: buildChapterContextText(rawChapters),
+          sourceChapterIds: rawChapters.map((chapter) => chapter.content.id),
+          mode: "direct",
+          indexMode: "raw_small_project",
+          indexedChapterCount: 0,
+          totalChapterCount: chapters.length,
+          staleChapterCount: 0,
+          skippedTooShortChapterCount: 0
+        },
+        chapters: rawChapters,
+        primaryChapterId: null,
+        requiresSummaries: false
+      };
+    }
+    const contextText = [
+      "[全书摘要索引]",
+      `覆盖：0/${chapters.length} 章`,
+      "状态：全书摘要索引尚未建立。",
+      "当前不能直接读取全书原文来回答全文问题。请等待后台索引完成，或指定单章、章节范围、当前章节或选中文本。"
+    ].join("\n");
+    return {
+      agentContext: {
+        scopeLabel: "全书摘要索引",
+        contextText,
+        sourceChapterIds: chapters.map((chapter) => chapter.id),
+        mode: "summarized",
+        indexMode: "missing",
+        indexedChapterCount: 0,
+        totalChapterCount: chapters.length,
+        staleChapterCount: 0,
+        skippedTooShortChapterCount: 0
+      },
+      chapters: [],
+      primaryChapterId: null,
+      requiresSummaries: false
+    };
+  }
+  const coverage = bookSummary?.structured.coverage ?? buildComputedCoverage(chapters, chapterSummaries);
+  const readyBookSummary = bookSummary?.status === "ready" ? bookSummary : null;
+
+  return {
+    agentContext: {
+      scopeLabel: "全书摘要索引",
+      contextText: buildBookSummaryIndexText({
+        bookSummary: readyBookSummary,
+        arcSummaries,
+        chapterSummaries,
+        chapters,
+        message: request.message,
+        budget
+      }),
+      sourceChapterIds: chapters.map((chapter) => chapter.id),
+      mode: "summarized",
+      indexMode: getCoverageIndexMode(coverage, Boolean(readyBookSummary)),
+      indexedChapterCount: coverage.indexedChapterCount,
+      totalChapterCount: coverage.totalChapterCount,
+      staleChapterCount: getCoverageStaleCount(coverage),
+      skippedTooShortChapterCount: coverage.skippedTooShortChapterIds.length
+    },
+    chapters: [],
+    primaryChapterId: null,
+    requiresSummaries: false
+  };
+}
+
+function resolveChapterRangeSummaryIndexContext(
+  request: ChatContextRequest,
+  scope: Extract<ChatAgentScope, { readonly type: "chapter_range" }>,
+  chapterRepo: ChapterRepository,
+  summaryRepo: SummaryRepository,
+  budget: TokenBudget
+): ResolvedChatAgentContext {
+  const chapters = chapterRepo.listByProject(request.projectId);
+  if (chapters.length === 0) {
+    throw new Error("当前项目没有章节，无法为 AI 对话提供章节上下文。");
+  }
+  if (scope.from > scope.to) {
+    throw new Error(`章节范围无效：第${scope.from}章到第${scope.to}章。`);
+  }
+  if (scope.to > chapters.length) {
+    throw new Error(`找不到第${scope.to}章，当前项目只有 ${chapters.length} 章。`);
+  }
+
+  const rangeChapters = chapters.slice(scope.from - 1, scope.to);
+  const summaryByChapterId = new Map(summaryRepo.listChapterSummaries(request.projectId).map((summary) => [summary.chapterId, summary]));
+  const readySummaries: ChapterAiSummaryRecord[] = [];
+  let staleChapterCount = 0;
+  let skippedTooShortChapterCount = 0;
+  for (const chapter of rangeChapters) {
+    const summary = summaryByChapterId.get(chapter.id);
+    if (summary?.status === "ready") {
+      readySummaries.push(summary);
+      continue;
+    }
+    if (summary?.status === "skipped_too_short") {
+      skippedTooShortChapterCount += 1;
+      continue;
+    }
+    staleChapterCount += 1;
+  }
+  const hasCompleteCachedCoverage = readySummaries.length + skippedTooShortChapterCount === rangeChapters.length && staleChapterCount === 0;
+  const shouldPreferSummaryIndex = hasCompleteCachedCoverage || rangeChapters.length > 3;
+
+  if (!shouldPreferSummaryIndex && canUseRawSmallProjectContext(request.message, rangeChapters, budget)) {
+    const rawChapters = rangeChapters.map((chapter, index) => loadChapterContent(chapterRepo, chapter, scope.from + index));
+    return {
+      agentContext: {
+        scopeLabel: `第${scope.from}-${scope.to}章`,
+        contextText: buildChapterContextText(rawChapters),
+        sourceChapterIds: rawChapters.map((chapter) => chapter.content.id),
+        mode: "direct",
+        indexMode: "raw_small_project",
+        indexedChapterCount: 0,
+        totalChapterCount: rangeChapters.length,
+        staleChapterCount: 0,
+        skippedTooShortChapterCount: 0
+      },
+      chapters: rawChapters,
+      primaryChapterId: null,
+      requiresSummaries: false
+    };
+  }
+
+  const header = [
+    "[章节范围摘要索引]",
+    `范围：第${scope.from}-${scope.to}章`,
+    `覆盖：${readySummaries.length}/${rangeChapters.length} 章`,
+    staleChapterCount > 0 ? `状态：摘要缺失或过期 ${staleChapterCount} 章` : "状态：最新"
+  ];
+  const summaryLines =
+    readySummaries.length > 0
+      ? readySummaries.flatMap((summary) => [`[第${summary.chapterOrder}章 ${summary.chapterTitle}]`, `短摘要：${summary.summaryShort}`, `长摘要：${summary.summaryLong}`])
+      : ["当前范围摘要索引尚未建立。回答时必须说明不能声称已经读取这些章节原文。"];
+  const contextText = [...header, ...summaryLines].join("\n");
+
+  return {
+    agentContext: {
+      scopeLabel: `第${scope.from}-${scope.to}章摘要索引`,
+      contextText,
+      sourceChapterIds: rangeChapters.map((chapter) => chapter.id),
+      mode: "summarized",
+      indexMode: hasCompleteCachedCoverage ? "summary_cache" : readySummaries.length > 0 ? "hybrid" : "missing",
+      indexedChapterCount: readySummaries.length,
+      totalChapterCount: rangeChapters.length,
+      staleChapterCount,
+      skippedTooShortChapterCount
+    },
+    chapters: [],
+    primaryChapterId: null,
+    requiresSummaries: false
+  };
 }
 
 export function isChatAgentContextTooLarge(message: string, contextText: string, budget: TokenBudget = getTokenBudget("chat")): boolean {
@@ -184,7 +508,8 @@ export function resolveChatAgentContext(
   request: ChatContextRequest,
   plan: ChatAgentPlan,
   chapterRepo: ChapterRepository,
-  budget: TokenBudget = getTokenBudget("chat")
+  budget: TokenBudget = getTokenBudget("chat"),
+  options: ChatAgentContextOptions = {}
 ): ResolvedChatAgentContext {
   const scopeLabel = buildScopeLabel(plan.scope);
   if (plan.scope.type === "selection") {
@@ -204,6 +529,17 @@ export function resolveChatAgentContext(
       primaryChapterId: request.chapterId ?? null,
       requiresSummaries: false
     };
+  }
+
+  if (plan.scope.type === "all_chapters" && options.summaryRepo) {
+    const summaryContext = resolveSummaryIndexContext(request, chapterRepo, options.summaryRepo, budget);
+    if (summaryContext) {
+      return summaryContext;
+    }
+  }
+
+  if (plan.scope.type === "chapter_range" && options.summaryRepo) {
+    return resolveChapterRangeSummaryIndexContext(request, plan.scope, chapterRepo, options.summaryRepo, budget);
   }
 
   const chapters = resolveChapterScope(chapterRepo, request.projectId, plan.scope, request.chapterId);

@@ -231,6 +231,94 @@ const migrations: readonly Migration[] = [
         db.exec("ALTER TABLE ai_chat_sessions ADD COLUMN memory_updated_at TEXT;");
       }
     }
+  },
+  {
+    version: 7,
+    name: "summary_index",
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS chapter_ai_summaries (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          chapter_id TEXT NOT NULL,
+          chapter_title TEXT NOT NULL,
+          chapter_order INTEGER NOT NULL,
+          content_hash TEXT NOT NULL,
+          summary_short TEXT NOT NULL,
+          summary_long TEXT NOT NULL,
+          structured_json TEXT NOT NULL,
+          token_count INTEGER NOT NULL DEFAULT 0,
+          status TEXT NOT NULL CHECK (status IN ('ready', 'stale', 'building', 'failed', 'skipped_too_short')),
+          error TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(project_id, chapter_id),
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+          FOREIGN KEY (chapter_id) REFERENCES chapters(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_chapter_ai_summaries_project_order
+          ON chapter_ai_summaries(project_id, chapter_order);
+
+        CREATE TABLE IF NOT EXISTS arc_ai_summaries (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          arc_key TEXT NOT NULL,
+          chapter_from INTEGER NOT NULL,
+          chapter_to INTEGER NOT NULL,
+          source_hash TEXT NOT NULL,
+          summary TEXT NOT NULL,
+          structured_json TEXT NOT NULL,
+          status TEXT NOT NULL CHECK (status IN ('ready', 'stale', 'building', 'failed')),
+          error TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(project_id, arc_key),
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_arc_ai_summaries_project_range
+          ON arc_ai_summaries(project_id, chapter_from, chapter_to);
+
+        CREATE TABLE IF NOT EXISTS book_ai_summaries (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          source_hash TEXT NOT NULL,
+          summary_short TEXT NOT NULL,
+          summary_long TEXT NOT NULL,
+          structured_json TEXT NOT NULL,
+          status TEXT NOT NULL CHECK (status IN ('ready', 'stale', 'building', 'failed')),
+          error TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_book_ai_summaries_project_updated
+          ON book_ai_summaries(project_id, updated_at);
+
+        CREATE TABLE IF NOT EXISTS summary_jobs (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          job_type TEXT NOT NULL CHECK (job_type IN ('chapter_summary', 'arc_summary', 'book_summary', 'rebuild_project_index')),
+          target_id TEXT,
+          source_hash TEXT NOT NULL,
+          status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'completed', 'failed', 'cancelled', 'skipped')),
+          priority INTEGER NOT NULL DEFAULT 0,
+          attempt_count INTEGER NOT NULL DEFAULT 0,
+          next_run_at TEXT,
+          error TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          started_at TEXT,
+          finished_at TEXT,
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_summary_jobs_project_status_priority
+          ON summary_jobs(project_id, status, priority, created_at);
+      `);
+    }
   }
 ];
 

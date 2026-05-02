@@ -1,0 +1,269 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { createDatabase, type SqliteDatabase } from "../../src/main/db/database";
+import { runMigrations } from "../../src/main/db/migrations";
+import { SummaryRepository } from "../../src/main/db/repositories/summary-repo";
+import { computeChapterContentHash, computeSourceHash, type ChapterAiSummaryPayload } from "../../src/main/shared/summary-index";
+
+const tempDirs: string[] = [];
+
+const createdAt = "2026-05-01T00:00:00.000Z";
+const updatedAt = "2026-05-01T00:01:00.000Z";
+
+function createTempDbPath(): string {
+  const dir = mkdtempSync(join(tmpdir(), "novel-tool-summary-repo-"));
+  tempDirs.push(dir);
+  return join(dir, "novel-tool.sqlite3");
+}
+
+function createDb(): SqliteDatabase {
+  const db = createDatabase(createTempDbPath());
+  runMigrations(db);
+  return db;
+}
+
+function seedProjectAndChapter(db: SqliteDatabase): void {
+  db.prepare("INSERT INTO projects (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)").run("project_1", "归途", createdAt, createdAt);
+  db.prepare(
+    `INSERT INTO chapters
+     (id, project_id, title, sort_order, content_json, plain_text, word_count, daily_word_count, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run("chapter_1", "project_1", "第1章", 0, JSON.stringify({ type: "doc", content: [] }), "正文", 2, 0, createdAt, createdAt);
+}
+
+function validChapterPayload(): ChapterAiSummaryPayload {
+  return {
+    oneLine: "少年在测试中失利。",
+    synopsis: "萧炎在测试中遭遇低谷，众人态度发生变化。",
+    keyEvents: ["萧炎测试结果不佳"],
+    characterMentions: [{ name: "萧炎", roleInChapter: "被测试的少年", stateOrChange: "处于低谷" }],
+    relationshipHints: ["族人态度冷淡"],
+    timeAndPlace: ["萧家测试广场"],
+    foreshadowingHints: ["修为异常原因未解释"],
+    unresolvedQuestions: ["萧炎为何失去天赋"],
+    emotionalArc: "从平静到苦涩。",
+    importantQuotes: ["斗之力，三段！"]
+  };
+}
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+describe("summary index migrations and repository", () => {
+  it("creates summary index tables from a clean sqlite database", () => {
+    const db = createDb();
+
+    const tables = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+      .all()
+      .map((row) => row.name);
+
+    expect(tables).toEqual(
+      expect.arrayContaining(["chapter_ai_summaries", "arc_ai_summaries", "book_ai_summaries", "summary_jobs"])
+    );
+    expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").get()).toEqual({ version: 7 });
+    expect(db.prepare("PRAGMA table_info(chapter_ai_summaries)").all().map((row) => row.name)).toEqual(
+      expect.arrayContaining(["content_hash", "summary_short", "summary_long", "structured_json", "status", "error"])
+    );
+
+    db.close();
+  });
+
+  it("upserts, reads, lists, and marks chapter summaries stale", () => {
+    const db = createDb();
+    seedProjectAndChapter(db);
+    const repo = new SummaryRepository(db);
+    const payload = validChapterPayload();
+    const oldHash = computeChapterContentHash("旧正文");
+    const newHash = computeChapterContentHash("新正文");
+
+    repo.upsertChapterSummary({
+      id: "summary_1",
+      projectId: "project_1",
+      chapterId: "chapter_1",
+      chapterTitle: "第1章",
+      chapterOrder: 1,
+      contentHash: oldHash,
+      summaryShort: payload.oneLine,
+      summaryLong: payload.synopsis,
+      structured: payload,
+      tokenCount: 128,
+      status: "ready",
+      error: null,
+      createdAt,
+      updatedAt
+    });
+
+    expect(repo.getChapterSummary("project_1", "chapter_1")).toMatchObject({
+      id: "summary_1",
+      projectId: "project_1",
+      chapterId: "chapter_1",
+      contentHash: oldHash,
+      status: "ready",
+      structured: payload
+    });
+    expect(repo.listChapterSummaries("project_1")).toHaveLength(1);
+
+    repo.markChapterStale("project_1", "chapter_1", newHash, "2026-05-01T00:02:00.000Z");
+
+    expect(repo.getChapterSummary("project_1", "chapter_1")).toMatchObject({
+      contentHash: newHash,
+      status: "stale",
+      error: null,
+      updatedAt: "2026-05-01T00:02:00.000Z"
+    });
+
+    db.close();
+  });
+
+  it("upserts arc and book summaries with parsed structured payloads", () => {
+    const db = createDb();
+    seedProjectAndChapter(db);
+    const repo = new SummaryRepository(db);
+    const arcStructured = {
+      chapterFrom: 1,
+      chapterTo: 20,
+      synopsis: "萧炎低谷开局。",
+      keyEvents: ["测试失败"],
+      characterChanges: ["萧炎被轻视"],
+      relationshipChanges: ["族人态度转冷"],
+      foreshadowingHints: ["修为异常"],
+      unresolvedQuestions: ["原因未明"]
+    };
+    const bookStructured = {
+      coverage: {
+        totalChapterCount: 1,
+        indexedChapterCount: 1,
+        staleChapterIds: [],
+        missingChapterIds: [],
+        skippedTooShortChapterIds: []
+      },
+      synopsis: "少年低谷开局。",
+      mainPlot: ["测试失败"],
+      majorCharacters: [{ name: "萧炎", summary: "主角，处于低谷。" }],
+      majorConflicts: ["个人低谷与家族评价冲突"],
+      relationshipChanges: ["族人轻视"],
+      foreshadowingHints: ["修为异常"],
+      unresolvedQuestions: ["为何退步"]
+    };
+
+    repo.upsertArcSummary({
+      id: "arc_summary_1",
+      projectId: "project_1",
+      arcKey: "auto:001-020",
+      chapterFrom: 1,
+      chapterTo: 20,
+      sourceHash: computeSourceHash(["chapter_1:hash"]),
+      summary: "萧炎低谷开局。",
+      structured: arcStructured,
+      status: "ready",
+      error: null,
+      createdAt,
+      updatedAt
+    });
+    repo.upsertBookSummary({
+      id: "book_summary_1",
+      projectId: "project_1",
+      sourceHash: computeSourceHash(["arc_1:hash"]),
+      summaryShort: "少年低谷开局。",
+      summaryLong: "萧炎在家族测试中失利，故事由此展开。",
+      structured: bookStructured,
+      status: "ready",
+      error: null,
+      createdAt,
+      updatedAt
+    });
+
+    expect(repo.listArcSummaries("project_1")[0]).toMatchObject({ arcKey: "auto:001-020", structured: arcStructured });
+    expect(repo.getLatestBookSummary("project_1")).toMatchObject({ id: "book_summary_1", structured: bookStructured });
+
+    db.close();
+  });
+
+  it("coalesces queued summary jobs by project, type, and target", () => {
+    const db = createDb();
+    seedProjectAndChapter(db);
+    const repo = new SummaryRepository(db);
+
+    const first = repo.enqueueSummaryJob({
+      projectId: "project_1",
+      jobType: "chapter_summary",
+      targetId: "chapter_1",
+      sourceHash: "hash_1",
+      priority: 1,
+      now: createdAt
+    });
+    const second = repo.enqueueSummaryJob({
+      projectId: "project_1",
+      jobType: "chapter_summary",
+      targetId: "chapter_1",
+      sourceHash: "hash_2",
+      priority: 5,
+      now: updatedAt
+    });
+
+    expect(second.id).toBe(first.id);
+    expect(second).toMatchObject({ sourceHash: "hash_2", priority: 5, status: "queued", updatedAt });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM summary_jobs").get()).toEqual({ count: 1 });
+
+    db.close();
+  });
+
+  it("claims, completes, fails, requeues, and resets summary jobs", () => {
+    const db = createDb();
+    seedProjectAndChapter(db);
+    const repo = new SummaryRepository(db);
+    const low = repo.enqueueSummaryJob({
+      projectId: "project_1",
+      jobType: "chapter_summary",
+      targetId: "chapter_1",
+      sourceHash: "hash_low",
+      priority: 1,
+      now: createdAt
+    });
+    const high = repo.enqueueSummaryJob({
+      projectId: "project_1",
+      jobType: "book_summary",
+      targetId: null,
+      sourceHash: "hash_high",
+      priority: 10,
+      now: createdAt
+    });
+
+    const claimed = repo.claimNextSummaryJob("project_1", updatedAt);
+    expect(claimed).toMatchObject({ id: high.id, status: "running", startedAt: updatedAt });
+
+    repo.completeSummaryJob(high.id, "2026-05-01T00:03:00.000Z");
+    expect(db.prepare("SELECT status FROM summary_jobs WHERE id = ?").get(high.id)).toEqual({ status: "completed" });
+
+    const claimedLow = repo.claimNextSummaryJob("project_1", "2026-05-01T00:04:00.000Z");
+    expect(claimedLow).toMatchObject({ id: low.id, status: "running" });
+    repo.failSummaryJob(low.id, "OpenRouter 429", "2026-05-01T00:10:00.000Z", "2026-05-01T00:05:00.000Z");
+    expect(db.prepare("SELECT status, error, next_run_at FROM summary_jobs WHERE id = ?").get(low.id)).toEqual({
+      status: "failed",
+      error: "OpenRouter 429",
+      next_run_at: "2026-05-01T00:10:00.000Z"
+    });
+
+    const requeued = repo.enqueueSummaryJob({
+      projectId: "project_1",
+      jobType: "chapter_summary",
+      targetId: "chapter_1",
+      sourceHash: "hash_retry",
+      priority: 2,
+      now: "2026-05-01T00:11:00.000Z"
+    });
+    expect(requeued.id).not.toBe(low.id);
+
+    repo.claimNextSummaryJob("project_1", "2026-05-01T00:12:00.000Z");
+    repo.resetRunningJobs("project_1", "2026-05-01T00:13:00.000Z");
+    expect(db.prepare("SELECT status FROM summary_jobs WHERE id = ?").get(requeued.id)).toEqual({ status: "queued" });
+
+    db.close();
+  });
+});

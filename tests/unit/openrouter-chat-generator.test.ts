@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { buildChapterIndexSummaryMessages } from "../../src/main/ai/summary-prompts";
 import { buildChatCompletionMessages, OpenRouterChatGenerator } from "../../src/main/ai/openrouter-chat-generator";
 import { estimateMessagesTokens } from "../../src/main/ai/token-estimator";
 import { getTokenBudget } from "../../src/main/ai/token-budget";
 import type { AiChatGenerationInput } from "../../src/main/ai/ai-task-service";
+import type { ChapterAiSummaryPayload } from "../../src/main/shared/summary-index";
 
 function createInput(patch: Partial<AiChatGenerationInput> = {}): AiChatGenerationInput {
   return {
@@ -363,5 +365,104 @@ describe("OpenRouter chat generator prompt assembly", () => {
 
     expect(streamCallCount).toBe(2);
     expect(result.summary).toBe("最终短记忆：用户在整理全部章节和角色关系。");
+  });
+});
+
+describe("OpenRouter persistent summary index generation", () => {
+  const chapterSummary: ChapterAiSummaryPayload = {
+    oneLine: "林远回到故乡。",
+    synopsis: "林远在风雨中回到故乡，旧日关系重新浮出水面。",
+    keyEvents: ["林远回乡"],
+    characterMentions: [{ name: "林远", roleInChapter: "主角", stateOrChange: "回到故乡" }],
+    relationshipHints: ["林远与旧友关系待揭示"],
+    timeAndPlace: ["雨夜", "故乡"],
+    foreshadowingHints: ["旧信暗示往事未了"],
+    unresolvedQuestions: ["林远为何离乡多年"],
+    emotionalArc: "从迟疑到压抑的平静",
+    importantQuotes: ["风从旧街尽头吹来。"]
+  };
+
+  it("builds long-term chapter index prompts instead of request-time user-question prompts", () => {
+    const messages = buildChapterIndexSummaryMessages({
+      projectId: "project_1",
+      chapterId: "chapter_1",
+      title: "第一章 回乡",
+      ordinal: 1,
+      plainText: "林远回到了故乡。"
+    });
+    const joined = messages.map((message) => message.content).join("\n");
+
+    expect(joined).toContain("长期可复用的章节摘要索引");
+    expect(joined).toContain("输出 JSON");
+    expect(joined).toContain("章节标题：第一章 回乡");
+    expect(joined).not.toContain("用户最终问题");
+  });
+
+  it("streams and parses persistent chapter summary JSON", async () => {
+    const requests: Array<{ readonly messages: readonly { readonly content: string }[]; readonly maxCompletionTokens?: number; readonly temperature?: number }> = [];
+    const generator = new OpenRouterChatGenerator({} as never);
+    Object.assign(generator as unknown as { createClient: () => Promise<unknown> }, {
+      createClient: async () => ({
+        chatBudget: getTokenBudget("chat", 16_384),
+        contextLength: 16_384,
+        modelName: "summary/model",
+        client: {
+          createChatCompletion: async () => {
+            throw new Error("persistent summary index generation must use streaming completions");
+          },
+          streamChatCompletion: async (request: { readonly messages: readonly { readonly content: string }[]; readonly maxCompletionTokens?: number; readonly temperature?: number }) => {
+            requests.push(request);
+            return {
+              content: JSON.stringify(chapterSummary),
+              reasoning: "",
+              truncated: false,
+              toolCalls: []
+            };
+          }
+        }
+      })
+    });
+
+    const result = await generator.summarizeChapterForIndex({
+      projectId: "project_1",
+      chapterId: "chapter_1",
+      title: "第一章 回乡",
+      ordinal: 1,
+      plainText: "林远回到了故乡。"
+    });
+
+    expect(result).toEqual(chapterSummary);
+    expect(requests).toHaveLength(1);
+    expect(requests[0].temperature).toBe(0.2);
+    expect(requests[0].messages.map((message) => message.content).join("\n")).toContain("长期可复用的章节摘要索引");
+  });
+
+  it("rejects invalid persistent chapter summary JSON instead of accepting malformed index data", async () => {
+    const generator = new OpenRouterChatGenerator({} as never);
+    Object.assign(generator as unknown as { createClient: () => Promise<unknown> }, {
+      createClient: async () => ({
+        chatBudget: getTokenBudget("chat", 16_384),
+        contextLength: 16_384,
+        modelName: "summary/model",
+        client: {
+          streamChatCompletion: async () => ({
+            content: JSON.stringify({ ...chapterSummary, extra: "not allowed" }),
+            reasoning: "",
+            truncated: false,
+            toolCalls: []
+          })
+        }
+      })
+    });
+
+    await expect(
+      generator.summarizeChapterForIndex({
+        projectId: "project_1",
+        chapterId: "chapter_1",
+        title: "第一章 回乡",
+        ordinal: 1,
+        plainText: "林远回到了故乡。"
+      })
+    ).rejects.toThrow("章节索引摘要无效");
   });
 });

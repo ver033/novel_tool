@@ -11,7 +11,7 @@ import { isOpenRouterCanceledError } from "./openrouter-error";
 import { buildReasoningConfig } from "./reasoning-budget";
 import { estimateMessagesTokens, estimateTextTokens } from "./token-estimator";
 import type { TokenBudget } from "./token-budget";
-import type { AiChatAction, AiChatMessageRecord } from "../shared/types";
+import type { AiChatAction, AiChatMessageRecord, AiContextIndexMode } from "../shared/types";
 
 const CHAT_AGENT_MAX_ITERATIONS = 8;
 const CHAT_AGENT_TRUNCATED_FINAL_NOTICE = "\n\n（回答已被模型截断，以上是已生成的部分。建议缩小范围，或按章节继续校对。）";
@@ -76,6 +76,11 @@ export type ChatAgentLoopHandlers = {
     readonly modelName: string;
     readonly contextMode: "direct" | "summarized" | "mixed";
     readonly scopeLabel: string;
+    readonly indexMode?: AiContextIndexMode;
+    readonly indexedChapterCount?: number;
+    readonly totalChapterCount?: number;
+    readonly staleChapterCount?: number;
+    readonly skippedTooShortChapterCount?: number;
   }) => void;
 };
 
@@ -87,6 +92,11 @@ export type ChatAgentLoopResult = {
 type ChatAgentContextStatus = {
   readonly contextMode: "direct" | "summarized" | "mixed";
   readonly scopeLabel: string;
+  readonly indexMode?: AiContextIndexMode;
+  readonly indexedChapterCount?: number;
+  readonly totalChapterCount?: number;
+  readonly staleChapterCount?: number;
+  readonly skippedTooShortChapterCount?: number;
 };
 
 function assertNotCanceled(signal?: AbortSignal): void {
@@ -181,6 +191,17 @@ function buildUserPrompt(input: ChatAgentLoopInput): string {
   ].join("\n");
 }
 
+function buildEmptyFinalAnswerRetryPrompt(): OpenRouterMessage {
+  return {
+    role: "user",
+    content: [
+      "上一轮没有输出最终回答。",
+      "请直接回答用户最初的问题，只能依据已经读取到的工具结果、当前消息和最近对话记忆，不要编造未读取内容。",
+      "如果工具结果已经足够，请输出最终回答；除非确实缺少必要上下文，否则不要再次调用工具。"
+    ].join("\n")
+  };
+}
+
 function buildAssistantToolCallMessage(content: string, toolCalls: readonly OpenRouterToolCall[]): OpenRouterMessage {
   return {
     role: "assistant",
@@ -210,7 +231,12 @@ function emitContextUsage(
     modelContextTokens: input.modelContextTokens,
     modelName: input.modelName,
     contextMode: contextStatus.contextMode,
-    scopeLabel: contextStatus.scopeLabel
+    scopeLabel: contextStatus.scopeLabel,
+    indexMode: contextStatus.indexMode,
+    indexedChapterCount: contextStatus.indexedChapterCount,
+    totalChapterCount: contextStatus.totalChapterCount,
+    staleChapterCount: contextStatus.staleChapterCount,
+    skippedTooShortChapterCount: contextStatus.skippedTooShortChapterCount
   });
 }
 
@@ -263,6 +289,7 @@ function readToolContextStatus(toolResultContent: string): ChatAgentContextStatu
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
       return null;
     }
+    const record = parsed as Record<string, unknown>;
     const candidate = parsed as { readonly mode?: unknown; readonly scopeLabel?: unknown };
     if (!isContextMode(candidate.mode) || typeof candidate.scopeLabel !== "string" || !candidate.scopeLabel.trim()) {
       if (!isRecord(parsed) || !isRecord(parsed.contextPlan)) {
@@ -280,7 +307,12 @@ function readToolContextStatus(toolResultContent: string): ChatAgentContextStatu
     }
     return {
       contextMode: candidate.mode,
-      scopeLabel: candidate.scopeLabel.trim()
+      scopeLabel: candidate.scopeLabel.trim(),
+      indexMode: isContextIndexMode(record.indexMode) ? record.indexMode : undefined,
+      indexedChapterCount: toOptionalNonNegativeInteger(record.indexedChapterCount),
+      totalChapterCount: toOptionalNonNegativeInteger(record.totalChapterCount),
+      staleChapterCount: toOptionalNonNegativeInteger(record.staleChapterCount),
+      skippedTooShortChapterCount: toOptionalNonNegativeInteger(record.skippedTooShortChapterCount)
     };
   } catch {
     return null;
@@ -289,6 +321,14 @@ function readToolContextStatus(toolResultContent: string): ChatAgentContextStatu
 
 function isContextMode(value: unknown): value is "direct" | "summarized" | "mixed" {
   return value === "direct" || value === "summarized" || value === "mixed";
+}
+
+function isContextIndexMode(value: unknown): value is AiContextIndexMode {
+  return value === "raw" || value === "raw_small_project" || value === "summary_cache" || value === "hybrid" || value === "missing" || value === "stale";
+}
+
+function toOptionalNonNegativeInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -398,6 +438,7 @@ export async function runChatAgentLoop(input: ChatAgentLoopInput, handlers: Chat
     input.tools.some((tool) => tool.function.name === "add_to_scratchpad") &&
     /(草稿纸|草稿|素材)/.test(normalizedUserMessage) &&
     /(加入|保存|存到|放到|记录)/.test(normalizedUserMessage);
+  let emptyFinalAnswerRetryUsed = false;
 
   for (let iteration = 0; iteration < CHAT_AGENT_MAX_ITERATIONS; iteration += 1) {
     assertNotCanceled(input.signal);
@@ -500,6 +541,12 @@ export async function runChatAgentLoop(input: ChatAgentLoopInput, handlers: Chat
     if (!content) {
       if (lastToolResultPresentation && !streamedContent.trim()) {
         return finishWithToolResultContent(input, handlers, appendActionStatusToToolPresentation(lastToolResultPresentation, actions), actions);
+      }
+      const hasToolResults = messages.some((message) => message.role === "tool");
+      if (hasToolResults && !emptyFinalAnswerRetryUsed) {
+        emptyFinalAnswerRetryUsed = true;
+        messages.push(buildEmptyFinalAnswerRetryPrompt());
+        continue;
       }
       throw new Error("OpenRouter 返回了空对话内容。");
     }

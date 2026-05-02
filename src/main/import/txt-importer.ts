@@ -1,7 +1,9 @@
 import path from "node:path";
+import { SummaryService } from "../ai/summary-service";
 import { ChapterRepository } from "../db/repositories/chapter-repo";
 import { ImportJobRepository } from "../db/repositories/import-job-repo";
 import { ProjectRepository } from "../db/repositories/project-repo";
+import { SummaryRepository } from "../db/repositories/summary-repo";
 import type { ProjectService } from "../project/project-service";
 import { createId } from "../shared/ids";
 import { countWritingUnits } from "../shared/text";
@@ -135,6 +137,7 @@ export class TxtImporter {
     try {
       const projectRepo = new ProjectRepository(projectDb);
       const chapterRepo = new ChapterRepository(projectDb);
+      const summaryService = new SummaryService(new SummaryRepository(projectDb), chapterRepo);
       const existingProject = readProjectRecordFromDatabaseOrNull(projectDb);
       const result = projectRepo.transact(() => {
         const createdAt = nowIso();
@@ -157,6 +160,15 @@ export class TxtImporter {
             ? existingChapters
             : preview.chapters.map((chapter, index) => chapterRepo.create(chapterContentFromPreview(project.id, chapter, index)));
         writeProjectSource(projectDb, { type: "txt", path: preview.filePath }, nowIso());
+        const enqueuedAt = nowIso();
+        for (const chapter of chapters) {
+          summaryService.maybeEnqueueChapterSummary({
+            projectId: project.id,
+            chapterId: chapter.id,
+            trigger: "import",
+            now: enqueuedAt
+          });
+        }
         return {
           project: projectRepo.findById(project.id) ?? project,
           chapters,
@@ -188,9 +200,19 @@ export class TxtImporter {
     const shouldCloseProjectDb = !this.projectService;
     try {
       const chapterRepo = new ChapterRepository(projectDb);
+      const summaryService = new SummaryService(new SummaryRepository(projectDb), chapterRepo);
       return chapterRepo.transact(() => {
         const startOrder = chapterRepo.nextSortOrder(project.id);
         const chapters = preview.chapters.map((chapter, index) => chapterRepo.create(chapterContentFromPreview(project.id, chapter, startOrder + index)));
+        const enqueuedAt = nowIso();
+        for (const chapter of chapters) {
+          summaryService.maybeEnqueueChapterSummary({
+            projectId: project.id,
+            chapterId: chapter.id,
+            trigger: "import",
+            now: enqueuedAt
+          });
+        }
         this.completeImport(importJobId, project);
         return {
           project: this.projectRepo.findById(project.id) ?? project,

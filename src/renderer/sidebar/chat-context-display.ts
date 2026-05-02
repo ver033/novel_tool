@@ -22,6 +22,8 @@ export type ChatContextUsageDisplay = {
   readonly inputBudgetLabel: string;
   readonly outputBudgetLabel: string;
   readonly compressionLabel: string;
+  readonly sourceLabel: string;
+  readonly coverageLabel: string | null;
   readonly scopeLabel: string;
 };
 
@@ -51,6 +53,57 @@ function formatModelName(modelName: string): string {
   return lastSegment.length > 28 ? `${lastSegment.slice(0, 25)}...` : lastSegment;
 }
 
+function getContextSourceLabel(contextUsage: AiStreamContextEvent): string {
+  if (contextUsage.indexMode === "summary_cache") {
+    return "全文摘要索引";
+  }
+  if (contextUsage.indexMode === "hybrid") {
+    return "摘要索引 + 原文";
+  }
+  if (contextUsage.indexMode === "missing") {
+    return "索引缺失";
+  }
+  if (contextUsage.indexMode === "stale") {
+    return "摘要索引可能过期";
+  }
+  return "原文";
+}
+
+function getCompressionLabel(contextUsage: AiStreamContextEvent): string {
+  if (contextUsage.indexMode === "summary_cache") {
+    return "墨枢已使用全文摘要索引";
+  }
+  if (contextUsage.indexMode === "hybrid") {
+    return "墨枢已混合使用摘要索引和原文";
+  }
+  if (contextUsage.indexMode === "missing") {
+    return "全书摘要索引缺失";
+  }
+  if (contextUsage.indexMode === "stale") {
+    return "全书摘要索引可能包含过期章节";
+  }
+  return contextUsage.contextMode === "summarized"
+    ? "墨枢已压缩背景信息"
+    : contextUsage.contextMode === "mixed"
+      ? "部分原文 + 压缩背景"
+      : "原文背景信息";
+}
+
+function formatCoverageLabel(contextUsage: AiStreamContextEvent): string | null {
+  if (contextUsage.totalChapterCount === undefined) {
+    return null;
+  }
+  const indexedChapterCount = contextUsage.indexedChapterCount ?? 0;
+  const parts = [`覆盖 ${indexedChapterCount} / ${contextUsage.totalChapterCount} 章`];
+  if (contextUsage.staleChapterCount) {
+    parts.push(`${contextUsage.staleChapterCount} 章过期`);
+  }
+  if (contextUsage.skippedTooShortChapterCount) {
+    parts.push(`${contextUsage.skippedTooShortChapterCount} 章过短跳过`);
+  }
+  return parts.join("，");
+}
+
 export function buildChatContextUsageDisplay(contextUsage: AiStreamContextEvent): ChatContextUsageDisplay {
   const visibleTotal = contextUsage.modelContextTokens ?? contextUsage.maxInputTokens;
   const percent = Math.min(100, Math.round((contextUsage.estimatedInputTokens / Math.max(1, visibleTotal)) * 100));
@@ -67,12 +120,9 @@ export function buildChatContextUsageDisplay(contextUsage: AiStreamContextEvent)
     windowLabel: formatTokenCount(contextUsage.modelContextTokens),
     inputBudgetLabel: formatTokenCount(contextUsage.maxInputTokens),
     outputBudgetLabel: formatTokenCount(contextUsage.maxOutputTokens),
-    compressionLabel:
-      contextUsage.contextMode === "summarized"
-        ? "墨枢已压缩背景信息"
-        : contextUsage.contextMode === "mixed"
-          ? "部分原文 + 压缩背景"
-          : "原文背景信息",
+    compressionLabel: getCompressionLabel(contextUsage),
+    sourceLabel: getContextSourceLabel(contextUsage),
+    coverageLabel: formatCoverageLabel(contextUsage),
     scopeLabel: contextUsage.scopeLabel
   };
 }

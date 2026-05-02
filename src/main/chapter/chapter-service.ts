@@ -18,6 +18,24 @@ import type {
 
 type ChapterRepositoryResolver = (projectId?: string) => ChapterRepository;
 
+export type SummaryIndexInvalidationInput = {
+  readonly projectId: string;
+  readonly chapterId: string;
+  readonly previousPlainText: string;
+  readonly nextPlainText: string;
+  readonly previousWordCount: number;
+  readonly nextWordCount: number;
+  readonly updatedAt: string;
+};
+
+export type SummaryIndexInvalidator = {
+  readonly markChapterContentChanged: (input: SummaryIndexInvalidationInput) => void;
+};
+
+type ChapterServiceOptions = {
+  readonly summaryIndexInvalidator?: SummaryIndexInvalidator;
+};
+
 function nowIso(): string {
   return new Date().toISOString();
 }
@@ -31,9 +49,11 @@ function localDateKey(value: Date = new Date()): string {
 
 export class ChapterService {
   private readonly resolveChapterRepo: ChapterRepositoryResolver;
+  private readonly summaryIndexInvalidator?: SummaryIndexInvalidator;
 
-  constructor(chapterRepo: ChapterRepository | ChapterRepositoryResolver) {
+  constructor(chapterRepo: ChapterRepository | ChapterRepositoryResolver, options: ChapterServiceOptions = {}) {
     this.resolveChapterRepo = typeof chapterRepo === "function" ? chapterRepo : () => chapterRepo;
+    this.summaryIndexInvalidator = options.summaryIndexInvalidator;
   }
 
   listChapters(input: ChapterListInput): ChapterSummary[] {
@@ -90,16 +110,31 @@ export class ChapterService {
     const nextDailyWordCount =
       previousContent.dailyWordCountDate === today ? Math.max(0, previousContent.dailyWordCount + wordCountDelta) : Math.max(0, wordCountDelta);
 
-    return chapterRepo.saveContent(
+    const updatedAt = nowIso();
+    const saved = chapterRepo.saveContent(
       input.chapterId,
       input.contentJson,
       input.plainText,
       nextWordCount,
       nextDailyWordCount,
       today,
-      nowIso(),
+      updatedAt,
       previousContent.updatedAt
     );
+
+    if (previousContent.plainText !== saved.plainText) {
+      this.summaryIndexInvalidator?.markChapterContentChanged({
+        projectId: saved.projectId,
+        chapterId: saved.id,
+        previousPlainText: previousContent.plainText,
+        nextPlainText: saved.plainText,
+        previousWordCount: previousContent.wordCount,
+        nextWordCount: saved.wordCount,
+        updatedAt
+      });
+    }
+
+    return saved;
   }
 
   updateTargetWordCount(input: ChapterUpdateTargetWordCountInput): ChapterSummary {

@@ -35,6 +35,9 @@ describe("phase 2 database migrations", () => {
       "ai_chat_sessions",
       "ai_task_candidates",
       "ai_tasks",
+      "arc_ai_summaries",
+      "book_ai_summaries",
+      "chapter_ai_summaries",
       "chapter_snapshots",
       "chapters",
       "import_jobs",
@@ -42,7 +45,8 @@ describe("phase 2 database migrations", () => {
       "prompt_presets",
       "schema_migrations",
       "scratch_notes",
-      "settings"
+      "settings",
+      "summary_jobs"
     ]);
     expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version").all()).toEqual([
       { version: 1 },
@@ -50,7 +54,8 @@ describe("phase 2 database migrations", () => {
       { version: 3 },
       { version: 4 },
       { version: 5 },
-      { version: 6 }
+      { version: 6 },
+      { version: 7 }
     ]);
     expect(db.prepare("PRAGMA table_info(import_jobs)").all().find((row) => row.name === "project_id")).toMatchObject({ notnull: 0 });
     expect(db.prepare("PRAGMA table_info(ai_task_candidates)").all().find((row) => row.name === "metadata_json")).toMatchObject({
@@ -81,7 +86,7 @@ describe("phase 2 database migrations", () => {
     runMigrations(db);
     runMigrations(db);
 
-    expect(db.prepare("SELECT COUNT(*) AS count FROM schema_migrations").get()).toEqual({ count: 6 });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM schema_migrations").get()).toEqual({ count: 7 });
 
     db.close();
   });

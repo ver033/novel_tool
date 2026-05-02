@@ -71,6 +71,14 @@ describe("chat @ reference parser", () => {
       scope: { type: "chapter", ordinal: 4 },
       messageWithoutReference: "总结一下的内容"
     });
+    expect(parseChatScopeReference("帮我总结前两章的内容")).toEqual({
+      scope: { type: "chapter_range", from: 1, to: 2 },
+      messageWithoutReference: "帮我总结的内容"
+    });
+    expect(parseChatScopeReference("帮我总结前十章的内容")).toEqual({
+      scope: { type: "chapter_range", from: 1, to: 10 },
+      messageWithoutReference: "帮我总结的内容"
+    });
     expect(parseChatScopeReference("梳理第2到第3章主线")).toEqual({
       scope: { type: "chapter_range", from: 2, to: 3 },
       messageWithoutReference: "梳理主线"

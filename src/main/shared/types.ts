@@ -44,6 +44,8 @@ import type {
   settingsSaveInputSchema,
   settingsListModelsInputSchema,
   settingsTestConnectionInputSchema,
+  summaryIndexStatusInputSchema,
+  summaryRebuildProjectIndexInputSchema,
   taskPromptPresetSchema
 } from "./schemas";
 import type { ProofreadIssue } from "./proofread";
@@ -149,6 +151,8 @@ export type AiStreamReasoningEvent = {
   readonly content: string;
 };
 
+export type AiContextIndexMode = "raw" | "raw_small_project" | "summary_cache" | "hybrid" | "missing" | "stale";
+
 export type AiStreamContextEvent = {
   readonly requestId: string;
   readonly estimatedInputTokens: number;
@@ -158,6 +162,11 @@ export type AiStreamContextEvent = {
   readonly modelName: string;
   readonly contextMode: "direct" | "summarized" | "mixed";
   readonly scopeLabel: string;
+  readonly indexMode?: AiContextIndexMode;
+  readonly indexedChapterCount?: number;
+  readonly totalChapterCount?: number;
+  readonly staleChapterCount?: number;
+  readonly skippedTooShortChapterCount?: number;
 };
 
 export type AiStreamDoneEvent = {
@@ -309,6 +318,22 @@ export type ExportTxtResult = {
   readonly wordCount: number;
   readonly exportedAt: string;
 };
+export type SummaryIndexStatusInput = z.input<typeof summaryIndexStatusInputSchema>;
+export type SummaryRebuildProjectIndexInput = z.input<typeof summaryRebuildProjectIndexInputSchema>;
+export type SummaryIndexPausedReason = "ai_not_configured" | "foreground_ai_active" | null;
+export type SummaryIndexStatus = {
+  readonly projectId: string;
+  readonly totalChapterCount: number;
+  readonly readyChapterCount: number;
+  readonly staleChapterCount: number;
+  readonly missingChapterCount: number;
+  readonly skippedTooShortChapterCount: number;
+  readonly failedJobCount: number;
+  readonly queuedJobCount: number;
+  readonly runningJobLabel: string | null;
+  readonly pausedReason: SummaryIndexPausedReason;
+  readonly updatedAt: string;
+};
 
 export const ipcChannels = {
   system: {
@@ -364,6 +389,10 @@ export const ipcChannels = {
     streamDone: "novelTool:ai:streamDone",
     streamError: "novelTool:ai:streamError",
     rejectCandidate: "novelTool:ai:rejectCandidate"
+  },
+  summary: {
+    getIndexStatus: "novelTool:summary:getIndexStatus",
+    rebuildProjectIndex: "novelTool:summary:rebuildProjectIndex"
   },
   scratch: {
     list: "novelTool:scratch:list",

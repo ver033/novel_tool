@@ -46,7 +46,9 @@ import type {
   ScratchUpdateInput,
   SettingsListModelsInput,
   SettingsSaveInput,
-  SettingsTestConnectionInput
+  SettingsTestConnectionInput,
+  SummaryIndexStatusInput,
+  SummaryRebuildProjectIndexInput
 } from "../main/shared/types";
 import { ipcChannels } from "../main/shared/types";
 
@@ -93,6 +95,10 @@ export type NovelToolApi = {
     readonly save: (input: SettingsSaveInput) => Promise<unknown>;
     readonly testConnection: (input?: SettingsTestConnectionInput) => Promise<unknown>;
     readonly listModels: (input?: SettingsListModelsInput) => Promise<unknown>;
+  };
+  readonly summary: {
+    readonly getIndexStatus: (input: SummaryIndexStatusInput) => Promise<unknown>;
+    readonly rebuildProjectIndex: (input: SummaryRebuildProjectIndexInput) => Promise<unknown>;
   };
   readonly ai: {
     readonly createTask: (input: AiCreateTaskInput) => Promise<unknown>;
@@ -166,6 +172,10 @@ export const novelToolApi: NovelToolApi = Object.freeze({
     save: (input: SettingsSaveInput) => ipcRenderer.invoke(ipcChannels.settings.save, input),
     testConnection: (input?: SettingsTestConnectionInput) => ipcRenderer.invoke(ipcChannels.settings.testConnection, input),
     listModels: (input?: SettingsListModelsInput) => ipcRenderer.invoke(ipcChannels.settings.listModels, input)
+  }),
+  summary: Object.freeze({
+    getIndexStatus: (input: SummaryIndexStatusInput) => ipcRenderer.invoke(ipcChannels.summary.getIndexStatus, input),
+    rebuildProjectIndex: (input: SummaryRebuildProjectIndexInput) => ipcRenderer.invoke(ipcChannels.summary.rebuildProjectIndex, input)
   }),
   ai: Object.freeze({
     createTask: (input: AiCreateTaskInput) => ipcRenderer.invoke(ipcChannels.ai.createTask, input),

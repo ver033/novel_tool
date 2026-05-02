@@ -150,6 +150,18 @@ function parseNaturalReference(message: string): ChatAtReference | null {
     }
   }
 
+  const leadingRangeMatch = new RegExp(`前\\s*(${NUMERAL})\\s*[章节回]`).exec(normalized);
+  if (leadingRangeMatch) {
+    const to = parseChineseOrdinal(leadingRangeMatch[1]);
+    if (to) {
+      return buildReference(message, leadingRangeMatch.index, leadingRangeMatch[0].length, {
+        type: "chapter_range",
+        from: 1,
+        to
+      });
+    }
+  }
+
   const allMatch = /全部章节|所有章节|全文|全书|整本书/.exec(normalized);
   if (allMatch) {
     return buildReference(message, allMatch.index, allMatch[0].length, {
