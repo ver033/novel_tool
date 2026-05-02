@@ -7,6 +7,14 @@ import type {
   AiChatStreamHandlers,
   AiGenerationOptions
 } from "./ai-task-service";
+import {
+  buildArcIndexSummaryMessages,
+  buildBookIndexSummaryMessages,
+  buildChapterIndexSummaryMessages,
+  type ArcIndexSummaryInput,
+  type BookIndexSummaryInput,
+  type ChapterIndexSummaryInput
+} from "./summary-prompts";
 import { runChatAgentLoop, type ChatAgentModel } from "./chat-agent-harness";
 import { buildChatAgentMemoryText } from "./chat-agent-memory";
 import type {
@@ -21,9 +29,18 @@ import { logDevLlmPrompt } from "./dev-prompt-logger";
 import type { OpenRouterChatCompletionResult, OpenRouterMessage } from "./openrouter-client";
 import { OpenRouterClient } from "./openrouter-client";
 import { buildReasoningConfig } from "./reasoning-budget";
+import {
+  arcAiSummaryPayloadSchema,
+  bookAiSummaryPayloadSchema,
+  chapterAiSummaryPayloadSchema,
+  type ArcAiSummaryPayload,
+  type BookAiSummaryPayload,
+  type ChapterAiSummaryPayload
+} from "../shared/summary-index";
 import { getTokenBudget, type TokenBudget } from "./token-budget";
 import { estimateMessagesTokens, estimateTextTokens, truncateTextToTokenBudget } from "./token-estimator";
 import type { SettingsService } from "../settings/settings-service";
+import type { z } from "zod";
 
 function hasAgentContext(input: AiChatGenerationInput): input is AiChatGenerationInput & { readonly agentContext: ChatAgentContext } {
   return "agentContext" in input && Boolean(input.agentContext);
@@ -34,6 +51,7 @@ const CHAPTER_SUMMARY_MERGE_MAX_TOKENS = 2200;
 const CONTEXT_BATCH_SUMMARY_MAX_TOKENS = 3200;
 const CONTEXT_SUMMARY_MERGE_MAX_TOKENS = 3200;
 const CHAT_MEMORY_SUMMARY_MAX_TOKENS = 2200;
+const SUMMARY_INDEX_MAX_TOKENS = 4096;
 const CHAT_MEMORY_SUMMARY_PROMPT_RATIO = 0.75;
 const CHAT_MEMORY_SUMMARY_RECOMPRESS_MAX_ROUNDS = 2;
 
@@ -116,6 +134,29 @@ function assertChatMessagesWithinBudget(messages: readonly OpenRouterMessage[], 
   throw new Error(`AI 对话上下文太长，预计输入约 ${estimatedTokens} tokens，超过上限 ${maxInputTokens}。请缩短问题或选中文本后重试。`);
 }
 
+function stripJsonCodeFence(content: string): string {
+  const trimmed = content.trim();
+  const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(trimmed);
+  return (fenced?.[1] ?? trimmed).trim();
+}
+
+function parseSummaryIndexJson<T>(label: string, content: string, schema: z.ZodType<T>): T {
+  if (!content.trim()) {
+    throw new Error(`${label}为空。`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stripJsonCodeFence(content));
+  } catch (error) {
+    throw new Error(`${label}无效：${error instanceof Error ? error.message : String(error)}`);
+  }
+  const result = schema.safeParse(parsed);
+  if (!result.success) {
+    throw new Error(`${label}无效：${result.error.message}`);
+  }
+  return result.data;
+}
+
 export function buildChatCompletionMessages(input: AiChatGenerationInput, chatBudget: TokenBudget = getTokenBudget("chat")): OpenRouterMessage[] {
   const systemMessage = {
     role: "system",
@@ -172,7 +213,12 @@ export class OpenRouterChatGenerator implements AiChatGenerator {
       modelContextTokens: contextLength,
       modelName,
       contextMode: input.agentContext?.mode ?? "direct",
-      scopeLabel: input.agentContext?.scopeLabel ?? (input.currentChapterTitle ? "本章" : input.selectionText ? "选中文本" : "当前对话")
+      scopeLabel: input.agentContext?.scopeLabel ?? (input.currentChapterTitle ? "本章" : input.selectionText ? "选中文本" : "当前对话"),
+      indexMode: input.agentContext?.indexMode,
+      indexedChapterCount: input.agentContext?.indexedChapterCount,
+      totalChapterCount: input.agentContext?.totalChapterCount,
+      staleChapterCount: input.agentContext?.staleChapterCount,
+      skippedTooShortChapterCount: input.agentContext?.skippedTooShortChapterCount
     });
     logDevLlmPrompt({
       kind: "chat",
@@ -512,6 +558,96 @@ export class OpenRouterChatGenerator implements AiChatGenerator {
     return {
       summary: currentSummary
     };
+  }
+
+  async summarizeChapterForIndex(input: ChapterIndexSummaryInput, options: AiGenerationOptions = {}): Promise<ChapterAiSummaryPayload> {
+    const { chatBudget, client, modelName } = await this.createClient();
+    const maxCompletionTokens = capInternalMaxCompletionTokens(SUMMARY_INDEX_MAX_TOKENS, chatBudget);
+    const messages = buildChapterIndexSummaryMessages(input);
+    logDevLlmPrompt({
+      kind: "summary-index:chapter",
+      modelName,
+      messages,
+      meta: {
+        chapterTitle: input.title,
+        ordinal: input.ordinal
+      },
+      params: {
+        maxCompletionTokens,
+        temperature: 0.2
+      }
+    });
+    const result = await this.runInternalStreamingCompletion(client, {
+      messages,
+      maxCompletionTokens,
+      temperature: 0.2,
+      signal: options.signal
+    });
+    if (result.truncated) {
+      throw new Error("章节索引摘要被截断，请换用输出额度更高的模型后重试。");
+    }
+    return parseSummaryIndexJson("章节索引摘要", result.content, chapterAiSummaryPayloadSchema);
+  }
+
+  async summarizeArcForIndex(input: ArcIndexSummaryInput, options: AiGenerationOptions = {}): Promise<ArcAiSummaryPayload> {
+    const { chatBudget, client, modelName } = await this.createClient();
+    const maxCompletionTokens = capInternalMaxCompletionTokens(SUMMARY_INDEX_MAX_TOKENS, chatBudget);
+    const messages = buildArcIndexSummaryMessages(input);
+    logDevLlmPrompt({
+      kind: "summary-index:arc",
+      modelName,
+      messages,
+      meta: {
+        arcKey: input.arcKey,
+        chapterFrom: input.chapterFrom,
+        chapterTo: input.chapterTo,
+        chapterCount: input.chapters.length
+      },
+      params: {
+        maxCompletionTokens,
+        temperature: 0.2
+      }
+    });
+    const result = await this.runInternalStreamingCompletion(client, {
+      messages,
+      maxCompletionTokens,
+      temperature: 0.2,
+      signal: options.signal
+    });
+    if (result.truncated) {
+      throw new Error("阶段索引摘要被截断，请换用输出额度更高的模型后重试。");
+    }
+    return parseSummaryIndexJson("阶段索引摘要", result.content, arcAiSummaryPayloadSchema);
+  }
+
+  async summarizeBookForIndex(input: BookIndexSummaryInput, options: AiGenerationOptions = {}): Promise<BookAiSummaryPayload> {
+    const { chatBudget, client, modelName } = await this.createClient();
+    const maxCompletionTokens = capInternalMaxCompletionTokens(SUMMARY_INDEX_MAX_TOKENS, chatBudget);
+    const messages = buildBookIndexSummaryMessages(input);
+    logDevLlmPrompt({
+      kind: "summary-index:book",
+      modelName,
+      messages,
+      meta: {
+        arcCount: input.arcs.length,
+        totalChapterCount: input.coverage.totalChapterCount,
+        indexedChapterCount: input.coverage.indexedChapterCount
+      },
+      params: {
+        maxCompletionTokens,
+        temperature: 0.2
+      }
+    });
+    const result = await this.runInternalStreamingCompletion(client, {
+      messages,
+      maxCompletionTokens,
+      temperature: 0.2,
+      signal: options.signal
+    });
+    if (result.truncated) {
+      throw new Error("全书索引摘要被截断，请换用输出额度更高的模型后重试。");
+    }
+    return parseSummaryIndexJson("全书索引摘要", result.content, bookAiSummaryPayloadSchema);
   }
 
   private async mergeSummaryItems(

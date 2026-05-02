@@ -8,7 +8,9 @@ import { runMigrations } from "../../src/main/db/migrations";
 import { ChapterRepository } from "../../src/main/db/repositories/chapter-repo";
 import { ProjectRepository } from "../../src/main/db/repositories/project-repo";
 import { ScratchNoteRepository } from "../../src/main/db/repositories/scratch-note-repo";
+import { SummaryRepository } from "../../src/main/db/repositories/summary-repo";
 import { createId } from "../../src/main/shared/ids";
+import { computeChapterContentHash, type ChapterAiSummaryPayload } from "../../src/main/shared/summary-index";
 import type { ChapterSummary } from "../../src/main/shared/types";
 import { executeChatAgentTool, MOSHU_CHAT_AGENT_TOOLS } from "../../src/main/ai/chat-agent-tools";
 import { getTokenBudget } from "../../src/main/ai/token-budget";
@@ -23,7 +25,8 @@ function createRepos() {
   return {
     db,
     chapterRepo: new ChapterRepository(db),
-    scratchRepo: new ScratchNoteRepository(db)
+    scratchRepo: new ScratchNoteRepository(db),
+    summaryRepo: new SummaryRepository(db)
   };
 }
 
@@ -76,6 +79,21 @@ function parseToolJson(result: string): Record<string, unknown> {
   return JSON.parse(result) as Record<string, unknown>;
 }
 
+function createSummaryPayload(input: { readonly oneLine: string; readonly synopsis: string }): ChapterAiSummaryPayload {
+  return {
+    oneLine: input.oneLine,
+    synopsis: input.synopsis,
+    keyEvents: [],
+    characterMentions: [],
+    relationshipHints: [],
+    timeAndPlace: [],
+    foreshadowingHints: [],
+    unresolvedQuestions: [],
+    emotionalArc: "稳定推进",
+    importantQuotes: []
+  };
+}
+
 describe("chat agent tools", () => {
   it("describes read_chapters with flat model-friendly scope parameters", () => {
     const readTool = MOSHU_CHAT_AGENT_TOOLS.find((tool) => tool.function.name === "read_chapters");
@@ -85,6 +103,8 @@ describe("chat agent tools", () => {
     expect(parameters).toContain('"all_chapters"');
     expect(parameters).toContain('"chapter_range"');
     expect(parameters).toContain('"ordinal"');
+    expect(parameters).toContain('"mode"');
+    expect(parameters).toContain('"summary"');
     expect(parameters).not.toContain('"oneOf"');
   });
 
@@ -423,6 +443,159 @@ describe("chat agent tools", () => {
     expect(result.contextText).not.toContain("第一章真实正文。");
     expect(result.contextText).toContain("第二章真实正文。");
     expect(result.contextText).toContain("第三章真实正文。");
+
+    db.close();
+  });
+
+  it("uses ready summary cache for a short chapter range when the model does not request raw mode", async () => {
+    const { chapterRepo, db, scratchRepo, summaryRepo } = createRepos();
+    const projectId = "project_read_short_range_summary";
+    createProject(new ProjectRepository(db), projectId);
+    const first = createChapter(chapterRepo, {
+      projectId,
+      title: "第1章 起点",
+      sortOrder: 0,
+      plainText: "第一章不应读取原文。".repeat(1200)
+    });
+    const second = createChapter(chapterRepo, {
+      projectId,
+      title: "第2章 暗潮",
+      sortOrder: 1,
+      plainText: "第二章不应读取原文。".repeat(1200)
+    });
+    [first, second].forEach((chapter, index) => {
+      const ordinal = index + 1;
+      summaryRepo.upsertChapterSummary({
+        id: `summary_short_range_${ordinal}`,
+        projectId,
+        chapterId: chapter.id,
+        chapterTitle: chapter.title,
+        chapterOrder: ordinal,
+        contentHash: computeChapterContentHash(`chapter-${ordinal}`),
+        summaryShort: `第${ordinal}章短摘要。`,
+        summaryLong: `第${ordinal}章长摘要。`,
+        structured: createSummaryPayload({
+          oneLine: `第${ordinal}章短摘要。`,
+          synopsis: `第${ordinal}章长摘要。`
+        }),
+        tokenCount: 30,
+        status: "ready",
+        error: null,
+        createdAt: "2026-05-01T00:00:00.000Z",
+        updatedAt: "2026-05-01T00:00:00.000Z"
+      });
+    });
+    const guardedRepo = Object.create(chapterRepo) as ChapterRepository;
+    guardedRepo.getContent = () => {
+      throw new Error("short chapter range with ready summaries must not read raw chapter content");
+    };
+
+    const result = parseToolJson(
+      await executeChatAgentTool({
+        name: "read_chapters",
+        argumentsJson: JSON.stringify({
+          scope: "chapter_range",
+          from: 1,
+          to: 2
+        }),
+        runtime: {
+          projectId,
+          currentChapterId: first.id,
+          userMessage: "帮我总结前两章的内容",
+          chapterRepo: guardedRepo,
+          summaryRepo,
+          scratchRepo,
+          tokenBudget: getTokenBudget("chat")
+        }
+      })
+    );
+
+    expect(result.scopeLabel).toBe("第1-2章摘要索引");
+    expect(result.indexMode).toBe("summary_cache");
+    expect(result.indexedChapterCount).toBe(2);
+    expect(result.totalChapterCount).toBe(2);
+    expect(result.contextText).toContain("第1章短摘要。");
+    expect(result.contextText).toContain("第2章长摘要。");
+    expect(result.contextText).not.toContain("不应读取原文");
+
+    db.close();
+  });
+
+  it("uses hybrid summaries for partially cached long chapter ranges without requiring an explicit mode", async () => {
+    const { chapterRepo, db, scratchRepo, summaryRepo } = createRepos();
+    const projectId = "project_read_partial_long_summary";
+    createProject(new ProjectRepository(db), projectId);
+    const chapters = Array.from({ length: 10 }, (_, index) => {
+      const ordinal = index + 1;
+      return createChapter(chapterRepo, {
+        projectId,
+        title: `第${ordinal}章 长范围${ordinal}`,
+        sortOrder: index,
+        plainText: `第${ordinal}章默认工具参数不应回退读取原文。`
+      });
+    });
+    chapters.forEach((chapter, index) => {
+      const ordinal = index + 1;
+      if (ordinal === 5) {
+        return;
+      }
+      summaryRepo.upsertChapterSummary({
+        id: `summary_read_partial_long_${ordinal}`,
+        projectId,
+        chapterId: chapter.id,
+        chapterTitle: chapter.title,
+        chapterOrder: ordinal,
+        contentHash: computeChapterContentHash(`partial-long-${ordinal}`),
+        summaryShort: `第${ordinal}章工具短摘要。`,
+        summaryLong: `第${ordinal}章工具长摘要。`,
+        structured: createSummaryPayload({
+          oneLine: `第${ordinal}章工具短摘要。`,
+          synopsis: `第${ordinal}章工具长摘要。`
+        }),
+        tokenCount: 30,
+        status: "ready",
+        error: null,
+        createdAt: "2026-05-01T00:00:00.000Z",
+        updatedAt: "2026-05-01T00:00:00.000Z"
+      });
+    });
+    const guardedRepo = Object.create(chapterRepo) as ChapterRepository;
+    guardedRepo.getContent = () => {
+      throw new Error("partially cached long read_chapters calls must not read raw chapter content");
+    };
+
+    const result = parseToolJson(
+      await executeChatAgentTool({
+        name: "read_chapters",
+        argumentsJson: JSON.stringify({
+          scope: "chapter_range",
+          from: 1,
+          to: 10
+        }),
+        runtime: {
+          projectId,
+          currentChapterId: chapters[0].id,
+          userMessage: "帮我总结前十章的内容",
+          chapterRepo: guardedRepo,
+          summaryRepo,
+          scratchRepo,
+          tokenBudget: {
+            maxInputTokens: 120_000,
+            maxOutputTokens: 4096
+          }
+        }
+      })
+    );
+
+    expect(result.scopeLabel).toBe("第1-10章摘要索引");
+    expect(result.indexMode).toBe("hybrid");
+    expect(result.indexedChapterCount).toBe(9);
+    expect(result.totalChapterCount).toBe(10);
+    expect(result.staleChapterCount).toBe(1);
+    expect(result.contextText).toContain("摘要缺失或过期 1 章");
+    expect(result.contextText).toContain("第1章工具短摘要。");
+    expect(result.contextText).toContain("第10章工具长摘要。");
+    expect(result.contextText).not.toContain("回退读取原文");
 
     db.close();
   });

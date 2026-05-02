@@ -436,6 +436,14 @@ export const exportTxtInputSchema = z
   })
   .strict();
 
+export const summaryIndexStatusInputSchema = z
+  .object({
+    projectId: idSchema
+  })
+  .strict();
+
+export const summaryRebuildProjectIndexInputSchema = summaryIndexStatusInputSchema;
+
 export class IpcPayloadValidationError extends Error {
   constructor(readonly issues: z.ZodIssue[]) {
     super("IPC payload validation failed");

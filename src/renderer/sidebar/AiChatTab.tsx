@@ -1,6 +1,6 @@
 import { PaperPlaneRight, Plus, Stop, Trash } from "@phosphor-icons/react";
 import { type CSSProperties, type KeyboardEvent, type ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
-import type { AiChatMessageRecord, ChapterSummary, SelectionSnapshot } from "../../main/shared/types";
+import type { AiChatMessageRecord, ChapterSummary, SelectionSnapshot, SummaryIndexStatus } from "../../main/shared/types";
 import { Button } from "../components/Button";
 import { Modal } from "../components/Modal";
 import type { SettingsCategory } from "../routes/SettingsPage";
@@ -30,6 +30,13 @@ type ActiveCommand = {
   readonly query: string;
   readonly start: number;
   readonly end: number;
+};
+
+type SummaryIndexBanner = {
+  readonly title: string;
+  readonly detail: string;
+  readonly variant: "ready" | "building" | "warning" | "paused";
+  readonly actionLabel: "开始建立索引" | "重建全书索引" | "打开 AI 服务设置" | "重试" | null;
 };
 
 const chatSkillSuggestions: readonly ChatCommandSuggestion[] = [
@@ -113,6 +120,83 @@ function chatErrorHint(error: string): string | null {
     return "请缩短问题、取消过长选区，或改成分章/分段提问。";
   }
   return null;
+}
+
+function buildSummaryIndexBanner(
+  status: SummaryIndexStatus | null,
+  loading: boolean,
+  error: string | null
+): SummaryIndexBanner | null {
+  if (error) {
+    return {
+      title: "全书索引状态读取失败",
+      detail: error,
+      variant: "warning",
+      actionLabel: "重试"
+    };
+  }
+  if (!status) {
+    return loading
+      ? {
+          title: "正在读取全书索引状态",
+          detail: "墨枢正在检查当前项目是否已有可复用的章节摘要。",
+          variant: "building",
+          actionLabel: null
+        }
+      : null;
+  }
+  if (status.totalChapterCount === 0) {
+    return null;
+  }
+
+  const indexedCount = status.readyChapterCount + status.skippedTooShortChapterCount;
+  const queuedOrRunning = status.queuedJobCount > 0 || Boolean(status.runningJobLabel);
+  if (status.pausedReason === "ai_not_configured") {
+    return {
+      title: "AI 服务未配置，索引暂停",
+      detail: `全书索引已完成 ${indexedCount} / ${status.totalChapterCount} 章。配置 OpenRouter 后会继续后台建立。`,
+      variant: "paused",
+      actionLabel: "打开 AI 服务设置"
+    };
+  }
+  if (status.pausedReason === "foreground_ai_active") {
+    return {
+      title: "全书索引暂停中",
+      detail: "当前有前台 AI 任务正在运行，后台索引会等它结束后继续。",
+      variant: "paused",
+      actionLabel: null
+    };
+  }
+  if (status.staleChapterCount > 0) {
+    return {
+      title: `${status.staleChapterCount} 章摘要已过期`,
+      detail: `全书索引已完成 ${indexedCount} / ${status.totalChapterCount} 章。最近编辑过的章节需要重新摘要。`,
+      variant: "warning",
+      actionLabel: "重建全书索引"
+    };
+  }
+  if (queuedOrRunning) {
+    return {
+      title: `全书索引正在建立 ${indexedCount} / ${status.totalChapterCount} 章`,
+      detail: status.runningJobLabel ?? "后台摘要任务已排队，会在不影响当前 AI 对话时继续。",
+      variant: "building",
+      actionLabel: null
+    };
+  }
+  if (status.missingChapterCount > 0) {
+    return {
+      title: "全书索引缺失",
+      detail: `当前只有 ${indexedCount} / ${status.totalChapterCount} 章可用于全文摘要索引。`,
+      variant: "warning",
+      actionLabel: "开始建立索引"
+    };
+  }
+  return {
+    title: `全书索引已完成 ${indexedCount} / ${status.totalChapterCount} 章`,
+    detail: "全文总结和跨章节提问会优先使用摘要索引，避免临时读取整本书。",
+    variant: "ready",
+    actionLabel: "重建全书索引"
+  };
 }
 
 function getLastUserMessage(messages: readonly AiChatMessageRecord[]): AiChatMessageRecord | null {
@@ -287,6 +371,7 @@ export function AiChatTab({ chapters, currentChapterId, currentChapterTitle, cur
   const errorHint = chatStore.error ? chatErrorHint(chatStore.error) : null;
   const showSettingsAction = Boolean(chatStore.error && (isAiSettingsError(chatStore.error) || isOpenRouterRateLimitError(chatStore.error)));
   const contextDisplay = chatStore.contextUsage ? buildChatContextUsageDisplay(chatStore.contextUsage) : null;
+  const summaryBanner = buildSummaryIndexBanner(chatStore.summaryIndexStatus, chatStore.summaryIndexLoading, chatStore.summaryIndexError);
   const showContextStatus = Boolean(contextDisplay || chatStore.contextUsagePending);
   const contextRingStyle = contextDisplay
     ? ({
@@ -343,6 +428,34 @@ export function AiChatTab({ chapters, currentChapterId, currentChapterTitle, cur
           <span className="chip">当前章节：{currentChapterTitle ?? "未选择章节"}</span>
           <span className="chip">{selectionSnapshot ? "已选中文本" : "未选中文本"}</span>
         </div>
+        {summaryBanner ? (
+          <div className={`summary-index-banner ${summaryBanner.variant}`} role="status">
+            <div className="summary-index-copy">
+              <b>{summaryBanner.title}</b>
+              <span>{summaryBanner.detail}</span>
+            </div>
+            {summaryBanner.actionLabel ? (
+              <button
+                className="small-button"
+                disabled={chatStore.summaryIndexLoading || chatStore.busy}
+                onClick={() => {
+                  if (summaryBanner.actionLabel === "打开 AI 服务设置") {
+                    onOpenSettings("AI 服务");
+                    return;
+                  }
+                  if (summaryBanner.actionLabel === "重试") {
+                    void chatStore.refreshSummaryIndexStatus();
+                    return;
+                  }
+                  void chatStore.rebuildSummaryIndex();
+                }}
+                type="button"
+              >
+                {summaryBanner.actionLabel}
+              </button>
+            ) : null}
+          </div>
+        ) : null}
         <div className="messages" aria-live="polite">
           {chatStore.loading ? (
             <div className="message pending" role="status">
@@ -437,6 +550,7 @@ export function AiChatTab({ chapters, currentChapterId, currentChapterTitle, cur
                     <strong>{contextDisplay?.percentText ?? "分析中"}</strong>
                     {contextDisplay ? <span>{contextDisplay.usedLabel}</span> : null}
                     <span className="chat-context-model-label">{contextDisplay?.modelLabel ?? "准备上下文"}</span>
+                    {contextDisplay ? <span className="chat-context-source-label">{contextDisplay.sourceLabel}</span> : null}
                     {chatStore.contextUsagePending ? <span className="context-updating">更新中</span> : null}
                   </div>
                   {contextDisplay ? (
@@ -451,6 +565,8 @@ export function AiChatTab({ chapters, currentChapterId, currentChapterTitle, cur
                       <div className="chat-context-popover-meta">
                         <span>模型 {contextDisplay.modelLabel}</span>
                         <span>范围 {contextDisplay.scopeLabel}</span>
+                        <span>来源 {contextDisplay.sourceLabel}</span>
+                        {contextDisplay.coverageLabel ? <span>{contextDisplay.coverageLabel}</span> : null}
                         <span>模型窗口 {contextDisplay.windowLabel}</span>
                         <span>输入预算 {contextDisplay.inputBudgetLabel}</span>
                         <span>输出 {contextDisplay.outputBudgetLabel}</span>

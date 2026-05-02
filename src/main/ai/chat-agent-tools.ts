@@ -5,6 +5,7 @@ import type { OpenRouterToolDefinition } from "./openrouter-client";
 import type { TokenBudget } from "./token-budget";
 import type { ChapterRepository } from "../db/repositories/chapter-repo";
 import type { ScratchNoteRepository } from "../db/repositories/scratch-note-repo";
+import type { SummaryRepository } from "../db/repositories/summary-repo";
 import type { ProofreadIssue } from "../shared/proofread";
 import type { AiChatAction, TaskType } from "../shared/types";
 import type { WritingContextPlan, WritingOperationOutputKind, WritingOperationTarget } from "./writing-operation-types";
@@ -23,6 +24,7 @@ export type ChatAgentToolRuntime = {
   readonly selectionText?: string;
   readonly userMessage: string;
   readonly chapterRepo: ChapterRepository;
+  readonly summaryRepo?: SummaryRepository;
   readonly scratchRepo?: ScratchNoteRepository;
   readonly tokenBudget: TokenBudget;
   readonly signal?: AbortSignal;
@@ -58,6 +60,7 @@ const emptyArgsSchema = z.object({}).strict();
 const readChaptersArgsSchema = z
   .object({
     scope: chatAgentScopeSchema,
+    mode: z.enum(["raw", "summary", "hybrid"]).optional(),
     inlineText: z.string().trim().min(1).optional()
   })
   .strict();
@@ -96,6 +99,11 @@ const readChaptersToolParameters = {
     inlineText: {
       type: "string",
       description: "scope=selection 且没有编辑器选区时，由模型从用户消息中复制出的待处理正文。"
+    },
+    mode: {
+      type: "string",
+      enum: ["raw", "summary", "hybrid"],
+      description: "读取模式。全部章节默认 summary；章节范围如果已有完整摘要缓存也默认 summary；需要精确原文时填写 raw；hybrid 允许系统在原文和摘要之间自动选择。"
     }
   },
   required: ["scope"]
@@ -356,6 +364,7 @@ function normalizeReadChaptersArgs(value: unknown): unknown {
       return scope
         ? {
             scope,
+            ...(typeof value.mode === "string" ? { mode: value.mode } : {}),
             ...(typeof value.inlineText === "string" ? { inlineText: value.inlineText } : {})
           }
         : value;
@@ -364,6 +373,7 @@ function normalizeReadChaptersArgs(value: unknown): unknown {
     return scope
       ? {
           scope,
+          ...(typeof value.mode === "string" ? { mode: value.mode } : {}),
           ...(typeof value.inlineText === "string" ? { inlineText: value.inlineText } : {})
         }
       : value;
@@ -373,7 +383,7 @@ function normalizeReadChaptersArgs(value: unknown): unknown {
   return scope ? { scope } : value;
 }
 
-function parseReadChaptersArgs(argumentsJson: string): { readonly scope: ChatAgentScope; readonly inlineText?: string } {
+function parseReadChaptersArgs(argumentsJson: string): { readonly scope: ChatAgentScope; readonly mode?: "raw" | "summary" | "hybrid"; readonly inlineText?: string } {
   const parsed = readChaptersArgsSchema.safeParse(normalizeReadChaptersArgs(parseJsonArguments(argumentsJson)));
   if (!parsed.success) {
     throw new Error(
@@ -444,6 +454,43 @@ function createPlanForScope(scope: z.output<typeof chatAgentScopeSchema>): ChatA
   };
 }
 
+function shouldUseSummaryIndex(args: { readonly scope: ChatAgentScope; readonly mode?: "raw" | "summary" | "hybrid" }): boolean {
+  if (args.mode === "raw") {
+    return false;
+  }
+  if (args.mode === "summary") {
+    return true;
+  }
+  if (args.scope.type === "all_chapters") {
+    return true;
+  }
+  return args.scope.type === "chapter_range" && args.scope.to - args.scope.from + 1 > 3;
+}
+
+function hasCompleteReadySummaryCoverage(runtime: ChatAgentToolRuntime, scope: ChatAgentScope): boolean {
+  if (scope.type !== "chapter_range" || !runtime.summaryRepo) {
+    return false;
+  }
+  if (scope.from > scope.to) {
+    return false;
+  }
+
+  const chapters = runtime.chapterRepo.listByProject(runtime.projectId);
+  if (scope.to > chapters.length) {
+    return false;
+  }
+  const rangeChapters = chapters.slice(scope.from - 1, scope.to);
+  if (rangeChapters.length === 0) {
+    return false;
+  }
+
+  const summaryByChapterId = new Map(runtime.summaryRepo.listChapterSummaries(runtime.projectId).map((summary) => [summary.chapterId, summary]));
+  return rangeChapters.every((chapter) => {
+    const summary = summaryByChapterId.get(chapter.id);
+    return summary?.status === "ready" || summary?.status === "skipped_too_short";
+  });
+}
+
 async function executeListChapters(runtime: ChatAgentToolRuntime): Promise<ChatAgentToolExecutionResult> {
   assertNotCanceled(runtime.signal);
   const chapters = runtime.chapterRepo.listByProject(runtime.projectId).map((chapter, index) => ({
@@ -504,6 +551,10 @@ async function executeReadChapters(runtime: ChatAgentToolRuntime, argumentsJson:
     };
   }
 
+  if (args.mode === "summary" && !runtime.summaryRepo) {
+    throw new Error("摘要索引服务未初始化，无法按 summary 模式读取章节。");
+  }
+  const useSummaryIndex = shouldUseSummaryIndex(args) || (args.mode !== "raw" && hasCompleteReadySummaryCoverage(runtime, args.scope));
   const resolved = resolveChatAgentContext(
     {
       projectId: runtime.projectId,
@@ -513,8 +564,12 @@ async function executeReadChapters(runtime: ChatAgentToolRuntime, argumentsJson:
     },
     createPlanForScope(args.scope),
     runtime.chapterRepo,
-    runtime.tokenBudget
+    runtime.tokenBudget,
+    { summaryRepo: useSummaryIndex ? runtime.summaryRepo : undefined }
   );
+  if (args.mode === "raw" && args.scope.type === "all_chapters" && resolved.requiresSummaries) {
+    throw new Error("全部章节原文超过模型输入预算，不能按 raw 模式读取。请改用 summary 模式或缩小章节范围。");
+  }
   let agentContext = resolved.agentContext;
 
   if (resolved.requiresSummaries) {
@@ -529,6 +584,11 @@ async function executeReadChapters(runtime: ChatAgentToolRuntime, argumentsJson:
     content: stringifyToolResult({
       scopeLabel: agentContext.scopeLabel,
       mode: agentContext.mode,
+      indexMode: agentContext.indexMode,
+      indexedChapterCount: agentContext.indexedChapterCount,
+      totalChapterCount: agentContext.totalChapterCount,
+      staleChapterCount: agentContext.staleChapterCount,
+      skippedTooShortChapterCount: agentContext.skippedTooShortChapterCount,
       sourceChapterIds: agentContext.sourceChapterIds,
       contextText: agentContext.contextText
     })

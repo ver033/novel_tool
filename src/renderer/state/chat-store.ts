@@ -6,7 +6,8 @@ import type {
   AiStreamContextEvent,
   ChapterContent,
   SelectionSnapshot,
-  SettingsState
+  SettingsState,
+  SummaryIndexStatus
 } from "../../main/shared/types";
 import { createIdleChatContextUsage } from "../sidebar/chat-context-display";
 import { getNovelToolApi } from "./app-store";
@@ -23,6 +24,8 @@ type ChatStreamPayload = {
   readonly messages: readonly AiChatMessageRecord[];
   readonly action: AiChatAction | null;
 };
+
+const SUMMARY_INDEX_POLL_MS = 15_000;
 
 function createPendingMessage(role: "user" | "assistant", content: string): AiChatMessageRecord {
   const createdAt = new Date().toISOString();
@@ -60,6 +63,9 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
   const [idleContextUsage, setIdleContextUsage] = useState<AiStreamContextEvent | null>(null);
   const [contextUsage, setContextUsage] = useState<AiStreamContextEvent | null>(null);
   const [contextUsagePending, setContextUsagePending] = useState(false);
+  const [summaryIndexStatus, setSummaryIndexStatus] = useState<SummaryIndexStatus | null>(null);
+  const [summaryIndexLoading, setSummaryIndexLoading] = useState(false);
+  const [summaryIndexError, setSummaryIndexError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -109,6 +115,43 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
     [api, projectId]
   );
 
+  const refreshSummaryIndexStatus = useCallback(async () => {
+    if (!projectId) {
+      setSummaryIndexStatus(null);
+      setSummaryIndexError(null);
+      setSummaryIndexLoading(false);
+      return;
+    }
+
+    setSummaryIndexLoading(true);
+    setSummaryIndexError(null);
+    try {
+      const status = (await api.summary.getIndexStatus({ projectId })) as SummaryIndexStatus;
+      setSummaryIndexStatus(status);
+    } catch (reason) {
+      setSummaryIndexError(formatIpcErrorMessage(reason, "读取全书索引状态失败"));
+    } finally {
+      setSummaryIndexLoading(false);
+    }
+  }, [api, projectId]);
+
+  const rebuildSummaryIndex = useCallback(async () => {
+    if (!projectId) {
+      return;
+    }
+
+    setSummaryIndexLoading(true);
+    setSummaryIndexError(null);
+    try {
+      const status = (await api.summary.rebuildProjectIndex({ projectId })) as SummaryIndexStatus;
+      setSummaryIndexStatus(status);
+    } catch (reason) {
+      setSummaryIndexError(formatIpcErrorMessage(reason, "建立全书索引失败"));
+    } finally {
+      setSummaryIndexLoading(false);
+    }
+  }, [api, projectId]);
+
   useEffect(() => {
     let disposed = false;
     cancelActiveStream({ detach: true });
@@ -122,6 +165,9 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
       setIdleContextUsage(null);
       setContextUsage(null);
       setContextUsagePending(false);
+      setSummaryIndexStatus(null);
+      setSummaryIndexLoading(false);
+      setSummaryIndexError(null);
       setError(null);
       return () => {
         disposed = true;
@@ -177,6 +223,24 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
       disposed = true;
     };
   }, [api, cancelActiveStream, projectId]);
+
+  useEffect(() => {
+    void refreshSummaryIndexStatus();
+  }, [refreshSummaryIndexStatus]);
+
+  useEffect(() => {
+    if (!projectId || !summaryIndexStatus) {
+      return undefined;
+    }
+    if (summaryIndexStatus.queuedJobCount === 0 && !summaryIndexStatus.runningJobLabel) {
+      return undefined;
+    }
+
+    const intervalId = window.setInterval(() => {
+      void refreshSummaryIndexStatus();
+    }, SUMMARY_INDEX_POLL_MS);
+    return () => window.clearInterval(intervalId);
+  }, [projectId, refreshSummaryIndexStatus, summaryIndexStatus]);
 
   useEffect(() => () => cancelActiveStream({ detach: true }), [cancelActiveStream]);
 
@@ -424,10 +488,15 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
     error,
     loading,
     messages,
+    rebuildSummaryIndex,
+    refreshSummaryIndexStatus,
     selectSession,
     sendMessage,
     session,
     sessions,
+    summaryIndexError,
+    summaryIndexLoading,
+    summaryIndexStatus,
     streamingReasoning,
     streamingText
   };

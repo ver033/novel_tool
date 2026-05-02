@@ -84,4 +84,42 @@ describe("chat context usage display", () => {
       compressionLabel: "墨枢已压缩背景信息"
     });
   });
+
+  it("shows persistent summary index as the context source when the request used cached book summaries", () => {
+    expect(
+      buildChatContextUsageDisplay(
+        createContextUsage({
+          contextMode: "summarized",
+          scopeLabel: "全部章节",
+          indexMode: "summary_cache",
+          indexedChapterCount: 80,
+          totalChapterCount: 80,
+          skippedTooShortChapterCount: 0
+        })
+      )
+    ).toMatchObject({
+      compressionLabel: "墨枢已使用全文摘要索引",
+      sourceLabel: "全文摘要索引",
+      coverageLabel: "覆盖 80 / 80 章"
+    });
+  });
+
+  it("shows missing summary index as an explicit context source instead of looking like normal compression", () => {
+    expect(
+      buildChatContextUsageDisplay(
+        createContextUsage({
+          contextMode: "summarized",
+          scopeLabel: "全部章节",
+          indexMode: "missing",
+          indexedChapterCount: 0,
+          totalChapterCount: 120,
+          staleChapterCount: 0
+        })
+      )
+    ).toMatchObject({
+      compressionLabel: "全书摘要索引缺失",
+      sourceLabel: "索引缺失",
+      coverageLabel: "覆盖 0 / 120 章"
+    });
+  });
 });

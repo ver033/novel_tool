@@ -6,8 +6,10 @@ import { createDatabase } from "../../src/main/db/database";
 import { runMigrations } from "../../src/main/db/migrations";
 import { ChapterRepository } from "../../src/main/db/repositories/chapter-repo";
 import { ProjectRepository } from "../../src/main/db/repositories/project-repo";
+import { SummaryRepository } from "../../src/main/db/repositories/summary-repo";
 import { ChapterService } from "../../src/main/chapter/chapter-service";
 import { ProjectService } from "../../src/main/project/project-service";
+import { computeChapterContentHash, type ChapterAiSummaryPayload } from "../../src/main/shared/summary-index";
 
 const tempDirs: string[] = [];
 const projectServices: ProjectService[] = [];
@@ -42,6 +44,21 @@ function createServices() {
 
 function recentProjectIds(projectService: ProjectService): string[] {
   return projectService.listRecentProjects().map((entry) => entry.project.id);
+}
+
+function chapterSummaryPayload(): ChapterAiSummaryPayload {
+  return {
+    oneLine: "旧正文摘要。",
+    synopsis: "旧正文的摘要内容。",
+    keyEvents: ["旧事件"],
+    characterMentions: [{ name: "林远", roleInChapter: "主角" }],
+    relationshipHints: [],
+    timeAndPlace: [],
+    foreshadowingHints: [],
+    unresolvedQuestions: [],
+    emotionalArc: "平静。",
+    importantQuotes: []
+  };
 }
 
 afterEach(() => {
@@ -311,6 +328,68 @@ describe("project and chapter lifecycle", () => {
       )
     ).toThrow("章节内容已被其他操作更新");
     expect(chapterRepo.getContent(initialChapter.id)?.plainText).toBe("第一版。");
+
+    db.close();
+  });
+
+  it("marks an existing chapter summary stale after saved chapter text changes without running AI", () => {
+    const { db, projectService } = createServices();
+    const { project, initialChapter } = projectService.createProject({ name: "归途" });
+    const projectDb = projectService.getProjectDatabaseForProject(project.id);
+    const summaryRepo = new SummaryRepository(projectDb);
+    const invalidationCalls: Array<{ readonly previousPlainText: string; readonly nextPlainText: string }> = [];
+    const chapterService = new ChapterService(
+      (projectId) => new ChapterRepository(projectId ? projectService.getProjectDatabaseForProject(projectId) : projectService.getActiveProjectDatabase()),
+      {
+        summaryIndexInvalidator: {
+          markChapterContentChanged(input) {
+            invalidationCalls.push({
+              previousPlainText: input.previousPlainText,
+              nextPlainText: input.nextPlainText
+            });
+            summaryRepo.markChapterStale(input.projectId, input.chapterId, computeChapterContentHash(input.nextPlainText), input.updatedAt);
+          }
+        }
+      }
+    );
+
+    chapterService.saveContent({
+      projectId: project.id,
+      chapterId: initialChapter.id,
+      contentJson: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "旧正文。" }] }] },
+      plainText: "旧正文。"
+    });
+    summaryRepo.upsertChapterSummary({
+      id: "summary_1",
+      projectId: project.id,
+      chapterId: initialChapter.id,
+      chapterTitle: initialChapter.title,
+      chapterOrder: 1,
+      contentHash: computeChapterContentHash("旧正文。"),
+      summaryShort: "旧正文摘要。",
+      summaryLong: "旧正文的摘要内容。",
+      structured: chapterSummaryPayload(),
+      tokenCount: 32,
+      status: "ready",
+      error: null,
+      createdAt: "2026-05-01T00:00:00.000Z",
+      updatedAt: "2026-05-01T00:00:00.000Z"
+    });
+    invalidationCalls.splice(0);
+
+    chapterService.saveContent({
+      projectId: project.id,
+      chapterId: initialChapter.id,
+      contentJson: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "新正文。" }] }] },
+      plainText: "新正文。"
+    });
+
+    expect(invalidationCalls).toEqual([{ previousPlainText: "旧正文。", nextPlainText: "新正文。" }]);
+    expect(summaryRepo.getChapterSummary(project.id, initialChapter.id)).toMatchObject({
+      status: "stale",
+      contentHash: computeChapterContentHash("新正文。"),
+      error: null
+    });
 
     db.close();
   });

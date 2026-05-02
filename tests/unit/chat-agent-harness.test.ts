@@ -131,6 +131,109 @@ describe("chat agent harness", () => {
     expect(modelMessages).toHaveLength(2);
   });
 
+  it("asks the model once more for a final answer when it returns empty content after reading chapter context", async () => {
+    const modelMessages: OpenRouterMessage[][] = [];
+    const model: ChatAgentModel = {
+      async stream(input) {
+        modelMessages.push([...input.messages]);
+        if (modelMessages.length === 1) {
+          return {
+            content: "",
+            truncated: false,
+            toolCalls: [
+              {
+                id: "call_read_first_two",
+                name: "read_chapters",
+                argumentsJson: JSON.stringify({
+                  scope: {
+                    type: "chapter_range",
+                    from: 1,
+                    to: 2
+                  }
+                })
+              }
+            ]
+          };
+        }
+
+        if (modelMessages.length === 2) {
+          const toolMessages = getToolMessages(input.messages);
+          expect(toolMessages).toHaveLength(1);
+          expect(toolMessages[0].content).toContain("第一章真实正文");
+          expect(toolMessages[0].content).toContain("第二章真实正文");
+          return {
+            content: "",
+            truncated: false
+          };
+        }
+
+        const lastMessage = input.messages[input.messages.length - 1];
+        expect(lastMessage.role).toBe("user");
+        expect(String(lastMessage.content)).toContain("上一轮没有输出最终回答");
+        expect(getToolMessages(input.messages)[0].content).toContain("第二章真实正文");
+        return {
+          content: "前两章总结：第一章交代主角处境，第二章补充世界背景并推进冲突。",
+          truncated: false
+        };
+      }
+    };
+    const chunks: string[] = [];
+
+    const result = await runChatAgentLoop(
+      {
+        requestId: "agent_loop_empty_final_after_read_context",
+        projectId: "project_agent",
+        sessionId: "chat_1",
+        userMessage: "帮我总结前两章的内容",
+        history: [],
+        currentChapterId: "chapter_1",
+        chapterDirectory: [
+          {
+            ordinal: 1,
+            id: "chapter_1",
+            title: "第1章 起点",
+            wordCount: 10,
+            current: true
+          },
+          {
+            ordinal: 2,
+            id: "chapter_2",
+            title: "第2章 暗潮",
+            wordCount: 12,
+            current: false
+          }
+        ],
+        tools,
+        model,
+        tokenBudget: getTokenBudget("chat"),
+        modelContextTokens: 16_384,
+        modelName: "test/model",
+        async executeTool(call: OpenRouterToolCall) {
+          expect(call.name).toBe("read_chapters");
+          return {
+            action: null,
+            content: JSON.stringify({
+              scopeLabel: "前两章",
+              mode: "direct",
+              sourceChapterIds: ["chapter_1", "chapter_2"],
+              contextText: "[第1章 起点]\n第一章真实正文。\n\n[第2章 暗潮]\n第二章真实正文。"
+            })
+          };
+        }
+      },
+      {
+        onChunk(event) {
+          chunks.push(event.content);
+        }
+      }
+    );
+
+    expect(result.content).toBe("前两章总结：第一章交代主角处境，第二章补充世界背景并推进冲突。");
+    expect(result.actions).toEqual([]);
+    expect(chunks.join("")).toBe(result.content);
+    expect(modelMessages).toHaveLength(3);
+  });
+
   it("feeds tool execution errors back to the model so it can self-correct", async () => {
     let modelCallCount = 0;
     let toolCallCount = 0;

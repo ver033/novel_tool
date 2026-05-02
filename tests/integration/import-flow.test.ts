@@ -7,6 +7,7 @@ import { runMigrations } from "../../src/main/db/migrations";
 import { ChapterRepository } from "../../src/main/db/repositories/chapter-repo";
 import { ImportJobRepository } from "../../src/main/db/repositories/import-job-repo";
 import { ProjectRepository } from "../../src/main/db/repositories/project-repo";
+import { SummaryRepository } from "../../src/main/db/repositories/summary-repo";
 import { TxtImporter } from "../../src/main/import/txt-importer";
 import { ProjectService } from "../../src/main/project/project-service";
 
@@ -104,6 +105,13 @@ describe("TXT import flow", () => {
     expect(chapterRepo.getContent(confirmed.chapters[0].id)).toBeNull();
     const projectFile = openProjectChapterRepo(confirmed.project.rootPath!);
     expect(projectFile.chapterRepo.getContent(confirmed.chapters[0].id)?.plainText.length).toBeGreaterThan(1000);
+    expect(projectFile.db.prepare("SELECT job_type, status, COUNT(*) AS count FROM summary_jobs GROUP BY job_type, status").all()).toEqual([
+      {
+        job_type: "chapter_summary",
+        status: "queued",
+        count: 3
+      }
+    ]);
     projectFile.db.close();
 
     db.close();
@@ -132,6 +140,33 @@ describe("TXT import flow", () => {
       "第1章 旧章",
       "第二章 新章"
     ]);
+
+    db.close();
+  });
+
+  it("queues summary jobs only for eligible chapters appended to the current project", () => {
+    const { db, dir, importer, projectService } = createImporter();
+    const created = projectService.createProject({
+      name: "旧项目",
+      rootPath: join(dir, "旧项目.noveltool")
+    });
+    const filePath = join(dir, "追加长章.txt");
+    writeFileSync(filePath, ["第二章 长章", "雨".repeat(620), "第三章 短章", "新线索。"].join("\n\n"), "utf8");
+
+    const preview = importer.previewTxt({ filePath });
+    const confirmed = importer.confirmTxtImport({
+      importJobId: preview.importJobId,
+      mode: "import_into_current_project",
+      projectId: created.project.id
+    });
+
+    const summaryRepo = new SummaryRepository(projectService.getProjectDatabaseForProject(created.project.id));
+    expect(summaryRepo.claimNextSummaryJob(created.project.id, "2026-05-01T00:00:00.000Z")).toMatchObject({
+      jobType: "chapter_summary",
+      targetId: confirmed.chapters[0].id,
+      priority: 8
+    });
+    expect(summaryRepo.claimNextSummaryJob(created.project.id, "2026-05-01T00:00:00.000Z")).toBeNull();
 
     db.close();
   });

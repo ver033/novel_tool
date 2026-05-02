@@ -2107,6 +2107,53 @@ select:focus-visible {
   font-size: 14px;
 }
 
+.summary-index-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 12px;
+  padding: 11px 12px;
+  border: 1px solid #dbe4f0;
+  border-radius: 10px;
+  background: #fbfcfe;
+  color: #475569;
+}
+
+.summary-index-banner.ready {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+}
+
+.summary-index-banner.building {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+}
+
+.summary-index-banner.warning,
+.summary-index-banner.paused {
+  border-color: #fed7aa;
+  background: #fff7ed;
+}
+
+.summary-index-copy {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.summary-index-copy b {
+  color: #1f2937;
+  font-size: 13px;
+  font-weight: 780;
+}
+
+.summary-index-copy span {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .chat-context-status {
   position: relative;
   display: inline-flex;
@@ -2139,6 +2186,14 @@ select:focus-visible {
   min-width: 0;
   max-width: 150px;
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-context-source-label {
+  max-width: 110px;
+  overflow: hidden;
+  color: #475569;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

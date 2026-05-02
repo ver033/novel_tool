@@ -31,6 +31,7 @@ import type { AiChatRepository } from "../db/repositories/ai-chat-repo";
 import { AiTaskRepository } from "../db/repositories/ai-task-repo";
 import type { ChapterRepository } from "../db/repositories/chapter-repo";
 import type { ScratchNoteRepository } from "../db/repositories/scratch-note-repo";
+import type { SummaryRepository } from "../db/repositories/summary-repo";
 import type { ProofreadIssue } from "../shared/proofread";
 import { getTokenBudget, type TokenBudget } from "./token-budget";
 import type {
@@ -158,6 +159,11 @@ export type AiChatStreamHandlers = {
     readonly modelName: string;
     readonly contextMode: "direct" | "summarized" | "mixed";
     readonly scopeLabel: string;
+    readonly indexMode?: AiStreamContextEvent["indexMode"];
+    readonly indexedChapterCount?: number;
+    readonly totalChapterCount?: number;
+    readonly staleChapterCount?: number;
+    readonly skippedTooShortChapterCount?: number;
   }) => void;
   readonly onDone?: (event: { readonly requestId: string; readonly payload: AiChatStreamResult }) => void;
   readonly onError?: (event: { readonly requestId: string; readonly error: string }) => void;
@@ -188,6 +194,7 @@ type AiTaskRepositoryResolver = (projectId?: string) => AiTaskRepository;
 type AiChatRepositoryResolver = (projectId: string) => AiChatRepository;
 type ScratchNoteRepositoryResolver = (projectId: string) => ScratchNoteRepository;
 type ChapterRepositoryResolver = (projectId: string) => ChapterRepository;
+type SummaryRepositoryResolver = (projectId: string) => SummaryRepository;
 type ChatTokenBudgetResolver = () => TokenBudget | Promise<TokenBudget>;
 
 function truncatedTaskError(task: AiTaskRecord): string {
@@ -342,6 +349,7 @@ export class AiTaskService {
   private readonly resolveAiChatRepo?: AiChatRepositoryResolver;
   private readonly resolveChapterRepo?: ChapterRepositoryResolver;
   private readonly resolveScratchRepo?: ScratchNoteRepositoryResolver;
+  private readonly resolveSummaryRepo?: SummaryRepositoryResolver;
   private readonly chatActionService?: ChatActionService;
   private readonly activeStreams = new Map<string, AbortController>();
 
@@ -354,12 +362,14 @@ export class AiTaskService {
     chapterRepo?: ChapterRepository | ChapterRepositoryResolver,
     private readonly chatPlanner?: ChatPlanner,
     private readonly resolveChatTokenBudget: ChatTokenBudgetResolver = () => getTokenBudget("chat"),
-    private readonly writingOperationRunner?: WritingOperationRunner
+    private readonly writingOperationRunner?: WritingOperationRunner,
+    summaryRepo?: SummaryRepository | SummaryRepositoryResolver
   ) {
     this.resolveAiTaskRepo = typeof aiTaskRepo === "function" ? aiTaskRepo : () => aiTaskRepo;
     this.resolveAiChatRepo = aiChatRepo ? (typeof aiChatRepo === "function" ? aiChatRepo : () => aiChatRepo) : undefined;
     this.resolveChapterRepo = chapterRepo ? (typeof chapterRepo === "function" ? chapterRepo : () => chapterRepo) : undefined;
     this.resolveScratchRepo = scratchRepo ? (typeof scratchRepo === "function" ? scratchRepo : () => scratchRepo) : undefined;
+    this.resolveSummaryRepo = summaryRepo ? (typeof summaryRepo === "function" ? summaryRepo : () => summaryRepo) : undefined;
     this.chatActionService = this.resolveScratchRepo ? new ChatActionService(this.resolveScratchRepo) : undefined;
   }
 
@@ -453,7 +463,8 @@ export class AiTaskService {
       },
       plan,
       chapterRepo,
-      chatBudget
+      chatBudget,
+      { summaryRepo: this.resolveSummaryRepo?.(input.projectId) }
     );
     const agentContext = await this.compressResolvedAgentContext(input.projectId, input.message, resolved, chatBudget, signal);
 
@@ -530,12 +541,14 @@ export class AiTaskService {
     const tokenBudget = await this.resolveChatTokenBudget();
     const allowedActions = inferSafeChatActions(input.message).map((action) => action.type);
     const scratchRepo = this.resolveScratchRepo?.(input.projectId);
+    const summaryRepo = this.resolveSummaryRepo?.(input.projectId);
     const runtimeBase = {
       projectId: input.projectId,
       currentChapterId: currentChapter?.id ?? input.chapterId,
       selectionText: input.selectionText,
       userMessage: input.message,
       chapterRepo,
+      summaryRepo,
       scratchRepo,
       tokenBudget,
       signal,
@@ -935,6 +948,10 @@ export class AiTaskService {
     this.activeStreams.delete(input.requestId);
   }
 
+  hasActiveStreams(): boolean {
+    return this.activeStreams.size > 0;
+  }
+
   applyCandidate(input: AiApplyCandidateInput): GeneratedPreview {
     const aiTaskRepo = this.resolveAiTaskRepo(input.projectId);
     const candidate = aiTaskRepo.findCandidateById(input.candidateId);
@@ -1098,10 +1115,10 @@ export class AiTaskService {
         sessionId: input.sessionId,
         role: "assistant",
         content: generated.content,
-        action: {
-          type: "none"
-        }
-      });
+          action: {
+            type: "none"
+          }
+        });
       const action =
         generated.actions?.[0] ??
         (legacyAgenticGeneration

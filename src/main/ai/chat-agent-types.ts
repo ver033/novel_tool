@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { AiContextIndexMode } from "../shared/types";
 
 export const chatAgentScopeSchema = z.discriminatedUnion("type", [
   z.object({
@@ -68,6 +69,11 @@ export type ChatAgentContext = {
   readonly contextText: string;
   readonly sourceChapterIds: readonly string[];
   readonly mode: ChatAgentContextMode;
+  readonly indexMode?: AiContextIndexMode;
+  readonly indexedChapterCount?: number;
+  readonly totalChapterCount?: number;
+  readonly staleChapterCount?: number;
+  readonly skippedTooShortChapterCount?: number;
 };
 
 export type ChatChapterSummaryInput = {
