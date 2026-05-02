@@ -59,7 +59,8 @@ describe("phase 2 database migrations", () => {
       { version: 7 },
       { version: 8 },
       { version: 9 },
-      { version: 10 }
+      { version: 10 },
+      { version: 11 }
     ]);
     expect(db.prepare("PRAGMA table_info(import_jobs)").all().find((row) => row.name === "project_id")).toMatchObject({ notnull: 0 });
     expect(db.prepare("PRAGMA table_info(ai_task_candidates)").all().find((row) => row.name === "metadata_json")).toMatchObject({
@@ -90,7 +91,7 @@ describe("phase 2 database migrations", () => {
     runMigrations(db);
     runMigrations(db);
 
-    expect(db.prepare("SELECT COUNT(*) AS count FROM schema_migrations").get()).toEqual({ count: 10 });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM schema_migrations").get()).toEqual({ count: 11 });
 
     db.close();
   });
@@ -138,7 +139,65 @@ describe("phase 2 database migrations", () => {
     expect(db.prepare("SELECT COUNT(*) AS count FROM arc_ai_summaries").get()).toEqual({ count: 0 });
     expect(db.prepare("SELECT COUNT(*) AS count FROM book_ai_summaries").get()).toEqual({ count: 0 });
     expect(db.prepare("SELECT COUNT(*) AS count FROM summary_jobs").get()).toEqual({ count: 0 });
-    expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").get()).toEqual({ version: 10 });
+    expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").get()).toEqual({ version: 11 });
+
+    db.close();
+  });
+
+  it("invalidates legacy proofread candidate metadata instead of converting it", () => {
+    const db = createDatabase(createTempDbPath());
+
+    runMigrations(db);
+    db.prepare("INSERT INTO projects (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)").run(
+      "project_legacy_proofread",
+      "归途",
+      "2026-05-02T00:00:00.000Z",
+      "2026-05-02T00:00:00.000Z"
+    );
+    db.prepare("INSERT INTO ai_tasks (id, project_id, task_type, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)").run(
+      "task_legacy_proofread",
+      "project_legacy_proofread",
+      "proofread",
+      "preview_ready",
+      "2026-05-02T00:00:00.000Z",
+      "2026-05-02T00:00:00.000Z"
+    );
+    db.prepare(
+      `INSERT INTO ai_task_candidates
+       (id, task_id, kind, generated_text, change_summary, metadata_json, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      "candidate_legacy_proofread",
+      "task_legacy_proofread",
+      "proofread",
+      "",
+      "发现 1 个问题",
+      JSON.stringify({
+        proofreadIssues: [
+          {
+            type: "表达不顺",
+            quote: "雨声里停下脚步",
+            suggestion: "林远听着雨声停下脚步。",
+            reason: "语序更自然"
+          }
+        ]
+      }),
+      "preview",
+      "2026-05-02T00:00:00.000Z",
+      "2026-05-02T00:00:00.000Z"
+    );
+
+    db.prepare("DELETE FROM schema_migrations WHERE version = ?").run(11);
+    runMigrations(db);
+
+    expect(
+      db.prepare("SELECT status, change_summary, metadata_json FROM ai_task_candidates WHERE id = ?").get("candidate_legacy_proofread")
+    ).toEqual({
+      status: "rejected",
+      change_summary: "旧版校对结果已失效，请重新生成。",
+      metadata_json: null
+    });
+    expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").get()).toEqual({ version: 11 });
 
     db.close();
   });

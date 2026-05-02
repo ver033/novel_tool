@@ -99,13 +99,15 @@ describe("cache-assisted proofread", () => {
     });
 
     expect(plan.targetText).toBe(target);
-    expect(plan.supportingContext).toHaveLength(1);
-    expect(plan.supportingContext[0]).toMatchObject({
+    expect(plan.supportingContext.map((item) => item.kind)).toEqual(["same_chapter_before", "same_chapter_after", "same_chapter_summary"]);
+    expect(plan.supportingContext[0]?.content).toContain("前文");
+    expect(plan.supportingContext[1]?.content).toContain("后文");
+    expect(plan.supportingContext[2]).toMatchObject({
       kind: "same_chapter_summary",
       label: "第3章 客人 章节摘要索引"
     });
-    expect(plan.supportingContext[0]?.content).toContain("人物认知边界");
-    expect(plan.reason).toContain("章节摘要缓存只用于逻辑和连续性判断");
+    expect(plan.supportingContext[2]?.content).toContain("人物认知边界");
+    expect(plan.reason).toContain("前后文和章节摘要缓存只用于逻辑和连续性判断");
 
     db.close();
   });
@@ -138,11 +140,21 @@ describe("cache-assisted proofread", () => {
       JSON.stringify({
         issues: [
           {
-            type: "人物认知",
+            code: "character_knowledge_conflict",
+            severity: "high",
             quote: "他立刻说出旧信来自祠堂。",
+            locationHint: "选区第 1 段",
+            explanation: "章节缓存显示该人物此前尚不知道旧信来源，因此这里可能出现人物认知越界。",
             suggestion: "请核对前文是否已经让他得知旧信来源。",
-            reason: "章节缓存显示该人物此前尚不知道旧信来源。",
-            缓存证据: ["第3章：尚不知道旧信来源"]
+            evidence: [
+              {
+                source: "chapter_summary",
+                quote: "尚不知道旧信来源",
+                note: "第3章章节缓存"
+              }
+            ],
+            canAutoApply: true,
+            needsAuthorJudgment: false
           }
         ]
       })
@@ -150,14 +162,21 @@ describe("cache-assisted proofread", () => {
 
     expect(parsed.proofreadIssues).toEqual([
       {
-        type: "人物认知",
+        code: "character_knowledge_conflict",
+        severity: "high",
         quote: "他立刻说出旧信来自祠堂。",
+        locationHint: "选区第 1 段",
+        explanation: "章节缓存显示该人物此前尚不知道旧信来源，因此这里可能出现人物认知越界。",
         suggestion: "请核对前文是否已经让他得知旧信来源。",
-        reason: "章节缓存显示该人物此前尚不知道旧信来源。",
-        缓存证据: ["第3章：尚不知道旧信来源"],
-        是否可自动应用: "否",
-        是否需要作者判断: "是",
-        是否需要回读原文: "是"
+        evidence: [
+          {
+            source: "chapter_summary",
+            quote: "尚不知道旧信来源",
+            note: "第3章章节缓存"
+          }
+        ],
+        canAutoApply: false,
+        needsAuthorJudgment: true
       }
     ]);
   });

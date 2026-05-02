@@ -344,14 +344,13 @@ describe("summary service generation", () => {
     db.close();
   });
 
-  it("indexes long chapters through chunk summaries and a merge step", async () => {
+  it("indexes long chapters by locally aggregating chunk summaries without a model merge step", async () => {
     const db = createDb();
     const { chapterRepo, summaryRepo } = seedProject(db);
     const content = Array.from({ length: 14 }, (_, index) => `第${index + 1}段。${"春".repeat(650)}`).join("\n\n");
     createChapter(chapterRepo, "chapter_1", content);
     const expectedChunks = splitChapterForSummaryIndex(content);
     const chunkInputs: number[] = [];
-    let mergeChunkCount = 0;
     const service = new SummaryService(summaryRepo, chapterRepo, {
       generator: {
         summarizeChapterForIndex: async () => {
@@ -359,11 +358,14 @@ describe("summary service generation", () => {
         },
         summarizeChapterChunkForIndex: async (input) => {
           chunkInputs.push(input.chunkIndex);
-          return chapterChunkIndexPayload({ chunkIndex: input.chunkIndex, chunkCount: input.chunkCount });
+          return chapterChunkIndexPayload({
+            chunkIndex: input.chunkIndex,
+            chunkCount: input.chunkCount,
+            summary: `第${input.chunkIndex + 1}个片段缓存摘要`
+          });
         },
-        mergeChapterChunksForIndex: async (input) => {
-          mergeChunkCount = input.chunks.length;
-          return summaryPayloadV2();
+        mergeChapterChunksForIndex: async () => {
+          throw new Error("long chapter chunk merge should be deterministic and local");
         }
       }
     });
@@ -371,8 +373,16 @@ describe("summary service generation", () => {
     const summary = await service.summarizeChapter("project_1", "chapter_1", computeChapterContentHash(content), "2026-05-01T00:10:00.000Z");
 
     expect(chunkInputs).toEqual(expectedChunks.map((chunk) => chunk.chunkIndex));
-    expect(mergeChunkCount).toBe(expectedChunks.length);
     expect(summary).toMatchObject({ status: "ready", contentHash: computeChapterContentHash(content) });
+    expect(summary.structured.章节信息).toMatchObject({
+      章节标题: "第1章",
+      正文覆盖: "完整章节",
+      缓存版本: "二"
+    });
+    expect(summary.structured.详细梗概).toContain("第1个片段缓存摘要");
+    expect(summary.structured.详细梗概).toContain(`第${expectedChunks.length}个片段缓存摘要`);
+    expect(summary.structured.关键事件.length).toBeGreaterThan(0);
+    expect(summary.structured.可核对事实.length).toBeGreaterThan(0);
     expect(summaryRepo.listChapterSummaryChunks("project_1", "chapter_1", computeChapterContentHash(content))).toHaveLength(expectedChunks.length);
     db.close();
   });
@@ -400,7 +410,9 @@ describe("summary service generation", () => {
           }
           return chapterChunkIndexPayload({ chunkIndex: input.chunkIndex, chunkCount: input.chunkCount });
         },
-        mergeChapterChunksForIndex: async () => summaryPayloadV2()
+        mergeChapterChunksForIndex: async () => {
+          throw new Error("changed source must stop before local chunk aggregation");
+        }
       }
     });
 
@@ -478,7 +490,9 @@ describe("summary service generation", () => {
           generatedChunkIndexes.push(input.chunkIndex);
           return chapterChunkIndexPayload({ chunkIndex: input.chunkIndex, chunkCount: input.chunkCount });
         },
-        mergeChapterChunksForIndex: async () => summaryPayloadV2()
+        mergeChapterChunksForIndex: async () => {
+          throw new Error("ready chunks should be aggregated locally");
+        }
       }
     });
 

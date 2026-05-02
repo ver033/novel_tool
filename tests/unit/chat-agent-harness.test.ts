@@ -731,6 +731,8 @@ describe("chat agent harness", () => {
         expect(systemPrompt).toContain("校对");
         expect(systemPrompt).toContain("不要输出全文改写稿");
         expect(systemPrompt).toContain("最多 20 条");
+        expect(systemPrompt).toContain("最终回答必须和你的分析一致");
+        expect(input.temperature).toBe(0.2);
         return {
           content: "【校对结果】\n暂未发现明显错别字。",
           truncated: false
@@ -758,15 +760,135 @@ describe("chat agent harness", () => {
     expect(result.content).toContain("【校对结果】");
   });
 
+  it("rechecks a clean proofread final answer when reasoning contains concrete issue candidates", async () => {
+    const chunks: string[] = [];
+    let callCount = 0;
+    const model: ChatAgentModel = {
+      async stream(input) {
+        callCount += 1;
+        if (callCount === 1) {
+          expect(input.temperature).toBe(0.2);
+          return {
+            content: "【校对结果】\n未发现明显校对问题。",
+            reasoning:
+              "识别出的问题：1. “望着萧战的反映”应该是“望着萧战的反应”。2. “可以她的实力与势力”应改为“以她的实力与势力”。",
+            truncated: false
+          };
+        }
+
+        const retryPrompt = String(input.messages.at(-1)?.content ?? "");
+        expect(retryPrompt).toContain("最终输出一致性校验");
+        expect(retryPrompt).toContain("望着萧战的反映");
+        return {
+          content: [
+            "【校对结果】",
+            "1. 错别字｜low",
+            "原文：望着萧战的反映",
+            "建议：改为“望着萧战的反应”。"
+          ].join("\n"),
+          truncated: false
+        };
+      }
+    };
+
+    const result = await runChatAgentLoop(
+      {
+        requestId: "agent_loop_proofread_consistency_retry",
+        projectId: "project_agent",
+        sessionId: "chat_1",
+        userMessage: "校对第五章的内容",
+        history: [],
+        chapterDirectory: [],
+        tools,
+        model,
+        tokenBudget: getTokenBudget("chat"),
+        modelContextTokens: null,
+        modelName: "test/model",
+        async executeTool() {
+          throw new Error("proofread consistency retry test should not execute tools");
+        }
+      },
+      {
+        onChunk(event) {
+          chunks.push(event.content);
+        }
+      }
+    );
+
+    expect(result.content).toContain("望着萧战的反映");
+    expect(result.content).toContain("反应");
+    expect(result.content).not.toContain("未发现明显校对问题");
+    expect(chunks.join("")).toBe(result.content);
+    expect(callCount).toBe(2);
+  });
+
+  it("rechecks a clean proofread answer when reasoning flags an abrupt inserted line", async () => {
+    let callCount = 0;
+    const model: ChatAgentModel = {
+      async stream(input) {
+        callCount += 1;
+        if (callCount === 1) {
+          return {
+            content: "【校对结果】\n未发现明确问题。",
+            reasoning: "“斗之力，三段！”这句本身正确，但作为第六章结尾突兀插入，需要检查逻辑和前后承接。",
+            truncated: false
+          };
+        }
+
+        const retryPrompt = String(input.messages.at(-1)?.content ?? "");
+        expect(retryPrompt).toContain("突兀");
+        expect(retryPrompt).toContain("斗之力，三段");
+        return {
+          content: [
+            "【校对结果】",
+            "1. 连续性风险｜medium",
+            "原文：斗之力，三段！",
+            "建议：确认这是否为误插入的旧章节句子；如果不是伏笔或刻意回环，应删除或补过渡。"
+          ].join("\n"),
+          truncated: false
+        };
+      }
+    };
+
+    const result = await runChatAgentLoop({
+      requestId: "agent_loop_abrupt_line_retry",
+      projectId: "project_agent",
+      sessionId: "chat_1",
+      userMessage: "校对第六章的内容",
+      history: [],
+      chapterDirectory: [],
+      tools,
+      model,
+      tokenBudget: getTokenBudget("chat"),
+      modelContextTokens: null,
+      modelName: "test/model",
+      async executeTool() {
+        throw new Error("abrupt line proofread retry test should not execute tools");
+      }
+    });
+
+    expect(result.content).toContain("斗之力，三段");
+    expect(result.content).toContain("连续性风险");
+    expect(result.content).not.toContain("未发现明确问题");
+    expect(callCount).toBe(2);
+  });
+
   it("instructs the model that pasted chat text can be used as the rewrite source", async () => {
     const userMessage = ["少年面无表情，唇角带着一抹自嘲。", "这一段文字润色一下"].join("\n");
     const model: ChatAgentModel = {
       async stream(input) {
         const systemPrompt = String(input.messages.find((message) => message.role === "system")?.content ?? "");
         const userPrompt = String(input.messages.find((message) => message.role === "user")?.content ?? "");
+        expect(input.toolChoice).toEqual({
+          type: "function",
+          function: {
+            name: "run_writing_operation"
+          }
+        });
         expect(systemPrompt).toContain("当前消息里直接粘贴的正文");
         expect(systemPrompt).toContain("target.kind=inline_text");
         expect(systemPrompt).toContain("没有 slash 时，你也必须根据作者自然语言自由决定是否调用 run_writing_operation");
+        expect(systemPrompt).toContain("写作操作意图优先于章节查询意图");
         expect(systemPrompt).toContain("本地不会根据关键词猜测正文范围");
         expect(userPrompt).toContain("run_writing_operation.target.inline_text.text");
         return {
@@ -794,6 +916,42 @@ describe("chat agent harness", () => {
     });
 
     expect(result.content).toContain("【润色稿】");
+  });
+
+  it("treats natural language writing intent as a tool route but forbids guessing missing targets", async () => {
+    const model: ChatAgentModel = {
+      async stream(input) {
+        const systemPrompt = String(input.messages.find((message) => message.role === "system")?.content ?? "");
+        expect(input.toolChoice).toBeUndefined();
+        expect(systemPrompt).toContain("自然语言提出润色、扩写、校对或续写，也应调用 run_writing_operation");
+        expect(systemPrompt).toContain("扩写是替换目标文本，续写是插入到目标文本之后");
+        expect(systemPrompt).toContain("slash 只是显式快捷方式，不是唯一触发方式");
+        expect(systemPrompt).toContain("没有粘贴正文、没有真实选区、也没有明确章节范围时，先请作者提供目标文本或选择范围，不要猜测");
+        return {
+          content: "请先选择正文，或把要处理的文字粘贴到对话里。",
+          truncated: false
+        };
+      }
+    };
+
+    const result = await runChatAgentLoop({
+      requestId: "agent_loop_missing_writing_target_contract",
+      projectId: "project_agent",
+      sessionId: "chat_1",
+      userMessage: "帮我润色一下",
+      history: [],
+      chapterDirectory: [],
+      tools,
+      model,
+      tokenBudget: getTokenBudget("chat"),
+      modelContextTokens: null,
+      modelName: "test/model",
+      async executeTool() {
+        throw new Error("missing target should not execute writing tools");
+      }
+    });
+
+    expect(result.content).toContain("请先选择正文");
   });
 
   it("keeps a successful writing operation result when the final assistant turn is empty", async () => {

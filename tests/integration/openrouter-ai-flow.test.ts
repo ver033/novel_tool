@@ -208,16 +208,38 @@ describe("OpenRouter AI flow", () => {
           },
           proofreadIssues: [
             {
-              type: "错别字",
+              code: "typo",
+              severity: "medium",
               quote: "的地得",
+              locationHint: "选区第 1 句",
+              explanation: "助词误用。",
               suggestion: "按语义修正的、地、得。",
-              reason: "助词误用"
+              evidence: [
+                {
+                  source: "target",
+                  quote: "的地得",
+                  note: "目标文本中的助词"
+                }
+              ],
+              canAutoApply: true,
+              needsAuthorJudgment: false
             },
             {
-              type: "标点",
+              code: "punctuation",
+              severity: "medium",
               quote: "他说：我回来了",
+              locationHint: "选区第 1 句",
+              explanation: "对白标点不完整。",
               suggestion: "他说：“我回来了。”",
-              reason: "对白标点不完整"
+              evidence: [
+                {
+                  source: "target",
+                  quote: "他说：我回来了",
+                  note: "目标文本中的对白"
+                }
+              ],
+              canAutoApply: true,
+              needsAuthorJudgment: false
             }
           ]
         };
@@ -246,16 +268,38 @@ describe("OpenRouter AI flow", () => {
       changeSummary: "发现 2 个问题",
       proofreadIssues: [
         {
-          type: "错别字",
+          code: "typo",
+          severity: "medium",
           quote: "的地得",
+          locationHint: "选区第 1 句",
+          explanation: "助词误用。",
           suggestion: "按语义修正的、地、得。",
-          reason: "助词误用"
+          evidence: [
+            {
+              source: "target",
+              quote: "的地得",
+              note: "目标文本中的助词"
+            }
+          ],
+          canAutoApply: true,
+          needsAuthorJudgment: false
         },
         {
-          type: "标点",
+          code: "punctuation",
+          severity: "medium",
           quote: "他说：我回来了",
+          locationHint: "选区第 1 句",
+          explanation: "对白标点不完整。",
           suggestion: "他说：“我回来了。”",
-          reason: "对白标点不完整"
+          evidence: [
+            {
+              source: "target",
+              quote: "他说：我回来了",
+              note: "目标文本中的对白"
+            }
+          ],
+          canAutoApply: true,
+          needsAuthorJudgment: false
         }
       ],
       writingContextPlan: {

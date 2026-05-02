@@ -61,7 +61,7 @@ const CHAPTER_SUMMARY_MERGE_MAX_TOKENS = 2200;
 const CONTEXT_BATCH_SUMMARY_MAX_TOKENS = 3200;
 const CONTEXT_SUMMARY_MERGE_MAX_TOKENS = 3200;
 const CHAT_MEMORY_SUMMARY_MAX_TOKENS = 2200;
-const SUMMARY_INDEX_MAX_TOKENS = 12_000;
+const SUMMARY_INDEX_MAX_TOKENS = 24_000;
 const CHAT_MEMORY_SUMMARY_PROMPT_RATIO = 0.75;
 const CHAT_MEMORY_SUMMARY_RECOMPRESS_MAX_ROUNDS = 2;
 
@@ -312,7 +312,7 @@ export class OpenRouterChatGenerator implements AiChatGenerator {
           {
             messages: agentInput.messages,
             tools: agentInput.tools,
-            toolChoice: "auto",
+            toolChoice: agentInput.toolChoice ?? "auto",
             parallelToolCalls: false,
             allowEmptyContent: true,
             maxCompletionTokens: agentInput.maxCompletionTokens,

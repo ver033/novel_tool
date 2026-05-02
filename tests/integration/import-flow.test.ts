@@ -197,7 +197,7 @@ describe("TXT import flow", () => {
     db.close();
   });
 
-  it("reopens the existing imported project when the same TXT file is imported again", () => {
+  it("creates a separate project file when importing changed same-name TXT as a new project", () => {
     const { db, dir, importer, chapterRepo, projectRepo } = createImporter();
     const filePath = join(dir, "test.txt");
     writeFileSync(filePath, "第一章 回家\n林远回来了。", "utf8");
@@ -208,6 +208,7 @@ describe("TXT import flow", () => {
       mode: "create_new_project",
       projectName: "test"
     });
+    writeFileSync(filePath, "第一章 新路\n林远去了新的地方。", "utf8");
     const secondPreview = importer.previewTxt({ filePath });
     const secondImport = importer.confirmTxtImport({
       importJobId: secondPreview.importJobId,
@@ -215,12 +216,18 @@ describe("TXT import flow", () => {
       projectName: "test"
     });
 
-    expect(secondImport.project.id).toBe(firstImport.project.id);
-    expect(secondImport.chapters.map((chapter) => chapter.id)).toEqual(firstImport.chapters.map((chapter) => chapter.id));
-    const projectFile = openProjectChapterRepo(firstImport.project.rootPath!);
-    expect(projectFile.chapterRepo.listByProject(firstImport.project.id).map((chapter) => chapter.title)).toEqual(["第一章 回家"]);
-    projectFile.db.close();
+    expect(secondImport.project.id).not.toBe(firstImport.project.id);
+    expect(firstImport.project.rootPath).toBe(join(dir, "test.noveltool"));
+    expect(secondImport.project.rootPath).toBe(join(dir, "test-2.noveltool"));
+    expect(secondImport.chapters.map((chapter) => chapter.title)).toEqual(["第一章 新路"]);
+    const firstProjectFile = openProjectChapterRepo(firstImport.project.rootPath!);
+    const secondProjectFile = openProjectChapterRepo(secondImport.project.rootPath!);
+    expect(firstProjectFile.chapterRepo.listByProject(firstImport.project.id).map((chapter) => chapter.title)).toEqual(["第一章 回家"]);
+    expect(secondProjectFile.chapterRepo.getContent(secondImport.chapters[0].id)?.plainText).toContain("新的地方");
+    firstProjectFile.db.close();
+    secondProjectFile.db.close();
     expect(projectRepo.listRecent().filter((project) => project.rootPath === join(dir, "test.noveltool"))).toHaveLength(1);
+    expect(projectRepo.listRecent().filter((project) => project.rootPath === join(dir, "test-2.noveltool"))).toHaveLength(1);
 
     db.close();
   });

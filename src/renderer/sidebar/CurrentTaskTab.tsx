@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Editor } from "@tiptap/react";
-import type { ProofreadIssue } from "../../main/shared/proofread";
+import { proofreadIssueLabels, type ProofreadIssue } from "../../main/shared/proofread";
 import type { SelectionSnapshot, TaskPromptPreset, TaskType } from "../../main/shared/types";
 import { Button } from "../components/Button";
 import { Textarea } from "../components/Textarea";
@@ -21,10 +21,10 @@ type CurrentTaskTabProps = {
 };
 
 const defaultInstruction: Record<TaskType, string> = {
-  polish: "请将语言表达得更文雅一些，保持剧情事实不变。",
-  expand: "请补充环境和心理细节，保持节奏克制。",
-  proofread: "请检查错别字、病句、重复表达和表达不顺。",
-  continue: "请自然衔接后续剧情，不要突然跳转视角。"
+  polish: "按原文风格轻量润色，优先处理拗口、重复和节奏问题。",
+  expand: "把原片段扩写为可替换原选区的完整版本，保持当前场景和人物认知。",
+  proofread: "按校对规则检查明确问题；不确定的逻辑风险标记为需要作者判断。",
+  continue: "从当前最后一句自然接续，只生成插入选区下方的新正文。"
 };
 
 function initialInstructionForTask(taskType: TaskType, taskPromptPreset: TaskPromptPreset | null): string {
@@ -32,11 +32,8 @@ function initialInstructionForTask(taskType: TaskType, taskPromptPreset: TaskPro
 }
 
 function applyModeForTask(taskType: TaskType) {
-  if (taskType === "expand") {
-    return "insert_below" as const;
-  }
   if (taskType === "continue") {
-    return "insert_at_cursor" as const;
+    return "insert_below" as const;
   }
   return "replace_selection" as const;
 }
@@ -63,6 +60,13 @@ function isTruncatedAiOutputError(error: string): boolean {
 function isOpenRouterRateLimitError(error: string): boolean {
   return error.includes("OpenRouter 请求失败 (429)") || error.includes("rate limited") || error.includes("Rate limit");
 }
+
+const proofreadSeverityLabels: Record<ProofreadIssue["severity"], string> = {
+  low: "低",
+  medium: "中",
+  high: "高",
+  critical: "严重"
+};
 
 function taskErrorTitle(error: string, taskType: TaskType): string {
   if (isAiSettingsError(error)) {
@@ -93,20 +97,21 @@ function taskErrorHint(error: string, taskType: TaskType): string | null {
 }
 
 function formatProofreadIssueDraft(issue: ProofreadIssue): string {
+  const label = proofreadIssueLabels[issue.code];
   const lines = [
-    `校对建议：${issue.type}`,
+    `校对建议：${label}｜${proofreadSeverityLabels[issue.severity]}`,
     `原文片段：${issue.quote || "未提供"}`,
+    `位置：${issue.locationHint || "未提供"}`,
     `建议改法：${issue.suggestion || "未提供"}`,
-    `原因：${issue.reason || "未提供"}`
+    `说明：${issue.explanation || "未提供"}`
   ];
-  if (issue.缓存证据?.length) {
-    lines.push(`缓存证据：${issue.缓存证据.join("；")}`);
+  if (issue.suggestedReplacement) {
+    lines.push(`建议替换：${issue.suggestedReplacement}`);
   }
-  if (issue.是否需要作者判断 || issue.是否需要回读原文 || issue.是否可自动应用) {
-    lines.push(
-      `处理方式：${issue.是否可自动应用 === "是" ? "可自动应用" : "建议作者手动判断"}${issue.是否需要回读原文 === "是" ? "，需要回读原文确认" : ""}`
-    );
+  if (issue.evidence.length) {
+    lines.push(`证据：${issue.evidence.map((item) => `${item.note}：${item.quote}`).join("；")}`);
   }
+  lines.push(`处理方式：${issue.canAutoApply ? "建议替换可作为手动修改参考" : "仅供诊断，建议作者手动判断"}${issue.needsAuthorJudgment ? "，需要作者判断" : ""}`);
   return lines.join("\n");
 }
 
@@ -142,7 +147,7 @@ export function CurrentTaskTab({
     editor,
     flushPendingSave
   });
-  const primaryLabel = taskType === "expand" ? "插入下方" : taskType === "continue" ? "插入到光标处" : "应用替换";
+  const primaryLabel = taskType === "expand" ? "替换原文" : taskType === "continue" ? "插入下方" : "应用替换";
   const hasCandidateText = Boolean(taskStore.candidate?.generatedText.trim());
   const partialTruncatedText = taskStore.streamingText || taskStore.task?.outputText || "";
   const canContinueTruncated = Boolean(taskStore.task && taskStore.error?.includes("截断") && partialTruncatedText.trim() && taskType !== "proofread");
@@ -222,10 +227,19 @@ export function CurrentTaskTab({
         ) : (
           <div className="proofread-issue-list">
             {proofreadIssues.map((issue, index) => (
-              <div className="issue" key={`${issue.type}-${index}`}>
+              <div className="issue proofread-issue-card" key={`${issue.code}-${index}`}>
                 <div className="issue-head">
-                  <span className="issue-number">{index + 1}</span>
-                  <span className="mini-tag">{issue.type}</span>
+                  <div className="proofread-issue-primary">
+                    <span className="issue-number">{index + 1}</span>
+                    <div>
+                      <b>{proofreadIssueLabels[issue.code]}</b>
+                      <span>{issue.locationHint || "未提供位置"}</span>
+                    </div>
+                  </div>
+                  <div className="issue-meta-row">
+                    <span className="mini-tag subtle">{proofreadSeverityLabels[issue.severity]}</span>
+                    {issue.needsAuthorJudgment ? <span className="mini-tag warning">需要作者判断</span> : null}
+                  </div>
                 </div>
                 <div className="issue-body">
                   <div>
@@ -233,28 +247,43 @@ export function CurrentTaskTab({
                     <p>{issue.quote || selectedText}</p>
                   </div>
                   <div>
+                    <span className="issue-label">位置</span>
+                    <p>{issue.locationHint || "未提供"}</p>
+                  </div>
+                  <div>
                     <span className="issue-label">建议改法</span>
                     <p>{issue.suggestion || "未提供"}</p>
                   </div>
                   <div>
-                    <span className="issue-label">原因</span>
-                    <p>{issue.reason || "未提供"}</p>
+                    <span className="issue-label">说明</span>
+                    <p>{issue.explanation || "未提供"}</p>
                   </div>
-                  {issue.缓存证据?.length ? (
+                  {issue.suggestedReplacement ? (
                     <div>
-                      <span className="issue-label">缓存证据</span>
-                      <p>{issue.缓存证据.join("；")}</p>
+                      <span className="issue-label">建议替换</span>
+                      <p>{issue.suggestedReplacement}</p>
                     </div>
                   ) : null}
-                  {issue.是否需要作者判断 || issue.是否需要回读原文 || issue.是否可自动应用 ? (
+                  {issue.evidence.length ? (
                     <div>
-                      <span className="issue-label">处理方式</span>
-                      <p>
-                        {issue.是否可自动应用 === "是" ? "可自动应用" : "建议作者手动判断"}
-                        {issue.是否需要回读原文 === "是" ? "，需要回读原文确认" : ""}
-                      </p>
+                      <span className="issue-label">证据</span>
+                      <ul className="issue-evidence-list">
+                        {issue.evidence.map((item, evidenceIndex) => (
+                          <li key={`${item.source}-${evidenceIndex}`}>
+                            <b>{item.note}</b>
+                            <span>{item.quote}</span>
+                          </li>
+                        ))}
+                      </ul>
                     </div>
                   ) : null}
+                  <div>
+                    <span className="issue-label">处理方式</span>
+                    <p>
+                      {issue.canAutoApply ? "建议替换可作为手动修改参考" : "仅供诊断，建议作者手动判断"}
+                      {issue.needsAuthorJudgment ? "，需要作者判断" : ""}
+                    </p>
+                  </div>
                 </div>
                 <div className="small-actions">
                   <button className="small-button blue" disabled={taskStore.busy} onClick={() => void copyProofreadIssue(issue, index)} type="button">复制建议</button>
@@ -339,11 +368,6 @@ export function CurrentTaskTab({
         <Button disabled={!taskStore.candidate || !hasCandidateText || taskStore.busy} onClick={() => void taskStore.saveCandidateToScratchpad()} variant="ghost">
           加入草稿纸
         </Button>
-        {taskType === "expand" ? (
-          <Button disabled={!taskStore.candidate || !hasCandidateText || taskStore.busy} onClick={() => void taskStore.applyCandidate("replace_selection")} variant="ghost">
-            替换原文
-          </Button>
-        ) : null}
         <Button disabled={!taskStore.candidate || !hasCandidateText || taskStore.busy} onClick={() => void taskStore.applyCandidate(applyModeForTask(taskType))} variant="primary">
           {primaryLabel}
         </Button>

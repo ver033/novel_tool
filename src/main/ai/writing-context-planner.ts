@@ -128,34 +128,41 @@ function buildSelectionContext(input: PlanWritingOperationContextInput, targetTe
     return [];
   }
 
-  if (input.operation.id === "proofread") {
-    const summaryContext = formatChapterSummaryCacheContext(input, input.target.chapterId);
-    return summaryContext ? [summaryContext] : [];
-  }
-
   const range = findTargetRange(chapter.plainText, targetText);
-  if (!range) {
-    return [];
-  }
-
-  const beforeStart = Math.max(0, range.start - input.operation.contextPolicy.includeLocalBeforeChars);
-  const afterEnd = Math.min(chapter.plainText.length, range.end + input.operation.contextPolicy.includeLocalAfterChars);
-  const before = chapter.plainText.slice(beforeStart, range.start).trim();
-  const after = chapter.plainText.slice(range.end, afterEnd).trim();
   const items: WritingSupportingContextItem[] = [];
 
-  pushContextItem(items, {
-    kind: "same_chapter_before",
-    label: `${chapter.title} 选区前文`,
-    content: before,
-    reason: "保持当前场景、称呼和语气连续"
-  });
-  pushContextItem(items, {
-    kind: "same_chapter_after",
-    label: `${chapter.title} 选区后文`,
-    content: after,
-    reason: "避免候选文本破坏后文承接"
-  });
+  if (range) {
+    const beforeStart = Math.max(0, range.start - input.operation.contextPolicy.includeLocalBeforeChars);
+    const afterEnd = Math.min(chapter.plainText.length, range.end + input.operation.contextPolicy.includeLocalAfterChars);
+    const before = chapter.plainText.slice(beforeStart, range.start).trim();
+    const after = chapter.plainText.slice(range.end, afterEnd).trim();
+
+    pushContextItem(items, {
+      kind: "same_chapter_before",
+      label: `${chapter.title} 选区前文`,
+      content: before,
+      reason:
+        input.operation.id === "proofread"
+          ? "用于判断前文承接、人物状态、时间线和逻辑风险；不可作为修改目标"
+          : "保持当前场景、称呼和语气连续"
+    });
+    pushContextItem(items, {
+      kind: "same_chapter_after",
+      label: `${chapter.title} 选区后文`,
+      content: after,
+      reason:
+        input.operation.id === "proofread"
+          ? "用于判断后文承接、人物状态、时间线和逻辑风险；不可作为修改目标"
+          : "避免候选文本破坏后文承接"
+    });
+  }
+
+  if (input.operation.id === "proofread") {
+    const summaryContext = formatChapterSummaryCacheContext(input, input.target.chapterId);
+    if (summaryContext) {
+      pushContextItem(items, summaryContext);
+    }
+  }
 
   return items;
 }
@@ -267,7 +274,7 @@ export function planWritingOperationContext(input: PlanWritingOperationContextIn
     reason:
       input.operation.id === "proofread"
         ? supportingContext.items.length > 0
-          ? "校对目标文本为唯一检查目标；章节摘要缓存只用于逻辑和连续性判断，不写回正文。"
+          ? "校对目标文本为唯一检查目标；前后文和章节摘要缓存只用于逻辑和连续性判断，不写回正文。"
           : "校对默认只检查目标文本，避免把参考上下文误判为可修改目标。"
         : "选区是唯一修改目标，前后文只作为参考上下文。"
   };

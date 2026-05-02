@@ -79,10 +79,21 @@ function createE2eTaskGenerator(): AiTaskGenerator {
           changeSummary: "发现 1 个问题",
           proofreadIssues: [
             {
-              type: "表达不顺",
+              code: "awkward_expression",
+              severity: "medium",
               quote: task.inputText,
+              locationHint: "E2E 选区",
+              explanation: "E2E 校对建议",
               suggestion: e2eGeneratedText.proofread,
-              reason: "E2E 校对建议"
+              evidence: [
+                {
+                  source: "target",
+                  quote: task.inputText,
+                  note: "E2E 目标文本"
+                }
+              ],
+              canAutoApply: true,
+              needsAuthorJudgment: false
             }
           ]
         };
@@ -232,7 +243,7 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
         }
       | null = null;
     const summaryWorkerInterval = setInterval(() => {
-      const currentProject = projectService.getCurrentProject();
+      const currentProject = projectService.getRuntimeActiveProject();
       if (!currentProject?.rootPath) {
         return;
       }

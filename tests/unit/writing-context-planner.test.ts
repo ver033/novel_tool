@@ -121,11 +121,11 @@ describe("writing context planner", () => {
     db.close();
   });
 
-  it("does not add local context for proofread by default", () => {
+  it("adds local before and after context for selected-text proofread", () => {
     const projectId = "project_proofread_context";
     const { db, chapterRepo } = createRepo(projectId);
     const target = "他轻轻地轻轻推开门。";
-    const chapter = createChapter(chapterRepo, projectId, "第1章", 1, `前文。\n${target}\n后文。`);
+    const chapter = createChapter(chapterRepo, projectId, "第1章", 1, `门外的脚步声忽然停住。\n${target}\n屋内没有人回应，只有烛火晃了一下。`);
 
     const plan = planWritingOperationContext({
       projectId,
@@ -141,8 +141,10 @@ describe("writing context planner", () => {
     });
 
     expect(plan.targetText).toBe(target);
-    expect(plan.supportingContext).toEqual([]);
-    expect(plan.reason).toContain("校对默认只检查目标文本");
+    expect(plan.supportingContext.map((item) => item.kind)).toEqual(["same_chapter_before", "same_chapter_after"]);
+    expect(plan.supportingContext[0]?.content).toContain("门外的脚步声忽然停住");
+    expect(plan.supportingContext[1]?.content).toContain("屋内没有人回应");
+    expect(plan.reason).toContain("前后文");
 
     db.close();
   });

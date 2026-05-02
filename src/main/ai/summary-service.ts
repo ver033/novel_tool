@@ -3,6 +3,7 @@ import type { ChapterRepository } from "../db/repositories/chapter-repo";
 import {
   SummaryRepository,
   type ArcAiSummaryRecord,
+  type ChapterAiSummaryChunkRecord,
   type BookAiSummaryRecord,
   type ChapterAiSummaryRecord,
   type SummaryJobRecord
@@ -256,6 +257,281 @@ function formatChapterCoverageLabel(chapterOrder: number, title: string): string
 
 function formatArcCoverageLabel(chapterFrom: number, chapterTo: number): string {
   return chapterFrom === chapterTo ? `第${chapterFrom}章` : `第${chapterFrom}-${chapterTo}章`;
+}
+
+function limitText(text: string, maxLength: number): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, Math.max(0, maxLength - 1)).trim()}…`;
+}
+
+function uniqueStrings(values: readonly string[], limit: number): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const rawValue of values) {
+    const value = rawValue.trim();
+    if (!value || value === "未明确" || seen.has(value)) {
+      continue;
+    }
+    seen.add(value);
+    result.push(value);
+    if (result.length >= limit) {
+      break;
+    }
+  }
+  return result;
+}
+
+function uniqueRecords<T>(items: readonly T[], keyForItem: (item: T) => string, limit: number): T[] {
+  const seen = new Set<string>();
+  const result: T[] = [];
+  for (const item of items) {
+    const key = keyForItem(item).trim();
+    if (!key || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push(item);
+    if (result.length >= limit) {
+      break;
+    }
+  }
+  return result;
+}
+
+function firstDefined(values: readonly string[], fallback: string): string {
+  return values.find((value) => value.trim() && value.trim() !== "未明确")?.trim() ?? fallback;
+}
+
+function mergeLongChapterChunks(content: ChapterContent, chunks: readonly ChapterAiSummaryChunkRecord[]): ChapterAiSummaryPayload {
+  const orderedChunks = [...chunks].sort((left, right) => left.chunkIndex - right.chunkIndex);
+  const chunkSummaries = orderedChunks
+    .map((chunk) => `片段${chunk.chunkIndex + 1}：${chunk.structured.片段摘要.trim()}`)
+    .filter((summary) => summary.trim().length > 0);
+  const detailText = chunkSummaries.join("\n");
+  const shortText = limitText(chunkSummaries.join("；"), 360) || `${content.title}已完成片段事实索引聚合。`;
+  const oneLine = limitText(chunkSummaries.join("；"), 120) || `${content.title}已完成长章节缓存。`;
+  const keyEvents = uniqueRecords(
+    orderedChunks.flatMap((chunk) => chunk.structured.关键事件),
+    (item) => `${item.事件}|${item.时间地点}|${item.事件结果}`,
+    32
+  );
+  const characterStates = uniqueRecords(
+    orderedChunks.flatMap((chunk) => chunk.structured.人物状态),
+    (item) => `${item.人物}|${item.本章结束状态}|${item.位置变化}`,
+    32
+  );
+  const facts = uniqueRecords(
+    orderedChunks.flatMap((chunk) => chunk.structured.可核对事实),
+    (item) => `${item.主体}|${item.属性}|${item.取值}|${item.时间范围}`,
+    48
+  );
+  const timePlaces = orderedChunks.map((chunk) => chunk.structured.时间与地点);
+  const lostInfo = uniqueStrings(
+    orderedChunks.flatMap((chunk) => chunk.structured.不可丢失信息),
+    48
+  );
+  const places = uniqueStrings(
+    timePlaces.flatMap((item) => item.主要地点),
+    24
+  );
+  const relativeTimes = uniqueStrings(
+    timePlaces.flatMap((item) => item.相对时间锚点),
+    24
+  );
+
+  return {
+    章节信息: {
+      章节序号: content.sortOrder + 1,
+      章节标题: content.title,
+      正文覆盖: "完整章节",
+      缓存类型: "章节缓存",
+      缓存版本: "二",
+      语言: "简体中文"
+    },
+    缓存质量: {
+      覆盖完整度: "完整",
+      信息密度: "高",
+      需要回读原文: "否",
+      缺失说明: []
+    },
+    一句话摘要: oneLine,
+    短摘要: shortText,
+    详细梗概:
+      detailText.length >= 60
+        ? detailText
+        : `${detailText || content.title}。本章已完成长章节片段缓存聚合，当前缓存保留片段摘要、关键事件、人物状态、伏笔线索、可核对事实和不可丢失信息，供后续总结、查询与校对使用。`,
+    本章功能: {
+      章节类型: "长章节",
+      剧情功能: "由多个片段缓存聚合，保留本章连续剧情推进。",
+      情绪功能: "以片段缓存中的人物情绪和事件压力为准。",
+      结构作用: "连接多个连续场景并保存跨片段事实线索。",
+      对后文的作用: "为后续全文总结、人物查询、伏笔查询和连续性检查提供章节级索引。"
+    },
+    场景列表: orderedChunks.slice(0, 24).map((chunk) => ({
+      场景序号: chunk.chunkIndex + 1,
+      场景标题: `片段${chunk.chunkIndex + 1}`,
+      时间: chunk.structured.时间与地点.本章时间,
+      地点: firstDefined(chunk.structured.时间与地点.主要地点, "未明确"),
+      出场人物: uniqueStrings(chunk.structured.人物状态.map((item) => item.人物), 12),
+      场景目标: "保留片段内主要事件与人物状态。",
+      冲突或阻力: firstDefined(chunk.structured.关键事件.map((item) => item.事件原因), "未明确"),
+      关键事件:
+        uniqueStrings(
+          chunk.structured.关键事件.map((item) => item.事件),
+          8
+        ).length > 0
+          ? uniqueStrings(
+              chunk.structured.关键事件.map((item) => item.事件),
+              8
+            )
+          : [chunk.structured.片段摘要],
+      场景结果: firstDefined(chunk.structured.关键事件.map((item) => item.事件结果), chunk.structured.片段摘要),
+      情绪变化: firstDefined(chunk.structured.人物状态.map((item) => item.情绪状态), "未明确"),
+      承接关系: "承接上一片段并进入下一片段。",
+      证据短句: uniqueStrings(
+        [
+          ...chunk.structured.关键事件.flatMap((item) => item.证据短句),
+          ...chunk.structured.人物状态.flatMap((item) => item.证据短句)
+        ],
+        6
+      )
+    })),
+    关键事件:
+      keyEvents.length > 0
+        ? keyEvents
+        : [
+            {
+              事件: "长章节片段缓存已建立",
+              涉及人物: [],
+              时间地点: "未明确",
+              事件原因: "章节正文超过直接索引长度",
+              事件结果: "系统按片段保留章节事实",
+              后续影响: "后续查询可使用片段事实索引",
+              证据短句: []
+            }
+          ],
+    人物状态:
+      characterStates.length > 0
+        ? characterStates
+        : [
+            {
+              人物: "未明确",
+              本章出场状态: "未明确",
+              本章结束状态: "未明确",
+              身体状态: "未明确",
+              情绪状态: "未明确",
+              行动: [],
+              动机: "未明确",
+              目标: "未明确",
+              阻力: "未明确",
+              位置变化: "未明确",
+              新获得信息: [],
+              仍不知道的信息: [],
+              误解或错误判断: [],
+              与他人关系变化: [],
+              需要后文承接: "否",
+              证据短句: []
+            }
+          ],
+    人物认知边界: uniqueRecords(
+      orderedChunks.flatMap((chunk) => chunk.structured.人物认知边界),
+      (item) => `${item.人物}|${item.已经知道.join("、")}|${item.新得知.join("、")}`,
+      32
+    ),
+    关系动态: uniqueRecords(
+      orderedChunks.flatMap((chunk) => chunk.structured.关系动态),
+      (item) => `${item.关系双方.join("、")}|${item.关系类型}|${item.本章结束状态}`,
+      24
+    ),
+    时间与地点: {
+      本章时间: firstDefined(timePlaces.map((item) => item.本章时间), "未明确"),
+      时间跨度: firstDefined(timePlaces.map((item) => item.时间跨度), "未明确"),
+      主要地点: places,
+      地点移动: uniqueStrings(
+        timePlaces.flatMap((item) => item.地点移动),
+        24
+      ),
+      明确时间锚点: uniqueStrings(
+        timePlaces.flatMap((item) => item.明确时间锚点),
+        24
+      ),
+      相对时间锚点: relativeTimes,
+      可能的时间线风险: uniqueStrings(
+        timePlaces.flatMap((item) => item.可能的时间线风险),
+        24
+      ),
+      证据短句: uniqueStrings(
+        timePlaces.flatMap((item) => item.证据短句),
+        12
+      )
+    },
+    空间与行动逻辑: [],
+    道具状态: uniqueRecords(
+      orderedChunks.flatMap((chunk) => chunk.structured.道具状态),
+      (item) => `${item.道具}|${item.当前持有者}|${item.本章结束状态}`,
+      24
+    ),
+    设定与规则: uniqueRecords(
+      orderedChunks.flatMap((chunk) => chunk.structured.设定与规则),
+      (item) => `${item.设定项}|${item.本章信息}`,
+      24
+    ),
+    限制与否定事实: [],
+    伏笔与线索: uniqueRecords(
+      orderedChunks.flatMap((chunk) => chunk.structured.伏笔与线索),
+      (item) => `${item.线索}|${item.本章状态}|${item.可能指向}`,
+      32
+    ),
+    因果链: uniqueRecords(
+      orderedChunks.flatMap((chunk) => chunk.structured.因果链),
+      (item) => `${item.原因}|${item.结果}`,
+      32
+    ),
+    可核对事实:
+      facts.length > 0
+        ? facts
+        : [
+            {
+              事实编号: "事实-长章节-1",
+              事实类型: "限制事实",
+              主体: "章节缓存",
+              属性: "聚合方式",
+              取值: "长章节由片段缓存聚合而成",
+              时间范围: "当前章节",
+              地点: "未明确",
+              确定性: "确定",
+              后文核对意义: "后续查询应优先参考片段缓存中的事实条目",
+              证据短句: []
+            }
+          ],
+    连续性风险: uniqueRecords(
+      orderedChunks.flatMap((chunk) => chunk.structured.连续性风险),
+      (item) => `${item.风险}|${item.风险类型}|${item.原因}`,
+      32
+    ),
+    未解决问题: uniqueRecords(
+      orderedChunks.flatMap((chunk) => chunk.structured.未解决问题),
+      (item) => `${item.问题}|${item.涉及人物或事件.join("、")}`,
+      24
+    ),
+    文风与叙事: {
+      叙事视角: "见片段缓存",
+      主要语气: "见片段缓存",
+      节奏特点: "长章节由多个连续片段构成，节奏以片段缓存记录为准。",
+      对白特点: "见片段缓存",
+      描写侧重: "保留片段中的人物行动、情绪、设定和伏笔线索。",
+      续写时应保持: ["保持已建立的人物状态", "承接片段内关键事件", "避免丢失可核对事实"]
+    },
+    不可丢失信息:
+      lostInfo.length > 0
+        ? lostInfo
+        : ["长章节已按片段建立事实索引，后续回答需要参考片段缓存"],
+    适合回答的问题: ["本章讲了什么", "本章人物状态如何", "本章有哪些伏笔或线索", "本章有哪些可核对事实", "本章是否存在连续性风险"],
+    不确定项: []
+  };
 }
 
 function trimBounds(text: string, start: number, end: number): { readonly start: number; readonly end: number } | null {
@@ -709,7 +985,7 @@ export class SummaryService implements SummaryIndexInvalidator {
     generator: SummaryIndexGenerator,
     options: { readonly signal?: AbortSignal }
   ): Promise<ChapterAiSummaryRecord> {
-    if (!generator.summarizeChapterChunkForIndex || !generator.mergeChapterChunksForIndex) {
+    if (!generator.summarizeChapterChunkForIndex) {
       throw new Error("AI 章节片段摘要生成器未配置。");
     }
 
@@ -780,22 +1056,7 @@ export class SummaryService implements SummaryIndexInvalidator {
       throw new Error("章节片段摘要尚未全部完成，不能合并为章节缓存。");
     }
 
-    const structured = await generator.mergeChapterChunksForIndex(
-      {
-        projectId,
-        chapterId,
-        title: content.title,
-        ordinal: content.sortOrder + 1,
-        chunks: readyChunks.map((chunk) => ({
-          chunkIndex: chunk.chunkIndex,
-          textStart: chunk.textStart,
-          textEnd: chunk.textEnd,
-          summaryShort: chunk.summaryShort,
-          structured: chunk.structured
-        }))
-      },
-      options
-    );
+    const structured = mergeLongChapterChunks(content, readyChunks);
     this.assertChapterSourceUnchanged(projectId, chapterId, sourceHash, now);
     return this.persistChapterSummary(projectId, chapterId, sourceHash, now, structured);
   }

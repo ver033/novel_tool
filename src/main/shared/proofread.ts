@@ -1,63 +1,109 @@
 import { z } from "zod";
 
-export const proofreadIssueTypes = [
-  "错别字",
-  "标点",
-  "病句",
-  "表达不顺",
-  "对白不自然",
-  "重复表达",
-  "指代不明",
-  "时间线",
-  "空间移动",
-  "人物状态",
-  "人物认知",
-  "人物关系",
-  "道具状态",
-  "设定规则",
-  "因果动机",
-  "视角越界",
-  "伏笔状态",
-  "无问题"
+export const proofreadIssueCodes = [
+  "typo",
+  "punctuation",
+  "grammar",
+  "awkward_expression",
+  "repetition",
+  "unclear_reference",
+  "dialogue_voice",
+  "pov_leak",
+  "timeline_conflict",
+  "spatial_logic",
+  "character_state_conflict",
+  "character_knowledge_conflict",
+  "relationship_conflict",
+  "prop_state_conflict",
+  "world_rule_conflict",
+  "causality_gap",
+  "motivation_gap",
+  "continuity_risk",
+  "style_drift",
+  "ai_tone"
 ] as const;
 
-const logicProofreadIssueTypes = new Set<(typeof proofreadIssueTypes)[number]>([
-  "时间线",
-  "空间移动",
-  "人物状态",
-  "人物认知",
-  "人物关系",
-  "道具状态",
-  "设定规则",
-  "因果动机",
-  "视角越界",
-  "伏笔状态"
+export type ProofreadIssueCode = (typeof proofreadIssueCodes)[number];
+
+export const proofreadIssueLabels: Record<ProofreadIssueCode, string> = {
+  typo: "错别字",
+  punctuation: "标点问题",
+  grammar: "病句",
+  awkward_expression: "表达不顺",
+  repetition: "重复表达",
+  unclear_reference: "指代不明",
+  dialogue_voice: "对白不自然",
+  pov_leak: "视角越界",
+  timeline_conflict: "时间线冲突",
+  spatial_logic: "空间逻辑问题",
+  character_state_conflict: "人物状态冲突",
+  character_knowledge_conflict: "人物认知冲突",
+  relationship_conflict: "关系变化冲突",
+  prop_state_conflict: "道具状态冲突",
+  world_rule_conflict: "设定规则冲突",
+  causality_gap: "因果断裂",
+  motivation_gap: "动机不足",
+  continuity_risk: "连续性风险",
+  style_drift: "文风漂移",
+  ai_tone: "AI 味 / 套话感"
+};
+
+export const proofreadEvidenceSourceSchema = z.enum([
+  "target",
+  "before_context",
+  "after_context",
+  "memory",
+  "chapter_summary"
+]);
+
+const logicProofreadIssueCodes = new Set<ProofreadIssueCode>([
+  "pov_leak",
+  "timeline_conflict",
+  "spatial_logic",
+  "character_state_conflict",
+  "character_knowledge_conflict",
+  "relationship_conflict",
+  "prop_state_conflict",
+  "world_rule_conflict",
+  "causality_gap",
+  "motivation_gap",
+  "continuity_risk"
 ]);
 
 export const proofreadIssueSchema = z
   .object({
-    type: z.enum(proofreadIssueTypes),
-    quote: z.string(),
-    suggestion: z.string(),
-    reason: z.string(),
-    严重程度: z.enum(["低", "中", "高", "严重"]).optional(),
-    置信度: z.enum(["低", "中", "高"]).optional(),
-    缓存证据: z.array(z.string()).optional(),
-    是否可自动应用: z.enum(["是", "否"]).optional(),
-    是否需要作者判断: z.enum(["是", "否"]).optional(),
-    是否需要回读原文: z.enum(["是", "否"]).optional()
+    code: z.enum(proofreadIssueCodes),
+    severity: z.enum(["low", "medium", "high", "critical"]),
+    quote: z.string().trim().min(1).max(600),
+    locationHint: z.string().trim().min(1).max(300),
+    explanation: z.string().trim().min(1).max(1200),
+    suggestion: z.string().trim().min(1).max(1200),
+    suggestedReplacement: z.string().trim().max(1200).optional(),
+    evidence: z
+      .array(
+        z
+          .object({
+            source: proofreadEvidenceSourceSchema,
+            quote: z.string().trim().min(1).max(600),
+            note: z.string().trim().min(1).max(600)
+          })
+          .strict()
+      )
+      .max(8)
+      .default([]),
+    canAutoApply: z.boolean(),
+    needsAuthorJudgment: z.boolean()
   })
   .strict()
-  .transform((issue) =>
-    logicProofreadIssueTypes.has(issue.type)
-      ? {
-          ...issue,
-          是否可自动应用: issue.是否可自动应用 ?? "否",
-          是否需要作者判断: issue.是否需要作者判断 ?? "是",
-          是否需要回读原文: issue.是否需要回读原文 ?? "是"
-        }
-      : issue
-  );
+  .transform((issue) => {
+    const isLogicIssue = logicProofreadIssueCodes.has(issue.code);
+    const needsAuthorJudgment = isLogicIssue ? true : issue.needsAuthorJudgment;
+    return {
+      ...issue,
+      canAutoApply: needsAuthorJudgment ? false : issue.canAutoApply,
+      needsAuthorJudgment
+    };
+  });
 
 export const proofreadResultSchema = z
   .object({

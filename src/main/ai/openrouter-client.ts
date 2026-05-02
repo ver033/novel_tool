@@ -77,6 +77,17 @@ export type OpenRouterClientOptions = {
   readonly httpStreamPost?: (request: OpenRouterHttpRequest) => Promise<OpenRouterHttpStream>;
 };
 
+export type OpenRouterToolChoice =
+  | "auto"
+  | "none"
+  | "required"
+  | {
+      readonly type: "function";
+      readonly function: {
+        readonly name: string;
+      };
+    };
+
 export type OpenRouterChatCompletionInput = {
   readonly messages: readonly OpenRouterMessage[];
   readonly maxCompletionTokens?: number;
@@ -84,7 +95,7 @@ export type OpenRouterChatCompletionInput = {
   readonly responseFormat?: OpenRouterResponseFormat;
   readonly reasoning?: OpenRouterReasoningConfig;
   readonly tools?: readonly OpenRouterToolDefinition[];
-  readonly toolChoice?: "auto" | "none";
+  readonly toolChoice?: OpenRouterToolChoice;
   readonly parallelToolCalls?: boolean;
   readonly allowEmptyContent?: boolean;
   readonly signal?: AbortSignal;

@@ -166,7 +166,7 @@ const runWritingOperationToolParameters = {
     operation: {
       type: "string",
       enum: ["polish", "expand", "proofread", "continue"],
-      description: "写作操作。polish=润色，expand=扩写，proofread=校对，continue=续写。"
+      description: "写作操作。polish=润色替换目标；expand=扩写为完整替换版；proofread=校对并列出问题；continue=续写新增正文，插入目标之后。"
     },
     target: {
       type: "object",
@@ -179,7 +179,7 @@ const runWritingOperationToolParameters = {
         },
         text: {
           type: "string",
-          description: "kind=inline_text 时的目标文本。"
+          description: "kind=inline_text 时的目标文本。用户当前消息里直接粘贴的正文必须原样放入 text。"
         },
         ordinal: {
           type: "integer",
@@ -285,7 +285,7 @@ export const MOSHU_CHAT_AGENT_TOOLS: readonly OpenRouterToolDefinition[] = [
     function: {
       name: "run_writing_operation",
       description:
-        "执行中文小说写作操作：润色、扩写、校对、续写。只生成候选文本或校对问题，不写回正文，不保存草稿纸。用户要求保存时必须另行调用 add_to_scratchpad。",
+        "执行中文小说写作操作：润色、扩写、校对、续写。自然语言请求也可以调用。只生成候选文本或校对问题，不写回正文，不保存草稿纸。没有明确目标时不要调用本工具；用户要求保存时必须另行调用 add_to_scratchpad。",
       parameters: runWritingOperationToolParameters
     }
   },

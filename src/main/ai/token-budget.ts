@@ -11,7 +11,7 @@ export type TokenBudget = {
 export const DEFAULT_TOKEN_BUDGETS: Record<AiBudgetedTaskType, TokenBudget> = {
   chat: {
     maxInputTokens: 12_000,
-    maxOutputTokens: 12_000,
+    maxOutputTokens: 24_000,
     maxReasoningTokens: 4_000
   },
   polish: {
