@@ -105,8 +105,8 @@ export function App() {
       setWelcomeNotice(reason instanceof Error ? reason.message : String(reason));
     });
   }, [appStore]);
-  const createChapter = useCallback(() => {
-    void appStore.createChapter();
+  const createChapter = useCallback((options?: { readonly afterChapterId?: string }) => {
+    void appStore.createChapter(options);
   }, [appStore]);
   const renameChapter = useCallback((chapterId: string, title: string) => {
     void appStore.renameChapter(chapterId, title);

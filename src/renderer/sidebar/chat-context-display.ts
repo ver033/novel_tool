@@ -23,6 +23,7 @@ export type ChatContextUsageDisplay = {
   readonly outputBudgetLabel: string;
   readonly compressionLabel: string;
   readonly sourceLabel: string;
+  readonly memoryLabel: string | null;
   readonly coverageLabel: string | null;
   readonly scopeLabel: string;
 };
@@ -104,6 +105,16 @@ function formatCoverageLabel(contextUsage: AiStreamContextEvent): string | null 
   return parts.join("，");
 }
 
+function getMemoryLabel(contextUsage: AiStreamContextEvent): string | null {
+  if (contextUsage.memoryCompactedThisRun) {
+    return "本轮已压缩早期对话";
+  }
+  if (contextUsage.memoryCompacted) {
+    return "早期对话已压缩为记忆";
+  }
+  return null;
+}
+
 export function buildChatContextUsageDisplay(contextUsage: AiStreamContextEvent): ChatContextUsageDisplay {
   const visibleTotal = contextUsage.modelContextTokens ?? contextUsage.maxInputTokens;
   const percent = Math.min(100, Math.round((contextUsage.estimatedInputTokens / Math.max(1, visibleTotal)) * 100));
@@ -122,6 +133,7 @@ export function buildChatContextUsageDisplay(contextUsage: AiStreamContextEvent)
     outputBudgetLabel: formatTokenCount(contextUsage.maxOutputTokens),
     compressionLabel: getCompressionLabel(contextUsage),
     sourceLabel: getContextSourceLabel(contextUsage),
+    memoryLabel: getMemoryLabel(contextUsage),
     coverageLabel: formatCoverageLabel(contextUsage),
     scopeLabel: contextUsage.scopeLabel
   };

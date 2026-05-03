@@ -1130,11 +1130,18 @@ select:focus-visible {
 }
 
 .chapter-title-row {
+  position: sticky;
+  top: -31px;
+  z-index: 2;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 14px;
-  margin-bottom: 42px;
+  margin: -31px -24px 42px;
+  padding: 31px 24px 16px;
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(14px);
+  border-bottom: 1px solid rgba(226, 232, 240, 0.72);
 }
 
 .tree-title {
@@ -1208,7 +1215,8 @@ select:focus-visible {
 }
 
 .chapter-item:hover .chapter-actions,
-.chapter-item:focus-within .chapter-actions {
+.chapter-item:focus-within .chapter-actions,
+.chapter-item.active .chapter-actions {
   opacity: 1;
   pointer-events: auto;
 }

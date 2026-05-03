@@ -122,4 +122,18 @@ describe("chat context usage display", () => {
       coverageLabel: "覆盖 0 / 120 章"
     });
   });
+
+  it("shows when earlier chat history has been compacted into memory", () => {
+    expect(
+      buildChatContextUsageDisplay(
+        createContextUsage({
+          memoryCompacted: true,
+          memoryCompactedThisRun: true
+        })
+      )
+    ).toMatchObject({
+      memoryLabel: "本轮已压缩早期对话",
+      compressionLabel: "原文背景信息"
+    });
+  });
 });

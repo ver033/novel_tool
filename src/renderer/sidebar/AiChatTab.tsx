@@ -87,7 +87,7 @@ function isMissingChapterError(error: string): boolean {
 }
 
 function isChatInputTooLongError(error: string): boolean {
-  return error.includes("AI 对话上下文太长") || error.includes("选区太长");
+  return error.includes("AI 对话上下文太长") || error.includes("选区太长") || error.includes("目标文本太长");
 }
 
 function chatErrorTitle(error: string): string {
@@ -606,6 +606,7 @@ export function AiChatTab({ chapters, currentChapterId, currentChapterTitle, cur
                     {contextDisplay ? <span>{contextDisplay.usedLabel}</span> : null}
                     <span className="chat-context-model-label">{contextDisplay?.modelLabel ?? "准备上下文"}</span>
                     {contextDisplay ? <span className="chat-context-source-label">{contextDisplay.sourceLabel}</span> : null}
+                    {contextDisplay?.memoryLabel ? <span className="chat-context-source-label">{contextDisplay.memoryLabel}</span> : null}
                     {chatStore.contextUsagePending ? <span className="context-updating">更新中</span> : null}
                   </div>
                   {contextDisplay ? (
@@ -614,6 +615,7 @@ export function AiChatTab({ chapters, currentChapterId, currentChapterTitle, cur
                       <div className="chat-context-popover-percent">{contextDisplay.percentText} 已用</div>
                       <div className="chat-context-popover-total">{contextDisplay.usedOfTotalLabel}</div>
                       <div className="chat-context-popover-strong">{contextDisplay.compressionLabel}</div>
+                      {contextDisplay.memoryLabel ? <div className="chat-context-popover-strong">{contextDisplay.memoryLabel}</div> : null}
                       {chatStore.contextUsagePending ? (
                         <div className="chat-context-popover-pending">正在准备新上下文，新用量会在最终请求开始时刷新。</div>
                       ) : null}
@@ -621,6 +623,7 @@ export function AiChatTab({ chapters, currentChapterId, currentChapterTitle, cur
                         <span>模型 {contextDisplay.modelLabel}</span>
                         <span>范围 {contextDisplay.scopeLabel}</span>
                         <span>上下文 {contextDisplay.sourceLabel}</span>
+                        {contextDisplay.memoryLabel ? <span>对话记忆 {contextDisplay.memoryLabel}</span> : null}
                         {contextDisplay.coverageLabel ? <span>{contextDisplay.coverageLabel}</span> : null}
                         <span>模型窗口 {contextDisplay.windowLabel}</span>
                         <span>输入预算 {contextDisplay.inputBudgetLabel}</span>

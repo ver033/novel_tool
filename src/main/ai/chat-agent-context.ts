@@ -14,6 +14,7 @@ import {
   getChapterSummaryMustKeep,
   getChapterSummaryRelationships,
   getChapterSummaryRisks,
+  getChapterSummaryTimePlace,
   getChapterSummaryUnresolvedQuestions,
   type BookSummaryCoverage
 } from "../shared/summary-index";
@@ -45,7 +46,7 @@ export type ChatAgentContextOptions = {
   readonly summaryFocus?: SummaryIndexFocus;
 };
 
-export type SummaryIndexFocus = "overview" | "characters" | "foreshadowing" | "facts";
+export type SummaryIndexFocus = "overview" | "characters" | "foreshadowing" | "facts" | "timeline";
 
 function findChapterSummaryByOrdinal(chapters: readonly ChapterSummary[], ordinal: number): ChapterSummary | null {
   return chapters.find((chapter) => parseChapterOrdinalFromText(chapter.title) === ordinal) ?? chapters[ordinal - 1] ?? null;
@@ -268,7 +269,7 @@ function buildBookSummaryIndexText(input: {
     .filter((section) => !section.startsWith("[第") || !section.includes("章 "));
   const compactText = compactSections.filter(Boolean).join("\n");
   if (!isChatAgentContextTooLarge(input.message, compactText, input.budget)) {
-    return `${compactText}\n章节索引因输入预算限制已省略；需要逐章细节时请指定章节范围。`;
+    return `${compactText}\n章节索引已按当前模型窗口省略部分逐章细节；需要更细结果时请指定章节范围。`;
   }
 
   const textBudget = Math.max(0, input.budget.maxInputTokens - estimateTextTokens(input.message) - CHAT_AGENT_CONTEXT_RESERVE_TOKENS);
@@ -283,9 +284,24 @@ function getSummaryFocusLabel(focus: SummaryIndexFocus): string {
       return "伏笔";
     case "facts":
       return "事实";
+    case "timeline":
+      return "时间线";
     case "overview":
       return "概览";
   }
+}
+
+function isTimelineRelatedText(value: unknown): boolean {
+  const text = typeof value === "string" ? value : JSON.stringify(value);
+  return /时间|地点|空间|移动|日期|年|月|日|清晨|上午|中午|下午|傍晚|夜|先后|顺序|跨度/.test(text);
+}
+
+function getTimelineRelatedFacts(summary: ChapterAiSummaryRecord): readonly string[] {
+  return getChapterSummaryFacts(summary.structured, "facts").filter(isTimelineRelatedText).slice(0, 12);
+}
+
+function getTimelineRelatedRisks(summary: ChapterAiSummaryRecord): readonly string[] {
+  return getChapterSummaryRisks(summary.structured).filter(isTimelineRelatedText).slice(0, 8);
 }
 
 function selectFocusScopeChapters(input: {
@@ -370,6 +386,20 @@ function buildFocusedSummaryBlock(summary: ChapterAiSummaryRecord, focus: Summar
     );
   }
 
+  if (focus === "timeline") {
+    return JSON.stringify(
+      {
+        ...base,
+        时间与地点: getChapterSummaryTimePlace(summary.structured),
+        关键事件: getChapterSummaryKeyEvents(summary.structured),
+        可核对事实: getTimelineRelatedFacts(summary),
+        连续性风险: getTimelineRelatedRisks(summary)
+      },
+      null,
+      2
+    );
+  }
+
   return JSON.stringify(
     {
       ...base,
@@ -443,7 +473,7 @@ function resolveFocusedSummaryIndexContext(
       : ["当前范围没有可用章节摘要索引。回答时请提示作者先建立摘要索引，不能声称已经读取正文。"];
   const rawText = [...header.filter(Boolean), ...body].join("\n");
   const contextText = isChatAgentContextTooLarge(request.message, rawText, budget)
-    ? `${truncateTextToTokenBudget(rawText, Math.max(0, budget.maxInputTokens - estimateTextTokens(request.message) - CHAT_AGENT_CONTEXT_RESERVE_TOKENS)).text}\n（摘要索引已按输入预算截断；需要更完整结果时请缩小章节范围。）`
+    ? `${truncateTextToTokenBudget(rawText, Math.max(0, budget.maxInputTokens - estimateTextTokens(request.message) - CHAT_AGENT_CONTEXT_RESERVE_TOKENS)).text}\n（摘要索引已按当前模型窗口压缩；需要更完整结果时请缩小章节范围。）`
     : rawText;
   const missingOrStaleCount = missingLabels.length + staleLabels.length;
 
@@ -695,7 +725,7 @@ function buildBudgetedSingleChapterContext(message: string, chapter: ChapterCont
   const header = `[第${chapter.ordinal}章 ${chapter.content.title} | 字数 ${chapter.content.wordCount}]`;
   const textBudget = Math.max(0, budget.maxInputTokens - estimateTextTokens(message) - estimateTextTokens(header) - CHAT_AGENT_CONTEXT_RESERVE_TOKENS);
   const truncated = truncateTextToTokenBudget(chapter.content.plainText, textBudget);
-  return buildChapterContextBlock(chapter, truncated.truncated ? `${truncated.text}\n（本章内容已按输入预算截断。）` : truncated.text);
+  return buildChapterContextBlock(chapter, truncated.truncated ? `${truncated.text}\n（本章内容已按当前模型窗口压缩。）` : truncated.text);
 }
 
 function resolveChapterScope(

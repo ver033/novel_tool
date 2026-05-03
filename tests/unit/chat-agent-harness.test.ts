@@ -434,8 +434,9 @@ describe("chat agent harness", () => {
     expect(contextEvents[0].scopeLabel).toBe("当前对话");
   });
 
-  it("counts tool definitions before sending an agent prompt to the model", async () => {
+  it("compacts oversized prompt and tool definitions before sending an agent prompt to the model", async () => {
     let modelCalled = false;
+    let capturedInput: Parameters<ChatAgentModel["stream"]>[0] | null = null;
     const oversizedTools: readonly OpenRouterToolDefinition[] = [
       {
         type: "function",
@@ -455,37 +456,103 @@ describe("chat agent harness", () => {
       }
     ];
     const model: ChatAgentModel = {
-      async stream() {
+      async stream(input) {
         modelCalled = true;
+        capturedInput = input;
         return {
-          content: "不应该发送到模型。",
+          content: "可以继续回答。",
           truncated: false
         };
       }
     };
 
-    await expect(
-      runChatAgentLoop({
-        requestId: "agent_loop_counts_tools_budget",
-        projectId: "project_agent",
-        sessionId: "chat_1",
-        userMessage: "总结全部章节",
-        history: [],
-        chapterDirectory: [],
-        tools: oversizedTools,
-        model,
-        tokenBudget: {
-          maxInputTokens: 3000,
-          maxOutputTokens: 512
-        },
-        modelContextTokens: null,
-        modelName: "test/model",
-        async executeTool() {
-          throw new Error("tool should not execute");
+    const result = await runChatAgentLoop({
+      requestId: "agent_loop_counts_tools_budget",
+      projectId: "project_agent",
+      sessionId: "chat_1",
+      userMessage: "总结全部章节",
+      history: [],
+      chapterDirectory: [],
+      tools: oversizedTools,
+      model,
+      tokenBudget: {
+        maxInputTokens: 3000,
+        maxOutputTokens: 512
+      },
+      modelContextTokens: null,
+      modelName: "test/model",
+      async executeTool() {
+        throw new Error("tool should not execute");
+      }
+    });
+
+    expect(result.content).toBe("可以继续回答。");
+    expect(modelCalled).toBe(true);
+    expect(capturedInput).not.toBeNull();
+    const compactedInput = capturedInput as unknown as Parameters<ChatAgentModel["stream"]>[0];
+    expect(compactedInput.tools[0].function.description.length).toBeLessThan(200);
+  });
+
+  it("compacts any oversized tool result before the next model turn instead of throwing a budget error", async () => {
+    let callCount = 0;
+    let secondInput: Parameters<ChatAgentModel["stream"]>[0] | null = null;
+    const model: ChatAgentModel = {
+      async stream(input) {
+        callCount += 1;
+        if (callCount === 1) {
+          return {
+            content: "",
+            truncated: false,
+            toolCalls: [
+              {
+                id: "call_project_context",
+                name: "get_project_context",
+                argumentsJson: "{}"
+              }
+            ]
+          };
         }
-      })
-    ).rejects.toThrow("AI 对话上下文太长");
-    expect(modelCalled).toBe(false);
+        secondInput = input;
+        return {
+          content: "已基于压缩后的工具结果回答。",
+          truncated: false
+        };
+      }
+    };
+
+    const result = await runChatAgentLoop({
+      requestId: "agent_loop_compacts_any_tool_result",
+      projectId: "project_agent",
+      sessionId: "chat_1",
+      userMessage: "分析现有项目",
+      history: [],
+      chapterDirectory: [],
+      tools,
+      model,
+      tokenBudget: {
+        maxInputTokens: 3000,
+        maxOutputTokens: 512
+      },
+      modelContextTokens: null,
+      modelName: "test/model",
+      async executeTool(call) {
+        expect(call.name).toBe("get_project_context");
+        return {
+          action: null,
+          content: JSON.stringify({
+            ok: true,
+            payload: "超长工具结果".repeat(6000)
+          })
+        };
+      }
+    });
+
+    const inputAfterTool = secondInput as unknown as Parameters<ChatAgentModel["stream"]>[0];
+    const toolMessage = inputAfterTool.messages.find((message): message is Extract<OpenRouterMessage, { role: "tool" }> => message.role === "tool");
+    expect(result.content).toContain("压缩后的工具结果");
+    expect(callCount).toBe(2);
+    expect(toolMessage?.content).toContain("工具结果已按当前模型输入窗口压缩");
+    expect(String(toolMessage?.content)).not.toContain("超长工具结果".repeat(100));
   });
 
   it("keeps partial final chat output when the model hits the output limit", async () => {
