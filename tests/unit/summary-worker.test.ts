@@ -232,7 +232,7 @@ describe("summary worker", () => {
     db.close();
   });
 
-  it("backs off and requeues a new job after OpenRouter 429", async () => {
+  it("backs off once after OpenRouter 429 while keeping the failed attempt visible", async () => {
     const db = createDb();
     const repo = new SummaryRepository(db);
     const job = repo.enqueueSummaryJob({
@@ -257,16 +257,21 @@ describe("summary worker", () => {
     const result = await worker.runOnce("project_1", runAt);
 
     expect(result.status).toBe("retry_scheduled");
-    expect(db.prepare("SELECT status FROM summary_jobs WHERE id = ?").get(job.id)).toBeUndefined();
-    expect(db.prepare("SELECT status, attempt_count, next_run_at FROM summary_jobs").get()).toEqual({
+    expect(db.prepare("SELECT status, attempt_count, next_run_at, error FROM summary_jobs WHERE id = ?").get(job.id)).toEqual({
+      status: "failed",
+      attempt_count: 1,
+      next_run_at: "2026-05-01T00:16:00.000Z",
+      error: "OpenRouter 请求失败 (429)"
+    });
+    expect(db.prepare("SELECT status, attempt_count, next_run_at FROM summary_jobs WHERE id != ?").get(job.id)).toEqual({
       status: "queued",
       attempt_count: 1,
-      next_run_at: "2026-05-01T00:06:00.000Z"
+      next_run_at: "2026-05-01T00:16:00.000Z"
     });
     db.close();
   });
 
-  it("automatically retries invalid summary index model output with short delays before failing", async () => {
+  it("does not automatically retry invalid summary index model output", async () => {
     const db = createDb();
     const repo = new SummaryRepository(db);
     repo.enqueueSummaryJob({
@@ -288,37 +293,16 @@ describe("summary worker", () => {
       ensureAiConfigured: async () => undefined
     });
 
-    const first = await worker.runOnce("project_1", runAt);
-    expect(first).toMatchObject({
-      status: "retry_scheduled",
-      nextRunAt: "2026-05-01T00:02:00.000Z"
-    });
-    expect(db.prepare("SELECT status, attempt_count, next_run_at FROM summary_jobs").get()).toEqual({
-      status: "queued",
-      attempt_count: 1,
-      next_run_at: "2026-05-01T00:02:00.000Z"
-    });
-
-    const second = await worker.runOnce("project_1", "2026-05-01T00:02:00.000Z");
-    expect(second).toMatchObject({
-      status: "retry_scheduled",
-      nextRunAt: "2026-05-01T00:07:00.000Z"
-    });
-    expect(db.prepare("SELECT status, attempt_count, next_run_at FROM summary_jobs").get()).toEqual({
-      status: "queued",
-      attempt_count: 2,
-      next_run_at: "2026-05-01T00:07:00.000Z"
-    });
-
-    const third = await worker.runOnce("project_1", "2026-05-01T00:07:00.000Z");
-    expect(third).toMatchObject({
+    const result = await worker.runOnce("project_1", runAt);
+    expect(result).toMatchObject({
       status: "failed",
       error: "章节索引摘要无效：Expected array, received string"
     });
-    expect(db.prepare("SELECT status, attempt_count, next_run_at FROM summary_jobs").get()).toEqual({
+    expect(db.prepare("SELECT status, attempt_count, next_run_at, error FROM summary_jobs").get()).toEqual({
       status: "failed",
-      attempt_count: 3,
-      next_run_at: null
+      attempt_count: 1,
+      next_run_at: null,
+      error: "章节索引摘要无效：Expected array, received string"
     });
     db.close();
   });

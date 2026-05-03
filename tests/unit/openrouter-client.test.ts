@@ -748,6 +748,38 @@ describe("OpenRouterClient", () => {
     });
   });
 
+  it("does not drop reasoning deltas just because the same short text appeared earlier", async () => {
+    const reasoningChunks: string[] = [];
+    const client = new OpenRouterClient({
+      apiKey: "sk-or-v1-test-key",
+      modelName: "google/gemini-2.5-pro",
+      httpStreamPost: async () => [
+        'data: {"choices":[{"delta":{"reasoning_content":"这里的"}}]}\n\n',
+        'data: {"choices":[{"delta":{"reasoning_content":"的"}}]}\n\n',
+        'data: {"choices":[{"delta":{"reasoning_content":"确需要保留"}}]}\n\n',
+        'data: {"choices":[{"delta":{"content":"答案"}}]}\n\n'
+      ]
+    });
+
+    const result = await client.streamChatCompletion(
+      {
+        messages: [{ role: "user", content: "检查 thinking 增量。" }]
+      },
+      {
+        onReasoning(token) {
+          reasoningChunks.push(token);
+        }
+      }
+    );
+
+    expect(reasoningChunks).toEqual(["这里的", "的", "确需要保留"]);
+    expect(result).toEqual({
+      content: "答案",
+      reasoning: "这里的的确需要保留",
+      truncated: false
+    });
+  });
+
   it("decodes streamed UTF-8 chunks across buffer boundaries", async () => {
     const encoded = Buffer.from("data: {\"choices\":[{\"delta\":{\"content\":\"山雨\"}}]}\n\n");
     const client = new OpenRouterClient({

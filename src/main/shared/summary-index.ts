@@ -55,6 +55,59 @@ function nonEmptyArrayOf<T extends z.ZodType>(itemSchema: T) {
   return z.preprocess(normalizeArrayInput, z.array(itemSchema).min(1));
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeChapterSummaryVersionDrift(value: unknown): unknown {
+  if (!isRecord(value)) {
+    return value;
+  }
+
+  const looksLikeV3Lite =
+    "章节作用" in value || "场景推进" in value || "时间地点" in value || "道具设定变化" in value || "文风要点" in value;
+  if (!looksLikeV3Lite || !isRecord(value.章节信息)) {
+    return value;
+  }
+
+  const version = stringifyStructuredValue(value.章节信息.缓存版本).trim();
+  if (version !== "二" && version !== "三" && version !== "三Lite" && version !== "三-Lite") {
+    return value;
+  }
+
+  return {
+    ...value,
+    章节信息: {
+      ...value.章节信息,
+      缓存版本: "三-Lite"
+    }
+  };
+}
+
+function normalizeChapterChunkVersionDrift(value: unknown): unknown {
+  if (!isRecord(value)) {
+    return value;
+  }
+
+  const looksLikeV2Lite = "关系变化" in value || "时间地点" in value || "道具设定变化" in value;
+  if (!looksLikeV2Lite || !isRecord(value.片段信息)) {
+    return value;
+  }
+
+  const version = stringifyStructuredValue(value.片段信息.缓存版本).trim();
+  if (version !== "一" && version !== "二" && version !== "二Lite" && version !== "二-Lite") {
+    return value;
+  }
+
+  return {
+    ...value,
+    片段信息: {
+      ...value.片段信息,
+      缓存版本: "二-Lite"
+    }
+  };
+}
+
 const sceneNumberSchema = z.preprocess((value) => {
   if (typeof value === "number" && value === 0) {
     return 1;
@@ -428,7 +481,7 @@ function addEnglishTextIssues(value: unknown, ctx: z.RefinementCtx, path: readon
         message: "章节缓存 V2 的 JSON 键名必须使用简体中文。"
       });
     }
-    addEnglishTextIssues(item, ctx, [...path, key], insideEvidence || key === "证据短句");
+    addEnglishTextIssues(item, ctx, [...path, key], insideEvidence || key === "证据短句" || key === "缓存版本");
   }
 }
 
@@ -498,9 +551,118 @@ export const chapterAiSummaryPayloadV2Schema = z
     addEnglishTextIssues(payload, ctx);
   });
 
-export const chapterAiSummaryPayloadSchema = chapterAiSummaryPayloadV2Schema;
+const chapterFunctionLiteSchema = z
+  .object({
+    剧情作用: nonEmptyStringSchema,
+    人物作用: nonEmptyStringSchema,
+    后文作用: nonEmptyStringSchema
+  })
+  .strict();
 
-export const chapterAiSummaryChunkPayloadSchema = z
+const keyEventLiteSchema = z
+  .object({
+    事件: nonEmptyStringSchema,
+    涉及人物: arrayOf(nonEmptyStringSchema),
+    时间地点: nonEmptyStringSchema,
+    结果: nonEmptyStringSchema,
+    后续影响: nonEmptyStringSchema,
+    证据短句: evidenceQuotesSchema
+  })
+  .strict();
+
+const characterStateLiteSchema = z
+  .object({
+    人物: nonEmptyStringSchema,
+    本章变化: nonEmptyStringSchema,
+    行动: arrayOf(nonEmptyStringSchema),
+    目标或动机: nonEmptyStringSchema,
+    新获得信息: arrayOf(nonEmptyStringSchema),
+    仍不知道的信息: arrayOf(nonEmptyStringSchema),
+    关系变化: arrayOf(nonEmptyStringSchema),
+    证据短句: evidenceQuotesSchema
+  })
+  .strict();
+
+const characterKnowledgeLiteSchema = z
+  .object({
+    人物: nonEmptyStringSchema,
+    认知变化: nonEmptyStringSchema,
+    仍不知道: arrayOf(nonEmptyStringSchema),
+    误解或风险: arrayOf(nonEmptyStringSchema),
+    证据短句: evidenceQuotesSchema
+  })
+  .strict();
+
+const timePlaceLiteSchema = z
+  .object({
+    本章时间: nonEmptyStringSchema,
+    主要地点: arrayOf(nonEmptyStringSchema),
+    时间线索: arrayOf(nonEmptyStringSchema),
+    地点移动: arrayOf(nonEmptyStringSchema),
+    可能风险: arrayOf(nonEmptyStringSchema)
+  })
+  .strict();
+
+const foreshadowingLiteSchema = z
+  .object({
+    线索: nonEmptyStringSchema,
+    类型: foreshadowingTypeSchema,
+    状态: foreshadowingStatusSchema,
+    指向或意义: nonEmptyStringSchema,
+    证据短句: evidenceQuotesSchema
+  })
+  .strict();
+
+export const chapterAiSummaryPayloadV3LiteSchema = z
+  .object({
+    章节信息: z
+      .object({
+        章节序号: z.number().int().positive(),
+        章节标题: nonEmptyStringSchema,
+        正文覆盖: coverageScopeSchema,
+        缓存类型: z.literal("章节缓存"),
+        缓存版本: z.literal("三-Lite"),
+        语言: z.literal("简体中文")
+      })
+      .strict(),
+    缓存质量: z
+      .object({
+        覆盖完整度: completenessSchema,
+        信息密度: densitySchema,
+        需要回读原文: yesNoSchema,
+        缺失说明: arrayOf(nonEmptyStringSchema)
+      })
+      .strict(),
+    一句话摘要: nonEmptyStringSchema,
+    短摘要: nonEmptyStringSchema,
+    详细梗概: z.string().trim().min(60),
+    章节作用: chapterFunctionLiteSchema,
+    场景推进: arrayOf(nonEmptyStringSchema),
+    关键事件: nonEmptyArrayOf(keyEventLiteSchema),
+    人物状态: arrayOf(characterStateLiteSchema),
+    人物认知边界: arrayOf(characterKnowledgeLiteSchema),
+    关系变化: arrayOf(nonEmptyStringSchema),
+    时间地点: timePlaceLiteSchema,
+    道具设定变化: arrayOf(nonEmptyStringSchema),
+    伏笔与线索: arrayOf(foreshadowingLiteSchema),
+    可核对事实: nonEmptyArrayOf(nonEmptyStringSchema),
+    连续性风险: arrayOf(nonEmptyStringSchema),
+    未解决问题: arrayOf(nonEmptyStringSchema),
+    文风要点: arrayOf(nonEmptyStringSchema),
+    不可丢失信息: nonEmptyArrayOf(nonEmptyStringSchema),
+    不确定项: arrayOf(nonEmptyStringSchema)
+  })
+  .strict()
+  .superRefine((payload, ctx) => {
+    addEnglishTextIssues(payload, ctx);
+  });
+
+export const chapterAiSummaryPayloadSchema = z.preprocess(
+  normalizeChapterSummaryVersionDrift,
+  z.union([chapterAiSummaryPayloadV3LiteSchema, chapterAiSummaryPayloadV2Schema])
+);
+
+const chapterAiSummaryChunkPayloadV1Schema = z
   .object({
     片段信息: z
       .object({
@@ -544,6 +706,52 @@ export const chapterAiSummaryChunkPayloadSchema = z
   .superRefine((payload, ctx) => {
     addEnglishTextIssues(payload, ctx);
   });
+
+const chapterAiSummaryChunkPayloadV2LiteSchema = z
+  .object({
+    片段信息: z
+      .object({
+        章节序号: z.number().int().positive(),
+        章节标题: nonEmptyStringSchema,
+        片段序号: z.number().int().positive(),
+        片段总数: z.number().int().positive(),
+        正文覆盖: z.literal("片段"),
+        缓存类型: z.literal("章节片段缓存"),
+        缓存版本: z.literal("二-Lite"),
+        语言: z.literal("简体中文")
+      })
+      .strict()
+      .superRefine((payload, ctx) => {
+        if (payload.片段序号 > payload.片段总数) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["片段序号"],
+            message: "片段序号不能大于片段总数。"
+          });
+        }
+      }),
+    片段摘要: nonEmptyStringSchema,
+    关键事件: arrayOf(keyEventLiteSchema),
+    人物状态: arrayOf(characterStateLiteSchema),
+    人物认知边界: arrayOf(characterKnowledgeLiteSchema),
+    关系变化: arrayOf(nonEmptyStringSchema),
+    时间地点: timePlaceLiteSchema,
+    道具设定变化: arrayOf(nonEmptyStringSchema),
+    伏笔与线索: arrayOf(foreshadowingLiteSchema),
+    可核对事实: arrayOf(nonEmptyStringSchema),
+    连续性风险: arrayOf(nonEmptyStringSchema),
+    未解决问题: arrayOf(nonEmptyStringSchema),
+    不可丢失信息: arrayOf(nonEmptyStringSchema)
+  })
+  .strict()
+  .superRefine((payload, ctx) => {
+    addEnglishTextIssues(payload, ctx);
+  });
+
+export const chapterAiSummaryChunkPayloadSchema = z.preprocess(
+  normalizeChapterChunkVersionDrift,
+  z.union([chapterAiSummaryChunkPayloadV2LiteSchema, chapterAiSummaryChunkPayloadV1Schema])
+);
 
 export const arcAiSummaryPayloadSchema = z
   .object({
@@ -669,6 +877,8 @@ export const continuityCheckResultSchema = z
 export type SummaryStatus = z.output<typeof summaryStatusSchema>;
 export type SummaryJobStatus = z.output<typeof summaryJobStatusSchema>;
 export type SummaryJobType = z.output<typeof summaryJobTypeSchema>;
+export type ChapterAiSummaryPayloadV2 = z.output<typeof chapterAiSummaryPayloadV2Schema>;
+export type ChapterAiSummaryPayloadV3Lite = z.output<typeof chapterAiSummaryPayloadV3LiteSchema>;
 export type ChapterAiSummaryPayload = z.output<typeof chapterAiSummaryPayloadSchema>;
 export type ChapterAiSummaryChunkPayload = z.output<typeof chapterAiSummaryChunkPayloadSchema>;
 export type ArcAiSummaryPayload = z.output<typeof arcAiSummaryPayloadSchema>;
@@ -683,12 +893,94 @@ export type BookSummaryCoverage = {
   readonly skippedTooShortChapterIds: readonly string[];
 };
 
+export function isChapterAiSummaryPayloadV3Lite(payload: ChapterAiSummaryPayload): payload is ChapterAiSummaryPayloadV3Lite {
+  return payload.章节信息.缓存版本 === "三-Lite";
+}
+
 export function getChapterSummaryShortText(payload: ChapterAiSummaryPayload): string {
   return payload.一句话摘要;
 }
 
 export function getChapterSummaryLongText(payload: ChapterAiSummaryPayload): string {
   return payload.详细梗概;
+}
+
+function stringifyChapterSummaryItems(items: readonly unknown[], limit: number): string[] {
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const item of items) {
+    const text = stringifyStructuredValue(item).trim();
+    if (!text || seen.has(text)) {
+      continue;
+    }
+    seen.add(text);
+    result.push(text);
+    if (result.length >= limit) {
+      break;
+    }
+  }
+  return result;
+}
+
+export function getChapterSummaryKeyEvents(payload: ChapterAiSummaryPayload): readonly unknown[] {
+  return payload.关键事件;
+}
+
+export function getChapterSummaryCharacterStates(payload: ChapterAiSummaryPayload): readonly unknown[] {
+  return payload.人物状态;
+}
+
+export function getChapterSummaryCharacterKnowledge(payload: ChapterAiSummaryPayload): readonly unknown[] {
+  return payload.人物认知边界;
+}
+
+export function getChapterSummaryRelationships(payload: ChapterAiSummaryPayload): readonly unknown[] {
+  return isChapterAiSummaryPayloadV3Lite(payload) ? payload.关系变化 : payload.关系动态;
+}
+
+export function getChapterSummaryTimePlace(payload: ChapterAiSummaryPayload): unknown {
+  return isChapterAiSummaryPayloadV3Lite(payload) ? payload.时间地点 : payload.时间与地点;
+}
+
+export function getChapterSummaryPropsAndRules(payload: ChapterAiSummaryPayload): readonly unknown[] {
+  return isChapterAiSummaryPayloadV3Lite(payload) ? payload.道具设定变化 : [...payload.道具状态, ...payload.设定与规则, ...payload.限制与否定事实];
+}
+
+export function getChapterSummaryForeshadowing(payload: ChapterAiSummaryPayload): readonly unknown[] {
+  return payload.伏笔与线索;
+}
+
+export function getChapterSummaryFacts(payload: ChapterAiSummaryPayload, focus: "overview" | "characters" | "foreshadowing" | "facts" = "overview"): readonly string[] {
+  if (isChapterAiSummaryPayloadV3Lite(payload)) {
+    if (focus === "characters") {
+      return stringifyChapterSummaryItems([...payload.人物状态, ...payload.人物认知边界, ...payload.关系变化, ...payload.可核对事实], 16);
+    }
+    if (focus === "foreshadowing") {
+      return stringifyChapterSummaryItems([...payload.伏笔与线索, ...payload.未解决问题, ...payload.可核对事实], 16);
+    }
+    return payload.可核对事实;
+  }
+
+  if (focus === "facts" || focus === "overview") {
+    return stringifyChapterSummaryItems(payload.可核对事实, 24);
+  }
+  const factTypes = focus === "characters" ? new Set(["人物状态", "人物认知", "关系"]) : new Set(["伏笔"]);
+  return stringifyChapterSummaryItems(
+    payload.可核对事实.filter((fact) => factTypes.has(fact.事实类型)),
+    16
+  );
+}
+
+export function getChapterSummaryRisks(payload: ChapterAiSummaryPayload): readonly string[] {
+  return isChapterAiSummaryPayloadV3Lite(payload) ? payload.连续性风险 : stringifyChapterSummaryItems(payload.连续性风险, 16);
+}
+
+export function getChapterSummaryUnresolvedQuestions(payload: ChapterAiSummaryPayload): readonly unknown[] {
+  return payload.未解决问题;
+}
+
+export function getChapterSummaryMustKeep(payload: ChapterAiSummaryPayload): readonly string[] {
+  return payload.不可丢失信息;
 }
 
 export function getArcSummaryText(payload: ArcAiSummaryPayload): string {

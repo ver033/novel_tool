@@ -150,16 +150,28 @@ function buildSummaryIndexBanner(
   }
 
   const indexedCount = status.readyChapterCount + status.skippedTooShortChapterCount;
+  const failedPreview = status.recentFailedJobs[0];
+  const retryPreview = status.retryingJobs[0];
   const issueParts = [
     status.failedJobCount > 0 ? `失败 ${status.failedJobCount}` : "",
     status.cancelledJobCount > 0 ? `已停止 ${status.cancelledJobCount}` : "",
     status.queuedJobCount > 0 ? `排队 ${status.queuedJobCount}` : ""
   ].filter(Boolean);
   const issueSuffix = issueParts.length > 0 ? `；${issueParts.join("；")}` : "";
-  const retrySuffix = status.nextRetryAt
-    ? `；${status.nextRetryJobLabel ?? "摘要任务"} 将在 ${formatSummaryIndexRetryTime(status.nextRetryAt)} 自动重试`
+  const retrySuffix = retryPreview?.nextRunAt
+    ? `；${retryPreview.label} 将在 ${formatSummaryIndexRetryTime(retryPreview.nextRunAt)} 自动重试`
     : "";
+  const failedSummary = failedPreview?.failureCategory ?? failedPreview?.error ?? null;
+  const failedSuffix = failedSummary ? `；最近失败：${failedPreview?.label}（${failedSummary}${failedPreview?.actionHint ? `：${failedPreview.actionHint}` : ""}）` : "";
   const queuedOrRunning = status.queuedJobCount > 0 || Boolean(status.runningJobLabel);
+  if (status.pausedReason === "background_disabled" || !status.backgroundEnabled) {
+    return {
+      title: "后台索引已关闭",
+      detail: `全书索引：${indexedCount} / ${status.totalChapterCount} 章${issueSuffix}${failedSuffix}。新章节和过期章节不会自动缓存。`,
+      variant: "paused",
+      actionLabel: "继续建立索引"
+    };
+  }
   if (status.pausedReason === "ai_not_configured") {
     return {
       title: "AI 服务未配置，索引暂停",
@@ -179,7 +191,7 @@ function buildSummaryIndexBanner(
   if (status.staleChapterCount > 0) {
     return {
       title: `索引过期：${status.staleChapterCount} 章需要更新`,
-      detail: `全书索引：${indexedCount} / ${status.totalChapterCount} 章${issueSuffix}。最近编辑过的章节需要重新摘要。`,
+      detail: `全书索引：${indexedCount} / ${status.totalChapterCount} 章${issueSuffix}${failedSuffix}。最近编辑过的章节需要重新摘要。`,
       variant: "warning",
       actionLabel: "打开缓存设置"
     };
@@ -188,8 +200,8 @@ function buildSummaryIndexBanner(
     return {
       title: `全书索引：${indexedCount} / ${status.totalChapterCount} 章`,
       detail: status.runningJobLabel
-        ? `正在摘要：${status.runningJobLabel.replace(/^正在摘要：/, "")}${issueSuffix}${retrySuffix}`
-        : `后台摘要任务已排队，会在不影响当前 AI 对话时继续${issueSuffix}${retrySuffix}。`,
+        ? `正在摘要：${status.runningJobLabel.replace(/^正在摘要：/, "")}${issueSuffix}${retrySuffix}${failedSuffix}`
+        : `后台摘要任务已排队，会在不影响当前 AI 对话时继续${issueSuffix}${retrySuffix}${failedSuffix}。`,
       variant: "building",
       actionLabel: "停止后台索引"
     };
@@ -201,7 +213,7 @@ function buildSummaryIndexBanner(
     ].filter(Boolean);
     return {
       title: "后台索引已停止",
-      detail: `全书索引：${indexedCount} / ${status.totalChapterCount} 章；${stoppedIssueParts.join("；")}。`,
+      detail: `全书索引：${indexedCount} / ${status.totalChapterCount} 章；${stoppedIssueParts.join("；")}${failedSuffix}。`,
       variant: "paused",
       actionLabel: "继续建立索引"
     };
@@ -209,7 +221,7 @@ function buildSummaryIndexBanner(
   if (status.missingChapterCount > 0) {
     return {
       title: `全书索引：${indexedCount} / ${status.totalChapterCount} 章`,
-      detail: `当前只有 ${indexedCount} / ${status.totalChapterCount} 章可用于全文摘要索引${issueSuffix}${retrySuffix}。`,
+      detail: `当前只有 ${indexedCount} / ${status.totalChapterCount} 章可用于全文摘要索引${issueSuffix}${retrySuffix}${failedSuffix}。`,
       variant: "warning",
       actionLabel: "开始建立索引"
     };

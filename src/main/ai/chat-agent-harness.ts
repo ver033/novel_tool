@@ -211,10 +211,16 @@ function buildUserPrompt(input: ChatAgentLoopInput): string {
   ].join("\n");
 }
 
-function shouldForceInlineWritingOperationTool(userMessage: string): boolean {
+function shouldForceWritingOperationTool(userMessage: string): boolean {
   const normalized = userMessage.replace(/\s+/g, "");
   if (!/(润色|润一下|改写|扩写|续写|校对|审校|纠错)/u.test(normalized)) {
     return false;
+  }
+  if (/^\/(?:润色|扩写|续写|校对|审校|纠错)/u.test(normalized)) {
+    return true;
+  }
+  if (/(当前章|当前章节|本章|这一章|这章|选区|选中文本|第[0-9一二三四五六七八九十百千]+章|前[0-9一二三四五六七八九十百千]+章|第[0-9一二三四五六七八九十百千]+章?(?:到|至|~|～|-|—)第?[0-9一二三四五六七八九十百千]+章?)/u.test(normalized)) {
+    return true;
   }
   const possibleInlineText = normalized
     .replace(/(帮我|请|麻烦|这一段|这段|这段话|下面|以下|内容|文字|段落|一下|一下色|润色|润一下|改写|扩写|续写|校对|审校|纠错|看看|处理|：|:|。|，|、|“|”|"|')/gu, "")
@@ -331,7 +337,16 @@ function assertMessagesWithinBudget(messages: readonly OpenRouterMessage[], tool
   throw new Error(`AI 对话上下文太长，预计输入约 ${estimated} tokens，超过上限 ${maxInputTokens}。请缩小章节范围或开启新对话后重试。`);
 }
 
-function flushFinalContent(input: ChatAgentLoopInput, handlers: ChatAgentLoopHandlers, streamedContent: string, content: string): void {
+function flushFinalContent(
+  input: ChatAgentLoopInput,
+  handlers: ChatAgentLoopHandlers,
+  streamedContent: string,
+  content: string,
+  alreadyForwardedStreamedContent = false
+): void {
+  if (alreadyForwardedStreamedContent) {
+    return;
+  }
   const text = content || streamedContent;
   if (text) {
     handlers.onChunk?.({
@@ -346,7 +361,8 @@ function finishTruncatedFinalContent(
   handlers: ChatAgentLoopHandlers,
   streamedContent: string,
   resultContent: string,
-  actions: readonly AiChatAction[]
+  actions: readonly AiChatAction[],
+  alreadyForwardedStreamedContent = false
 ): ChatAgentLoopResult {
   const partialContent = (streamedContent || resultContent).trim();
   if (!partialContent) {
@@ -354,10 +370,17 @@ function finishTruncatedFinalContent(
   }
 
   const content = `${partialContent}${CHAT_AGENT_TRUNCATED_FINAL_NOTICE}`;
-  handlers.onChunk?.({
-    requestId: input.requestId,
-    content
-  });
+  handlers.onChunk?.(
+    alreadyForwardedStreamedContent
+      ? {
+          requestId: input.requestId,
+          content: CHAT_AGENT_TRUNCATED_FINAL_NOTICE
+        }
+      : {
+          requestId: input.requestId,
+          content
+        }
+  );
 
   return {
     content,
@@ -488,16 +511,42 @@ function formatWritingOperationToolResult(toolResultContent: string): string | n
   return `【${formatWritingOperationTitle(parsed.operation)}】\n${parsed.generatedText.trim()}`;
 }
 
+function readStreamedWritingOperationPresentation(toolResultContent: string, presentation: string | null): string | null {
+  if (!presentation) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(toolResultContent) as unknown;
+    if (isRecord(parsed) && parsed.streamedPresentation === true) {
+      return presentation;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 function finishWithToolResultContent(
   input: ChatAgentLoopInput,
   handlers: ChatAgentLoopHandlers,
   content: string,
-  actions: readonly AiChatAction[]
+  actions: readonly AiChatAction[],
+  alreadyStreamedContent: string | null = null
 ): ChatAgentLoopResult {
-  handlers.onChunk?.({
-    requestId: input.requestId,
-    content
-  });
+  if (alreadyStreamedContent && content.startsWith(alreadyStreamedContent)) {
+    const remainingContent = content.slice(alreadyStreamedContent.length);
+    if (remainingContent) {
+      handlers.onChunk?.({
+        requestId: input.requestId,
+        content: remainingContent
+      });
+    }
+  } else {
+    handlers.onChunk?.({
+      requestId: input.requestId,
+      content
+    });
+  }
 
   return {
     content,
@@ -530,6 +579,7 @@ export async function runChatAgentLoop(input: ChatAgentLoopInput, handlers: Chat
   };
   let hasAuthorContext = false;
   let lastToolResultPresentation: string | null = null;
+  let lastStreamedToolResultPresentation: string | null = null;
   const normalizedUserMessage = input.userMessage.replace(/\s+/g, "");
   const canSaveToScratchpad =
     input.tools.some((tool) => tool.function.name === "add_to_scratchpad") &&
@@ -537,7 +587,7 @@ export async function runChatAgentLoop(input: ChatAgentLoopInput, handlers: Chat
     /(加入|保存|存到|放到|记录)/.test(normalizedUserMessage);
   let emptyFinalAnswerRetryUsed = false;
   let cleanProofreadAnswerRetryUsed = false;
-  const shouldForceWritingTool = shouldForceInlineWritingOperationTool(input.userMessage);
+  const shouldForceWritingTool = shouldForceWritingOperationTool(input.userMessage);
   const isProofreadRequest = isProofreadIntent(input.userMessage);
 
   for (let iteration = 0; iteration < CHAT_AGENT_MAX_ITERATIONS; iteration += 1) {
@@ -548,6 +598,9 @@ export async function runChatAgentLoop(input: ChatAgentLoopInput, handlers: Chat
     }
 
     let streamedContent = "";
+    let forwardedFinalTokenContent = "";
+    const mayNeedProofreadConsistencyRetry = isProofreadRequest && !cleanProofreadAnswerRetryUsed;
+    const shouldForwardFinalTokensLive = messages.some((message) => message.role === "tool") && !mayNeedProofreadConsistencyRetry;
     const result = await input.model.stream(
       {
         messages,
@@ -563,12 +616,24 @@ export async function runChatAgentLoop(input: ChatAgentLoopInput, handlers: Chat
                 }
               }
             : undefined,
-        reasoning: input.reasoning ?? buildReasoningConfig(input.tokenBudget, { exclude: false, fallbackEffort: "medium" }),
+        reasoning:
+          input.reasoning ??
+          buildReasoningConfig(input.tokenBudget, {
+            exclude: iteration === 0 && shouldForceWritingTool,
+            fallbackEffort: iteration === 0 && shouldForceWritingTool ? "low" : "medium"
+          }),
         signal: input.signal
       },
       {
         onToken(token) {
           streamedContent += token;
+          if (shouldForwardFinalTokensLive) {
+            forwardedFinalTokenContent += token;
+            handlers.onChunk?.({
+              requestId: input.requestId,
+              content: token
+            });
+          }
         },
         onReasoning(token) {
           handlers.onReasoning?.({
@@ -599,6 +664,7 @@ export async function runChatAgentLoop(input: ChatAgentLoopInput, handlers: Chat
           const writingToolPresentation = call.name === "run_writing_operation" ? formatWritingOperationToolResult(toolContent) : null;
           if (writingToolPresentation) {
             lastToolResultPresentation = writingToolPresentation;
+            lastStreamedToolResultPresentation = readStreamedWritingOperationPresentation(toolContent, writingToolPresentation);
             authoritativeToolResultPresentation = writingToolPresentation;
           }
           const nextContextStatus = readToolContextStatus(toolContent);
@@ -610,7 +676,7 @@ export async function runChatAgentLoop(input: ChatAgentLoopInput, handlers: Chat
             if (hasAuthorContext) {
               emitContextUsage(input, handlers, messages, contextStatus);
             }
-            return finishWithToolResultContent(input, handlers, writingToolPresentation, actions);
+            return finishWithToolResultContent(input, handlers, writingToolPresentation, actions, lastStreamedToolResultPresentation);
           }
         } catch (reason) {
           if (input.signal?.aborted || isCancellationReason(reason)) {
@@ -632,7 +698,7 @@ export async function runChatAgentLoop(input: ChatAgentLoopInput, handlers: Chat
         if (hasAuthorContext) {
           emitContextUsage(input, handlers, messages, contextStatus);
         }
-        return finishWithToolResultContent(input, handlers, authoritativeToolResultPresentation, actions);
+        return finishWithToolResultContent(input, handlers, authoritativeToolResultPresentation, actions, lastStreamedToolResultPresentation);
       }
       continue;
     }
@@ -642,14 +708,26 @@ export async function runChatAgentLoop(input: ChatAgentLoopInput, handlers: Chat
       emitContextUsage(input, handlers, messages, contextStatus);
     }
     if (result.truncated) {
-      return finishTruncatedFinalContent(input, handlers, streamedContent, content, actions);
+      return finishTruncatedFinalContent(input, handlers, streamedContent, content, actions, forwardedFinalTokenContent.length > 0);
     }
     if (lastToolResultPresentation && canSaveToScratchpad) {
-      return finishWithToolResultContent(input, handlers, appendActionStatusToToolPresentation(lastToolResultPresentation, actions), actions);
+      return finishWithToolResultContent(
+        input,
+        handlers,
+        appendActionStatusToToolPresentation(lastToolResultPresentation, actions),
+        actions,
+        lastStreamedToolResultPresentation
+      );
     }
     if (!content) {
       if (lastToolResultPresentation && !streamedContent.trim()) {
-        return finishWithToolResultContent(input, handlers, appendActionStatusToToolPresentation(lastToolResultPresentation, actions), actions);
+        return finishWithToolResultContent(
+          input,
+          handlers,
+          appendActionStatusToToolPresentation(lastToolResultPresentation, actions),
+          actions,
+          lastStreamedToolResultPresentation
+        );
       }
       const hasToolResults = messages.some((message) => message.role === "tool");
       if (hasToolResults && !emptyFinalAnswerRetryUsed) {
@@ -668,7 +746,7 @@ export async function runChatAgentLoop(input: ChatAgentLoopInput, handlers: Chat
       messages.push(buildCleanProofreadConsistencyRetryPrompt(result.reasoning ?? ""));
       continue;
     }
-    flushFinalContent(input, handlers, streamedContent, content);
+    flushFinalContent(input, handlers, streamedContent, content, forwardedFinalTokenContent.length > 0);
 
     return {
       content,

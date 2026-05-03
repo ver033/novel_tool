@@ -1,5 +1,15 @@
 import type { ChapterRepository } from "../db/repositories/chapter-repo";
 import type { SummaryRepository } from "../db/repositories/summary-repo";
+import {
+  getChapterSummaryCharacterKnowledge,
+  getChapterSummaryCharacterStates,
+  getChapterSummaryFacts,
+  getChapterSummaryForeshadowing,
+  getChapterSummaryPropsAndRules,
+  getChapterSummaryRelationships,
+  getChapterSummaryRisks,
+  getChapterSummaryTimePlace
+} from "../shared/summary-index";
 import { estimateTextTokens, truncateTextToTokenBudget } from "./token-estimator";
 import type { TokenBudget } from "./token-budget";
 import type {
@@ -78,15 +88,14 @@ function formatChapterSummaryCacheContext(input: PlanWritingOperationContextInpu
   const content = [
     `短摘要：${summary.summaryShort}`,
     `详细梗概：${summary.summaryLong}`,
-    `人物状态：${JSON.stringify(structured.人物状态)}`,
-    `人物认知边界：${JSON.stringify(structured.人物认知边界)}`,
-    `关系动态：${JSON.stringify(structured.关系动态)}`,
-    `时间与地点：${JSON.stringify(structured.时间与地点)}`,
-    `道具状态：${JSON.stringify(structured.道具状态)}`,
-    `设定与规则：${JSON.stringify(structured.设定与规则)}`,
-    `伏笔与线索：${JSON.stringify(structured.伏笔与线索)}`,
-    `可核对事实：${JSON.stringify(structured.可核对事实)}`,
-    `连续性风险：${JSON.stringify(structured.连续性风险)}`
+    `人物状态：${JSON.stringify(getChapterSummaryCharacterStates(structured))}`,
+    `人物认知边界：${JSON.stringify(getChapterSummaryCharacterKnowledge(structured))}`,
+    `关系变化：${JSON.stringify(getChapterSummaryRelationships(structured))}`,
+    `时间地点：${JSON.stringify(getChapterSummaryTimePlace(structured))}`,
+    `道具设定变化：${JSON.stringify(getChapterSummaryPropsAndRules(structured))}`,
+    `伏笔与线索：${JSON.stringify(getChapterSummaryForeshadowing(structured))}`,
+    `可核对事实：${JSON.stringify(getChapterSummaryFacts(structured, "facts"))}`,
+    `连续性风险：${JSON.stringify(getChapterSummaryRisks(structured))}`
   ].join("\n");
 
   return {

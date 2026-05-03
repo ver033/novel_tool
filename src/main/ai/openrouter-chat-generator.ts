@@ -39,7 +39,7 @@ import {
   arcAiSummaryPayloadSchema,
   bookAiSummaryPayloadSchema,
   chapterAiSummaryChunkPayloadSchema,
-  chapterAiSummaryPayloadV2Schema,
+  chapterAiSummaryPayloadSchema,
   continuityCheckResultSchema,
   type ArcAiSummaryPayload,
   type BookAiSummaryPayload,
@@ -61,7 +61,7 @@ const CHAPTER_SUMMARY_MERGE_MAX_TOKENS = 2200;
 const CONTEXT_BATCH_SUMMARY_MAX_TOKENS = 3200;
 const CONTEXT_SUMMARY_MERGE_MAX_TOKENS = 3200;
 const CHAT_MEMORY_SUMMARY_MAX_TOKENS = 2200;
-const SUMMARY_INDEX_MAX_TOKENS = 24_000;
+const SUMMARY_INDEX_MAX_TOKENS = 12_000;
 const CHAT_MEMORY_SUMMARY_PROMPT_RATIO = 0.75;
 const CHAT_MEMORY_SUMMARY_RECOMPRESS_MAX_ROUNDS = 2;
 
@@ -597,7 +597,7 @@ export class OpenRouterChatGenerator implements AiChatGenerator {
     if (result.truncated) {
       throw new Error("章节索引摘要被截断，请换用输出额度更高的模型后重试。");
     }
-    return parseSummaryIndexJson("章节索引摘要", result.content, chapterAiSummaryPayloadV2Schema);
+    return parseSummaryIndexJson("章节索引摘要", result.content, chapterAiSummaryPayloadSchema);
   }
 
   async summarizeChapterChunkForIndex(input: ChapterChunkIndexSummaryInput, options: AiGenerationOptions = {}): Promise<ChapterAiSummaryChunkPayload> {
@@ -660,7 +660,7 @@ export class OpenRouterChatGenerator implements AiChatGenerator {
     if (result.truncated) {
       throw new Error("章节片段合并索引摘要被截断，请换用输出额度更高的模型后重试。");
     }
-    return parseSummaryIndexJson("章节片段合并索引摘要", result.content, chapterAiSummaryPayloadV2Schema);
+    return parseSummaryIndexJson("章节片段合并索引摘要", result.content, chapterAiSummaryPayloadSchema);
   }
 
   async summarizeArcForIndex(input: ArcIndexSummaryInput, options: AiGenerationOptions = {}): Promise<ArcAiSummaryPayload> {

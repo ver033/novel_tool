@@ -54,7 +54,7 @@ import type {
 } from "./schemas";
 import type { ProofreadIssue } from "./proofread";
 import type { WritingContextPlanMetadata } from "./ai-candidate-metadata";
-import type { ChapterAiSummaryChunkPayload, ChapterAiSummaryPayload, SummaryJobStatus, SummaryStatus } from "./summary-index";
+import type { ChapterAiSummaryChunkPayload, ChapterAiSummaryPayload, SummaryJobStatus, SummaryJobType, SummaryStatus } from "./summary-index";
 
 export type TaskType = "polish" | "expand" | "proofread" | "continue";
 export type PromptPresetTaskType = "polish" | "expand" | "continue";
@@ -329,7 +329,7 @@ export type SummaryCancelCurrentJobInput = z.input<typeof summaryCancelCurrentJo
 export type SummaryListCacheEntriesInput = z.input<typeof summaryListCacheEntriesInputSchema>;
 export type SummaryGetChapterCacheInput = z.input<typeof summaryGetChapterCacheInputSchema>;
 export type SummaryClearAndRetryChapterCacheInput = z.input<typeof summaryClearAndRetryChapterCacheInputSchema>;
-export type SummaryIndexPausedReason = "ai_not_configured" | "foreground_ai_active" | null;
+export type SummaryIndexPausedReason = "ai_not_configured" | "foreground_ai_active" | "background_disabled" | null;
 export type SummaryChapterCacheState = SummaryStatus | "missing" | "queued" | "running" | "cancelled";
 export type SummaryChapterCacheEntry = {
   readonly chapterId: string;
@@ -367,6 +367,17 @@ export type SummaryChapterCacheDetail = SummaryChapterCacheEntry & {
     readonly updatedAt: string;
   }[];
 };
+export type SummaryIndexJobDetail = {
+  readonly jobId: string;
+  readonly jobType: SummaryJobType;
+  readonly targetId: string | null;
+  readonly label: string;
+  readonly error: string | null;
+  readonly failureCategory: string | null;
+  readonly actionHint: string | null;
+  readonly attemptCount: number;
+  readonly nextRunAt: string | null;
+};
 export type SummaryIndexStatus = {
   readonly projectId: string;
   readonly totalChapterCount: number;
@@ -380,6 +391,9 @@ export type SummaryIndexStatus = {
   readonly runningJobLabel: string | null;
   readonly nextRetryAt: string | null;
   readonly nextRetryJobLabel: string | null;
+  readonly backgroundEnabled: boolean;
+  readonly retryingJobs: readonly SummaryIndexJobDetail[];
+  readonly recentFailedJobs: readonly SummaryIndexJobDetail[];
   readonly pausedReason: SummaryIndexPausedReason;
   readonly updatedAt: string;
 };

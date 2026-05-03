@@ -65,6 +65,7 @@ type ValidatedHandler<TSchema extends z.ZodType, TResult> = (
 type DirectHandler<TResult> = (event: IpcMainInvokeEvent, payload: unknown) => Promise<TResult> | TResult;
 
 let registered = false;
+const SUMMARY_WORKER_INTERVAL_MS = 3_000;
 
 function useE2eAiGenerators(): boolean {
   return process.env.NODE_ENV === "test" && process.env.NOVEL_TOOL_E2E_AI === "1";
@@ -252,6 +253,9 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
       }
       const now = new Date().toISOString();
       const summaryRepo = new SummaryRepository(resolveProjectDb(currentProject.id));
+      if (!summaryRepo.getBackgroundIndexEnabled(currentProject.id)) {
+        return;
+      }
       if (!recoveredSummaryJobProjects.has(currentProject.id)) {
         summaryRepo.resetRunningJobs(currentProject.id, now);
         recoveredSummaryJobProjects.add(currentProject.id);
@@ -281,7 +285,7 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
             activeSummaryWorker = null;
           }
         });
-    }, 30_000);
+    }, SUMMARY_WORKER_INTERVAL_MS);
     summaryWorkerInterval.unref?.();
 
     ipcMain.handle(
@@ -337,8 +341,8 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
         if (activeSummaryWorker?.projectId === input.projectId) {
           activeSummaryWorker.controller.abort();
         }
-        new SummaryRepository(resolveProjectDb(input.projectId)).cancelQueuedAndRunningJobs(input.projectId, "用户停止后台索引任务。", now);
-        return createSummaryService(input.projectId).getIndexStatus(input.projectId, now, {
+        return createSummaryService(input.projectId).setBackgroundIndexEnabled(input.projectId, false, now, {
+          cancelQueuedAndRunning: true,
           pausedReason: getSummaryIndexPausedReason()
         });
       })

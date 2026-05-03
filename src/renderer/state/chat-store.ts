@@ -168,7 +168,7 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
     try {
       const status = (await api.summary.cancelCurrentJob({ projectId })) as SummaryIndexStatus;
       setSummaryIndexStatus(status);
-      setSummaryIndexNotice("后台索引已停止；已完成的章节缓存会保留。");
+      setSummaryIndexNotice("后台索引已关闭；已完成的章节缓存会保留。");
     } catch (reason) {
       setSummaryIndexError(formatIpcErrorMessage(reason, "停止当前索引任务失败"));
     } finally {
@@ -387,7 +387,41 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
       activeRequestId.current = requestId;
       const pendingUser = createPendingMessage("user", message);
       let unsubscribe: (() => void) | null = null;
+      let streamTextBuffer = "";
+      let streamReasoningBuffer = "";
+      let streamFlushFrame: number | null = null;
       let applied = false;
+      const isRequestActive = () => activeRequestId.current === requestId && !canceledRequestIds.current.has(requestId);
+      const flushStreamBuffers = () => {
+        if (streamFlushFrame !== null) {
+          window.cancelAnimationFrame(streamFlushFrame);
+          streamFlushFrame = null;
+        }
+        if (!isRequestActive()) {
+          streamTextBuffer = "";
+          streamReasoningBuffer = "";
+          return;
+        }
+        const nextText = streamTextBuffer;
+        const nextReasoning = streamReasoningBuffer;
+        streamTextBuffer = "";
+        streamReasoningBuffer = "";
+        if (nextText) {
+          setStreamingText((current) => `${current}${nextText}`);
+        }
+        if (nextReasoning) {
+          setStreamingReasoning((current) => `${current}${nextReasoning}`);
+        }
+      };
+      const scheduleStreamFlush = () => {
+        if (streamFlushFrame !== null) {
+          return;
+        }
+        streamFlushFrame = window.requestAnimationFrame(() => {
+          streamFlushFrame = null;
+          flushStreamBuffers();
+        });
+      };
       const applyResult = (result: ChatStreamPayload) => {
         if (applied) {
           return;
@@ -412,34 +446,38 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
             : undefined;
         unsubscribe = api.ai.subscribeAiStream(requestId, {
           onChunk(event) {
-            if (activeRequestId.current !== requestId || canceledRequestIds.current.has(requestId)) {
+            if (!isRequestActive()) {
               return;
             }
-            setStreamingText((current) => `${current}${event.content}`);
+            streamTextBuffer += event.content;
+            scheduleStreamFlush();
           },
           onReasoning(event) {
-            if (activeRequestId.current !== requestId || canceledRequestIds.current.has(requestId)) {
+            if (!isRequestActive()) {
               return;
             }
-            setStreamingReasoning((current) => `${current}${event.content}`);
+            streamReasoningBuffer += event.content;
+            scheduleStreamFlush();
           },
           onContext(event) {
-            if (activeRequestId.current !== requestId || canceledRequestIds.current.has(requestId)) {
+            if (!isRequestActive()) {
               return;
             }
             setContextUsage(event);
             setContextUsagePending(false);
           },
           onDone(event) {
-            if (activeRequestId.current !== requestId || canceledRequestIds.current.has(requestId)) {
+            if (!isRequestActive()) {
               return;
             }
+            flushStreamBuffers();
             applyResult(event.payload as ChatStreamPayload);
           },
           onError(event) {
-            if (activeRequestId.current !== requestId || canceledRequestIds.current.has(requestId)) {
+            if (!isRequestActive()) {
               return;
             }
+            flushStreamBuffers();
             setError(event.error);
           }
         });
@@ -458,6 +496,7 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
         }
         if (canceledRequestIds.current.has(requestId)) {
           if (activeRequestId.current === requestId) {
+            flushStreamBuffers();
             setContextUsagePending(false);
             await loadMessages(session).catch(() => {
               setMessages((current) => current.filter((item) => item.id !== pendingUser.id));
@@ -465,11 +504,13 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
           }
           return;
         }
+        flushStreamBuffers();
         applyResult(result);
         await refreshSessions(session.id);
       } catch (reason) {
         if (isCanceledIpcError(reason) || canceledRequestIds.current.has(requestId)) {
           if (activeRequestId.current === requestId) {
+            flushStreamBuffers();
             setContextUsagePending(false);
             setStreamingText("");
             setStreamingReasoning("");
@@ -479,6 +520,7 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
           }
           return;
         }
+        flushStreamBuffers();
         setContextUsagePending(false);
         setError(formatIpcErrorMessage(reason, "AI 对话失败"));
         await loadMessages(session).catch(() => {
@@ -490,6 +532,10 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
           activeRequestId.current = null;
         }
         unsubscribe?.();
+        if (streamFlushFrame !== null) {
+          window.cancelAnimationFrame(streamFlushFrame);
+          streamFlushFrame = null;
+        }
         canceledRequestIds.current.delete(requestId);
         if (isCurrentRequest) {
           setBusy(false);

@@ -507,7 +507,7 @@ class ReasoningAccumulator {
       this.textByKey.set(key, event.content);
       return event.content;
     }
-    if (event.content === previous || previous.includes(event.content)) {
+    if (event.content === previous) {
       return null;
     }
     if (event.content.startsWith(previous)) {

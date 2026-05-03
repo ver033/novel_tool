@@ -173,7 +173,6 @@ function assertChapterCacheShape(cache) {
     "关键事件",
     "人物状态",
     "人物认知边界",
-    "关系动态",
     "伏笔与线索",
     "可核对事实",
     "连续性风险",
@@ -182,7 +181,10 @@ function assertChapterCacheShape(cache) {
   for (const key of requiredKeys) {
     if (!(key in cache)) throw new Error(`章节缓存缺少字段：${key}`);
   }
-  if (cache.章节信息?.缓存版本 !== "二") throw new Error(`章节缓存版本不是“二”：${cache.章节信息?.缓存版本 ?? "missing"}`);
+  const version = cache.章节信息?.缓存版本;
+  if (version !== "三-Lite" && version !== "二") throw new Error(`章节缓存版本不是“三-Lite”或旧版“二”：${version ?? "missing"}`);
+  if (version === "三-Lite" && !Array.isArray(cache.关系变化)) throw new Error("章节缓存 V3 Lite 缺少关系变化。");
+  if (version === "二" && !Array.isArray(cache.关系动态)) throw new Error("旧版章节缓存 V2 缺少关系动态。");
   if (!Array.isArray(cache.关键事件) || cache.关键事件.length === 0) throw new Error("章节缓存缺少关键事件。");
   if (!Array.isArray(cache.可核对事实) || cache.可核对事实.length === 0) throw new Error("章节缓存缺少可核对事实。");
 }
@@ -452,21 +454,91 @@ function mergeChunkResultsForLongChapter({ title, ordinal, chunkResults }) {
   const orderedChunks = [...chunkResults].sort((left, right) => left.chunkIndex - right.chunkIndex);
   const chunkSummaries = orderedChunks.map((chunk) => `片段${chunk.chunkIndex + 1}：${chunk.structured.片段摘要}`).filter(Boolean);
   const detailText = chunkSummaries.join("\n");
-  const timePlaces = orderedChunks.map((chunk) => chunk.structured.时间与地点 ?? {});
+  const stringifyValue = (value) => {
+    if (value === null || value === undefined) return "";
+    if (typeof value === "string") return value;
+    if (Array.isArray(value)) return value.map((item) => stringifyValue(item)).filter(Boolean).join("、");
+    if (typeof value === "object") {
+      return Object.entries(value)
+        .map(([key, item]) => {
+          const text = stringifyValue(item);
+          return text ? `${key}：${text}` : "";
+        })
+        .filter(Boolean)
+        .join("；");
+    }
+    return String(value);
+  };
   const keyEvents = uniqueRecords(
-    orderedChunks.flatMap((chunk) => chunk.structured.关键事件 ?? []),
-    (item) => `${item.事件 ?? ""}|${item.时间地点 ?? ""}|${item.事件结果 ?? ""}`,
-    32
+    orderedChunks.flatMap((chunk) =>
+      (chunk.structured.关键事件 ?? []).map((item) => ({
+        事件: String(item.事件 ?? "片段关键事件"),
+        涉及人物: Array.isArray(item.涉及人物) ? item.涉及人物 : [],
+        时间地点: String(item.时间地点 ?? "未明确"),
+        结果: String(item.结果 ?? item.事件结果 ?? "未明确"),
+        后续影响: String(item.后续影响 ?? "未明确"),
+        证据短句: Array.isArray(item.证据短句) ? item.证据短句.slice(0, 1) : []
+      }))
+    ),
+    (item) => `${item.事件}|${item.时间地点}|${item.结果}`,
+    10
   );
   const characterStates = uniqueRecords(
-    orderedChunks.flatMap((chunk) => chunk.structured.人物状态 ?? []),
-    (item) => `${item.人物 ?? ""}|${item.本章结束状态 ?? ""}|${item.位置变化 ?? ""}`,
-    32
+    orderedChunks.flatMap((chunk) =>
+      (chunk.structured.人物状态 ?? []).map((item) => ({
+        人物: String(item.人物 ?? "未明确"),
+        本章变化: String(item.本章变化 ?? item.本章结束状态 ?? item.情绪状态 ?? "未明确"),
+        行动: Array.isArray(item.行动) ? item.行动 : [],
+        目标或动机: String(item.目标或动机 ?? item.动机 ?? item.目标 ?? "未明确"),
+        新获得信息: Array.isArray(item.新获得信息) ? item.新获得信息 : [],
+        仍不知道的信息: Array.isArray(item.仍不知道的信息) ? item.仍不知道的信息 : [],
+        关系变化: Array.isArray(item.关系变化) ? item.关系变化 : Array.isArray(item.与他人关系变化) ? item.与他人关系变化 : [],
+        证据短句: Array.isArray(item.证据短句) ? item.证据短句.slice(0, 1) : []
+      }))
+    ),
+    (item) => `${item.人物}|${item.本章变化}`,
+    10
   );
-  const checkableFacts = uniqueRecords(
-    orderedChunks.flatMap((chunk) => chunk.structured.可核对事实 ?? []),
-    (item) => `${item.主体 ?? ""}|${item.属性 ?? ""}|${item.取值 ?? ""}|${item.时间范围 ?? ""}`,
-    48
+  const characterKnowledge = uniqueRecords(
+    orderedChunks.flatMap((chunk) =>
+      (chunk.structured.人物认知边界 ?? []).map((item) => ({
+        人物: String(item.人物 ?? "未明确"),
+        认知变化: String(item.认知变化 ?? item.新得知 ?? item.已经知道 ?? "未明确"),
+        仍不知道: Array.isArray(item.仍不知道) ? item.仍不知道 : Array.isArray(item.尚不知道) ? item.尚不知道 : [],
+        误解或风险: Array.isArray(item.误解或风险) ? item.误解或风险 : Array.isArray(item.误以为) ? item.误以为 : [],
+        证据短句: Array.isArray(item.证据短句) ? item.证据短句.slice(0, 1) : []
+      }))
+    ),
+    (item) => `${item.人物}|${item.认知变化}`,
+    10
+  );
+  const checkableFacts = uniqueStrings(
+    orderedChunks.flatMap((chunk) => (chunk.structured.可核对事实 ?? []).map((item) => stringifyValue(item))),
+    12
+  );
+  const timePlaces = orderedChunks.map((chunk) => chunk.structured.时间地点 ?? chunk.structured.时间与地点 ?? {});
+  const propsAndRules = uniqueStrings(
+    orderedChunks.flatMap((chunk) => [
+      ...(chunk.structured.道具设定变化 ?? []),
+      ...(chunk.structured.道具状态 ?? []),
+      ...(chunk.structured.设定与规则 ?? []),
+      ...(chunk.structured.限制与否定事实 ?? []),
+      ...(chunk.structured.空间与行动逻辑 ?? [])
+    ]).map((item) => stringifyValue(item)),
+    10
+  );
+  const foreshadowing = uniqueRecords(
+    orderedChunks.flatMap((chunk) =>
+      (chunk.structured.伏笔与线索 ?? []).map((item) => ({
+        线索: String(item.线索 ?? "线索"),
+        类型: String(item.类型 ?? "普通线索"),
+        状态: String(item.状态 ?? item.本章状态 ?? "待判断"),
+        指向或意义: String(item.指向或意义 ?? item.可能指向 ?? "未明确"),
+        证据短句: Array.isArray(item.证据短句) ? item.证据短句.slice(0, 1) : []
+      }))
+    ),
+    (item) => `${item.线索}|${item.状态}|${item.指向或意义}`,
+    8
   );
 
   return {
@@ -475,12 +547,12 @@ function mergeChunkResultsForLongChapter({ title, ordinal, chunkResults }) {
       章节标题: title,
       正文覆盖: "完整章节",
       缓存类型: "章节缓存",
-      缓存版本: "二",
+      缓存版本: "三-Lite",
       语言: "简体中文"
     },
     缓存质量: {
       覆盖完整度: "完整",
-      信息密度: "高",
+      信息密度: "中",
       需要回读原文: "否",
       缺失说明: []
     },
@@ -490,36 +562,12 @@ function mergeChunkResultsForLongChapter({ title, ordinal, chunkResults }) {
       detailText.length >= 60
         ? detailText
         : `${detailText || title}。本章已完成长章节片段缓存聚合，当前缓存保留片段摘要、关键事件、人物状态、伏笔线索、可核对事实和不可丢失信息。`,
-    本章功能: {
-      章节类型: "长章节",
-      剧情功能: "由多个片段缓存聚合，保留本章连续剧情推进。",
-      情绪功能: "以片段缓存中的人物情绪和事件压力为准。",
-      结构作用: "连接多个连续片段并保存跨片段事实线索。",
-      对后文的作用: "为后续全文总结、人物查询、伏笔查询和连续性检查提供章节级索引。"
+    章节作用: {
+      剧情作用: "由多个片段缓存聚合，保留本章连续剧情推进。",
+      人物作用: "合并片段内主要人物状态和认知变化。",
+      后文作用: "为后续全文总结、人物查询、伏笔查询和连续性检查提供章节级索引。"
     },
-    场景列表: orderedChunks.slice(0, 24).map((chunk) => {
-      const events = uniqueStrings((chunk.structured.关键事件 ?? []).map((item) => item.事件), 8);
-      return {
-        场景序号: chunk.chunkIndex + 1,
-        场景标题: `片段${chunk.chunkIndex + 1}`,
-        时间: chunk.structured.时间与地点?.本章时间 ?? "未明确",
-        地点: firstDefined(chunk.structured.时间与地点?.主要地点 ?? [], "未明确"),
-        出场人物: uniqueStrings((chunk.structured.人物状态 ?? []).map((item) => item.人物), 12),
-        场景目标: "保留片段内主要事件与人物状态。",
-        冲突或阻力: firstDefined((chunk.structured.关键事件 ?? []).map((item) => item.事件原因), "未明确"),
-        关键事件: events.length > 0 ? events : [chunk.structured.片段摘要],
-        场景结果: firstDefined((chunk.structured.关键事件 ?? []).map((item) => item.事件结果), chunk.structured.片段摘要),
-        情绪变化: firstDefined((chunk.structured.人物状态 ?? []).map((item) => item.情绪状态), "未明确"),
-        承接关系: "承接上一片段并进入下一片段。",
-        证据短句: uniqueStrings(
-          [
-            ...(chunk.structured.关键事件 ?? []).flatMap((item) => item.证据短句 ?? []),
-            ...(chunk.structured.人物状态 ?? []).flatMap((item) => item.证据短句 ?? [])
-          ],
-          6
-        )
-      };
-    }),
+    场景推进: uniqueStrings(chunkSummaries, 6),
     关键事件:
       keyEvents.length > 0
         ? keyEvents
@@ -528,8 +576,7 @@ function mergeChunkResultsForLongChapter({ title, ordinal, chunkResults }) {
               事件: "长章节片段缓存已建立",
               涉及人物: [],
               时间地点: "未明确",
-              事件原因: "章节正文超过直接索引长度",
-              事件结果: "系统按片段保留章节事实",
+              结果: "系统按片段保留章节事实",
               后续影响: "后续查询可使用片段事实索引",
               证据短句: []
             }
@@ -540,113 +587,34 @@ function mergeChunkResultsForLongChapter({ title, ordinal, chunkResults }) {
         : [
             {
               人物: "未明确",
-              本章出场状态: "未明确",
-              本章结束状态: "未明确",
-              身体状态: "未明确",
-              情绪状态: "未明确",
+              本章变化: "未明确",
               行动: [],
-              动机: "未明确",
-              目标: "未明确",
-              阻力: "未明确",
-              位置变化: "未明确",
+              目标或动机: "未明确",
               新获得信息: [],
               仍不知道的信息: [],
-              误解或错误判断: [],
-              与他人关系变化: [],
-              需要后文承接: "否",
+              关系变化: [],
               证据短句: []
             }
           ],
-    人物认知边界: uniqueRecords(
-      orderedChunks.flatMap((chunk) => chunk.structured.人物认知边界 ?? []),
-      (item) => `${item.人物 ?? ""}|${(item.已经知道 ?? []).join("、")}|${(item.新得知 ?? []).join("、")}`,
-      32
-    ),
-    关系动态: uniqueRecords(
-      orderedChunks.flatMap((chunk) => chunk.structured.关系动态 ?? []),
-      (item) => `${(item.关系双方 ?? []).join("、")}|${item.关系类型 ?? ""}|${item.本章结束状态 ?? ""}`,
-      24
-    ),
-    时间与地点: {
+    人物认知边界: characterKnowledge,
+    关系变化: uniqueStrings(characterStates.flatMap((item) => item.关系变化 ?? []), 10),
+    时间地点: {
       本章时间: firstDefined(timePlaces.map((item) => item.本章时间), "未明确"),
-      时间跨度: firstDefined(timePlaces.map((item) => item.时间跨度), "未明确"),
-      主要地点: uniqueStrings(timePlaces.flatMap((item) => item.主要地点 ?? []), 24),
-      地点移动: uniqueStrings(timePlaces.flatMap((item) => item.地点移动 ?? []), 24),
-      明确时间锚点: uniqueStrings(timePlaces.flatMap((item) => item.明确时间锚点 ?? []), 24),
-      相对时间锚点: uniqueStrings(timePlaces.flatMap((item) => item.相对时间锚点 ?? []), 24),
-      可能的时间线风险: uniqueStrings(timePlaces.flatMap((item) => item.可能的时间线风险 ?? []), 24),
-      证据短句: uniqueStrings(timePlaces.flatMap((item) => item.证据短句 ?? []), 12)
+      主要地点: uniqueStrings(timePlaces.flatMap((item) => item.主要地点 ?? []), 8),
+      时间线索: uniqueStrings(timePlaces.flatMap((item) => [...(item.时间线索 ?? []), ...(item.明确时间锚点 ?? []), ...(item.相对时间锚点 ?? [])]), 8),
+      地点移动: uniqueStrings(timePlaces.flatMap((item) => item.地点移动 ?? []), 8),
+      可能风险: uniqueStrings(timePlaces.flatMap((item) => [...(item.可能风险 ?? []), ...(item.可能的时间线风险 ?? [])]), 8)
     },
-    空间与行动逻辑: uniqueRecords(
-      orderedChunks.flatMap((chunk) => chunk.structured.空间与行动逻辑 ?? []),
-      (item) => `${item.人物 ?? ""}|${item.移动或行动 ?? ""}|${item.起点 ?? ""}|${item.终点 ?? ""}`,
-      32
-    ),
-    道具状态: uniqueRecords(
-      orderedChunks.flatMap((chunk) => chunk.structured.道具状态 ?? []),
-      (item) => `${item.道具 ?? ""}|${item.当前持有者 ?? ""}|${item.本章结束状态 ?? ""}`,
-      24
-    ),
-    设定与规则: uniqueRecords(
-      orderedChunks.flatMap((chunk) => chunk.structured.设定与规则 ?? []),
-      (item) => `${item.设定项 ?? ""}|${item.本章信息 ?? ""}`,
-      24
-    ),
-    限制与否定事实: uniqueRecords(
-      orderedChunks.flatMap((chunk) => chunk.structured.限制与否定事实 ?? []),
-      (item) => `${item.对象 ?? ""}|${item.限制或否定 ?? ""}|${item.影响范围 ?? ""}`,
-      32
-    ),
-    伏笔与线索: uniqueRecords(
-      orderedChunks.flatMap((chunk) => chunk.structured.伏笔与线索 ?? []),
-      (item) => `${item.线索 ?? ""}|${item.本章状态 ?? ""}|${item.可能指向 ?? ""}`,
-      32
-    ),
-    因果链: uniqueRecords(
-      orderedChunks.flatMap((chunk) => chunk.structured.因果链 ?? []),
-      (item) => `${item.原因 ?? ""}|${item.结果 ?? ""}`,
-      32
-    ),
+    道具设定变化: propsAndRules,
+    伏笔与线索: foreshadowing,
     可核对事实:
       checkableFacts.length > 0
         ? checkableFacts
-        : [
-            {
-              事实编号: "事实-长章节-1",
-              事实类型: "限制事实",
-              主体: "章节缓存",
-              属性: "聚合方式",
-              取值: "长章节由片段缓存聚合而成",
-              时间范围: "当前章节",
-              地点: "未明确",
-              确定性: "确定",
-              后文核对意义: "后续查询应优先参考片段缓存中的事实条目",
-              证据短句: []
-            }
-          ],
-    连续性风险: uniqueRecords(
-      orderedChunks.flatMap((chunk) => chunk.structured.连续性风险 ?? []),
-      (item) => `${item.风险 ?? ""}|${item.风险类型 ?? ""}|${item.原因 ?? ""}`,
-      32
-    ),
-    未解决问题: uniqueRecords(
-      orderedChunks.flatMap((chunk) => chunk.structured.未解决问题 ?? []),
-      (item) => `${item.问题 ?? ""}|${(item.涉及人物或事件 ?? []).join("、")}`,
-      24
-    ),
-    文风与叙事: {
-      叙事视角: "见片段缓存",
-      主要语气: "见片段缓存",
-      节奏特点: "长章节由多个连续片段构成，节奏以片段缓存记录为准。",
-      对白特点: "见片段缓存",
-      描写侧重: "保留片段中的人物行动、情绪、设定和伏笔线索。",
-      续写时应保持: ["保持已建立的人物状态", "承接片段内关键事件", "避免丢失可核对事实"]
-    },
-    不可丢失信息: uniqueStrings(
-      orderedChunks.flatMap((chunk) => chunk.structured.不可丢失信息 ?? []),
-      48
-    ),
-    适合回答的问题: ["本章讲了什么", "本章人物状态如何", "本章有哪些伏笔或线索", "本章有哪些可核对事实", "本章是否存在连续性风险"],
+        : ["长章节由片段缓存聚合而成，后续查询应参考片段缓存事实条目"],
+    连续性风险: uniqueStrings(orderedChunks.flatMap((chunk) => (chunk.structured.连续性风险 ?? []).map((item) => stringifyValue(item))), 8),
+    未解决问题: uniqueStrings(orderedChunks.flatMap((chunk) => (chunk.structured.未解决问题 ?? []).map((item) => stringifyValue(item))), 8),
+    文风要点: ["长章节由多个连续片段构成", "续写时需承接已建立的人物状态和片段关键事件"],
+    不可丢失信息: uniqueStrings(orderedChunks.flatMap((chunk) => chunk.structured.不可丢失信息 ?? []), 10),
     不确定项: []
   };
 }
@@ -848,7 +816,7 @@ function buildSummaryContexts(snapshot) {
       短摘要: summary.summary_short,
       人物状态: structured.人物状态,
       人物认知边界: structured.人物认知边界,
-      关系动态: structured.关系动态,
+      关系动态: structured.关系变化 ?? structured.关系动态,
       伏笔与线索: structured.伏笔与线索,
       未解决问题: structured.未解决问题,
       可核对事实: structured.可核对事实,

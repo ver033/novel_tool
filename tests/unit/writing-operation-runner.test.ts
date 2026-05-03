@@ -213,19 +213,29 @@ describe("WritingOperationRunner", () => {
       })
     });
 
-    const result = await runner.runRequest({
-      projectId,
-      source: "chat_tool",
-      operation: "polish",
-      target: {
-        kind: "inline_text",
-        text: "萧炎垂下眼，指节慢慢攥紧。"
+    const streamedTokens: string[] = [];
+    const result = await runner.runRequest(
+      {
+        projectId,
+        source: "chat_tool",
+        operation: "polish",
+        target: {
+          kind: "inline_text",
+          text: "萧炎垂下眼，指节慢慢攥紧。"
+        },
+        userInstruction: "更有压迫感。"
       },
-      userInstruction: "更有压迫感。"
-    });
+      {},
+      {
+        onChunk(event) {
+          streamedTokens.push(event.content);
+        }
+      }
+    );
 
     expect(usedCreateCompletion).toBe(false);
     expect(usedStreamCompletion).toBe(true);
+    expect(streamedTokens.join("")).toBe("萧炎缓缓垂下眼，紧攥的指节在袖中一点点泛白。");
     expect(result.generatedText).toContain("萧炎缓缓垂下眼");
 
     db.close();
