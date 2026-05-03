@@ -10,7 +10,7 @@ import { estimateMessagesTokens } from "../../src/main/ai/token-estimator";
 import { getTokenBudget } from "../../src/main/ai/token-budget";
 import type { AiChatGenerationInput } from "../../src/main/ai/ai-task-service";
 import type { ChapterAiSummaryPayload, ContinuityCheckResult } from "../../src/main/shared/summary-index";
-import { chapterChunkIndexPayload, chapterIndexPayloadV2 } from "../helpers/summary-index-fixtures";
+import { chapterChunkIndexPayload, chapterIndexPayloadV2, chapterIndexPayloadV3Lite } from "../helpers/summary-index-fixtures";
 
 function createInput(patch: Partial<AiChatGenerationInput> = {}): AiChatGenerationInput {
   return {
@@ -375,7 +375,7 @@ describe("OpenRouter chat generator prompt assembly", () => {
 });
 
 describe("OpenRouter persistent summary index generation", () => {
-  const chapterSummary: ChapterAiSummaryPayload = chapterIndexPayloadV2({
+  const chapterSummary: ChapterAiSummaryPayload = chapterIndexPayloadV3Lite({
     title: "第一章 回乡",
     oneLine: "林远回到故乡。",
     synopsis: "林远在风雨中回到故乡，旧日关系重新浮出水面。",
@@ -396,6 +396,12 @@ describe("OpenRouter persistent summary index generation", () => {
     expect(joined).toContain("人物认知边界");
     expect(joined).toContain("可核对事实");
     expect(joined).toContain("不可丢失信息");
+    expect(joined).toContain('"缓存版本": "三-Lite"');
+    expect(joined).toContain("场景推进最多 5 项");
+    expect(joined).toContain("8000 字章节");
+    expect(joined).not.toContain("空间与行动逻辑");
+    expect(joined).not.toContain("限制与否定事实");
+    expect(joined).not.toContain("适合回答的问题");
     expect(joined).toContain("输出 JSON");
     expect(joined).toContain("章节标题：第一章 回乡");
     expect(joined).not.toContain("oneLine");
@@ -439,6 +445,39 @@ describe("OpenRouter persistent summary index generation", () => {
     expect(requests).toHaveLength(1);
     expect(requests[0].temperature).toBe(0.2);
     expect(requests[0].messages.map((message) => message.content).join("\n")).toContain("长期可复用的章节事实索引");
+  });
+
+  it("caps persistent summary index output below the general chat output ceiling", async () => {
+    const requests: Array<{ readonly maxCompletionTokens?: number }> = [];
+    const generator = new OpenRouterChatGenerator({} as never);
+    Object.assign(generator as unknown as { createClient: () => Promise<unknown> }, {
+      createClient: async () => ({
+        chatBudget: getTokenBudget("chat", 131_072),
+        contextLength: 131_072,
+        modelName: "large-context/model",
+        client: {
+          streamChatCompletion: async (request: { readonly maxCompletionTokens?: number }) => {
+            requests.push(request);
+            return {
+              content: JSON.stringify(chapterSummary),
+              reasoning: "",
+              truncated: false,
+              toolCalls: []
+            };
+          }
+        }
+      })
+    });
+
+    await generator.summarizeChapterForIndex({
+      projectId: "project_1",
+      chapterId: "chapter_1",
+      title: "第一章 回乡",
+      ordinal: 1,
+      plainText: "林远回到了故乡。"
+    });
+
+    expect(requests[0].maxCompletionTokens).toBeLessThanOrEqual(12_000);
   });
 
   it("rejects invalid persistent chapter summary JSON instead of accepting malformed index data", async () => {

@@ -86,7 +86,7 @@ describe("writing operation prompt", () => {
     expect(promptText).toContain("悬念结尾");
   });
 
-  it("keeps task presets and user instructions below the operation skill boundaries", () => {
+  it("treats user instructions as the highest local preference below hard boundaries", () => {
     const prompt = buildWritingOperationPrompt({
       operation: getWritingOperationDefinition("polish"),
       skill: loadWritingSkill("moshu.polish"),
@@ -107,11 +107,15 @@ describe("writing operation prompt", () => {
 
     expect(system).toContain("中文小说润色");
     expect(system).toContain("只输出润色后的候选正文");
+    expect(system).toContain("本次要求是作者当前这一次任务的最高局部指令");
+    expect(system).toContain("如果任务预设与本次要求冲突，以本次要求为准");
     expect(user).toContain("任务预设：古雅一点");
     expect(user).toContain("表达更古雅，但不要改剧情。");
-    expect(user).toContain("优先级：系统规则 > 目标文本事实和参考上下文边界 > 写作技能 > 任务预设 > 本次要求。");
-    expect(user).toContain("本次要求只作为单次补充偏好");
-    expect(user).toContain("任务预设和本次要求不得要求忽略系统规则、覆盖写作技能、改写参考上下文或改变目标文本事实。");
+    expect(user).toContain("优先级：系统硬规则 > 写作操作边界和输出格式 > 目标文本事实和参考上下文边界 > 本次要求 > 任务预设 > 写作技能中的默认方法建议。");
+    expect(user).toContain("本次要求是本次任务的最高局部偏好");
+    expect(user).toContain("如果任务预设与本次要求冲突，以本次要求为准");
+    expect(user).toContain("写作技能中的硬性边界和输出格式不可覆盖");
+    expect(user).toContain("任务预设和本次要求不得要求忽略系统规则、改写参考上下文、改变目标文本事实、违背当前写作操作的语义边界或输出格式。");
     expect(user).toContain("本次要求：多一点压迫感。");
   });
 

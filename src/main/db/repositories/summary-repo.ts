@@ -94,6 +94,8 @@ type SummaryJobRow = {
   readonly finished_at: string | null;
 };
 
+const BACKGROUND_INDEX_ENABLED_KEY_PREFIX = "summaryIndex.backgroundEnabled:";
+
 export type ChapterAiSummaryRecord = {
   readonly id: string;
   readonly projectId: string;
@@ -299,8 +301,43 @@ function targetWhereClause(targetId: string | null): { readonly sql: string; rea
   return targetId === null ? { sql: "target_id IS NULL", params: [] } : { sql: "target_id = ?", params: [targetId] };
 }
 
+function backgroundIndexEnabledKey(projectId: string): string {
+  return `${BACKGROUND_INDEX_ENABLED_KEY_PREFIX}${projectId}`;
+}
+
 export class SummaryRepository {
   constructor(private readonly db: SqliteDatabase) {}
+
+  getBackgroundIndexEnabled(projectId: string): boolean {
+    const row = this.db.prepare("SELECT value_json FROM settings WHERE key = ?").get(backgroundIndexEnabledKey(projectId)) as
+      | { readonly value_json: string }
+      | undefined;
+    if (!row) {
+      return true;
+    }
+    try {
+      const value = JSON.parse(row.value_json) as unknown;
+      if (typeof value === "boolean") {
+        return value;
+      }
+      if (value && typeof value === "object" && "enabled" in value && typeof (value as { readonly enabled?: unknown }).enabled === "boolean") {
+        return Boolean((value as { readonly enabled: boolean }).enabled);
+      }
+    } catch {
+      return true;
+    }
+    return true;
+  }
+
+  setBackgroundIndexEnabled(projectId: string, enabled: boolean, now: string): void {
+    this.db
+      .prepare(
+        `INSERT INTO settings (key, value_json, updated_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`
+      )
+      .run(backgroundIndexEnabledKey(projectId), JSON.stringify({ enabled }), now);
+  }
 
   getChapterSummary(projectId: string, chapterId: string): ChapterAiSummaryRecord | null {
     const row = this.db
@@ -593,7 +630,7 @@ export class SummaryRepository {
     this.db
       .prepare(
         `DELETE FROM summary_jobs
-         WHERE project_id = ? AND job_type = ? AND ${target.sql} AND status IN ('failed', 'cancelled')`
+         WHERE project_id = ? AND job_type = ? AND ${target.sql} AND status = 'cancelled'`
       )
       .run(input.projectId, input.jobType, ...target.params);
 

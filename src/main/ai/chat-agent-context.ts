@@ -4,7 +4,19 @@ import { getTokenBudget, type TokenBudget } from "./token-budget";
 import { estimateTextTokens, truncateTextToTokenBudget } from "./token-estimator";
 import type { ChapterRepository } from "../db/repositories/chapter-repo";
 import type { ArcAiSummaryRecord, BookAiSummaryRecord, ChapterAiSummaryRecord, SummaryRepository } from "../db/repositories/summary-repo";
-import { getBookSummaryCoverage, type BookSummaryCoverage } from "../shared/summary-index";
+import {
+  getBookSummaryCoverage,
+  getChapterSummaryCharacterKnowledge,
+  getChapterSummaryCharacterStates,
+  getChapterSummaryFacts,
+  getChapterSummaryForeshadowing,
+  getChapterSummaryKeyEvents,
+  getChapterSummaryMustKeep,
+  getChapterSummaryRelationships,
+  getChapterSummaryRisks,
+  getChapterSummaryUnresolvedQuestions,
+  type BookSummaryCoverage
+} from "../shared/summary-index";
 import type { ChapterContent, ChapterSummary } from "../shared/types";
 
 const CHAT_AGENT_CONTEXT_RESERVE_TOKENS = 500;
@@ -310,14 +322,6 @@ function selectFocusScopeChapters(input: {
   return input.chapters.slice(input.scope.from - 1, input.scope.to);
 }
 
-function filterSummaryFacts(summary: ChapterAiSummaryRecord, focus: SummaryIndexFocus): ChapterAiSummaryRecord["structured"]["可核对事实"] {
-  if (focus === "facts" || focus === "overview") {
-    return summary.structured.可核对事实;
-  }
-  const factTypes = focus === "characters" ? new Set(["人物状态", "人物认知", "关系"]) : new Set(["伏笔"]);
-  return summary.structured.可核对事实.filter((fact) => factTypes.has(fact.事实类型));
-}
-
 function buildFocusedSummaryBlock(summary: ChapterAiSummaryRecord, focus: SummaryIndexFocus): string {
   const base = {
     章节: formatChapterCoverageLabel(summary.chapterOrder, summary.chapterTitle),
@@ -329,9 +333,9 @@ function buildFocusedSummaryBlock(summary: ChapterAiSummaryRecord, focus: Summar
       {
         ...base,
         长摘要: summary.summaryLong,
-        关键事件: summary.structured.关键事件,
-        不可丢失信息: summary.structured.不可丢失信息,
-        未解决问题: summary.structured.未解决问题
+        关键事件: getChapterSummaryKeyEvents(summary.structured),
+        不可丢失信息: getChapterSummaryMustKeep(summary.structured),
+        未解决问题: getChapterSummaryUnresolvedQuestions(summary.structured)
       },
       null,
       2
@@ -342,10 +346,10 @@ function buildFocusedSummaryBlock(summary: ChapterAiSummaryRecord, focus: Summar
     return JSON.stringify(
       {
         ...base,
-        人物状态: summary.structured.人物状态,
-        人物认知边界: summary.structured.人物认知边界,
-        关系动态: summary.structured.关系动态,
-        可核对事实: filterSummaryFacts(summary, focus)
+        人物状态: getChapterSummaryCharacterStates(summary.structured),
+        人物认知边界: getChapterSummaryCharacterKnowledge(summary.structured),
+        关系动态: getChapterSummaryRelationships(summary.structured),
+        可核对事实: getChapterSummaryFacts(summary.structured, focus)
       },
       null,
       2
@@ -356,10 +360,10 @@ function buildFocusedSummaryBlock(summary: ChapterAiSummaryRecord, focus: Summar
     return JSON.stringify(
       {
         ...base,
-        伏笔与线索: summary.structured.伏笔与线索,
-        未解决问题: summary.structured.未解决问题,
-        连续性风险: summary.structured.连续性风险,
-        可核对事实: filterSummaryFacts(summary, focus)
+        伏笔与线索: getChapterSummaryForeshadowing(summary.structured),
+        未解决问题: getChapterSummaryUnresolvedQuestions(summary.structured),
+        连续性风险: getChapterSummaryRisks(summary.structured),
+        可核对事实: getChapterSummaryFacts(summary.structured, focus)
       },
       null,
       2
@@ -369,11 +373,11 @@ function buildFocusedSummaryBlock(summary: ChapterAiSummaryRecord, focus: Summar
   return JSON.stringify(
     {
       ...base,
-      人物状态: summary.structured.人物状态,
-      人物认知边界: summary.structured.人物认知边界,
-      关系动态: summary.structured.关系动态,
-      伏笔与线索: summary.structured.伏笔与线索,
-      可核对事实: summary.structured.可核对事实
+      人物状态: getChapterSummaryCharacterStates(summary.structured),
+      人物认知边界: getChapterSummaryCharacterKnowledge(summary.structured),
+      关系动态: getChapterSummaryRelationships(summary.structured),
+      伏笔与线索: getChapterSummaryForeshadowing(summary.structured),
+      可核对事实: getChapterSummaryFacts(summary.structured, "facts")
     },
     null,
     2

@@ -3544,6 +3544,22 @@ select:focus-visible {
   line-height: 1.6;
 }
 
+.summary-cache-problems {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid #fed7aa;
+  border-radius: 8px;
+  background: #fff7ed;
+  color: #9a3412;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.summary-cache-problems b {
+  color: #7c2d12;
+}
+
 .summary-cache-browser {
   min-height: 620px;
   display: grid;

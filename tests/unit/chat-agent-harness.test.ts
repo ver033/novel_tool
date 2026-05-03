@@ -630,6 +630,76 @@ describe("chat agent harness", () => {
     expect(chunks.join("")).toBe(result.content);
   });
 
+  it("does not replay a writing tool candidate that was already streamed by the tool runner", async () => {
+    const candidate = "少年僵立原地，周遭的嘲笑声一寸寸刺进耳中。";
+    const presentation = `【润色稿】\n${candidate}`;
+    const model: ChatAgentModel = {
+      async stream() {
+        return {
+          content: "",
+          truncated: false,
+          toolCalls: [
+            {
+              id: "call_polish_streamed",
+              name: "run_writing_operation",
+              argumentsJson: JSON.stringify({
+                operation: "polish"
+              })
+            }
+          ]
+        };
+      }
+    };
+    const chunks: string[] = [];
+
+    const result = await runChatAgentLoop(
+      {
+        requestId: "agent_loop_streamed_writing_result",
+        projectId: "project_agent",
+        sessionId: "chat_1",
+        userMessage: "润色选中文本",
+        history: [],
+        selectionText: "少年站着。",
+        chapterDirectory: [],
+        tools,
+        model,
+        tokenBudget: getTokenBudget("chat"),
+        modelContextTokens: null,
+        modelName: "test/model",
+        async executeTool(call: OpenRouterToolCall) {
+          expect(call.name).toBe("run_writing_operation");
+          chunks.push("【润色稿】\n");
+          chunks.push(candidate);
+          return {
+            action: null,
+            content: JSON.stringify({
+              operation: "polish",
+              outputKind: "candidate_text",
+              generatedText: candidate,
+              changeSummary: "OpenRouter polish candidate",
+              proofreadIssues: null,
+              streamedPresentation: true,
+              contextPlan: {
+                mode: "direct",
+                estimatedInputTokens: 512,
+                maxInputTokens: 3000,
+                reason: "选区是唯一修改目标，周边正文只作参考。"
+              }
+            })
+          };
+        }
+      },
+      {
+        onChunk(event) {
+          chunks.push(event.content);
+        }
+      }
+    );
+
+    expect(result.content).toBe(presentation);
+    expect(chunks.join("")).toBe(presentation);
+  });
+
   it("collects actions returned by tools without using prompt text regex", async () => {
     const action = {
       type: "add_to_scratchpad",
@@ -1101,6 +1171,95 @@ describe("chat agent harness", () => {
     expect(result.content).toContain("少年僵立原地");
     expect(result.content).not.toContain("我先帮你润色");
     expect(chunks.join("")).toBe(result.content);
+  });
+
+  it("streams the final answer after tool results without replaying the buffered tool-call preface", async () => {
+    const chunks: string[] = [];
+    let callCount = 0;
+    const model: ChatAgentModel = {
+      async stream(_input, handlers) {
+        callCount += 1;
+        if (callCount === 1) {
+          handlers?.onToken?.("我先读取章节。");
+          return {
+            content: "我先读取章节。",
+            truncated: false,
+            toolCalls: [
+              {
+                id: "call_read_all",
+                name: "read_chapters",
+                argumentsJson: JSON.stringify({
+                  scope: {
+                    type: "all_chapters"
+                  }
+                })
+              }
+            ]
+          };
+        }
+
+        handlers?.onToken?.("前两章主要");
+        handlers?.onToken?.("交代主角处境。");
+        return {
+          content: "前两章主要交代主角处境。",
+          truncated: false
+        };
+      }
+    };
+
+    const result = await runChatAgentLoop(
+      {
+        requestId: "agent_loop_final_answer_streams_after_tool",
+        projectId: "project_agent",
+        sessionId: "chat_1",
+        userMessage: "总结前两章",
+        history: [],
+        chapterDirectory: [
+          {
+            ordinal: 1,
+            id: "chapter_1",
+            title: "第1章 起点",
+            wordCount: 10,
+            current: true
+          },
+          {
+            ordinal: 2,
+            id: "chapter_2",
+            title: "第2章 暗潮",
+            wordCount: 12,
+            current: false
+          }
+        ],
+        tools,
+        model,
+        tokenBudget: getTokenBudget("chat"),
+        modelContextTokens: null,
+        modelName: "test/model",
+        async executeTool(call: OpenRouterToolCall) {
+          expect(call.name).toBe("read_chapters");
+          return {
+            action: null,
+            content: JSON.stringify({
+              scopeLabel: "前两章",
+              mode: "direct",
+              sourceChapterIds: ["chapter_1", "chapter_2"],
+              contextText: "[第1章 起点]\n第一章真实正文。\n\n[第2章 暗潮]\n第二章真实正文。"
+            })
+          };
+        }
+      },
+      {
+        onChunk(event) {
+          chunks.push(event.content);
+        }
+      }
+    );
+
+    expect(result.content).toBe("前两章主要交代主角处境。");
+    expect(chunks).toEqual(["前两章主要", "交代主角处境。"]);
+    expect(chunks.join("")).toBe(result.content);
+    expect(chunks.join("")).not.toContain("我先读取章节");
+    expect(callCount).toBe(2);
   });
 
   it("uses the writing operation result even when the final assistant turn is only a summary", async () => {

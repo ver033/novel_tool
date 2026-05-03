@@ -235,7 +235,12 @@ describe("summary index migrations and repository", () => {
       now: "2026-05-01T00:11:00.000Z"
     });
     expect(requeued.id).not.toBe(low.id);
-    expect(db.prepare("SELECT COUNT(*) AS count FROM summary_jobs WHERE id = ?").get(low.id)).toEqual({ count: 0 });
+    expect(db.prepare("SELECT status, error, next_run_at FROM summary_jobs WHERE id = ?").get(low.id)).toEqual({
+      status: "failed",
+      error: "OpenRouter 429",
+      next_run_at: "2026-05-01T00:10:00.000Z"
+    });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM summary_jobs WHERE target_id = ?").get("chapter_1")).toEqual({ count: 2 });
 
     repo.claimNextSummaryJob("project_1", "2026-05-01T00:12:00.000Z");
     repo.resetRunningJobs("project_1", "2026-05-01T00:13:00.000Z");
@@ -270,6 +275,21 @@ describe("summary index migrations and repository", () => {
     expect(requeued.id).not.toBe(cancelled.id);
     expect(db.prepare("SELECT COUNT(*) AS count FROM summary_jobs WHERE status = 'cancelled'").get()).toEqual({ count: 0 });
     expect(db.prepare("SELECT COUNT(*) AS count FROM summary_jobs WHERE status = 'queued'").get()).toEqual({ count: 1 });
+    db.close();
+  });
+
+  it("persists whether automatic background indexing is enabled for the project", () => {
+    const db = createDb();
+    seedProjectAndChapter(db);
+    const repo = new SummaryRepository(db);
+
+    expect(repo.getBackgroundIndexEnabled("project_1")).toBe(true);
+
+    repo.setBackgroundIndexEnabled("project_1", false, "2026-05-01T00:02:00.000Z");
+    expect(repo.getBackgroundIndexEnabled("project_1")).toBe(false);
+
+    repo.setBackgroundIndexEnabled("project_1", true, "2026-05-01T00:03:00.000Z");
+    expect(repo.getBackgroundIndexEnabled("project_1")).toBe(true);
     db.close();
   });
 });

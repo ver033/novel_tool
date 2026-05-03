@@ -9,7 +9,8 @@ import {
   getChapterSummaryLongText,
   getChapterSummaryShortText,
   summaryJobStatusSchema,
-  summaryStatusSchema
+  summaryStatusSchema,
+  type ChapterAiSummaryPayloadV2
 } from "../../src/main/shared/summary-index";
 
 const validChapterIndexPayloadV2 = {
@@ -219,6 +220,87 @@ const validChapterIndexPayloadV2 = {
   不确定项: []
 };
 
+const validChapterIndexPayloadV3Lite = {
+  章节信息: {
+    章节序号: 1,
+    章节标题: "第1章 陨落的天才",
+    正文覆盖: "完整章节",
+    缓存类型: "章节缓存",
+    缓存版本: "三-Lite",
+    语言: "简体中文"
+  },
+  缓存质量: {
+    覆盖完整度: "完整",
+    信息密度: "中",
+    需要回读原文: "否",
+    缺失说明: []
+  },
+  一句话摘要: "萧炎在家族测试中暴露低谷，承受众人嘲讽。",
+  短摘要: "萧炎测试结果低微，家族众人态度冷淡，萧薰儿仍然维护他。",
+  详细梗概: "本章以萧炎的斗气测试为核心，展现他从昔日天才跌落后的尴尬处境。测试结果公布后，广场上的族人议论和嘲笑加重了他的屈辱感，萧薰儿的态度则保留了重要情感支撑。",
+  章节作用: {
+    剧情作用: "确立主角当前困境",
+    人物作用: "建立萧炎低谷状态和萧薰儿支持关系",
+    后文作用: "为主角恢复实力和查明原因埋下动机"
+  },
+  场景推进: ["萧炎完成测试", "众人嘲讽", "萧薰儿维持支持"],
+  关键事件: [
+    {
+      事件: "萧炎斗气测试结果为斗之力三段",
+      涉及人物: ["萧炎"],
+      时间地点: "萧家测试广场",
+      结果: "萧炎被公开评价为低级",
+      后续影响: "后文实力变化需要解释",
+      证据短句: ["斗之力，三段"]
+    }
+  ],
+  人物状态: [
+    {
+      人物: "萧炎",
+      本章变化: "从强忍平静转为苦涩自嘲",
+      行动: ["参加测试", "强忍众人嘲笑"],
+      目标或动机: "维护尊严并承受测试结果",
+      新获得信息: ["测试结果被公开"],
+      仍不知道的信息: ["修为跌落的根本原因"],
+      关系变化: ["与族人的距离进一步拉开"],
+      证据短句: ["斗之力，三段"]
+    }
+  ],
+  人物认知边界: [
+    {
+      人物: "萧炎",
+      认知变化: "确认众人对他的轻视仍然存在",
+      仍不知道: ["修为异常原因"],
+      误解或风险: [],
+      证据短句: ["斗之力，三段"]
+    }
+  ],
+  关系变化: ["萧薰儿没有随众人轻视萧炎，支持关系需要后续承接"],
+  时间地点: {
+    本章时间: "未明确",
+    主要地点: ["萧家测试广场"],
+    时间线索: ["测试期间"],
+    地点移动: [],
+    可能风险: []
+  },
+  道具设定变化: ["测验魔石碑用于公开斗气等级", "斗之力三段被判为低级"],
+  伏笔与线索: [
+    {
+      线索: "萧炎从天才跌落的原因未解释",
+      类型: "明确伏笔",
+      状态: "埋下",
+      指向或意义: "修为异常原因",
+      证据短句: []
+    }
+  ],
+  可核对事实: ["萧炎本章测试结果为斗之力三段", "斗之力三段在萧家测试中被判为低级"],
+  连续性风险: ["后文若直接让萧炎恢复高等级，需要解释修为变化原因"],
+  未解决问题: ["萧炎修为跌落的原因是什么"],
+  文风要点: ["第三人称", "压抑、讽刺", "心理屈辱和外界嘲讽"],
+  不可丢失信息: ["萧炎测试结果为斗之力三段", "萧炎修为异常原因未揭示", "萧薰儿仍支持萧炎"],
+  不确定项: []
+};
+
 describe("summary index schemas", () => {
   it("rejects legacy V1 structured chapter summary payloads", () => {
     expect(() =>
@@ -237,7 +319,30 @@ describe("summary index schemas", () => {
     ).toThrow();
   });
 
-  it("accepts a V2 Chinese chapter fact index payload and derives display summaries from it", () => {
+  it("accepts a V3 Lite Chinese chapter fact index payload and derives display summaries from it", () => {
+    const parsed = chapterAiSummaryPayloadSchema.parse(validChapterIndexPayloadV3Lite);
+
+    expect(parsed).toEqual(validChapterIndexPayloadV3Lite);
+    expect(getChapterSummaryShortText(parsed)).toBe(validChapterIndexPayloadV3Lite.一句话摘要);
+    expect(getChapterSummaryLongText(parsed)).toBe(validChapterIndexPayloadV3Lite.详细梗概);
+    expect(JSON.stringify(parsed).length).toBeLessThan(JSON.stringify(validChapterIndexPayloadV2).length / 2);
+  });
+
+  it("normalizes V3 Lite chapter indexes when the model keeps the previous version label", () => {
+    const payload = JSON.parse(JSON.stringify(validChapterIndexPayloadV3Lite));
+    payload.章节信息.缓存版本 = "二";
+
+    const parsed = chapterAiSummaryPayloadSchema.parse(payload);
+
+    expect(parsed.章节信息.缓存版本).toBe("三-Lite");
+    expect(parsed).toMatchObject({
+      章节作用: validChapterIndexPayloadV3Lite.章节作用,
+      时间地点: validChapterIndexPayloadV3Lite.时间地点,
+      文风要点: validChapterIndexPayloadV3Lite.文风要点
+    });
+  });
+
+  it("continues to accept legacy V2 Chinese chapter fact indexes as read-only cache data", () => {
     const parsed = chapterAiSummaryPayloadSchema.parse(validChapterIndexPayloadV2);
 
     expect(parsed).toEqual(validChapterIndexPayloadV2);
@@ -255,10 +360,14 @@ describe("summary index schemas", () => {
     const parsed = chapterAiSummaryPayloadSchema.parse(payload);
 
     expect(parsed.章节信息.缓存版本).toBe("二");
-    expect(parsed.场景列表[0].场景序号).toBe(1);
-    expect(parsed.人物状态[0].新获得信息).toEqual(["测试结果被公开"]);
-    expect(parsed.人物状态[0].仍不知道的信息).toEqual([]);
-    expect(parsed.人物认知边界[0].新得知).toEqual(["众人对他的轻视仍然存在"]);
+    if (parsed.章节信息.缓存版本 !== "二") {
+      throw new Error("expected legacy V2 payload");
+    }
+    const legacy = parsed as ChapterAiSummaryPayloadV2;
+    expect(legacy.场景列表[0].场景序号).toBe(1);
+    expect(legacy.人物状态[0].新获得信息).toEqual(["测试结果被公开"]);
+    expect(legacy.人物状态[0].仍不知道的信息).toEqual([]);
+    expect(legacy.人物认知边界[0].新得知).toEqual(["众人对他的轻视仍然存在"]);
   });
 
   it("rejects thin V2 chapter fact indexes without continuity facts", () => {

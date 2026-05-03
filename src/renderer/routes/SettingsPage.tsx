@@ -224,6 +224,22 @@ function formatDateTime(value: string | null): string {
   });
 }
 
+function formatCacheJobNote(entry: SummaryChapterCacheEntry): string | null {
+  if (entry.jobError) {
+    return `错误：${entry.jobError}`;
+  }
+  if (entry.nextRunAt) {
+    return `等待重试：${formatDateTime(entry.nextRunAt)}`;
+  }
+  if (entry.jobStatus === "queued") {
+    return "等待后台处理";
+  }
+  if (entry.jobStatus === "running") {
+    return "当前正在生成缓存";
+  }
+  return null;
+}
+
 function getChapterCacheActionLabel(entry: SummaryChapterCacheEntry | null): string {
   if (!entry) {
     return "选择章节";
@@ -243,8 +259,8 @@ function getChapterCacheActionLabel(entry: SummaryChapterCacheEntry | null): str
   return labels[entry.cacheState];
 }
 
-function canRunChapterCacheAction(entry: SummaryChapterCacheEntry | null, running: boolean): boolean {
-  if (!entry || running) {
+function canRunChapterCacheAction(entry: SummaryChapterCacheEntry | null): boolean {
+  if (!entry) {
     return false;
   }
   return entry.cacheState === "ready" || entry.cacheState === "stale" || entry.cacheState === "missing" || entry.cacheState === "failed" || entry.cacheState === "cancelled";
@@ -685,6 +701,7 @@ function SummaryCacheSettingsPane({ currentProject }: SummaryCacheSettingsPanePr
   const selectedEntry = entries.find((entry) => entry.chapterId === selectedChapterId) ?? entries[0] ?? null;
   const running = Boolean(indexStatus?.runningJobLabel);
   const hasQueuedOrRunning = Boolean(indexStatus && (indexStatus.queuedJobCount > 0 || indexStatus.runningJobLabel));
+  const backgroundEnabled = indexStatus?.backgroundEnabled ?? true;
   const fullCachePreview = detail
     ? JSON.stringify(
         {
@@ -772,7 +789,7 @@ function SummaryCacheSettingsPane({ currentProject }: SummaryCacheSettingsPanePr
     }
   }
 
-  const selectedCanRunCacheAction = Boolean(project && canRunChapterCacheAction(selectedEntry, running));
+  const selectedCanRunCacheAction = Boolean(project && canRunChapterCacheAction(selectedEntry));
 
   return (
     <div className="settings-grid summary-cache-settings">
@@ -812,7 +829,12 @@ function SummaryCacheSettingsPane({ currentProject }: SummaryCacheSettingsPanePr
                 <b>{indexStatus?.queuedJobCount ?? 0}</b>
                 排队
               </span>
+              <span>
+                <b>{backgroundEnabled ? "开" : "关"}</b>
+                后台
+              </span>
             </div>
+            {!backgroundEnabled ? <p className="summary-cache-hint">后台索引已关闭。新章节和过期章节不会自动缓存，点击“继续建立索引”会重新开启。</p> : null}
             <div className="summary-cache-actions">
               <Button
                 variant="secondary"
@@ -823,10 +845,10 @@ function SummaryCacheSettingsPane({ currentProject }: SummaryCacheSettingsPanePr
               </Button>
               <Button
                 variant="ghost"
-                disabled={loading || actionBusy || !hasQueuedOrRunning}
-                onClick={() => void runAction(() => api.summary.cancelCurrentJob({ projectId: project.id }), "后台索引已停止。")}
+                disabled={loading || actionBusy || (!backgroundEnabled && !hasQueuedOrRunning)}
+                onClick={() => void runAction(() => api.summary.cancelCurrentJob({ projectId: project.id }), "后台索引已关闭；已完成的章节缓存会保留。")}
               >
-                停止后台索引
+                {backgroundEnabled ? "停止后台索引" : "后台索引已关闭"}
               </Button>
               <Button
                 variant={forceConfirm ? "primary" : "ghost"}
@@ -849,6 +871,29 @@ function SummaryCacheSettingsPane({ currentProject }: SummaryCacheSettingsPanePr
                 自动重试：{indexStatus.nextRetryJobLabel ?? "摘要任务"}，{formatDateTime(indexStatus.nextRetryAt)}
               </p>
             ) : null}
+            {indexStatus?.recentFailedJobs.length ? (
+              <div className="summary-cache-problems">
+                <b>最近失败</b>
+                {indexStatus.recentFailedJobs.map((job) => (
+                  <span key={job.jobId}>
+                    {job.label}：{job.failureCategory ?? job.error ?? "未知错误"}
+                    {job.actionHint ? `；${job.actionHint}` : ""}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+            {indexStatus?.retryingJobs.length ? (
+              <div className="summary-cache-problems">
+                <b>等待重试</b>
+                {indexStatus.retryingJobs.map((job) => (
+                  <span key={job.jobId}>
+                    {job.label}：{formatDateTime(job.nextRunAt)}
+                    {job.failureCategory ? `；上次错误：${job.failureCategory}` : job.error ? `；上次错误：${job.error}` : ""}
+                    {job.actionHint ? `；${job.actionHint}` : ""}
+                  </span>
+                ))}
+              </div>
+            ) : null}
           </>
         )}
         {message ? <p className="settings-message saved">{message}</p> : null}
@@ -870,7 +915,9 @@ function SummaryCacheSettingsPane({ currentProject }: SummaryCacheSettingsPanePr
                 >
                   <span>
                     <b>{entry.chapterTitle}</b>
-                    <small>{entry.wordCount.toLocaleString("zh-CN")} 字 · 点击查看完整缓存</small>
+                    <small>
+                      {entry.wordCount.toLocaleString("zh-CN")} 字 · {formatCacheJobNote(entry) ?? "点击查看完整缓存"}
+                    </small>
                   </span>
                   <em className={`cache-state ${entry.cacheState}`}>{formatCacheState(entry)}</em>
                 </button>
@@ -884,6 +931,7 @@ function SummaryCacheSettingsPane({ currentProject }: SummaryCacheSettingsPanePr
                 <p className="muted">
                   状态：{formatCacheState(selectedEntry)}；更新：{formatDateTime(selectedEntry?.summaryUpdatedAt ?? null)}
                 </p>
+                {selectedEntry && formatCacheJobNote(selectedEntry) ? <p className="summary-cache-hint">{formatCacheJobNote(selectedEntry)}</p> : null}
               </div>
               <Button
                 variant="secondary"
@@ -899,7 +947,7 @@ function SummaryCacheSettingsPane({ currentProject }: SummaryCacheSettingsPanePr
                 {getChapterCacheActionLabel(selectedEntry)}
               </Button>
             </div>
-            {running ? <p className="summary-cache-hint">后台索引正在运行。本章缓存操作会等当前任务停止后才能执行，避免旧任务覆盖新缓存。</p> : null}
+            {running ? <p className="summary-cache-hint">后台索引正在运行。其他章节的缓存操作会排队等待当前章节完成；同一章节正在缓存时不能重复重试。</p> : null}
             <div className="summary-cache-preview-block">
               <h4>缓存摘要</h4>
               <p>{detail?.summary?.summaryShort ?? "当前章节还没有可预览的缓存摘要。"}</p>

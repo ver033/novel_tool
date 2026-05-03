@@ -151,9 +151,23 @@ export class WritingOperationRunner {
     });
   }
 
-  async runRequest(request: WritingOperationRequest, options: AiGenerationOptions = {}): Promise<WritingOperationResult> {
+  async runRequest(
+    request: WritingOperationRequest,
+    options: AiGenerationOptions = {},
+    handlers: AiTaskStreamHandlers = {}
+  ): Promise<WritingOperationResult> {
     const { config, contextPlan, operation, prompt } = await this.buildPromptForRequest(request);
     const client = this.createClient(config);
+    handlers.onContext?.({
+      requestId: "",
+      estimatedInputTokens: contextPlan.estimatedInputTokens,
+      maxInputTokens: contextPlan.maxInputTokens,
+      maxOutputTokens: prompt.maxCompletionTokens,
+      modelContextTokens: config.contextLength,
+      modelName: config.modelName,
+      contextMode: contextPlan.mode,
+      scopeLabel: `写作操作：${operation.label}`
+    });
     logDevLlmPrompt({
       kind: `writing-operation:${operation.id}:chat-tool`,
       modelName: config.modelName,
@@ -181,7 +195,13 @@ export class WritingOperationRunner {
         reasoning: prompt.reasoning,
         signal: options.signal
       },
-      {}
+      {
+        onToken(token) {
+          if (operation.outputKind === "candidate_text") {
+            handlers.onChunk?.({ requestId: "", content: token });
+          }
+        }
+      }
     );
     const parsed = response.truncated ? buildTruncatedResult(operation.id, response.content) : parseWritingOperationResponse(operation, response.content);
 

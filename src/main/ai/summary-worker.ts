@@ -46,44 +46,19 @@ function formatError(reason: unknown): string {
   return reason instanceof Error ? reason.message : String(reason);
 }
 
-function retryDelayMinutes(reason: unknown): number | null {
-  if (reason instanceof OpenRouterError) {
-    if (reason.status === 429 || reason.code === "rate_limited") {
-      return 5;
-    }
-    if (reason.status === 503) {
-      return 2;
-    }
-  }
-  return null;
-}
-
-function isInvalidSummaryIndexOutput(reason: unknown): boolean {
-  const message = formatError(reason);
-  const fromSummaryIndex = /章节索引摘要|章节片段索引摘要|章节片段合并索引摘要|阶段索引摘要|全书索引摘要/u.test(message);
-  if (!fromSummaryIndex) {
-    return false;
-  }
-  return /无效|为空|被截断/u.test(message);
-}
-
 function retryPlanFor(reason: unknown): RetryPlan | null {
   if (reason instanceof OpenRouterError) {
     if (reason.status === 429 || reason.code === "rate_limited") {
-      return { delays: [5, 15, 30] };
+      return { delays: [15] };
     }
     if (reason.status === 503) {
-      return { delays: [2, 15, 30] };
+      return { delays: [10] };
     }
     if (reason.code === "timeout" || reason.code === "network_error") {
-      return { delays: [5, 15, 30] };
+      return { delays: [10] };
     }
   }
-  if (isInvalidSummaryIndexOutput(reason)) {
-    return { delays: [1, 5] };
-  }
-  const legacyDelay = retryDelayMinutes(reason);
-  return legacyDelay === null ? null : { delays: [legacyDelay] };
+  return null;
 }
 
 function isCancellationReason(reason: unknown): boolean {

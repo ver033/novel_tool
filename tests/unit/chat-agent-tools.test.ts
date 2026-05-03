@@ -10,7 +10,7 @@ import { ProjectRepository } from "../../src/main/db/repositories/project-repo";
 import { ScratchNoteRepository } from "../../src/main/db/repositories/scratch-note-repo";
 import { SummaryRepository } from "../../src/main/db/repositories/summary-repo";
 import { createId } from "../../src/main/shared/ids";
-import { computeChapterContentHash, type ChapterAiSummaryPayload } from "../../src/main/shared/summary-index";
+import { computeChapterContentHash, type ChapterAiSummaryPayload, type ChapterAiSummaryPayloadV2 } from "../../src/main/shared/summary-index";
 import type { ChapterSummary } from "../../src/main/shared/types";
 import { executeChatAgentTool, MOSHU_CHAT_AGENT_TOOLS } from "../../src/main/ai/chat-agent-tools";
 import { getTokenBudget } from "../../src/main/ai/token-budget";
@@ -622,7 +622,7 @@ describe("chat agent tools", () => {
       const structured = createSummaryPayload({
         oneLine: `第${ordinal}章人物短摘要。`,
         synopsis: `第${ordinal}章人物长摘要。`
-      });
+      }) as ChapterAiSummaryPayloadV2;
       structured.人物状态[0] = {
         ...structured.人物状态[0],
         人物: ordinal === 1 ? "林远" : "沈青",

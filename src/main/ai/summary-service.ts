@@ -25,13 +25,20 @@ import {
   type SummaryJobType
 } from "../shared/summary-index";
 import { countWritingUnits } from "../shared/text";
-import type { ChapterContent, SummaryChapterCacheDetail, SummaryChapterCacheEntry, SummaryIndexPausedReason, SummaryIndexStatus } from "../shared/types";
+import type {
+  ChapterContent,
+  SummaryChapterCacheDetail,
+  SummaryChapterCacheEntry,
+  SummaryIndexJobDetail,
+  SummaryIndexPausedReason,
+  SummaryIndexStatus
+} from "../shared/types";
 import { estimateTextTokens } from "./token-estimator";
 import type { ArcIndexSummaryInput, BookIndexSummaryInput, ChapterChunkIndexSummaryInput, ChapterChunkMergeSummaryInput, ChapterIndexSummaryInput } from "./summary-prompts";
 
 export const MIN_AUTO_SUMMARY_UNITS = 500;
 export const MIN_MANUAL_SUMMARY_UNITS = 80;
-export const ACTIVE_CHAPTER_IDLE_MS = 5 * 60 * 1000;
+export const ACTIVE_CHAPTER_IDLE_MS = 15 * 60 * 1000;
 export const MIN_HIGH_PRIORITY_DELTA_UNITS = 500;
 export const MIN_NORMAL_PRIORITY_DELTA_UNITS = 100;
 export const AUTO_ARC_CHAPTER_COUNT = 20;
@@ -81,6 +88,10 @@ type SummaryRebuildProjectIndexOptions = SummaryIndexStatusOptions & {
   readonly force?: boolean;
 };
 
+type SummarySetBackgroundIndexOptions = SummaryIndexStatusOptions & {
+  readonly cancelQueuedAndRunning?: boolean;
+};
+
 export type ChapterSummaryIndexChunk = {
   readonly chunkIndex: number;
   readonly chunkCount: number;
@@ -98,6 +109,46 @@ function parseTime(value: string): number {
   return Number.isFinite(timestamp) ? timestamp : 0;
 }
 
+function classifySummaryJobError(error: string | null): { readonly failureCategory: string | null; readonly actionHint: string | null } {
+  if (!error) {
+    return { failureCategory: null, actionHint: null };
+  }
+  if (error.includes("429") || error.includes("限流") || /rate.?limit/i.test(error) || error.includes("Resource has been exhausted")) {
+    return {
+      failureCategory: "上游限流",
+      actionHint: "OpenRouter 或模型供应商暂时限流。系统只会延迟自动重试一次；如果反复失败，请稍后重试或换用更稳定的模型。"
+    };
+  }
+  if (error.includes("finish_reason: length") || error.includes("被截断") || /truncated/i.test(error)) {
+    return {
+      failureCategory: "输出被截断",
+      actionHint: "章节缓存输出超出模型额度。请换用输出上限更高的模型，或先按单章手动重试确认该模型能返回完整 JSON。"
+    };
+  }
+  if (error.includes("结构无效") || error.includes("索引摘要无效") || error.includes("Unexpected end of JSON") || /JSON|schema|zod/i.test(error)) {
+    return {
+      failureCategory: "模型输出结构无效",
+      actionHint: "模型没有返回合法章节缓存 JSON。此类错误不会自动反复重试，建议换用更稳定的模型或手动重试单章。"
+    };
+  }
+  if (/timeout|timed?out|network|ECONN|ENOTFOUND|EAI_AGAIN/i.test(error) || error.includes("超时")) {
+    return {
+      failureCategory: "网络或上游超时",
+      actionHint: "请求没有稳定完成。系统只会延迟自动重试一次；如果反复失败，请稍后重试或换模型。"
+    };
+  }
+  if (error.includes("API Key") || error.includes("模型名称") || error.includes("未配置")) {
+    return {
+      failureCategory: "AI 配置不可用",
+      actionHint: "请先在 AI 服务设置中测试并保存 OpenRouter API Key 和模型。"
+    };
+  }
+  return {
+    failureCategory: "未知错误",
+    actionHint: "请查看原始错误信息。若同一章节多次失败，建议先单章重试或换用更稳定的模型。"
+  };
+}
+
 function skippedTooShortPayload(content: ChapterContent): ChapterAiSummaryPayload {
   return {
     章节信息: {
@@ -105,7 +156,7 @@ function skippedTooShortPayload(content: ChapterContent): ChapterAiSummaryPayloa
       章节标题: content.title,
       正文覆盖: "不完整",
       缓存类型: "章节缓存",
-      缓存版本: "二",
+      缓存版本: "三-Lite",
       语言: "简体中文"
     },
     缓存质量: {
@@ -117,36 +168,18 @@ function skippedTooShortPayload(content: ChapterContent): ChapterAiSummaryPayloa
     一句话摘要: "章节内容过短，暂不建立完整事实索引。",
     短摘要: "章节内容过短，当前只记录跳过状态，等待正文成形后再建立章节缓存。",
     详细梗概: "章节内容过短，当前只记录跳过状态，不消耗模型额度建立完整事实索引。等作者继续写到足够长度后，系统会在空闲时重新进入摘要队列。",
-    本章功能: {
-      章节类型: "未明确",
-      剧情功能: "未明确",
-      情绪功能: "未明确",
-      结构作用: "未明确",
-      对后文的作用: "未明确"
+    章节作用: {
+      剧情作用: "未明确",
+      人物作用: "未明确",
+      后文作用: "正文成形后重新建立章节缓存"
     },
-    场景列表: [
-      {
-        场景序号: 1,
-        场景标题: "内容过短",
-        时间: "未明确",
-        地点: "未明确",
-        出场人物: [],
-        场景目标: "未明确",
-        冲突或阻力: "未明确",
-        关键事件: ["章节内容过短，暂未提取事件"],
-        场景结果: "未明确",
-        情绪变化: "未明确",
-        承接关系: "未明确",
-        证据短句: []
-      }
-    ],
+    场景推进: ["章节内容过短，暂未提取场景推进"],
     关键事件: [
       {
         事件: "章节内容过短，暂未建立关键事件索引",
         涉及人物: [],
         时间地点: "未明确",
-        事件原因: "未明确",
-        事件结果: "未明确",
+        结果: "当前只记录跳过状态",
         后续影响: "需要正文成形后重新分析",
         证据短句: []
       }
@@ -154,67 +187,31 @@ function skippedTooShortPayload(content: ChapterContent): ChapterAiSummaryPayloa
     人物状态: [
       {
         人物: "未明确",
-        本章出场状态: "未明确",
-        本章结束状态: "未明确",
-        身体状态: "未明确",
-        情绪状态: "未明确",
+        本章变化: "未明确",
         行动: [],
-        动机: "未明确",
-        目标: "未明确",
-        阻力: "未明确",
-        位置变化: "未明确",
+        目标或动机: "未明确",
         新获得信息: [],
         仍不知道的信息: [],
-        误解或错误判断: [],
-        与他人关系变化: [],
-        需要后文承接: "否",
+        关系变化: [],
         证据短句: []
       }
     ],
     人物认知边界: [],
-    关系动态: [],
-    时间与地点: {
+    关系变化: [],
+    时间地点: {
       本章时间: "未明确",
-      时间跨度: "未明确",
       主要地点: [],
+      时间线索: [],
       地点移动: [],
-      明确时间锚点: [],
-      相对时间锚点: [],
-      可能的时间线风险: [],
-      证据短句: []
+      可能风险: []
     },
-    空间与行动逻辑: [],
-    道具状态: [],
-    设定与规则: [],
-    限制与否定事实: [],
+    道具设定变化: [],
     伏笔与线索: [],
-    因果链: [],
-    可核对事实: [
-      {
-        事实编号: "事实-跳过-1",
-        事实类型: "限制事实",
-        主体: "章节缓存",
-        属性: "建立状态",
-        取值: "内容过短，暂未建立完整索引",
-        时间范围: "当前版本",
-        地点: "未明确",
-        确定性: "确定",
-        后文核对意义: "正文成形后需要重新建立章节缓存",
-        证据短句: []
-      }
-    ],
+    可核对事实: ["章节内容过短，暂未建立完整索引"],
     连续性风险: [],
     未解决问题: [],
-    文风与叙事: {
-      叙事视角: "未明确",
-      主要语气: "未明确",
-      节奏特点: "未明确",
-      对白特点: "未明确",
-      描写侧重: "未明确",
-      续写时应保持: []
-    },
+    文风要点: [],
     不可丢失信息: ["章节内容过短，等待正文成形后重新建立事实索引"],
-    适合回答的问题: ["这个章节为什么没有建立摘要缓存"],
     不确定项: ["正文信息不足"]
   };
 }
@@ -305,6 +302,141 @@ function firstDefined(values: readonly string[], fallback: string): string {
   return values.find((value) => value.trim() && value.trim() !== "未明确")?.trim() ?? fallback;
 }
 
+function chunkKeyEvents(chunk: ChapterAiSummaryChunkRecord) {
+  return (chunk.structured.关键事件 as readonly Record<string, unknown>[]).map((item) => ({
+    事件: String(item.事件 ?? "片段关键事件"),
+    涉及人物: Array.isArray(item.涉及人物) ? item.涉及人物.map((value) => String(value)) : [],
+    时间地点: String(item.时间地点 ?? "未明确"),
+    结果: String(item.结果 ?? item.事件结果 ?? "未明确"),
+    后续影响: String(item.后续影响 ?? "未明确"),
+    证据短句: Array.isArray(item.证据短句) ? item.证据短句.map((value) => String(value)).slice(0, 1) : []
+  }));
+}
+
+function chunkCharacterStates(chunk: ChapterAiSummaryChunkRecord) {
+  return (chunk.structured.人物状态 as readonly Record<string, unknown>[]).map((item) => ({
+    人物: String(item.人物 ?? "未明确"),
+    本章变化: String(item.本章变化 ?? item.本章结束状态 ?? item.情绪状态 ?? "未明确"),
+    行动: Array.isArray(item.行动) ? item.行动.map((value) => String(value)) : [],
+    目标或动机: String(item.目标或动机 ?? item.动机 ?? item.目标 ?? "未明确"),
+    新获得信息: Array.isArray(item.新获得信息) ? item.新获得信息.map((value) => String(value)) : [],
+    仍不知道的信息: Array.isArray(item.仍不知道的信息) ? item.仍不知道的信息.map((value) => String(value)) : [],
+    关系变化: Array.isArray(item.关系变化)
+      ? item.关系变化.map((value) => String(value))
+      : Array.isArray(item.与他人关系变化)
+        ? item.与他人关系变化.map((value) => String(value))
+        : [],
+    证据短句: Array.isArray(item.证据短句) ? item.证据短句.map((value) => String(value)).slice(0, 1) : []
+  }));
+}
+
+function chunkCharacterKnowledge(chunk: ChapterAiSummaryChunkRecord) {
+  return (chunk.structured.人物认知边界 as readonly Record<string, unknown>[]).map((item) => ({
+    人物: String(item.人物 ?? "未明确"),
+    认知变化: String(item.认知变化 ?? item.新得知 ?? item.已经知道 ?? "未明确"),
+    仍不知道: Array.isArray(item.仍不知道)
+      ? item.仍不知道.map((value) => String(value))
+      : Array.isArray(item.尚不知道)
+        ? item.尚不知道.map((value) => String(value))
+        : [],
+    误解或风险: Array.isArray(item.误解或风险)
+      ? item.误解或风险.map((value) => String(value))
+      : Array.isArray(item.误以为)
+        ? item.误以为.map((value) => String(value))
+        : [],
+    证据短句: Array.isArray(item.证据短句) ? item.证据短句.map((value) => String(value)).slice(0, 1) : []
+  }));
+}
+
+function chunkTimePlace(chunk: ChapterAiSummaryChunkRecord): {
+  readonly time: string;
+  readonly places: readonly string[];
+  readonly timeClues: readonly string[];
+  readonly moves: readonly string[];
+  readonly risks: readonly string[];
+} {
+  const structured = chunk.structured as unknown as Record<string, unknown>;
+  const liteTime = structured.时间地点 as Record<string, unknown> | undefined;
+  if (liteTime) {
+    return {
+      time: String(liteTime.本章时间 ?? "未明确"),
+      places: Array.isArray(liteTime.主要地点) ? liteTime.主要地点.map((value) => String(value)) : [],
+      timeClues: Array.isArray(liteTime.时间线索) ? liteTime.时间线索.map((value) => String(value)) : [],
+      moves: Array.isArray(liteTime.地点移动) ? liteTime.地点移动.map((value) => String(value)) : [],
+      risks: Array.isArray(liteTime.可能风险) ? liteTime.可能风险.map((value) => String(value)) : []
+    };
+  }
+
+  const legacyTime = structured.时间与地点 as Record<string, unknown> | undefined;
+  return {
+    time: String(legacyTime?.本章时间 ?? "未明确"),
+    places: Array.isArray(legacyTime?.主要地点) ? legacyTime.主要地点.map((value) => String(value)) : [],
+    timeClues: [
+      ...(Array.isArray(legacyTime?.明确时间锚点) ? legacyTime.明确时间锚点.map((value) => String(value)) : []),
+      ...(Array.isArray(legacyTime?.相对时间锚点) ? legacyTime.相对时间锚点.map((value) => String(value)) : [])
+    ],
+    moves: Array.isArray(legacyTime?.地点移动) ? legacyTime.地点移动.map((value) => String(value)) : [],
+    risks: Array.isArray(legacyTime?.可能的时间线风险) ? legacyTime.可能的时间线风险.map((value) => String(value)) : []
+  };
+}
+
+function chunkPropsAndRules(chunk: ChapterAiSummaryChunkRecord): string[] {
+  const structured = chunk.structured as unknown as Record<string, unknown>;
+  const lite = structured.道具设定变化;
+  const values: unknown[] = Array.isArray(lite) ? [...lite] : [];
+  for (const key of ["道具状态", "设定与规则", "限制与否定事实", "空间与行动逻辑", "因果链"] as const) {
+    const items = structured[key];
+    if (Array.isArray(items)) {
+      values.push(...items);
+    }
+  }
+  return uniqueStrings(values.map((item) => stringifyForSummary(item)), 12);
+}
+
+function chunkForeshadowing(chunk: ChapterAiSummaryChunkRecord) {
+  return (chunk.structured.伏笔与线索 as readonly Record<string, unknown>[]).map((item) => ({
+    线索: String(item.线索 ?? "线索"),
+    类型: String(item.类型 ?? "普通线索"),
+    状态: String(item.状态 ?? item.本章状态 ?? "待判断"),
+    指向或意义: String(item.指向或意义 ?? item.可能指向 ?? "未明确"),
+    证据短句: Array.isArray(item.证据短句) ? item.证据短句.map((value) => String(value)).slice(0, 1) : []
+  }));
+}
+
+function chunkFacts(chunk: ChapterAiSummaryChunkRecord): string[] {
+  return uniqueStrings((chunk.structured.可核对事实 as readonly unknown[]).map((item) => stringifyForSummary(item)), 12);
+}
+
+function chunkRisks(chunk: ChapterAiSummaryChunkRecord): string[] {
+  return uniqueStrings((chunk.structured.连续性风险 as readonly unknown[]).map((item) => stringifyForSummary(item)), 8);
+}
+
+function chunkUnresolvedQuestions(chunk: ChapterAiSummaryChunkRecord): string[] {
+  return uniqueStrings((chunk.structured.未解决问题 as readonly unknown[]).map((item) => stringifyForSummary(item)), 8);
+}
+
+function stringifyForSummary(value: unknown): string {
+  if (value === null || value === undefined) {
+    return "";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => stringifyForSummary(item)).filter(Boolean).join("、");
+  }
+  if (typeof value === "object") {
+    return Object.entries(value)
+      .map(([key, item]) => {
+        const text = stringifyForSummary(item);
+        return text ? `${key}：${text}` : "";
+      })
+      .filter(Boolean)
+      .join("；");
+  }
+  return String(value);
+}
+
 function mergeLongChapterChunks(content: ChapterContent, chunks: readonly ChapterAiSummaryChunkRecord[]): ChapterAiSummaryPayload {
   const orderedChunks = [...chunks].sort((left, right) => left.chunkIndex - right.chunkIndex);
   const chunkSummaries = orderedChunks
@@ -314,43 +446,39 @@ function mergeLongChapterChunks(content: ChapterContent, chunks: readonly Chapte
   const shortText = limitText(chunkSummaries.join("；"), 360) || `${content.title}已完成片段事实索引聚合。`;
   const oneLine = limitText(chunkSummaries.join("；"), 120) || `${content.title}已完成长章节缓存。`;
   const keyEvents = uniqueRecords(
-    orderedChunks.flatMap((chunk) => chunk.structured.关键事件),
-    (item) => `${item.事件}|${item.时间地点}|${item.事件结果}`,
-    32
+    orderedChunks.flatMap((chunk) => chunkKeyEvents(chunk)),
+    (item) => `${item.事件}|${item.时间地点}|${item.结果}`,
+    10
   );
   const characterStates = uniqueRecords(
-    orderedChunks.flatMap((chunk) => chunk.structured.人物状态),
-    (item) => `${item.人物}|${item.本章结束状态}|${item.位置变化}`,
-    32
+    orderedChunks.flatMap((chunk) => chunkCharacterStates(chunk)),
+    (item) => `${item.人物}|${item.本章变化}`,
+    10
   );
-  const facts = uniqueRecords(
-    orderedChunks.flatMap((chunk) => chunk.structured.可核对事实),
-    (item) => `${item.主体}|${item.属性}|${item.取值}|${item.时间范围}`,
-    48
+  const characterKnowledge = uniqueRecords(
+    orderedChunks.flatMap((chunk) => chunkCharacterKnowledge(chunk)),
+    (item) => `${item.人物}|${item.认知变化}`,
+    10
   );
-  const spatialActions = uniqueRecords(
-    orderedChunks.flatMap((chunk) => chunk.structured.空间与行动逻辑),
-    (item) => `${item.人物}|${item.移动或行动}|${item.起点}|${item.终点}`,
-    32
-  );
-  const negativeFacts = uniqueRecords(
-    orderedChunks.flatMap((chunk) => chunk.structured.限制与否定事实),
-    (item) => `${item.对象}|${item.限制或否定}|${item.影响范围}`,
-    32
-  );
-  const timePlaces = orderedChunks.map((chunk) => chunk.structured.时间与地点);
+  const facts = uniqueStrings(orderedChunks.flatMap((chunk) => chunkFacts(chunk)), 12);
+  const timePlaces = orderedChunks.map((chunk) => chunkTimePlace(chunk));
   const lostInfo = uniqueStrings(
     orderedChunks.flatMap((chunk) => chunk.structured.不可丢失信息),
-    48
+    10
   );
   const places = uniqueStrings(
-    timePlaces.flatMap((item) => item.主要地点),
-    24
+    timePlaces.flatMap((item) => item.places),
+    8
   );
-  const relativeTimes = uniqueStrings(
-    timePlaces.flatMap((item) => item.相对时间锚点),
-    24
+  const timeClues = uniqueStrings(timePlaces.flatMap((item) => item.timeClues), 8);
+  const propsAndRules = uniqueStrings(orderedChunks.flatMap((chunk) => chunkPropsAndRules(chunk)), 10);
+  const foreshadowing = uniqueRecords(
+    orderedChunks.flatMap((chunk) => chunkForeshadowing(chunk)),
+    (item) => `${item.线索}|${item.状态}|${item.指向或意义}`,
+    8
   );
+  const risks = uniqueStrings(orderedChunks.flatMap((chunk) => chunkRisks(chunk)), 8);
+  const unresolvedQuestions = uniqueStrings(orderedChunks.flatMap((chunk) => chunkUnresolvedQuestions(chunk)), 8);
 
   return {
     章节信息: {
@@ -358,7 +486,7 @@ function mergeLongChapterChunks(content: ChapterContent, chunks: readonly Chapte
       章节标题: content.title,
       正文覆盖: "完整章节",
       缓存类型: "章节缓存",
-      缓存版本: "二",
+      缓存版本: "三-Lite",
       语言: "简体中文"
     },
     缓存质量: {
@@ -373,42 +501,12 @@ function mergeLongChapterChunks(content: ChapterContent, chunks: readonly Chapte
       detailText.length >= 60
         ? detailText
         : `${detailText || content.title}。本章已完成长章节片段缓存聚合，当前缓存保留片段摘要、关键事件、人物状态、伏笔线索、可核对事实和不可丢失信息，供后续总结、查询与校对使用。`,
-    本章功能: {
-      章节类型: "长章节",
-      剧情功能: "由多个片段缓存聚合，保留本章连续剧情推进。",
-      情绪功能: "以片段缓存中的人物情绪和事件压力为准。",
-      结构作用: "连接多个连续场景并保存跨片段事实线索。",
-      对后文的作用: "为后续全文总结、人物查询、伏笔查询和连续性检查提供章节级索引。"
+    章节作用: {
+      剧情作用: "由多个片段缓存聚合，保留本章连续剧情推进。",
+      人物作用: "合并片段内主要人物状态和认知变化。",
+      后文作用: "为后续全文总结、人物查询、伏笔查询和连续性检查提供章节级索引。"
     },
-    场景列表: orderedChunks.slice(0, 24).map((chunk) => ({
-      场景序号: chunk.chunkIndex + 1,
-      场景标题: `片段${chunk.chunkIndex + 1}`,
-      时间: chunk.structured.时间与地点.本章时间,
-      地点: firstDefined(chunk.structured.时间与地点.主要地点, "未明确"),
-      出场人物: uniqueStrings(chunk.structured.人物状态.map((item) => item.人物), 12),
-      场景目标: "保留片段内主要事件与人物状态。",
-      冲突或阻力: firstDefined(chunk.structured.关键事件.map((item) => item.事件原因), "未明确"),
-      关键事件:
-        uniqueStrings(
-          chunk.structured.关键事件.map((item) => item.事件),
-          8
-        ).length > 0
-          ? uniqueStrings(
-              chunk.structured.关键事件.map((item) => item.事件),
-              8
-            )
-          : [chunk.structured.片段摘要],
-      场景结果: firstDefined(chunk.structured.关键事件.map((item) => item.事件结果), chunk.structured.片段摘要),
-      情绪变化: firstDefined(chunk.structured.人物状态.map((item) => item.情绪状态), "未明确"),
-      承接关系: "承接上一片段并进入下一片段。",
-      证据短句: uniqueStrings(
-        [
-          ...chunk.structured.关键事件.flatMap((item) => item.证据短句),
-          ...chunk.structured.人物状态.flatMap((item) => item.证据短句)
-        ],
-        6
-      )
-    })),
+    场景推进: uniqueStrings(chunkSummaries, 6),
     关键事件:
       keyEvents.length > 0
         ? keyEvents
@@ -417,8 +515,7 @@ function mergeLongChapterChunks(content: ChapterContent, chunks: readonly Chapte
               事件: "长章节片段缓存已建立",
               涉及人物: [],
               时间地点: "未明确",
-              事件原因: "章节正文超过直接索引长度",
-              事件结果: "系统按片段保留章节事实",
+              结果: "系统按片段保留章节事实",
               后续影响: "后续查询可使用片段事实索引",
               证据短句: []
             }
@@ -429,117 +526,37 @@ function mergeLongChapterChunks(content: ChapterContent, chunks: readonly Chapte
         : [
             {
               人物: "未明确",
-              本章出场状态: "未明确",
-              本章结束状态: "未明确",
-              身体状态: "未明确",
-              情绪状态: "未明确",
+              本章变化: "未明确",
               行动: [],
-              动机: "未明确",
-              目标: "未明确",
-              阻力: "未明确",
-              位置变化: "未明确",
+              目标或动机: "未明确",
               新获得信息: [],
               仍不知道的信息: [],
-              误解或错误判断: [],
-              与他人关系变化: [],
-              需要后文承接: "否",
+              关系变化: [],
               证据短句: []
             }
           ],
-    人物认知边界: uniqueRecords(
-      orderedChunks.flatMap((chunk) => chunk.structured.人物认知边界),
-      (item) => `${item.人物}|${item.已经知道.join("、")}|${item.新得知.join("、")}`,
-      32
-    ),
-    关系动态: uniqueRecords(
-      orderedChunks.flatMap((chunk) => chunk.structured.关系动态),
-      (item) => `${item.关系双方.join("、")}|${item.关系类型}|${item.本章结束状态}`,
-      24
-    ),
-    时间与地点: {
-      本章时间: firstDefined(timePlaces.map((item) => item.本章时间), "未明确"),
-      时间跨度: firstDefined(timePlaces.map((item) => item.时间跨度), "未明确"),
+    人物认知边界: characterKnowledge,
+    关系变化: uniqueStrings(characterStates.flatMap((item) => item.关系变化), 10),
+    时间地点: {
+      本章时间: firstDefined(timePlaces.map((item) => item.time), "未明确"),
       主要地点: places,
-      地点移动: uniqueStrings(
-        timePlaces.flatMap((item) => item.地点移动),
-        24
-      ),
-      明确时间锚点: uniqueStrings(
-        timePlaces.flatMap((item) => item.明确时间锚点),
-        24
-      ),
-      相对时间锚点: relativeTimes,
-      可能的时间线风险: uniqueStrings(
-        timePlaces.flatMap((item) => item.可能的时间线风险),
-        24
-      ),
-      证据短句: uniqueStrings(
-        timePlaces.flatMap((item) => item.证据短句),
-        12
-      )
+      时间线索: timeClues,
+      地点移动: uniqueStrings(timePlaces.flatMap((item) => item.moves), 8),
+      可能风险: uniqueStrings(timePlaces.flatMap((item) => item.risks), 8)
     },
-    空间与行动逻辑: spatialActions,
-    道具状态: uniqueRecords(
-      orderedChunks.flatMap((chunk) => chunk.structured.道具状态),
-      (item) => `${item.道具}|${item.当前持有者}|${item.本章结束状态}`,
-      24
-    ),
-    设定与规则: uniqueRecords(
-      orderedChunks.flatMap((chunk) => chunk.structured.设定与规则),
-      (item) => `${item.设定项}|${item.本章信息}`,
-      24
-    ),
-    限制与否定事实: negativeFacts,
-    伏笔与线索: uniqueRecords(
-      orderedChunks.flatMap((chunk) => chunk.structured.伏笔与线索),
-      (item) => `${item.线索}|${item.本章状态}|${item.可能指向}`,
-      32
-    ),
-    因果链: uniqueRecords(
-      orderedChunks.flatMap((chunk) => chunk.structured.因果链),
-      (item) => `${item.原因}|${item.结果}`,
-      32
-    ),
+    道具设定变化: propsAndRules,
+    伏笔与线索: foreshadowing,
     可核对事实:
       facts.length > 0
         ? facts
-        : [
-            {
-              事实编号: "事实-长章节-1",
-              事实类型: "限制事实",
-              主体: "章节缓存",
-              属性: "聚合方式",
-              取值: "长章节由片段缓存聚合而成",
-              时间范围: "当前章节",
-              地点: "未明确",
-              确定性: "确定",
-              后文核对意义: "后续查询应优先参考片段缓存中的事实条目",
-              证据短句: []
-            }
-          ],
-    连续性风险: uniqueRecords(
-      orderedChunks.flatMap((chunk) => chunk.structured.连续性风险),
-      (item) => `${item.风险}|${item.风险类型}|${item.原因}`,
-      32
-    ),
-    未解决问题: uniqueRecords(
-      orderedChunks.flatMap((chunk) => chunk.structured.未解决问题),
-      (item) => `${item.问题}|${item.涉及人物或事件.join("、")}`,
-      24
-    ),
-    文风与叙事: {
-      叙事视角: "见片段缓存",
-      主要语气: "见片段缓存",
-      节奏特点: "长章节由多个连续片段构成，节奏以片段缓存记录为准。",
-      对白特点: "见片段缓存",
-      描写侧重: "保留片段中的人物行动、情绪、设定和伏笔线索。",
-      续写时应保持: ["保持已建立的人物状态", "承接片段内关键事件", "避免丢失可核对事实"]
-    },
+        : ["长章节由片段缓存聚合而成，后续查询应参考片段缓存事实条目"],
+    连续性风险: risks,
+    未解决问题: unresolvedQuestions,
+    文风要点: ["长章节由多个连续片段构成", "续写时需承接已建立的人物状态和片段关键事件"],
     不可丢失信息:
       lostInfo.length > 0
         ? lostInfo
         : ["长章节已按片段建立事实索引，后续回答需要参考片段缓存"],
-    适合回答的问题: ["本章讲了什么", "本章人物状态如何", "本章有哪些伏笔或线索", "本章有哪些可核对事实", "本章是否存在连续性风险"],
     不确定项: []
   };
 }
@@ -702,6 +719,9 @@ export class SummaryService implements SummaryIndexInvalidator {
     if (!content || content.projectId !== input.projectId) {
       throw new Error("找不到需要建立摘要的章节。");
     }
+    if ((input.trigger === "auto_idle" || input.trigger === "chapter_inactive") && !this.summaryRepo.getBackgroundIndexEnabled(input.projectId)) {
+      return null;
+    }
 
     const writingUnits = countWritingUnits(content.plainText);
     const sourceHash = computeChapterContentHash(content.plainText);
@@ -731,6 +751,9 @@ export class SummaryService implements SummaryIndexInvalidator {
   }
 
   enqueueEligibleStaleChapterSummaries(projectId: string, now: string): SummaryJobRecord[] {
+    if (!this.summaryRepo.getBackgroundIndexEnabled(projectId)) {
+      return [];
+    }
     const jobs: SummaryJobRecord[] = [];
     const summaries = this.summaryRepo.listChapterSummaries(projectId);
     const summaryChapterIds = new Set(summaries.map((summary) => summary.chapterId));
@@ -766,6 +789,7 @@ export class SummaryService implements SummaryIndexInvalidator {
   }
 
   getIndexStatus(projectId: string, now: string, options: SummaryIndexStatusOptions = {}): SummaryIndexStatus {
+    const backgroundEnabled = this.summaryRepo.getBackgroundIndexEnabled(projectId);
     const chapters = this.chapterRepo.listByProject(projectId);
     const summaries = new Map(this.summaryRepo.listChapterSummaries(projectId).map((summary) => [summary.chapterId, summary]));
     let readyChapterCount = 0;
@@ -790,12 +814,13 @@ export class SummaryService implements SummaryIndexInvalidator {
       staleChapterCount += 1;
     }
 
-    const jobs = this.summaryRepo.listSummaryJobs(projectId);
+    const jobs = this.summaryRepo.listSummaryJobs(projectId).filter((job) => !this.isChapterJobResolvedByReadySummary(summaries.get(job.targetId ?? "") ?? null, job));
     const runningJob = jobs.find((job) => job.status === "running") ?? null;
-    const nextRetryJob =
-      jobs
-        .filter((job) => job.status === "queued" && job.nextRunAt && job.nextRunAt > now)
-        .sort((left, right) => String(left.nextRunAt).localeCompare(String(right.nextRunAt)))[0] ?? null;
+    const failedJobs = jobs.filter((job) => job.status === "failed");
+    const retryingJobs = jobs
+      .filter((job) => job.status === "queued" && job.nextRunAt && job.nextRunAt > now)
+      .sort((left, right) => String(left.nextRunAt).localeCompare(String(right.nextRunAt)));
+    const nextRetryJob = retryingJobs[0] ?? null;
 
     return {
       projectId,
@@ -804,13 +829,20 @@ export class SummaryService implements SummaryIndexInvalidator {
       staleChapterCount,
       missingChapterCount,
       skippedTooShortChapterCount,
-      failedJobCount: jobs.filter((job) => job.status === "failed").length,
+      failedJobCount: failedJobs.length,
       cancelledJobCount: jobs.filter((job) => job.status === "cancelled").length,
       queuedJobCount: jobs.filter((job) => job.status === "queued").length,
       runningJobLabel: runningJob ? this.formatRunningJobLabel(projectId, runningJob) : null,
       nextRetryAt: nextRetryJob?.nextRunAt ?? null,
       nextRetryJobLabel: nextRetryJob ? this.formatPendingRetryJobLabel(projectId, nextRetryJob) : null,
-      pausedReason: options.pausedReason ?? null,
+      backgroundEnabled,
+      retryingJobs: retryingJobs.slice(0, 5).map((job) => this.formatSummaryJobDetail(projectId, job)),
+      recentFailedJobs: failedJobs
+        .slice()
+        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+        .slice(0, 5)
+        .map((job) => this.formatSummaryJobDetail(projectId, job)),
+      pausedReason: backgroundEnabled ? (options.pausedReason ?? null) : "background_disabled",
       updatedAt: now
     };
   }
@@ -820,7 +852,8 @@ export class SummaryService implements SummaryIndexInvalidator {
     const jobs = this.currentChapterJobs(projectId);
     return this.chapterRepo.listByProject(projectId).map((chapter) => {
       const summary = summaries.get(chapter.id) ?? null;
-      const job = jobs.get(chapter.id) ?? null;
+      const rawJob = jobs.get(chapter.id) ?? null;
+      const job = this.isChapterJobResolvedByReadySummary(summary, rawJob) ? null : rawJob;
       return {
         chapterId: chapter.id,
         chapterTitle: chapter.title,
@@ -873,14 +906,13 @@ export class SummaryService implements SummaryIndexInvalidator {
   }
 
   clearAndRetryChapterCache(projectId: string, chapterId: string, now: string, options: SummaryIndexStatusOptions = {}): SummaryIndexStatus {
-    if (this.summaryRepo.hasRunningSummaryJob(projectId)) {
-      throw new Error("后台索引正在运行。请先停止后台索引，再清除并重试章节缓存。");
-    }
     const content = this.chapterRepo.getContent(chapterId);
     if (!content || content.projectId !== projectId) {
       throw new Error("找不到需要重试缓存的章节。");
     }
+    this.assertCanClearAndRetryChapterCache(projectId, chapterId);
 
+    this.summaryRepo.setBackgroundIndexEnabled(projectId, true, now);
     this.summaryRepo.deleteChapterSummary(projectId, chapterId);
     this.summaryRepo.deleteDerivedSummaries(projectId);
     this.maybeEnqueueChapterSummary({
@@ -893,6 +925,7 @@ export class SummaryService implements SummaryIndexInvalidator {
   }
 
   rebuildProjectIndex(projectId: string, now: string, options: SummaryRebuildProjectIndexOptions = {}): SummaryIndexStatus {
+    this.summaryRepo.setBackgroundIndexEnabled(projectId, true, now);
     const trigger: ChapterSummaryQueueTrigger = options.force ? "manual_rebuild" : "manual_continue";
     for (const chapter of this.chapterRepo.listByProject(projectId)) {
       this.maybeEnqueueChapterSummary({
@@ -901,6 +934,14 @@ export class SummaryService implements SummaryIndexInvalidator {
         trigger,
         now
       });
+    }
+    return this.getIndexStatus(projectId, now, options);
+  }
+
+  setBackgroundIndexEnabled(projectId: string, enabled: boolean, now: string, options: SummarySetBackgroundIndexOptions = {}): SummaryIndexStatus {
+    this.summaryRepo.setBackgroundIndexEnabled(projectId, enabled, now);
+    if (!enabled && options.cancelQueuedAndRunning) {
+      this.summaryRepo.cancelQueuedAndRunningJobs(projectId, "用户停止后台索引任务。", now);
     }
     return this.getIndexStatus(projectId, now, options);
   }
@@ -930,6 +971,25 @@ export class SummaryService implements SummaryIndexInvalidator {
       return "cancelled";
     }
     return summary?.status ?? "missing";
+  }
+
+  private assertCanClearAndRetryChapterCache(projectId: string, chapterId: string): void {
+    const blockingJob =
+      this.summaryRepo.listSummaryJobs(projectId).find((job) => job.status === "running" && (job.jobType !== "chapter_summary" || job.targetId === chapterId)) ?? null;
+    if (!blockingJob) {
+      return;
+    }
+    if (blockingJob.jobType === "chapter_summary") {
+      throw new Error("本章缓存正在运行。请等待完成，或先停止后台索引。");
+    }
+    throw new Error("阶段或全书索引正在整理。请等待完成，或先停止后台索引后再重试章节缓存。");
+  }
+
+  private isChapterJobResolvedByReadySummary(summary: ChapterAiSummaryRecord | null, job: SummaryJobRecord | null): boolean {
+    if (!summary || !job || job.jobType !== "chapter_summary" || job.status !== "failed" || job.targetId !== summary.chapterId) {
+      return false;
+    }
+    return summary.status === "ready" && summary.contentHash === job.sourceHash && summary.updatedAt.localeCompare(job.updatedAt) >= 0;
   }
 
   async summarizeChapter(projectId: string, chapterId: string, sourceHash: string, now: string, options: { readonly signal?: AbortSignal } = {}): Promise<ChapterAiSummaryRecord> {
@@ -1444,6 +1504,21 @@ export class SummaryService implements SummaryIndexInvalidator {
       return "全书摘要";
     }
     return "全书索引";
+  }
+
+  private formatSummaryJobDetail(projectId: string, job: SummaryJobRecord): SummaryIndexJobDetail {
+    const failure = classifySummaryJobError(job.error);
+    return {
+      jobId: job.id,
+      jobType: job.jobType,
+      targetId: job.targetId,
+      label: this.formatPendingRetryJobLabel(projectId, job),
+      error: job.error,
+      failureCategory: failure.failureCategory,
+      actionHint: failure.actionHint,
+      attemptCount: job.attemptCount,
+      nextRunAt: job.nextRunAt
+    };
   }
 
   private markSkippedTooShort(content: ChapterContent, contentHash: string, now: string): void {

@@ -436,13 +436,23 @@ describe("AI chat flow", () => {
   });
 
   it("uses explicitly referenced chapter for chat scratchpad actions", async () => {
+    let scratchChapterId = "";
     const chatGenerator: AiChatGenerator = {
       async sendAgentMessageStream(input) {
         expect(input.currentChapterTitle).toBe("第四章 真相");
         expect(input.chapterExcerpt).toContain("第四章正文");
+        const scratchResult = await input.executeTool({
+          id: "call_save_fourth_summary",
+          name: "add_to_scratchpad",
+          argumentsJson: JSON.stringify({
+            content: "第四章总结：旧案浮出水面。",
+            chapterId: scratchChapterId
+          })
+        });
         return {
           role: "assistant",
           content: "第四章总结：旧案浮出水面。",
+          actions: scratchResult.action ? [scratchResult.action] : [],
           createdAt: "2026-04-28T00:00:00.000Z"
         };
       }
@@ -468,6 +478,7 @@ describe("AI chat flow", () => {
       sortOrder: 3,
       plainText: "第四章正文：旧案浮出水面。"
     });
+    scratchChapterId = fourthChapter.id;
     const aiTaskService = new AiTaskService(aiTaskRepo, undefined, chatGenerator, chatRepo, scratchRepo, chapterRepo);
     const session = aiTaskService.getChatSession({ projectId: project.id });
 
@@ -534,18 +545,29 @@ describe("AI chat flow", () => {
   });
 
   it("can add a streamed chapter summary to scratchpad from chat", async () => {
+    let scratchChapterId = "";
     const chatGenerator: AiChatGenerator = {
-      async sendAgentMessageStream(_input, handlers) {
+      async sendAgentMessageStream(input, handlers) {
         handlers.onChunk?.({ requestId: "chat_stream_2", content: "本章总结" });
+        const scratchResult = await input.executeTool({
+          id: "call_save_current_summary",
+          name: "add_to_scratchpad",
+          argumentsJson: JSON.stringify({
+            content: "本章总结：林远在雨夜抵达山门。",
+            chapterId: scratchChapterId
+          })
+        });
         return {
           role: "assistant",
           content: "本章总结：林远在雨夜抵达山门。",
+          actions: scratchResult.action ? [scratchResult.action] : [],
           createdAt: "2026-04-28T00:00:00.000Z"
         };
       }
     };
     const { aiTaskRepo, chapterRepo, chatRepo, db, projectService, scratchRepo } = createServices();
     const { project, initialChapter } = projectService.createProject({ name: "雨夜" });
+    scratchChapterId = initialChapter.id;
     const aiTaskService = new AiTaskService(aiTaskRepo, undefined, chatGenerator, chatRepo, scratchRepo, chapterRepo);
     const session = aiTaskService.getChatSession({ projectId: project.id });
 
@@ -829,12 +851,21 @@ describe("AI chat flow", () => {
     db.close();
   });
 
-  it("executes add-to-scratchpad only from the validated agent plan", async () => {
+  it("executes add-to-scratchpad only from the validated agent tool call", async () => {
     const chatGenerator: AiChatGenerator = {
-      async sendAgentMessageStream() {
+      async sendAgentMessageStream(input) {
+        const scratchResult = await input.executeTool({
+          id: "call_add_summary_to_scratchpad",
+          name: "add_to_scratchpad",
+          argumentsJson: JSON.stringify({
+            content: "全书总结：主角发现旧案。",
+            chapterId: null
+          })
+        });
         return {
           role: "assistant",
           content: "全书总结：主角发现旧案。",
+          actions: scratchResult.action ? [scratchResult.action] : [],
           createdAt: "2026-04-29T00:00:00.000Z"
         };
       }
@@ -1399,6 +1430,45 @@ describe("AI chat flow", () => {
     expect(toolResultText).toContain("林远雨夜回城。");
     expect(toolResultText).toContain("旧信让林远确认失踪故人仍有线索可追。");
     expect(toolResultText).not.toContain("不应被旧链路读取的原始正文");
+
+    db.close();
+  });
+
+  it("does not pre-run the legacy planner for open-ended natural chat before the tool-call agent", async () => {
+    const capturedInputs: unknown[] = [];
+    let plannerCalled = false;
+    const chatGenerator: AiChatGenerator = {
+      async sendAgentMessageStream(input) {
+        capturedInputs.push(input);
+        return {
+          role: "assistant",
+          content: "可以，我会先判断需要读取哪些上下文。",
+          createdAt: "2026-05-01T00:00:00.000Z"
+        };
+      }
+    };
+    const planner: ChatPlanner = {
+      async plan() {
+        plannerCalled = true;
+        throw new Error("tool-call agent should decide context without a legacy planner preflight");
+      }
+    };
+    const { aiTaskRepo, chapterRepo, chatRepo, db, projectService, scratchRepo } = createServices();
+    const { project, initialChapter } = projectService.createProject({ name: "雨夜" });
+    const aiTaskService = new AiTaskService(aiTaskRepo, undefined, chatGenerator, chatRepo, scratchRepo, chapterRepo, planner);
+    const session = aiTaskService.getChatSession({ projectId: project.id });
+
+    await aiTaskService.sendChatMessageStream({
+      requestId: "chat_stream_open_ended_no_legacy_planner",
+      projectId: project.id,
+      sessionId: session.id,
+      message: "这个人物的动机合理吗？",
+      chapterId: initialChapter.id
+    });
+
+    expect(plannerCalled).toBe(false);
+    expect(capturedInputs).toHaveLength(1);
+    expect((capturedInputs[0] as { readonly agentContext?: unknown }).agentContext).toBeUndefined();
 
     db.close();
   });

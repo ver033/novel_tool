@@ -44,6 +44,7 @@ export type ChatAgentToolRuntime = {
     readonly changeSummary: string | null;
     readonly proofreadIssues: readonly ProofreadIssue[] | null;
     readonly contextPlan: WritingContextPlan;
+    readonly streamedPresentation?: boolean;
   }>;
   readonly executeContinuityCheck?: (input: ContinuityCheckInput) => Promise<ContinuityCheckResult>;
 };
@@ -867,6 +868,7 @@ async function executeRunWritingOperation(runtime: ChatAgentToolRuntime, argumen
       generatedText: result.generatedText,
       changeSummary: result.changeSummary,
       proofreadIssues: result.proofreadIssues,
+      streamedPresentation: result.streamedPresentation === true,
       contextPlan: {
         mode: result.contextPlan.mode,
         estimatedInputTokens: result.contextPlan.estimatedInputTokens,

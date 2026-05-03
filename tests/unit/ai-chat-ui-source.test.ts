@@ -28,6 +28,10 @@ describe("AI chat summary index UI source", () => {
     expect(chatStore).toContain("summaryIndexStatus.runningJobLabel");
     expect(chatStore).toContain("setInterval");
     expect(chatStore).toContain("clearInterval");
+    expect(chatStore).toContain("streamTextBuffer");
+    expect(chatStore).toContain("streamReasoningBuffer");
+    expect(chatStore).toContain("requestAnimationFrame");
+    expect(chatStore).toContain("flushStreamBuffers");
   });
 
   it("renders compact summary index status in the AI chat tab only", () => {
@@ -48,8 +52,12 @@ describe("AI chat summary index UI source", () => {
     expect(chatTab).toContain('onOpenSettings("章节索引缓存")');
     expect(chatTab).not.toContain("void chatStore.rebuildSummaryIndex({ force: true })");
     expect(chatTab).toContain("后台索引已停止");
+    expect(chatTab).toContain("后台索引已关闭");
     expect(chatTab).toContain("自动重试");
-    expect(chatTab).toContain("nextRetryAt");
+    expect(chatTab).toContain("retryingJobs");
+    expect(chatTab).toContain("recentFailedJobs");
+    expect(chatTab).toContain("failureCategory");
+    expect(chatTab).toContain("actionHint");
     expect(chatTab).toContain("summary-index-notice");
     expect(chatTab).toContain("summary-index-banner");
     expect(css).toContain(".summary-index-banner");
