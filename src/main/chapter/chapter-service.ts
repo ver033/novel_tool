@@ -47,6 +47,15 @@ function localDateKey(value: Date = new Date()): string {
   return `${year}-${month}-${day}`;
 }
 
+function assertChapterBelongsToProject(content: ChapterContent, projectId?: string): void {
+  if (!projectId) {
+    return;
+  }
+  if (content.projectId !== projectId) {
+    throw new Error("章节不属于当前项目。");
+  }
+}
+
 export class ChapterService {
   private readonly resolveChapterRepo: ChapterRepositoryResolver;
   private readonly summaryIndexInvalidator?: SummaryIndexInvalidator;
@@ -83,11 +92,23 @@ export class ChapterService {
   }
 
   renameChapter(input: ChapterRenameInput): ChapterSummary {
-    return this.resolveChapterRepo(input.projectId).rename(input.chapterId, input.title, nowIso());
+    const chapterRepo = this.resolveChapterRepo(input.projectId);
+    const content = chapterRepo.getContent(input.chapterId);
+    if (!content) {
+      throw new Error("Chapter not found");
+    }
+    assertChapterBelongsToProject(content, input.projectId);
+    return chapterRepo.rename(input.chapterId, input.title, nowIso());
   }
 
   deleteChapter(input: ChapterDeleteInput): void {
-    this.resolveChapterRepo(input.projectId).delete(input.chapterId);
+    const chapterRepo = this.resolveChapterRepo(input.projectId);
+    const content = chapterRepo.getContent(input.chapterId);
+    if (!content) {
+      throw new Error("Chapter not found");
+    }
+    assertChapterBelongsToProject(content, input.projectId);
+    chapterRepo.delete(input.chapterId);
   }
 
   getContent(input: ChapterGetContentInput): ChapterContent {
@@ -95,6 +116,7 @@ export class ChapterService {
     if (!content) {
       throw new Error("Chapter not found");
     }
+    assertChapterBelongsToProject(content, input.projectId);
     return content;
   }
 
@@ -104,6 +126,7 @@ export class ChapterService {
     if (!previousContent) {
       throw new Error("Chapter not found");
     }
+    assertChapterBelongsToProject(previousContent, input.projectId);
 
     const nextWordCount = input.wordCount ?? countWritingUnits(input.plainText);
     const today = localDateKey();
@@ -139,7 +162,13 @@ export class ChapterService {
   }
 
   updateTargetWordCount(input: ChapterUpdateTargetWordCountInput): ChapterSummary {
-    return this.resolveChapterRepo(input.projectId).updateTargetWordCount(input.chapterId, input.targetWordCount, nowIso());
+    const chapterRepo = this.resolveChapterRepo(input.projectId);
+    const content = chapterRepo.getContent(input.chapterId);
+    if (!content) {
+      throw new Error("Chapter not found");
+    }
+    assertChapterBelongsToProject(content, input.projectId);
+    return chapterRepo.updateTargetWordCount(input.chapterId, input.targetWordCount, nowIso());
   }
 
   createSnapshot(input: ChapterCreateSnapshotInput): ChapterSnapshot {

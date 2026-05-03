@@ -5,15 +5,26 @@ import path from "node:path";
 
 const rootDir = path.resolve(__dirname, "../..");
 
-async function launchNovelTool(homeDir: string): Promise<ElectronApplication> {
-  const executablePath = path.join(rootDir, `out/novel-tool-${process.platform}-${process.arch}/novel-tool.app/Contents/MacOS/novel-tool`);
-  if (!existsSync(executablePath)) {
-    throw new Error("Packaged Electron app not found. Run `npm run build` before `npm run test:e2e`.");
-  }
+function resolveElectronExecutablePath(): string {
+  const platform = process.platform;
+  const candidates =
+    platform === "darwin"
+      ? [path.join(rootDir, "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron")]
+      : platform === "win32"
+        ? [path.join(rootDir, "node_modules/electron/dist/electron.exe")]
+        : [path.join(rootDir, "node_modules/electron/dist/electron")];
 
+  const executablePath = candidates.find((candidate) => existsSync(candidate));
+  if (!executablePath) {
+    throw new Error(`Electron executable not found. Run \`npm install\` before \`npm run test:e2e\`. Checked:\n${candidates.join("\n")}`);
+  }
+  return executablePath;
+}
+
+async function launchNovelTool(homeDir: string): Promise<ElectronApplication> {
   return electron.launch({
-    executablePath,
-    args: [`--user-data-dir=${path.join(homeDir, "user-data")}`],
+    executablePath: resolveElectronExecutablePath(),
+    args: [rootDir, `--user-data-dir=${path.join(homeDir, "user-data")}`],
     env: {
       ...process.env,
       HOME: homeDir,
@@ -39,7 +50,9 @@ test.describe("Phase 11 sidebar hardening", () => {
       await page.setViewportSize({ width: 1280, height: 860 });
 
       await page.getByRole("button", { name: /新建作品\s+从空白开始/ }).click();
-      await expect(page.getByRole("heading", { name: "第1章" })).toBeVisible();
+      await page.getByPlaceholder("例如：长夜归途").fill("我的小说");
+      await page.getByRole("button", { name: "创建并开始写作" }).click();
+      await expect(page.locator(".chapter-heading-button")).toContainText("第1章");
       await expect(page.locator(".right-sidebar")).toHaveCount(0);
 
       await expect(page.getByRole("button", { name: "打开 AI 对话" })).toBeVisible();
