@@ -45,6 +45,12 @@ export const AUTO_ARC_CHAPTER_COUNT = 20;
 export const CHAPTER_INDEX_DIRECT_MAX_UNITS = 6000;
 export const CHAPTER_INDEX_CHUNK_TARGET_UNITS = 3500;
 export const CHAPTER_INDEX_CHUNK_OVERLAP_UNITS = 120;
+export const CHAPTER_INDEX_MEDIUM_CONTEXT_DIRECT_MAX_UNITS = 15_000;
+export const CHAPTER_INDEX_LARGE_CONTEXT_DIRECT_MAX_UNITS = 24_000;
+export const CHAPTER_INDEX_HUGE_CONTEXT_DIRECT_MAX_UNITS = 30_000;
+export const CHAPTER_INDEX_MEDIUM_CONTEXT_CHUNK_TARGET_UNITS = 8_000;
+export const CHAPTER_INDEX_LARGE_CONTEXT_CHUNK_TARGET_UNITS = 10_000;
+export const CHAPTER_INDEX_HUGE_CONTEXT_CHUNK_TARGET_UNITS = 12_000;
 
 export class SummarySourceChangedError extends Error {
   constructor(message: string) {
@@ -56,6 +62,7 @@ export class SummarySourceChangedError extends Error {
 export type ChapterSummaryQueueTrigger = "auto_idle" | "chapter_inactive" | "import" | "manual_continue" | "manual_rebuild";
 
 export type SummaryIndexGenerator = {
+  readonly getSummaryIndexBudget?: () => Promise<SummaryIndexBudgetInfo>;
   readonly summarizeChapterForIndex: (input: ChapterIndexSummaryInput, options?: { readonly signal?: AbortSignal }) => Promise<ChapterAiSummaryPayload>;
   readonly summarizeChapterChunkForIndex?: (
     input: ChapterChunkIndexSummaryInput,
@@ -67,6 +74,16 @@ export type SummaryIndexGenerator = {
   ) => Promise<ChapterAiSummaryPayload>;
   readonly summarizeArcForIndex?: (input: ArcIndexSummaryInput, options?: { readonly signal?: AbortSignal }) => Promise<ArcAiSummaryPayload>;
   readonly summarizeBookForIndex?: (input: BookIndexSummaryInput, options?: { readonly signal?: AbortSignal }) => Promise<BookAiSummaryPayload>;
+};
+
+export type SummaryIndexBudgetInfo = {
+  readonly maxInputTokens: number;
+  readonly modelContextTokens: number | null;
+};
+
+type ChapterIndexSizing = {
+  readonly directMaxUnits: number;
+  readonly chunkTargetUnits: number;
 };
 
 type SummaryServiceOptions = {
@@ -128,7 +145,7 @@ function classifySummaryJobError(error: string | null): { readonly failureCatego
   if (error.includes("结构无效") || error.includes("索引摘要无效") || error.includes("Unexpected end of JSON") || /JSON|schema|zod/i.test(error)) {
     return {
       failureCategory: "模型输出结构无效",
-      actionHint: "模型没有返回合法章节缓存 JSON。此类错误不会自动反复重试，建议换用更稳定的模型或手动重试单章。"
+      actionHint: "模型没有返回合法章节缓存 JSON。这通常不是章节正文内容问题；此类错误不会自动反复重试，建议换用更稳定的模型或手动重试单章。"
     };
   }
   if (/timeout|timed?out|network|ECONN|ENOTFOUND|EAI_AGAIN/i.test(error) || error.includes("超时")) {
@@ -146,6 +163,39 @@ function classifySummaryJobError(error: string | null): { readonly failureCatego
   return {
     failureCategory: "未知错误",
     actionHint: "请查看原始错误信息。若同一章节多次失败，建议先单章重试或换用更稳定的模型。"
+  };
+}
+
+function getChapterIndexSizing(budget: SummaryIndexBudgetInfo | null): ChapterIndexSizing {
+  const contextTokens = budget?.modelContextTokens ?? 0;
+  const maxInputTokens = budget?.maxInputTokens ?? 0;
+  if (contextTokens >= 128_000 || maxInputTokens >= 80_000) {
+    return {
+      directMaxUnits: CHAPTER_INDEX_HUGE_CONTEXT_DIRECT_MAX_UNITS,
+      chunkTargetUnits: CHAPTER_INDEX_HUGE_CONTEXT_CHUNK_TARGET_UNITS
+    };
+  }
+  if (contextTokens >= 64_000 || maxInputTokens >= 36_000) {
+    return {
+      directMaxUnits: CHAPTER_INDEX_LARGE_CONTEXT_DIRECT_MAX_UNITS,
+      chunkTargetUnits: CHAPTER_INDEX_LARGE_CONTEXT_CHUNK_TARGET_UNITS
+    };
+  }
+  if (contextTokens >= 32_000 || maxInputTokens >= 18_000) {
+    return {
+      directMaxUnits: CHAPTER_INDEX_MEDIUM_CONTEXT_DIRECT_MAX_UNITS,
+      chunkTargetUnits: CHAPTER_INDEX_MEDIUM_CONTEXT_CHUNK_TARGET_UNITS
+    };
+  }
+  if (maxInputTokens >= 10_000) {
+    return {
+      directMaxUnits: 10_000,
+      chunkTargetUnits: 6_000
+    };
+  }
+  return {
+    directMaxUnits: CHAPTER_INDEX_DIRECT_MAX_UNITS,
+    chunkTargetUnits: CHAPTER_INDEX_CHUNK_TARGET_UNITS
   };
 }
 
@@ -600,7 +650,7 @@ function findBackwardWritingUnitOffset(text: string, start: number, end: number,
   return offset;
 }
 
-function splitParagraphPieces(plainText: string): Array<{ readonly start: number; readonly end: number; readonly units: number }> {
+function splitParagraphPieces(plainText: string, targetUnits: number): Array<{ readonly start: number; readonly end: number; readonly units: number }> {
   const pieces: Array<{ readonly start: number; readonly end: number; readonly units: number }> = [];
   const paragraphBreakPattern = /\n{2,}/g;
   let start = 0;
@@ -611,13 +661,13 @@ function splitParagraphPieces(plainText: string): Array<{ readonly start: number
       return;
     }
     const units = countWritingUnits(plainText.slice(bounds.start, bounds.end));
-    if (units <= CHAPTER_INDEX_CHUNK_TARGET_UNITS) {
+    if (units <= targetUnits) {
       pieces.push({ ...bounds, units });
       return;
     }
     let splitStart = bounds.start;
     while (splitStart < bounds.end) {
-      const splitEnd = findForwardWritingUnitOffset(plainText, splitStart, bounds.end, CHAPTER_INDEX_CHUNK_TARGET_UNITS);
+      const splitEnd = findForwardWritingUnitOffset(plainText, splitStart, bounds.end, targetUnits);
       const splitBounds = trimBounds(plainText, splitStart, splitEnd);
       if (splitBounds) {
         pieces.push({
@@ -640,8 +690,13 @@ function splitParagraphPieces(plainText: string): Array<{ readonly start: number
   return pieces;
 }
 
-export function splitChapterForSummaryIndex(plainText: string): ChapterSummaryIndexChunk[] {
-  const pieces = splitParagraphPieces(plainText);
+export function splitChapterForSummaryIndex(
+  plainText: string,
+  options: { readonly targetUnits?: number; readonly overlapUnits?: number } = {}
+): ChapterSummaryIndexChunk[] {
+  const targetUnits = Math.max(1, options.targetUnits ?? CHAPTER_INDEX_CHUNK_TARGET_UNITS);
+  const overlapUnits = Math.max(0, options.overlapUnits ?? CHAPTER_INDEX_CHUNK_OVERLAP_UNITS);
+  const pieces = splitParagraphPieces(plainText, targetUnits);
   if (pieces.length === 0) {
     return [];
   }
@@ -652,7 +707,7 @@ export function splitChapterForSummaryIndex(plainText: string): ChapterSummaryIn
   let currentUnits = 0;
 
   for (const piece of pieces) {
-    if (currentUnits > 0 && currentUnits + piece.units > CHAPTER_INDEX_CHUNK_TARGET_UNITS) {
+    if (currentUnits > 0 && currentUnits + piece.units > targetUnits) {
       ranges.push({ start: currentStart, end: currentEnd, units: currentUnits });
       currentStart = piece.start;
       currentEnd = piece.end;
@@ -666,7 +721,7 @@ export function splitChapterForSummaryIndex(plainText: string): ChapterSummaryIn
 
   return ranges.map((range, index) => {
     const textStart =
-      index === 0 ? range.start : findBackwardWritingUnitOffset(plainText, ranges[index - 1]?.start ?? 0, range.start, CHAPTER_INDEX_CHUNK_OVERLAP_UNITS);
+      index === 0 ? range.start : findBackwardWritingUnitOffset(plainText, ranges[index - 1]?.start ?? 0, range.start, overlapUnits);
     const bounds = trimBounds(plainText, textStart, range.end) ?? { start: textStart, end: range.end };
     return {
       chunkIndex: index,
@@ -854,6 +909,7 @@ export class SummaryService implements SummaryIndexInvalidator {
       const summary = summaries.get(chapter.id) ?? null;
       const rawJob = jobs.get(chapter.id) ?? null;
       const job = this.isChapterJobResolvedByReadySummary(summary, rawJob) ? null : rawJob;
+      const failure = classifySummaryJobError(job?.error ?? null);
       return {
         chapterId: chapter.id,
         chapterTitle: chapter.title,
@@ -865,6 +921,8 @@ export class SummaryService implements SummaryIndexInvalidator {
         contentHash: summary?.contentHash ?? null,
         jobStatus: job?.status ?? null,
         jobError: job?.error ?? null,
+        jobFailureCategory: failure.failureCategory,
+        jobActionHint: failure.actionHint,
         nextRunAt: job?.nextRunAt ?? null
       } satisfies SummaryChapterCacheEntry;
     });
@@ -989,7 +1047,7 @@ export class SummaryService implements SummaryIndexInvalidator {
     if (!summary || !job || job.jobType !== "chapter_summary" || job.status !== "failed" || job.targetId !== summary.chapterId) {
       return false;
     }
-    return summary.status === "ready" && summary.contentHash === job.sourceHash && summary.updatedAt.localeCompare(job.updatedAt) >= 0;
+    return summary.status === "ready" && summary.contentHash === job.sourceHash;
   }
 
   async summarizeChapter(projectId: string, chapterId: string, sourceHash: string, now: string, options: { readonly signal?: AbortSignal } = {}): Promise<ChapterAiSummaryRecord> {
@@ -1005,8 +1063,11 @@ export class SummaryService implements SummaryIndexInvalidator {
       throw new SummarySourceChangedError("章节内容已变化，已重新排队最新摘要任务。");
     }
 
-    if (countWritingUnits(content.plainText) > CHAPTER_INDEX_DIRECT_MAX_UNITS) {
-      return this.summarizeLongChapterWithChunks(projectId, chapterId, sourceHash, now, content, generator, options);
+    const writingUnits = countWritingUnits(content.plainText);
+    const budget = writingUnits > CHAPTER_INDEX_DIRECT_MAX_UNITS && generator.getSummaryIndexBudget ? await generator.getSummaryIndexBudget() : null;
+    const sizing = getChapterIndexSizing(budget);
+    if (writingUnits > sizing.directMaxUnits) {
+      return this.summarizeLongChapterWithChunks(projectId, chapterId, sourceHash, now, content, generator, sizing, options);
     }
 
     const structured = await generator.summarizeChapterForIndex(
@@ -1053,13 +1114,14 @@ export class SummaryService implements SummaryIndexInvalidator {
     now: string,
     content: ChapterContent,
     generator: SummaryIndexGenerator,
+    sizing: ChapterIndexSizing,
     options: { readonly signal?: AbortSignal }
   ): Promise<ChapterAiSummaryRecord> {
     if (!generator.summarizeChapterChunkForIndex) {
       throw new Error("AI 章节片段摘要生成器未配置。");
     }
 
-    const chunks = splitChapterForSummaryIndex(content.plainText);
+    const chunks = splitChapterForSummaryIndex(content.plainText, { targetUnits: sizing.chunkTargetUnits });
     if (chunks.length <= 1) {
       const structured = await generator.summarizeChapterForIndex(
         {

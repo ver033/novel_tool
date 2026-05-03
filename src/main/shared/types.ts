@@ -342,6 +342,8 @@ export type SummaryChapterCacheEntry = {
   readonly contentHash: string | null;
   readonly jobStatus: SummaryJobStatus | null;
   readonly jobError: string | null;
+  readonly jobFailureCategory: string | null;
+  readonly jobActionHint: string | null;
   readonly nextRunAt: string | null;
 };
 export type SummaryChapterCacheDetail = SummaryChapterCacheEntry & {

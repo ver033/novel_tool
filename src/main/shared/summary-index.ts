@@ -71,7 +71,7 @@ function normalizeChapterSummaryVersionDrift(value: unknown): unknown {
   }
 
   const version = stringifyStructuredValue(value.章节信息.缓存版本).trim();
-  if (version !== "二" && version !== "三" && version !== "三Lite" && version !== "三-Lite") {
+  if (version !== "二" && version !== "二Lite" && version !== "二-Lite" && version !== "三" && version !== "三Lite" && version !== "三-Lite") {
     return value;
   }
 

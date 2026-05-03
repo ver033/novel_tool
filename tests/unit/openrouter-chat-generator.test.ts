@@ -397,6 +397,7 @@ describe("OpenRouter persistent summary index generation", () => {
     expect(joined).toContain("可核对事实");
     expect(joined).toContain("不可丢失信息");
     expect(joined).toContain('"缓存版本": "三-Lite"');
+    expect(joined).toContain("“二-Lite”只允许用于章节片段缓存");
     expect(joined).toContain("场景推进最多 5 项");
     expect(joined).toContain("8000 字章节");
     expect(joined).not.toContain("空间与行动逻辑");
@@ -506,7 +507,7 @@ describe("OpenRouter persistent summary index generation", () => {
         ordinal: 1,
         plainText: "林远回到了故乡。"
       })
-    ).rejects.toThrow("章节索引摘要无效");
+    ).rejects.toThrow("模型返回的 JSON 结构不符合章节缓存模板");
   });
 
   it("builds chunk and merge prompts with strict current-fragment boundaries", () => {
@@ -549,6 +550,9 @@ describe("OpenRouter persistent summary index generation", () => {
     expect(chunkPrompt).toContain("只能记录当前片段中出现的信息");
     expect(chunkPrompt).toContain("不得根据其他片段、常识或猜测补全");
     expect(mergePrompt).toContain("不得遗漏片段缓存中明确出现的重要内容");
+    expect(chunkPrompt).toContain('"缓存版本": "二-Lite"');
+    expect(mergePrompt).toContain('"缓存版本": "三-Lite"');
+    expect(mergePrompt).toContain("不得沿用片段缓存的“二-Lite”");
     expect(chunkPrompt).not.toContain("oneLine");
     expect(chunkPrompt).not.toContain("synopsis");
     expect(mergePrompt).not.toContain("oneLine");
