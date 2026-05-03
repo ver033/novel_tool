@@ -4,6 +4,7 @@ import Link from "@tiptap/extension-link";
 import { BackgroundColor, FontSize, TextStyle } from "@tiptap/extension-text-style";
 import StarterKit from "@tiptap/starter-kit";
 import { CharacterCount, Placeholder } from "@tiptap/extensions";
+import { closeHistory } from "@tiptap/pm/history";
 import { UniqueID } from "@tiptap/extension-unique-id";
 import { countWritingUnits } from "../../main/shared/text";
 import type { EditorSettings, SelectionSnapshot, TaskPromptPreset, TaskType } from "../../main/shared/types";
@@ -52,6 +53,17 @@ const firstLineIndentBySetting = {
   four: "4em"
 } as const;
 
+function replaceEditorContentWithoutUndo(editor: Editor, contentJson: TiptapDocument): void {
+  const document = editor.schema.nodeFromJSON(ensureParagraphIds(contentJson));
+  const transaction = editor.state.tr
+    .replaceWith(0, editor.state.doc.content.size, document)
+    .setMeta("preventUpdate", true)
+    .setMeta("addToHistory", false);
+
+  closeHistory(transaction);
+  editor.view.dispatch(transaction);
+}
+
 export const NovelEditor = memo(function NovelEditor({
   chapterId,
   contentJson,
@@ -64,7 +76,7 @@ export const NovelEditor = memo(function NovelEditor({
   onSelectionToScratchpad,
   onTask
 }: NovelEditorProps) {
-  const appliedContentVersion = useRef<number | null>(null);
+  const appliedContentVersion = useRef<number | null>(contentVersion);
   const onContentChangeRef = useRef(onContentChange);
   useEffect(() => {
     onContentChangeRef.current = onContentChange;
@@ -126,9 +138,9 @@ export const NovelEditor = memo(function NovelEditor({
       return;
     }
 
-    editor.commands.setContent(ensureParagraphIds(contentJson), { emitUpdate: false });
+    replaceEditorContentWithoutUndo(editor, contentJson);
     appliedContentVersion.current = contentVersion;
-  }, [contentVersion, editor]);
+  }, [contentJson, contentVersion, editor]);
 
   useEffect(() => {
     onEditorReady?.(editor);

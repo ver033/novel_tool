@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 
 type ModalProps = {
+  readonly className?: string;
   readonly open: boolean;
   readonly title: string;
   readonly children: ReactNode;
@@ -16,7 +17,7 @@ const focusableSelector = [
   "[tabindex]:not([tabindex='-1'])"
 ].join(",");
 
-export function Modal({ open, title, children, onClose }: ModalProps) {
+export function Modal({ className = "", open, title, children, onClose }: ModalProps) {
   const titleId = useId();
   const modalRef = useRef<HTMLElement | null>(null);
 
@@ -70,7 +71,7 @@ export function Modal({ open, title, children, onClose }: ModalProps) {
       <section
         aria-labelledby={titleId}
         aria-modal="true"
-        className="modal"
+        className={`modal ${className}`.trim()}
         onKeyDown={handleKeyDown}
         ref={modalRef}
         role="dialog"

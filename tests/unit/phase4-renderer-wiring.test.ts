@@ -52,4 +52,78 @@ describe("phase 4 renderer Tiptap wiring", () => {
     expect(writingPage).toContain("flushBeforeNavigation(() => onDeleteChapter(chapterId))");
     expect(writingPage).toContain("onDeleteChapter={handleDeleteChapter}");
   });
+
+  it("keeps chapter revision history removed from IPC and preload", () => {
+    const types = readSource("src/main/shared/types.ts");
+    const preload = readSource("src/preload/api.ts");
+    const chapterIpc = readSource("src/main/ipc/chapter-ipc.ts");
+    const writingPage = readSource("src/renderer/routes/WritingPage.tsx");
+    const topBar = readSource("src/renderer/layout/TopBar.tsx");
+    const styles = readSource("src/renderer/styles/globals.css");
+
+    expect(types).not.toContain("listRevisions");
+    expect(types).not.toContain("getRevision");
+    expect(types).not.toContain("restoreRevision");
+    expect(preload).not.toContain("listRevisions");
+    expect(preload).not.toContain("getRevision");
+    expect(preload).not.toContain("restoreRevision");
+    expect(chapterIpc).not.toContain("listRevisions");
+    expect(chapterIpc).not.toContain("getRevision");
+    expect(chapterIpc).not.toContain("restoreRevision");
+    expect(writingPage).not.toContain("ChapterHistoryModal");
+    expect(writingPage).not.toContain("chapterHistoryOpen");
+    expect(writingPage).not.toContain("onHistory");
+    expect(topBar).not.toContain("ClockCounterClockwise");
+    expect(topBar).not.toContain("历史版本");
+    expect(styles).not.toContain("chapter-history");
+  });
+
+  it("wires emergency draft recovery into the editor store", () => {
+    const editorStore = readSource("src/renderer/state/editor-store.ts");
+
+    expect(editorStore).toContain("draftRecoveryStore.putEmergencyDraft");
+    expect(editorStore).toContain("draftRecoveryStore.putDraft");
+    expect(editorStore).toContain("draftRecoveryStore.markDraftSaved");
+    expect(editorStore).toContain("pendingDraftRecovery");
+    expect(editorStore).toContain("recoverDraft");
+    expect(editorStore).toContain("dismissDraftRecovery");
+  });
+
+  it("renders the emergency draft recovery prompt from the writing page", () => {
+    const writingPage = readSource("src/renderer/routes/WritingPage.tsx");
+
+    expect(writingPage).toContain("DraftRecoveryPrompt");
+    expect(writingPage).toContain("pendingDraftRecovery");
+    expect(writingPage).toContain("recoverDraft");
+    expect(writingPage).toContain("dismissDraftRecovery");
+  });
+
+  it("keeps chapter loads and restores out of the editor undo stack", () => {
+    const editor = readSource("src/renderer/editor/NovelEditor.tsx");
+    const writingPage = readSource("src/renderer/routes/WritingPage.tsx");
+
+    expect(writingPage).toContain('key={`${activeChapter.id}:${editorStore.contentVersion}`}');
+    expect(editor).toContain("closeHistory");
+    expect(editor).toContain('setMeta("addToHistory", false)');
+    expect(editor).toContain("useRef<number | null>(contentVersion)");
+  });
+
+  it("wires undo and redo controls beside the top search box", () => {
+    const writingPage = readSource("src/renderer/routes/WritingPage.tsx");
+    const topBar = readSource("src/renderer/layout/TopBar.tsx");
+    const styles = readSource("src/renderer/styles/globals.css");
+
+    expect(topBar).toContain("ArrowCounterClockwise");
+    expect(topBar).toContain("ArrowClockwise");
+    expect(topBar).toContain("label=\"撤销\"");
+    expect(topBar).toContain("label=\"重做\"");
+    expect(topBar).toContain("readonly onUndo?: () => void");
+    expect(topBar).toContain("readonly onRedo?: () => void");
+    expect(writingPage).toContain("editor?.chain().focus().undo().run()");
+    expect(writingPage).toContain("editor?.chain().focus().redo().run()");
+    expect(writingPage).toContain("editor.can().undo()");
+    expect(writingPage).toContain("editor.can().redo()");
+    expect(styles).toContain(".topbar-center");
+    expect(styles).toContain(".undo-redo-group");
+  });
 });

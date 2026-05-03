@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties, type FormEvent } from "react";
 import type { Editor } from "@tiptap/react";
 import { Button } from "../components/Button";
+import { DraftRecoveryPrompt } from "../components/DraftRecoveryPrompt";
 import { Input } from "../components/Input";
 import { Modal } from "../components/Modal";
 import { FloatingAiButton } from "../editor/FloatingAiButton";
@@ -174,6 +175,7 @@ export function WritingPage({
   const [searchValue, setSearchValue] = useState("");
   const [searchResults, setSearchResults] = useState<EditorSearchResult[]>([]);
   const [searchBusy, setSearchBusy] = useState(false);
+  const [undoRedoState, setUndoRedoState] = useState({ canRedo: false, canUndo: false });
   const targetWordCount = activeChapter?.targetWordCount ?? null;
   const targetProgressLabel = useMemo(() => {
     if (!targetWordCount) {
@@ -227,6 +229,25 @@ export function WritingPage({
       cancelled = true;
     };
   }, [api]);
+  useEffect(() => {
+    if (!editor) {
+      setUndoRedoState({ canRedo: false, canUndo: false });
+      return undefined;
+    }
+
+    const updateUndoRedoState = () => {
+      setUndoRedoState({
+        canRedo: editor.can().redo(),
+        canUndo: editor.can().undo()
+      });
+    };
+
+    updateUndoRedoState();
+    editor.on("transaction", updateUndoRedoState);
+    return () => {
+      editor.off("transaction", updateUndoRedoState);
+    };
+  }, [editor]);
   useEffect(() => {
     const query = searchValue.trim();
     if (!currentProject || !query) {
@@ -304,6 +325,12 @@ export function WritingPage({
     setFocusMode((current) => !current);
     setSearchValue("");
   }, []);
+  const handleUndo = useCallback(() => {
+    editor?.chain().focus().undo().run();
+  }, [editor]);
+  const handleRedo = useCallback(() => {
+    editor?.chain().focus().redo().run();
+  }, [editor]);
   const handleSearchResultSelect = useCallback(
     (chapterId: string) => {
       setSearchValue("");
@@ -439,8 +466,12 @@ export function WritingPage({
         saveStatus={editorStore.saveStatus}
         searchValue={searchValue}
         editorSettings={editorStore.editorSettings}
+        canRedo={undoRedoState.canRedo}
+        canUndo={undoRedoState.canUndo}
         onExport={handleExport}
         onImport={handleImport}
+        onRedo={editor ? handleRedo : undefined}
+        onUndo={editor ? handleUndo : undefined}
         onEditorSettingsChange={editorStore.updateEditorSettings}
         onFocusModeToggle={handleFocusModeToggle}
         onSearchChange={setSearchValue}
@@ -485,6 +516,13 @@ export function WritingPage({
                   提示词预设加载失败：{taskPromptPresetError}
                 </div>
               ) : null}
+              {editorStore.pendingDraftRecovery ? (
+                <DraftRecoveryPrompt
+                  draft={editorStore.pendingDraftRecovery}
+                  onDismiss={editorStore.dismissDraftRecovery}
+                  onRecover={editorStore.recoverDraft}
+                />
+              ) : null}
               {activeChapter ? (
                 <>
                   {inlineChapterRenameActive ? (
@@ -514,6 +552,7 @@ export function WritingPage({
                     contentJson={editorStore.contentJson}
                     contentVersion={editorStore.contentVersion}
                     editorSettings={editorStore.editorSettings}
+                    key={`${activeChapter.id}:${editorStore.contentVersion}`}
                     taskPromptPresets={taskPromptPresets}
                     onContentChange={editorStore.handleContentChange}
                     onEditorReady={setEditor}
