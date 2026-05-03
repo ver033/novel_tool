@@ -7,7 +7,7 @@ type IconButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
 
 export function IconButton({ label, children, className = "", ...props }: IconButtonProps) {
   return (
-    <button className={`icon-button ${className}`.trim()} aria-label={label} title={label} {...props}>
+    <button className={`icon-button ${className}`.trim()} aria-label={label} title={label} type="button" {...props}>
       {children}
     </button>
   );

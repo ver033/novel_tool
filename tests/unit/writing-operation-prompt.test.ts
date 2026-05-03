@@ -109,6 +109,8 @@ describe("writing operation prompt", () => {
     expect(system).toContain("只输出润色后的候选正文");
     expect(system).toContain("本次要求是作者当前这一次任务的最高局部指令");
     expect(system).toContain("如果任务预设与本次要求冲突，以本次要求为准");
+    expect(system).toContain("生成正文必须优先保持原文文风");
+    expect(system).toContain("叙事视角、语气、句式节奏、描写密度、对白习惯、用词层级和信息释放速度");
     expect(user).toContain("任务预设：古雅一点");
     expect(user).toContain("表达更古雅，但不要改剧情。");
     expect(user).toContain("优先级：系统硬规则 > 写作操作边界和输出格式 > 目标文本事实和参考上下文边界 > 本次要求 > 任务预设 > 写作技能中的默认方法建议。");

@@ -8,6 +8,7 @@ import {
   normalizeTiptapDocument,
   type TiptapDocument
 } from "../editor/tiptap/converters";
+import { createDraftTextHash, draftRecoveryStore, shouldOfferDraftRecovery, type EditorDraftRecord } from "./draft-recovery-store";
 
 export const AUTOSAVE_DEBOUNCE_MS = 1000;
 
@@ -89,6 +90,13 @@ type SaveSnapshot = {
   readonly wordCount: number;
 };
 
+type DraftWriteContext = {
+  readonly chapterId: string | null;
+  readonly chapterTitle: string;
+  readonly dbUpdatedAt: string | null;
+  readonly projectId: string | null;
+};
+
 export function useEditorStore(activeChapter: ChapterSummary | null) {
   const api = useMemo(getNovelToolApi, []);
   const [contentJson, setContentJson] = useState<TiptapDocument>(() => createTiptapDocumentFromPlainText(""));
@@ -102,13 +110,28 @@ export function useEditorStore(activeChapter: ChapterSummary | null) {
   const [dailyWordCount, setDailyWordCount] = useState(0);
   const [dailyWordCountDate, setDailyWordCountDate] = useState<string | null>(null);
   const [savedWordCount, setSavedWordCount] = useState(0);
+  const [pendingDraftRecovery, setPendingDraftRecovery] = useState<EditorDraftRecord | null>(null);
   const saveInFlight = useRef<Promise<void> | null>(null);
   const editRevision = useRef(0);
   const savedRevision = useRef(0);
   const editorScope = useRef(0);
+  const savedDbUpdatedAt = useRef<string | null>(null);
+  const draftWriteTimer = useRef<number | null>(null);
 
   const chapterId = activeChapter?.id ?? null;
   const projectId = activeChapter?.projectId ?? null;
+  const draftWriteContext = useRef<DraftWriteContext>({
+    chapterId,
+    chapterTitle: activeChapter?.title ?? "未命名章节",
+    dbUpdatedAt: savedDbUpdatedAt.current,
+    projectId
+  });
+  draftWriteContext.current = {
+    chapterId,
+    chapterTitle: activeChapter?.title ?? "未命名章节",
+    dbUpdatedAt: savedDbUpdatedAt.current,
+    projectId
+  };
   const latestSaveSnapshot = useRef<SaveSnapshot>({
     chapterId,
     contentJson,
@@ -164,7 +187,9 @@ export function useEditorStore(activeChapter: ChapterSummary | null) {
       setSavedWordCount(0);
       setSaveStatus("saved");
       setLastSavedAt(null);
+      savedDbUpdatedAt.current = null;
       setErrorMessage(null);
+      setPendingDraftRecovery(null);
       return;
     }
 
@@ -199,6 +224,32 @@ export function useEditorStore(activeChapter: ChapterSummary | null) {
         setDailyWordCountDate(content.dailyWordCountDate ?? null);
         setSavedWordCount(content.wordCount ?? countWritingUnits(nextPlainText));
         setLastSavedAt(content.updatedAt ? new Date(content.updatedAt) : null);
+        savedDbUpdatedAt.current = content.updatedAt ?? null;
+        try {
+          const draft = await draftRecoveryStore.getDraft(currentProjectId, currentChapterId);
+          if (cancelled || editorScope.current !== currentScopeId) {
+            return;
+          }
+          if (
+            draft &&
+            shouldOfferDraftRecovery({
+              draftStatus: draft.status,
+              draftUpdatedAt: draft.updatedAt,
+              dbUpdatedAt: content.updatedAt ?? null,
+              draftContentHash: draft.contentHash,
+              dbContentHash: createDraftTextHash(nextPlainText)
+            })
+          ) {
+            setPendingDraftRecovery(draft);
+          } else {
+            setPendingDraftRecovery(null);
+          }
+        } catch (draftReason) {
+          console.warn("Failed to inspect local editor draft", draftReason);
+          if (!cancelled && editorScope.current === currentScopeId) {
+            setPendingDraftRecovery(null);
+          }
+        }
       } catch (reason) {
         if (cancelled) {
           return;
@@ -216,6 +267,8 @@ export function useEditorStore(activeChapter: ChapterSummary | null) {
         setDailyWordCount(0);
         setDailyWordCountDate(null);
         setSavedWordCount(0);
+        savedDbUpdatedAt.current = null;
+        setPendingDraftRecovery(null);
         setErrorMessage(formatError(reason));
         setSaveStatus("failed");
       }
@@ -231,11 +284,44 @@ export function useEditorStore(activeChapter: ChapterSummary | null) {
   const handleContentChange = useCallback((nextContentJson: TiptapDocument) => {
     editRevision.current += 1;
     const nextPlainText = extractPlainTextFromTiptapJson(nextContentJson);
+    const nextWordCount = countWritingUnits(nextPlainText);
     setContentJson(nextContentJson);
     setPlainText(nextPlainText);
-    setWordCount(countWritingUnits(nextPlainText));
+    setWordCount(nextWordCount);
     setErrorMessage(null);
     setSaveStatus("dirty");
+    const draftContext = draftWriteContext.current;
+    if (draftWriteTimer.current !== null) {
+      window.clearTimeout(draftWriteTimer.current);
+    }
+    if (draftContext.projectId && draftContext.chapterId) {
+      draftRecoveryStore.putEmergencyDraft({
+        projectId: draftContext.projectId,
+        chapterId: draftContext.chapterId,
+        chapterTitle: draftContext.chapterTitle,
+        contentJson: nextContentJson,
+        plainText: nextPlainText,
+        wordCount: nextWordCount,
+        dbUpdatedAt: draftContext.dbUpdatedAt,
+        status: "dirty"
+      });
+    }
+    draftWriteTimer.current = window.setTimeout(() => {
+      if (!draftContext.projectId || !draftContext.chapterId) {
+        return;
+      }
+      void draftRecoveryStore.putDraft({
+          projectId: draftContext.projectId,
+          chapterId: draftContext.chapterId,
+          chapterTitle: draftContext.chapterTitle,
+          contentJson: nextContentJson,
+          plainText: nextPlainText,
+          wordCount: nextWordCount,
+          dbUpdatedAt: draftContext.dbUpdatedAt,
+          status: "dirty"
+        })
+        .catch((reason) => console.warn("Failed to write local editor draft", reason));
+    }, 500);
   }, []);
 
   const updateEditorSettings = useCallback(
@@ -277,6 +363,9 @@ export function useEditorStore(activeChapter: ChapterSummary | null) {
           wordCount: snapshot.wordCount
         })) as ChapterContent | undefined;
 
+        void draftRecoveryStore.markDraftSaved(snapshotProjectId, snapshotChapterId, content?.updatedAt ?? new Date().toISOString())
+          .catch((reason) => console.warn("Failed to mark local editor draft saved", reason));
+
         if (editorScope.current !== snapshot.scopeId) {
           return;
         }
@@ -286,6 +375,7 @@ export function useEditorStore(activeChapter: ChapterSummary | null) {
         setDailyWordCountDate(content?.dailyWordCountDate ?? localDateKey());
         setSavedWordCount(content?.wordCount ?? snapshot.wordCount);
         setLastSavedAt(content?.updatedAt ? new Date(content.updatedAt) : new Date());
+        savedDbUpdatedAt.current = content?.updatedAt ?? null;
         setSaveStatus(
           resolveSaveCompletionStatus({
             currentRevision: editRevision.current,
@@ -323,6 +413,33 @@ export function useEditorStore(activeChapter: ChapterSummary | null) {
     return () => window.clearTimeout(timer);
   }, [chapterId, editorSettings.autosaveMs, flushPendingSave, saveStatus]);
 
+  const recoverDraft = useCallback(() => {
+    const draft = pendingDraftRecovery;
+    if (!draft) {
+      return;
+    }
+    editRevision.current += 1;
+    const nextDocument = normalizeTiptapDocument(draft.contentJson, draft.plainText);
+    setContentJson(nextDocument);
+    setContentVersion((current) => current + 1);
+    setPlainText(draft.plainText);
+    setWordCount(draft.wordCount);
+    setErrorMessage(null);
+    setSaveStatus("dirty");
+    setPendingDraftRecovery(null);
+  }, [pendingDraftRecovery]);
+
+  const dismissDraftRecovery = useCallback(() => {
+    const draft = pendingDraftRecovery;
+    if (!draft) {
+      return;
+    }
+    setPendingDraftRecovery(null);
+    void draftRecoveryStore
+      .dismissDraft(draft.projectId, draft.chapterId)
+      .catch((reason) => console.warn("Failed to dismiss local editor draft", reason));
+  }, [pendingDraftRecovery]);
+
   const visibleDailyWordCount = getVisibleDailyWordCount({ dailyWordCount, dailyWordCountDate, savedWordCount, saveStatus, wordCount });
 
   return {
@@ -330,9 +447,12 @@ export function useEditorStore(activeChapter: ChapterSummary | null) {
     contentVersion,
     editorSettings,
     dailyWordCount: visibleDailyWordCount,
+    dismissDraftRecovery,
     flushPendingSave,
     handleContentChange,
+    pendingDraftRecovery,
     plainText,
+    recoverDraft,
     saveStatus,
     saveStatusLabel: statusLabel(saveStatus, lastSavedAt, errorMessage),
     updateEditorSettings,

@@ -481,7 +481,7 @@ describe("OpenRouter persistent summary index generation", () => {
     expect(requests[0].maxCompletionTokens).toBeLessThanOrEqual(12_000);
   });
 
-  it("rejects invalid persistent chapter summary JSON instead of accepting malformed index data", async () => {
+  it("rejects irrecoverable persistent chapter summary JSON instead of accepting empty index data", async () => {
     const generator = new OpenRouterChatGenerator({} as never);
     Object.assign(generator as unknown as { createClient: () => Promise<unknown> }, {
       createClient: async () => ({
@@ -490,7 +490,7 @@ describe("OpenRouter persistent summary index generation", () => {
         modelName: "summary/model",
         client: {
           streamChatCompletion: async () => ({
-            content: JSON.stringify({ ...chapterSummary, extra: "not allowed" }),
+            content: JSON.stringify({ 章节信息: { 缓存版本: "三-Lite" } }),
             reasoning: "",
             truncated: false,
             toolCalls: []

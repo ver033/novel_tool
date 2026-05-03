@@ -160,6 +160,33 @@ select:focus-visible {
   color: #344054;
 }
 
+.topbar-center {
+  justify-self: center;
+  width: min(100%, 560px);
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.undo-redo-group {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #fbfcfe;
+}
+
+.undo-redo-group .icon-button {
+  width: 36px;
+  height: 36px;
+  color: #475569;
+}
+
 .search {
   justify-self: center;
   width: min(100%, 460px);
@@ -221,6 +248,14 @@ select:focus-visible {
 .icon-button:hover {
   background: #f2f5f9;
   transform: translateY(-1px);
+}
+
+.icon-button:disabled,
+.icon-button:disabled:hover {
+  cursor: not-allowed;
+  opacity: 0.42;
+  background: transparent;
+  transform: none;
 }
 
 .layout-control {
@@ -3400,6 +3435,45 @@ select:focus-visible {
   font-size: 13px;
 }
 
+.draft-recovery-prompt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin: 0 0 18px;
+  padding: 12px 14px;
+  border: 1px solid #f59e0b;
+  border-radius: 8px;
+  background: #fffbeb;
+  color: #78350f;
+  box-shadow: 0 12px 28px rgba(146, 64, 14, 0.08);
+}
+
+.draft-recovery-copy {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.draft-recovery-copy strong {
+  font-size: 15px;
+  font-weight: 760;
+}
+
+.draft-recovery-copy small {
+  color: #92400e;
+  font-size: 12px;
+}
+
+.draft-recovery-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .wizard-actions {
   display: flex;
   justify-content: flex-end;
@@ -3891,7 +3965,8 @@ select:focus-visible {
   }
 
   .search,
-  .focus-mode-label {
+  .focus-mode-label,
+  .topbar-center {
     display: none;
   }
 

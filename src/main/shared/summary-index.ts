@@ -30,8 +30,83 @@ function stringifyStructuredValue(value: unknown): string {
   return String(value);
 }
 
+const missingTextValues = new Set(["", "未明确", "无", "没有", "无新增", "暂无", "不详", "未知", "null", "undefined"]);
+
+function normalizeTextValue(value: unknown): string {
+  return stringifyStructuredValue(value).trim();
+}
+
 const textSchema = z.preprocess((value) => stringifyStructuredValue(value), z.string());
-const nonEmptyStringSchema = z.preprocess((value) => stringifyStructuredValue(value), z.string().trim().min(1));
+const requiredStringSchema = z.preprocess((value) => normalizeTextValue(value), z.string().trim().min(1));
+const nonEmptyStringSchema = z.preprocess((value) => {
+  const text = normalizeTextValue(value);
+  return missingTextValues.has(text) ? "未明确" : text;
+}, z.string().trim().min(1));
+
+const chineseDigitValues: Record<string, number> = {
+  零: 0,
+  〇: 0,
+  一: 1,
+  二: 2,
+  两: 2,
+  三: 3,
+  四: 4,
+  五: 5,
+  六: 6,
+  七: 7,
+  八: 8,
+  九: 9
+};
+
+function normalizeFullWidthDigits(text: string): string {
+  return text.replace(/[０-９]/g, (char) => String(char.charCodeAt(0) - 0xff10));
+}
+
+function parseChineseInteger(text: string): number | null {
+  const normalized = text.replace(/[第章节回卷部\s]/g, "");
+  if (!normalized || !/[零〇一二两三四五六七八九十百千]/u.test(normalized)) {
+    return null;
+  }
+
+  let total = 0;
+  let current = 0;
+  const units: Record<string, number> = { 十: 10, 百: 100, 千: 1000 };
+  for (const char of normalized) {
+    const digit = chineseDigitValues[char];
+    if (digit !== undefined) {
+      current = digit;
+      continue;
+    }
+    const unit = units[char];
+    if (unit !== undefined) {
+      total += (current || 1) * unit;
+      current = 0;
+    }
+  }
+  return total + current || null;
+}
+
+function parseLooseInteger(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  const text = normalizeFullWidthDigits(normalizeTextValue(value));
+  const digitMatch = text.match(/\d+/u);
+  if (digitMatch) {
+    return Number.parseInt(digitMatch[0], 10);
+  }
+  return parseChineseInteger(text);
+}
+
+const positiveIntegerSchema = z.preprocess((value) => {
+  const parsed = parseLooseInteger(value);
+  return parsed ?? value;
+}, z.number().int().positive());
+
+const nonnegativeIntegerSchema = z.preprocess((value) => {
+  const parsed = parseLooseInteger(value);
+  return parsed ?? value;
+}, z.number().int().nonnegative());
 
 function normalizeArrayInput(value: unknown): unknown {
   if (Array.isArray(value)) {
@@ -51,12 +126,132 @@ function arrayOf<T extends z.ZodType>(itemSchema: T) {
   return z.preprocess(normalizeArrayInput, z.array(itemSchema));
 }
 
-function nonEmptyArrayOf<T extends z.ZodType>(itemSchema: T) {
-  return z.preprocess(normalizeArrayInput, z.array(itemSchema).min(1));
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function firstValue(record: Record<string, unknown>, keys: readonly string[]): unknown {
+  for (const key of keys) {
+    const value = record[key];
+    if (value !== undefined && value !== null && normalizeTextValue(value)) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function normalizeStringList(value: unknown): string[] {
+  const normalized = normalizeArrayInput(value);
+  const items = Array.isArray(normalized) ? normalized : [normalized];
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const item of items) {
+    const text = normalizeTextValue(item);
+    if (!text || missingTextValues.has(text) || seen.has(text)) {
+      continue;
+    }
+    seen.add(text);
+    result.push(text);
+  }
+  return result;
+}
+
+function mergeStringLists(...values: readonly unknown[]): string[] {
+  return normalizeStringList(values.flatMap((value) => normalizeStringList(value)));
+}
+
+function normalizeKeyEventLiteInput(value: unknown): unknown {
+  if (!isRecord(value)) {
+    return value;
+  }
+  return {
+    ...value,
+    结果: firstValue(value, ["结果", "事件结果", "场景结果"]) ?? "未明确"
+  };
+}
+
+function normalizeCharacterStateLiteInput(value: unknown): unknown {
+  if (!isRecord(value)) {
+    return value;
+  }
+  return {
+    ...value,
+    本章变化:
+      firstValue(value, ["本章变化", "状态变化"]) ??
+      mergeStringLists(value.本章出场状态, value.本章结束状态, value.身体状态, value.情绪状态).join("；") ??
+      "未明确",
+    目标或动机: firstValue(value, ["目标或动机"]) ?? mergeStringLists(value.动机, value.目标).join("；") ?? "未明确",
+    关系变化: firstValue(value, ["关系变化", "与他人关系变化"]) ?? []
+  };
+}
+
+function normalizeCharacterKnowledgeLiteInput(value: unknown): unknown {
+  if (!isRecord(value)) {
+    return value;
+  }
+  return {
+    ...value,
+    认知变化: firstValue(value, ["认知变化"]) ?? mergeStringLists(value.新得知, value.已经知道).join("；") ?? "未明确",
+    仍不知道: firstValue(value, ["仍不知道", "尚不知道", "仍不知道的信息"]) ?? [],
+    误解或风险: firstValue(value, ["误解或风险", "误以为", "误解或错误判断"]) ?? []
+  };
+}
+
+function normalizeForeshadowingLiteInput(value: unknown): unknown {
+  if (!isRecord(value)) {
+    return value;
+  }
+  return {
+    ...value,
+    状态: firstValue(value, ["状态", "本章状态"]) ?? "待判断",
+    指向或意义: firstValue(value, ["指向或意义", "可能指向", "指向", "意义"]) ?? "未明确"
+  };
+}
+
+function normalizeTimePlaceLiteInput(value: unknown): unknown {
+  if (!isRecord(value)) {
+    return value;
+  }
+  return {
+    本章时间: firstValue(value, ["本章时间", "时间跨度"]) ?? "未明确",
+    主要地点: firstValue(value, ["主要地点"]) ?? [],
+    时间线索: firstValue(value, ["时间线索", "明确时间锚点", "相对时间锚点"]) ?? [],
+    地点移动: firstValue(value, ["地点移动"]) ?? [],
+    可能风险: firstValue(value, ["可能风险", "可能的时间线风险"]) ?? []
+  };
+}
+
+function normalizeChapterSummaryShapeDrift(value: unknown): unknown {
+  if (!isRecord(value)) {
+    return value;
+  }
+
+  const chapterFunction = isRecord(value.章节作用) ? value.章节作用 : isRecord(value.本章功能) ? value.本章功能 : undefined;
+  const timePlace = isRecord(value.时间地点) ? value.时间地点 : isRecord(value.时间与地点) ? value.时间与地点 : undefined;
+
+  return {
+    ...value,
+    章节作用: chapterFunction
+      ? {
+          ...chapterFunction,
+          剧情作用: firstValue(chapterFunction, ["剧情作用", "剧情功能", "结构作用"]) ?? "未明确",
+          人物作用: firstValue(chapterFunction, ["人物作用", "情绪功能", "章节类型"]) ?? "未明确",
+          后文作用: firstValue(chapterFunction, ["后文作用", "对后文的作用"]) ?? "未明确"
+        }
+      : value.章节作用,
+    场景推进: firstValue(value, ["场景推进"]) ?? normalizeStringList(value.场景列表),
+    关系变化: firstValue(value, ["关系变化"]) ?? normalizeStringList(value.关系动态),
+    时间地点: timePlace ? normalizeTimePlaceLiteInput(timePlace) : value.时间地点,
+    道具设定变化: mergeStringLists(value.道具设定变化, value.道具状态, value.设定与规则, value.限制与否定事实),
+    可核对事实: normalizeStringList(value.可核对事实),
+    连续性风险: normalizeStringList(value.连续性风险),
+    未解决问题: normalizeStringList(value.未解决问题),
+    文风要点: firstValue(value, ["文风要点"]) ?? normalizeStringList(value.文风与叙事),
+    关键事件: Array.isArray(value.关键事件) ? value.关键事件.map(normalizeKeyEventLiteInput) : value.关键事件,
+    人物状态: Array.isArray(value.人物状态) ? value.人物状态.map(normalizeCharacterStateLiteInput) : value.人物状态,
+    人物认知边界: Array.isArray(value.人物认知边界) ? value.人物认知边界.map(normalizeCharacterKnowledgeLiteInput) : value.人物认知边界,
+    伏笔与线索: Array.isArray(value.伏笔与线索) ? value.伏笔与线索.map(normalizeForeshadowingLiteInput) : value.伏笔与线索
+  };
 }
 
 function normalizeChapterSummaryVersionDrift(value: unknown): unknown {
@@ -70,16 +265,18 @@ function normalizeChapterSummaryVersionDrift(value: unknown): unknown {
     return value;
   }
 
-  const version = stringifyStructuredValue(value.章节信息.缓存版本).trim();
-  if (version !== "二" && version !== "二Lite" && version !== "二-Lite" && version !== "三" && version !== "三Lite" && version !== "三-Lite") {
-    return value;
+  const normalized = normalizeChapterSummaryShapeDrift(value);
+  if (!isRecord(normalized) || !isRecord(normalized.章节信息)) {
+    return normalized;
   }
 
   return {
-    ...value,
+    ...normalized,
     章节信息: {
-      ...value.章节信息,
-      缓存版本: "三-Lite"
+      ...normalized.章节信息,
+      缓存类型: "章节缓存",
+      缓存版本: "三-Lite",
+      语言: "简体中文"
     }
   };
 }
@@ -94,29 +291,24 @@ function normalizeChapterChunkVersionDrift(value: unknown): unknown {
     return value;
   }
 
-  const version = stringifyStructuredValue(value.片段信息.缓存版本).trim();
-  if (version !== "一" && version !== "二" && version !== "二Lite" && version !== "二-Lite") {
-    return value;
-  }
-
   return {
     ...value,
     片段信息: {
       ...value.片段信息,
-      缓存版本: "二-Lite"
+      缓存类型: "章节片段缓存",
+      缓存版本: "二-Lite",
+      语言: "简体中文"
     }
   };
 }
 
 const sceneNumberSchema = z.preprocess((value) => {
-  if (typeof value === "number" && value === 0) {
+  const parsed = parseLooseInteger(value);
+  if (parsed === 0) {
     return 1;
   }
-  if (typeof value === "string" && value.trim() === "0") {
-    return 1;
-  }
-  return value;
-}, z.number().int().positive());
+  return parsed ?? value;
+}, positiveIntegerSchema);
 
 function enumWithFallback<T extends readonly [string, ...string[]]>(
   values: T,
@@ -262,13 +454,13 @@ const sceneIndexSchema = z
     出场人物: arrayOf(nonEmptyStringSchema),
     场景目标: nonEmptyStringSchema,
     冲突或阻力: nonEmptyStringSchema,
-    关键事件: nonEmptyArrayOf(nonEmptyStringSchema),
+    关键事件: arrayOf(nonEmptyStringSchema),
     场景结果: nonEmptyStringSchema,
     情绪变化: nonEmptyStringSchema,
     承接关系: nonEmptyStringSchema,
     证据短句: evidenceQuotesSchema
   })
-  .strict();
+  .strip();
 
 const keyEventIndexSchema = z
   .object({
@@ -280,7 +472,7 @@ const keyEventIndexSchema = z
     后续影响: nonEmptyStringSchema,
     证据短句: evidenceQuotesSchema
   })
-  .strict();
+  .strip();
 
 const characterStateIndexSchema = z
   .object({
@@ -301,7 +493,7 @@ const characterStateIndexSchema = z
     需要后文承接: yesNoSchema,
     证据短句: evidenceQuotesSchema
   })
-  .strict();
+  .strip();
 
 const characterKnowledgeIndexSchema = z
   .object({
@@ -313,11 +505,11 @@ const characterKnowledgeIndexSchema = z
     不能知道但后文需注意: arrayOf(nonEmptyStringSchema),
     证据短句: evidenceQuotesSchema
   })
-  .strict();
+  .strip();
 
 const relationshipIndexSchema = z
   .object({
-    关系双方: nonEmptyArrayOf(nonEmptyStringSchema),
+    关系双方: arrayOf(nonEmptyStringSchema),
     关系类型: nonEmptyStringSchema,
     本章开始状态: nonEmptyStringSchema,
     本章结束状态: nonEmptyStringSchema,
@@ -325,7 +517,7 @@ const relationshipIndexSchema = z
     是否需要后文承接: yesNoSchema,
     证据短句: evidenceQuotesSchema
   })
-  .strict();
+  .strip();
 
 const timePlaceIndexSchema = z
   .object({
@@ -338,7 +530,7 @@ const timePlaceIndexSchema = z
     可能的时间线风险: arrayOf(nonEmptyStringSchema),
     证据短句: evidenceQuotesSchema
   })
-  .strict();
+  .strip();
 
 const spatialActionIndexSchema = z
   .object({
@@ -351,7 +543,7 @@ const spatialActionIndexSchema = z
     风险说明: textSchema,
     证据短句: evidenceQuotesSchema
   })
-  .strict();
+  .strip();
 
 const itemStateIndexSchema = z
   .object({
@@ -365,7 +557,7 @@ const itemStateIndexSchema = z
     是否需要后文追踪: yesNoSchema,
     证据短句: evidenceQuotesSchema
   })
-  .strict();
+  .strip();
 
 const settingRuleIndexSchema = z
   .object({
@@ -377,7 +569,7 @@ const settingRuleIndexSchema = z
     是否影响后文: yesNoSchema,
     证据短句: evidenceQuotesSchema
   })
-  .strict();
+  .strip();
 
 const negativeFactIndexSchema = z
   .object({
@@ -387,7 +579,7 @@ const negativeFactIndexSchema = z
     后文检查意义: nonEmptyStringSchema,
     证据短句: evidenceQuotesSchema
   })
-  .strict();
+  .strip();
 
 const foreshadowingIndexSchema = z
   .object({
@@ -400,7 +592,7 @@ const foreshadowingIndexSchema = z
     需要作者判断: yesNoSchema,
     证据短句: evidenceQuotesSchema
   })
-  .strict();
+  .strip();
 
 const causalChainIndexSchema = z
   .object({
@@ -411,7 +603,7 @@ const causalChainIndexSchema = z
     缺口说明: z.string(),
     证据短句: evidenceQuotesSchema
   })
-  .strict();
+  .strip();
 
 const checkableFactIndexSchema = z
   .object({
@@ -426,7 +618,7 @@ const checkableFactIndexSchema = z
     后文核对意义: nonEmptyStringSchema,
     证据短句: evidenceQuotesSchema
   })
-  .strict();
+  .strip();
 
 const continuityRiskIndexSchema = z
   .object({
@@ -439,7 +631,7 @@ const continuityRiskIndexSchema = z
     建议回读范围: arrayOf(nonEmptyStringSchema),
     证据短句: evidenceQuotesSchema
   })
-  .strict();
+  .strip();
 
 const unresolvedQuestionIndexSchema = z
   .object({
@@ -448,24 +640,17 @@ const unresolvedQuestionIndexSchema = z
     后续需要回答: yesNoSchema,
     证据短句: evidenceQuotesSchema
   })
-  .strict();
+  .strip();
 
 const generatedEnglishPattern = /[A-Za-z]/u;
 
-function addEnglishTextIssues(value: unknown, ctx: z.RefinementCtx, path: readonly (string | number)[] = [], insideEvidence = false): void {
+function addEnglishKeyIssues(value: unknown, ctx: z.RefinementCtx, path: readonly (string | number)[] = []): void {
   if (typeof value === "string") {
-    if (!insideEvidence && generatedEnglishPattern.test(value)) {
-      ctx.addIssue({
-        code: "custom",
-        path: [...path],
-        message: "非证据字段必须使用简体中文，不能包含英文。"
-      });
-    }
     return;
   }
 
   if (Array.isArray(value)) {
-    value.forEach((item, index) => addEnglishTextIssues(item, ctx, [...path, index], insideEvidence));
+    value.forEach((item, index) => addEnglishKeyIssues(item, ctx, [...path, index]));
     return;
   }
 
@@ -478,10 +663,10 @@ function addEnglishTextIssues(value: unknown, ctx: z.RefinementCtx, path: readon
       ctx.addIssue({
         code: "custom",
         path: [...path, key],
-        message: "章节缓存 V2 的 JSON 键名必须使用简体中文。"
+        message: "章节缓存 JSON 键名必须使用简体中文。"
       });
     }
-    addEnglishTextIssues(item, ctx, [...path, key], insideEvidence || key === "证据短句" || key === "缓存版本");
+    addEnglishKeyIssues(item, ctx, [...path, key]);
   }
 }
 
@@ -489,14 +674,14 @@ export const chapterAiSummaryPayloadV2Schema = z
   .object({
     章节信息: z
       .object({
-        章节序号: z.number().int().positive(),
+        章节序号: positiveIntegerSchema,
         章节标题: nonEmptyStringSchema,
         正文覆盖: coverageScopeSchema,
         缓存类型: z.literal("章节缓存"),
         缓存版本: z.literal("二"),
         语言: z.literal("简体中文")
       })
-      .strict(),
+      .strip(),
     缓存质量: z
       .object({
         覆盖完整度: completenessSchema,
@@ -504,10 +689,10 @@ export const chapterAiSummaryPayloadV2Schema = z
         需要回读原文: yesNoSchema,
         缺失说明: arrayOf(nonEmptyStringSchema)
       })
-      .strict(),
-    一句话摘要: nonEmptyStringSchema,
-    短摘要: nonEmptyStringSchema,
-    详细梗概: z.string().trim().min(60),
+      .strip(),
+    一句话摘要: requiredStringSchema,
+    短摘要: requiredStringSchema,
+    详细梗概: requiredStringSchema,
     本章功能: z
       .object({
         章节类型: nonEmptyStringSchema,
@@ -516,10 +701,10 @@ export const chapterAiSummaryPayloadV2Schema = z
         结构作用: nonEmptyStringSchema,
         对后文的作用: nonEmptyStringSchema
       })
-      .strict(),
-    场景列表: nonEmptyArrayOf(sceneIndexSchema),
-    关键事件: nonEmptyArrayOf(keyEventIndexSchema),
-    人物状态: nonEmptyArrayOf(characterStateIndexSchema),
+      .strip(),
+    场景列表: arrayOf(sceneIndexSchema),
+    关键事件: arrayOf(keyEventIndexSchema),
+    人物状态: arrayOf(characterStateIndexSchema),
     人物认知边界: arrayOf(characterKnowledgeIndexSchema),
     关系动态: arrayOf(relationshipIndexSchema),
     时间与地点: timePlaceIndexSchema,
@@ -529,7 +714,7 @@ export const chapterAiSummaryPayloadV2Schema = z
     限制与否定事实: arrayOf(negativeFactIndexSchema),
     伏笔与线索: arrayOf(foreshadowingIndexSchema),
     因果链: arrayOf(causalChainIndexSchema),
-    可核对事实: nonEmptyArrayOf(checkableFactIndexSchema),
+    可核对事实: arrayOf(checkableFactIndexSchema),
     连续性风险: arrayOf(continuityRiskIndexSchema),
     未解决问题: arrayOf(unresolvedQuestionIndexSchema),
     文风与叙事: z
@@ -541,14 +726,14 @@ export const chapterAiSummaryPayloadV2Schema = z
         描写侧重: nonEmptyStringSchema,
         续写时应保持: arrayOf(nonEmptyStringSchema)
       })
-      .strict(),
-    不可丢失信息: nonEmptyArrayOf(nonEmptyStringSchema),
-    适合回答的问题: nonEmptyArrayOf(nonEmptyStringSchema),
+      .strip(),
+    不可丢失信息: arrayOf(nonEmptyStringSchema),
+    适合回答的问题: arrayOf(nonEmptyStringSchema),
     不确定项: arrayOf(nonEmptyStringSchema)
   })
-  .strict()
+  .strip()
   .superRefine((payload, ctx) => {
-    addEnglishTextIssues(payload, ctx);
+    addEnglishKeyIssues(payload, ctx);
   });
 
 const chapterFunctionLiteSchema = z
@@ -557,7 +742,7 @@ const chapterFunctionLiteSchema = z
     人物作用: nonEmptyStringSchema,
     后文作用: nonEmptyStringSchema
   })
-  .strict();
+  .strip();
 
 const keyEventLiteSchema = z
   .object({
@@ -568,7 +753,7 @@ const keyEventLiteSchema = z
     后续影响: nonEmptyStringSchema,
     证据短句: evidenceQuotesSchema
   })
-  .strict();
+  .strip();
 
 const characterStateLiteSchema = z
   .object({
@@ -581,7 +766,7 @@ const characterStateLiteSchema = z
     关系变化: arrayOf(nonEmptyStringSchema),
     证据短句: evidenceQuotesSchema
   })
-  .strict();
+  .strip();
 
 const characterKnowledgeLiteSchema = z
   .object({
@@ -591,7 +776,7 @@ const characterKnowledgeLiteSchema = z
     误解或风险: arrayOf(nonEmptyStringSchema),
     证据短句: evidenceQuotesSchema
   })
-  .strict();
+  .strip();
 
 const timePlaceLiteSchema = z
   .object({
@@ -601,7 +786,7 @@ const timePlaceLiteSchema = z
     地点移动: arrayOf(nonEmptyStringSchema),
     可能风险: arrayOf(nonEmptyStringSchema)
   })
-  .strict();
+  .strip();
 
 const foreshadowingLiteSchema = z
   .object({
@@ -611,20 +796,20 @@ const foreshadowingLiteSchema = z
     指向或意义: nonEmptyStringSchema,
     证据短句: evidenceQuotesSchema
   })
-  .strict();
+  .strip();
 
 export const chapterAiSummaryPayloadV3LiteSchema = z
   .object({
     章节信息: z
       .object({
-        章节序号: z.number().int().positive(),
+        章节序号: positiveIntegerSchema,
         章节标题: nonEmptyStringSchema,
         正文覆盖: coverageScopeSchema,
         缓存类型: z.literal("章节缓存"),
         缓存版本: z.literal("三-Lite"),
         语言: z.literal("简体中文")
       })
-      .strict(),
+      .strip(),
     缓存质量: z
       .object({
         覆盖完整度: completenessSchema,
@@ -632,29 +817,29 @@ export const chapterAiSummaryPayloadV3LiteSchema = z
         需要回读原文: yesNoSchema,
         缺失说明: arrayOf(nonEmptyStringSchema)
       })
-      .strict(),
-    一句话摘要: nonEmptyStringSchema,
-    短摘要: nonEmptyStringSchema,
-    详细梗概: z.string().trim().min(60),
+      .strip(),
+    一句话摘要: requiredStringSchema,
+    短摘要: requiredStringSchema,
+    详细梗概: requiredStringSchema,
     章节作用: chapterFunctionLiteSchema,
     场景推进: arrayOf(nonEmptyStringSchema),
-    关键事件: nonEmptyArrayOf(keyEventLiteSchema),
+    关键事件: arrayOf(keyEventLiteSchema),
     人物状态: arrayOf(characterStateLiteSchema),
     人物认知边界: arrayOf(characterKnowledgeLiteSchema),
     关系变化: arrayOf(nonEmptyStringSchema),
     时间地点: timePlaceLiteSchema,
     道具设定变化: arrayOf(nonEmptyStringSchema),
     伏笔与线索: arrayOf(foreshadowingLiteSchema),
-    可核对事实: nonEmptyArrayOf(nonEmptyStringSchema),
+    可核对事实: arrayOf(nonEmptyStringSchema),
     连续性风险: arrayOf(nonEmptyStringSchema),
     未解决问题: arrayOf(nonEmptyStringSchema),
     文风要点: arrayOf(nonEmptyStringSchema),
-    不可丢失信息: nonEmptyArrayOf(nonEmptyStringSchema),
+    不可丢失信息: arrayOf(nonEmptyStringSchema),
     不确定项: arrayOf(nonEmptyStringSchema)
   })
-  .strict()
+  .strip()
   .superRefine((payload, ctx) => {
-    addEnglishTextIssues(payload, ctx);
+    addEnglishKeyIssues(payload, ctx);
   });
 
 export const chapterAiSummaryPayloadSchema = z.preprocess(
@@ -666,16 +851,16 @@ const chapterAiSummaryChunkPayloadV1Schema = z
   .object({
     片段信息: z
       .object({
-        章节序号: z.number().int().positive(),
+        章节序号: positiveIntegerSchema,
         章节标题: nonEmptyStringSchema,
-        片段序号: z.number().int().positive(),
-        片段总数: z.number().int().positive(),
+        片段序号: positiveIntegerSchema,
+        片段总数: positiveIntegerSchema,
         正文覆盖: z.literal("片段"),
         缓存类型: z.literal("章节片段缓存"),
         缓存版本: z.literal("一"),
         语言: z.literal("简体中文")
       })
-      .strict()
+      .strip()
       .superRefine((payload, ctx) => {
         if (payload.片段序号 > payload.片段总数) {
           ctx.addIssue({
@@ -685,7 +870,7 @@ const chapterAiSummaryChunkPayloadV1Schema = z
           });
         }
       }),
-    片段摘要: nonEmptyStringSchema,
+    片段摘要: requiredStringSchema,
     关键事件: arrayOf(keyEventIndexSchema),
     人物状态: arrayOf(characterStateIndexSchema),
     人物认知边界: arrayOf(characterKnowledgeIndexSchema),
@@ -702,25 +887,25 @@ const chapterAiSummaryChunkPayloadV1Schema = z
     未解决问题: arrayOf(unresolvedQuestionIndexSchema),
     不可丢失信息: arrayOf(nonEmptyStringSchema)
   })
-  .strict()
+  .strip()
   .superRefine((payload, ctx) => {
-    addEnglishTextIssues(payload, ctx);
+    addEnglishKeyIssues(payload, ctx);
   });
 
 const chapterAiSummaryChunkPayloadV2LiteSchema = z
   .object({
     片段信息: z
       .object({
-        章节序号: z.number().int().positive(),
+        章节序号: positiveIntegerSchema,
         章节标题: nonEmptyStringSchema,
-        片段序号: z.number().int().positive(),
-        片段总数: z.number().int().positive(),
+        片段序号: positiveIntegerSchema,
+        片段总数: positiveIntegerSchema,
         正文覆盖: z.literal("片段"),
         缓存类型: z.literal("章节片段缓存"),
         缓存版本: z.literal("二-Lite"),
         语言: z.literal("简体中文")
       })
-      .strict()
+      .strip()
       .superRefine((payload, ctx) => {
         if (payload.片段序号 > payload.片段总数) {
           ctx.addIssue({
@@ -730,7 +915,7 @@ const chapterAiSummaryChunkPayloadV2LiteSchema = z
           });
         }
       }),
-    片段摘要: nonEmptyStringSchema,
+    片段摘要: requiredStringSchema,
     关键事件: arrayOf(keyEventLiteSchema),
     人物状态: arrayOf(characterStateLiteSchema),
     人物认知边界: arrayOf(characterKnowledgeLiteSchema),
@@ -743,9 +928,9 @@ const chapterAiSummaryChunkPayloadV2LiteSchema = z
     未解决问题: arrayOf(nonEmptyStringSchema),
     不可丢失信息: arrayOf(nonEmptyStringSchema)
   })
-  .strict()
+  .strip()
   .superRefine((payload, ctx) => {
-    addEnglishTextIssues(payload, ctx);
+    addEnglishKeyIssues(payload, ctx);
   });
 
 export const chapterAiSummaryChunkPayloadSchema = z.preprocess(
@@ -757,12 +942,12 @@ export const arcAiSummaryPayloadSchema = z
   .object({
     阶段信息: z
       .object({
-        起始章节: z.number().int().positive(),
-        结束章节: z.number().int().positive(),
-        覆盖章节: arrayOf(z.number().int().positive()),
+        起始章节: positiveIntegerSchema,
+        结束章节: positiveIntegerSchema,
+        覆盖章节: arrayOf(positiveIntegerSchema),
         覆盖限制: arrayOf(nonEmptyStringSchema)
       })
-      .strict()
+      .strip()
       .superRefine((payload, ctx) => {
         if (payload.起始章节 > payload.结束章节) {
           ctx.addIssue({
@@ -772,8 +957,8 @@ export const arcAiSummaryPayloadSchema = z
           });
         }
       }),
-    阶段一句话摘要: nonEmptyStringSchema,
-    阶段详细梗概: z.string().trim().min(60),
+    阶段一句话摘要: requiredStringSchema,
+    阶段详细梗概: requiredStringSchema,
     主线推进: arrayOf(nonEmptyStringSchema),
     人物线变化: arrayOf(nonEmptyStringSchema),
     人物认知变化: arrayOf(nonEmptyStringSchema),
@@ -789,9 +974,9 @@ export const arcAiSummaryPayloadSchema = z
     不可丢失信息: arrayOf(nonEmptyStringSchema),
     适合回答的问题: arrayOf(nonEmptyStringSchema)
   })
-  .strict()
+  .strip()
   .superRefine((payload, ctx) => {
-    addEnglishTextIssues(payload, ctx);
+    addEnglishKeyIssues(payload, ctx);
   });
 
 export const bookAiSummaryPayloadSchema = z
@@ -800,17 +985,17 @@ export const bookAiSummaryPayloadSchema = z
       .object({
         覆盖阶段: arrayOf(nonEmptyStringSchema),
         覆盖章节范围: nonEmptyStringSchema,
-        总章节数: z.number().int().nonnegative(),
-        已索引章节数: z.number().int().nonnegative(),
+        总章节数: nonnegativeIntegerSchema,
+        已索引章节数: nonnegativeIntegerSchema,
         过期章节: arrayOf(nonEmptyStringSchema),
         缺失章节: arrayOf(nonEmptyStringSchema),
         过短跳过章节: arrayOf(nonEmptyStringSchema),
         覆盖限制: arrayOf(nonEmptyStringSchema)
       })
-      .strict(),
-    全文一句话摘要: nonEmptyStringSchema,
-    全文短摘要: nonEmptyStringSchema,
-    全文详细梗概: z.string().trim().min(60),
+      .strip(),
+    全文一句话摘要: requiredStringSchema,
+    全文短摘要: requiredStringSchema,
+    全文详细梗概: requiredStringSchema,
     主线剧情: arrayOf(nonEmptyStringSchema),
     主要人物线: arrayOf(nonEmptyStringSchema),
     重要关系线: arrayOf(nonEmptyStringSchema),
@@ -827,7 +1012,7 @@ export const bookAiSummaryPayloadSchema = z
     不可丢失信息: arrayOf(nonEmptyStringSchema),
     适合回答的问题: arrayOf(nonEmptyStringSchema)
   })
-  .strict()
+  .strip()
   .superRefine((payload, ctx) => {
     if (payload.全书信息.已索引章节数 > payload.全书信息.总章节数) {
       ctx.addIssue({
@@ -836,7 +1021,7 @@ export const bookAiSummaryPayloadSchema = z
         message: "已索引章节数不能超过总章节数。"
       });
     }
-    addEnglishTextIssues(payload, ctx);
+    addEnglishKeyIssues(payload, ctx);
   });
 
 const continuityEvidenceSchema = z
@@ -845,7 +1030,7 @@ const continuityEvidenceSchema = z
     字段: nonEmptyStringSchema,
     证据短句: textSchema
   })
-  .strict();
+  .strip();
 
 export const continuityCheckResultSchema = z
   .object({
@@ -864,14 +1049,14 @@ export const continuityCheckResultSchema = z
           是否需要回读原文: yesNoSchema,
           建议处理: nonEmptyStringSchema
         })
-        .strict()
+        .strip()
     ),
     需要回读的章节: arrayOf(nonEmptyStringSchema),
     给作者的简短说明: nonEmptyStringSchema
   })
-  .strict()
+  .strip()
   .superRefine((payload, ctx) => {
-    addEnglishTextIssues(payload, ctx);
+    addEnglishKeyIssues(payload, ctx);
   });
 
 export type SummaryStatus = z.output<typeof summaryStatusSchema>;

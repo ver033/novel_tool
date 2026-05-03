@@ -56,13 +56,14 @@ describe("chapter summary chunk schema and persistence", () => {
     db.close();
   });
 
-  it("rejects English generated text outside evidence fields", () => {
-    expect(() =>
+  it("allows mixed source terms in values and strips extra model fields", () => {
+    expect(
       chapterAiSummaryChunkPayloadSchema.parse({
         ...chapterChunkIndexPayload(),
-        片段摘要: "This chunk contains English."
+        片段摘要: "本片段记录 U盘 和 AI 标记带来的新线索。",
+        englishKey: "不合法但可忽略"
       })
-    ).toThrow("非证据字段必须使用简体中文");
+    ).toMatchObject({ 片段摘要: "本片段记录 U盘 和 AI 标记带来的新线索。" });
 
     expect(
       chapterAiSummaryChunkPayloadSchema.parse({

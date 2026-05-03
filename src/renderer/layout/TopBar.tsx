@@ -1,4 +1,14 @@
-import { BookOpen, CornersIn, CornersOut, DownloadSimple, GearSix, MagnifyingGlass, UploadSimple } from "@phosphor-icons/react";
+import {
+  ArrowClockwise,
+  ArrowCounterClockwise,
+  BookOpen,
+  CornersIn,
+  CornersOut,
+  DownloadSimple,
+  GearSix,
+  MagnifyingGlass,
+  UploadSimple
+} from "@phosphor-icons/react";
 import { useState } from "react";
 import type { EditorSettings } from "../../main/shared/types";
 import { IconButton } from "../components/IconButton";
@@ -10,8 +20,12 @@ type TopBarProps = {
   readonly saveStatus?: "saved" | "dirty" | "saving" | "failed";
   readonly editorSettings?: EditorSettings;
   readonly focusMode?: boolean;
+  readonly canRedo?: boolean;
+  readonly canUndo?: boolean;
   readonly onExport?: () => void;
   readonly onImport?: () => void;
+  readonly onRedo?: () => void;
+  readonly onUndo?: () => void;
   readonly onEditorSettingsChange?: (patch: Partial<EditorSettings>) => void | Promise<void>;
   readonly onFocusModeToggle?: () => void;
   readonly onSearchChange?: (value: string) => void;
@@ -126,8 +140,12 @@ export function TopBar({
   saveStatus = "saved",
   editorSettings,
   focusMode = false,
+  canRedo = false,
+  canUndo = false,
   onExport,
   onImport,
+  onRedo,
+  onUndo,
   onEditorSettingsChange,
   onFocusModeToggle,
   onSearchChange,
@@ -155,20 +173,32 @@ export function TopBar({
           {subtitle ? <small>{subtitle}</small> : null}
         </span>
       </button>
-      {focusMode ? (
-        <span className="focus-mode-label">专注写作</span>
-      ) : (
-        <label className="search">
-          <MagnifyingGlass size={21} />
-          <input
-            aria-label={mode === "welcome" ? "搜索作品或章节" : "搜索章节或内容"}
-            disabled={!onSearchChange}
-            onChange={(event) => onSearchChange?.(event.target.value)}
-            placeholder={mode === "welcome" ? "搜索作品或章节" : "搜索章节或内容"}
-            value={searchValue}
-          />
-        </label>
-      )}
+      <div className="topbar-center">
+        {mode === "writing" && !focusMode ? (
+          <div className="undo-redo-group" aria-label="撤销和重做">
+            <IconButton className="undo-redo-button" disabled={!onUndo || !canUndo} label="撤销" onClick={() => onUndo?.()}>
+              <ArrowCounterClockwise size={22} weight="regular" />
+            </IconButton>
+            <IconButton className="undo-redo-button" disabled={!onRedo || !canRedo} label="重做" onClick={() => onRedo?.()}>
+              <ArrowClockwise size={22} weight="regular" />
+            </IconButton>
+          </div>
+        ) : null}
+        {focusMode ? (
+          <span className="focus-mode-label">专注写作</span>
+        ) : (
+          <label className="search">
+            <MagnifyingGlass size={21} />
+            <input
+              aria-label={mode === "welcome" ? "搜索作品或章节" : "搜索章节或内容"}
+              disabled={!onSearchChange}
+              onChange={(event) => onSearchChange?.(event.target.value)}
+              placeholder={mode === "welcome" ? "搜索作品或章节" : "搜索章节或内容"}
+              value={searchValue}
+            />
+          </label>
+        )}
+      </div>
       <div className="top-actions">
         {mode === "writing" && onFocusModeToggle ? (
           <IconButton label={focusMode ? "退出专注" : "专注模式"} onClick={onFocusModeToggle}>
