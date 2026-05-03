@@ -506,14 +506,14 @@ describe("AI chat flow", () => {
     db.close();
   });
 
-  it("fails clearly when a chat request references a missing chapter", async () => {
+  it("lets the tool-call agent report a missing chapter without legacy-context abort", async () => {
     let wasGeneratorCalled = false;
     const chatGenerator: AiChatGenerator = {
       async sendAgentMessageStream() {
         wasGeneratorCalled = true;
         return {
           role: "assistant",
-          content: "不应该生成",
+          content: "找不到第9章，当前项目没有这个章节。",
           createdAt: "2026-04-28T00:00:00.000Z"
         };
       }
@@ -523,22 +523,21 @@ describe("AI chat flow", () => {
     const aiTaskService = new AiTaskService(aiTaskRepo, undefined, chatGenerator, chatRepo, scratchRepo, chapterRepo);
     const session = aiTaskService.getChatSession({ projectId: project.id });
 
-    await expect(
-      aiTaskService.sendChatMessageStream({
-        requestId: "chat_stream_missing_chapter",
-        projectId: project.id,
-        sessionId: session.id,
-        message: "总结第9章",
-        chapterId: initialChapter.id,
-        currentChapterTitle: initialChapter.title,
-        chapterExcerpt: "当前章内容"
-      })
-    ).rejects.toThrow("找不到第9章");
+    const result = await aiTaskService.sendChatMessageStream({
+      requestId: "chat_stream_missing_chapter",
+      projectId: project.id,
+      sessionId: session.id,
+      message: "总结第9章",
+      chapterId: initialChapter.id,
+      currentChapterTitle: initialChapter.title,
+      chapterExcerpt: "当前章内容"
+    });
 
-    expect(wasGeneratorCalled).toBe(false);
+    expect(wasGeneratorCalled).toBe(true);
+    expect(result.messages.at(-1)?.content).toContain("找不到第9章");
     expect(aiTaskService.listChatMessages({ projectId: project.id, sessionId: session.id }).map((message) => message.role)).toEqual([
       "user",
-      "error"
+      "assistant"
     ]);
 
     db.close();
@@ -1120,7 +1119,9 @@ describe("AI chat flow", () => {
         modelContextTokens: 16_384,
         modelName: "google/gemini-2.5-pro",
         contextMode: "direct",
-        scopeLabel: "本章"
+        scopeLabel: "本章",
+        memoryCompacted: false,
+        memoryCompactedThisRun: false
       }
     );
     expect(contextEvents.at(-1)).toMatchObject({

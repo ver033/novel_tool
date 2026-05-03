@@ -13,6 +13,7 @@ import { createId } from "../../src/main/shared/ids";
 import { computeChapterContentHash, type ChapterAiSummaryPayload, type ChapterAiSummaryPayloadV2 } from "../../src/main/shared/summary-index";
 import type { ChapterSummary } from "../../src/main/shared/types";
 import { executeChatAgentTool, MOSHU_CHAT_AGENT_TOOLS } from "../../src/main/ai/chat-agent-tools";
+import { estimateTextTokens } from "../../src/main/ai/token-estimator";
 import { getTokenBudget } from "../../src/main/ai/token-budget";
 import { chapterIndexPayloadV2 } from "../helpers/summary-index-fixtures";
 
@@ -101,6 +102,7 @@ describe("chat agent tools", () => {
     expect(parameters).toContain('"focus"');
     expect(parameters).toContain('"characters"');
     expect(parameters).toContain('"foreshadowing"');
+    expect(parameters).toContain('"timeline"');
     expect(parameters).toContain('"summary"');
     expect(parameters).not.toContain('"oneOf"');
   });
@@ -110,7 +112,7 @@ describe("chat agent tools", () => {
     const parameters = JSON.stringify(tool?.function.parameters);
 
     expect(tool?.function.description).toContain("润色");
-    expect(tool?.function.description).toContain("自然语言请求也可以调用");
+    expect(tool?.function.description).toContain("自然语言明确提出这四类任务时也可以调用");
     expect(tool?.function.description).toContain("没有明确目标时不要调用本工具");
     expect(parameters).toContain('"operation"');
     expect(parameters).toContain('"polish"');
@@ -693,6 +695,181 @@ describe("chat agent tools", () => {
     expect(result.contextText).toContain("林远");
     expect(result.contextText).toContain("沈青");
     expect(result.contextText).not.toContain("人物原文不应被读取");
+
+    db.close();
+  });
+
+  it("keeps focused all-chapter summary tool output within a conservative tool budget", async () => {
+    const { chapterRepo, db, scratchRepo, summaryRepo } = createRepos();
+    const projectId = "project_read_huge_facts_focus";
+    createProject(new ProjectRepository(db), projectId);
+    const chapterCount = 24;
+    for (let index = 0; index < chapterCount; index += 1) {
+      const ordinal = index + 1;
+      const chapter = createChapter(chapterRepo, {
+        projectId,
+        title: `第${ordinal}章 时间线${ordinal}`,
+        sortOrder: index,
+        plainText: `第${ordinal}章原文不应被读取。`
+      });
+      const structured = createSummaryPayload({
+        oneLine: `第${ordinal}章时间线短摘要。`,
+        synopsis: `第${ordinal}章时间线长摘要。`
+      }) as ChapterAiSummaryPayloadV2;
+      structured.可核对事实 = Array.from({ length: 12 }, (_, factIndex) => ({
+        事实编号: `事实-${ordinal}-${factIndex + 1}`,
+        事实类型: factIndex % 2 === 0 ? "时间" : "人物状态",
+        主体: `人物${ordinal}`,
+        属性: "时间线推进",
+        取值: `第${ordinal}章第${factIndex + 1}个很长的事实线索，包含大量用于模拟长篇索引的文字。${"剧情状态变化".repeat(12)}`,
+        时间范围: `第${ordinal}章期间`,
+        地点: `地点${ordinal}`,
+        确定性: "确定",
+        后文核对意义: `用于判断第${ordinal}章之后的时间线是否冲突。${"后续承接".repeat(8)}`,
+        证据短句: [`第${ordinal}章证据${factIndex + 1}`]
+      }));
+      summaryRepo.upsertChapterSummary({
+        id: `summary_huge_facts_${ordinal}`,
+        projectId,
+        chapterId: chapter.id,
+        chapterTitle: chapter.title,
+        chapterOrder: ordinal,
+        contentHash: computeChapterContentHash(`huge-facts-${ordinal}`),
+        summaryShort: `第${ordinal}章时间线短摘要。`,
+        summaryLong: `第${ordinal}章时间线长摘要。`,
+        structured,
+        tokenCount: 900,
+        status: "ready",
+        error: null,
+        createdAt: "2026-05-01T00:00:00.000Z",
+        updatedAt: "2026-05-01T00:00:00.000Z"
+      });
+    }
+    const guardedRepo = Object.create(chapterRepo) as ChapterRepository;
+    guardedRepo.getContent = () => {
+      throw new Error("huge all-chapter summary reads must not fall back to raw text");
+    };
+    const maxInputTokens = 900;
+
+    const output = await executeChatAgentTool({
+      name: "read_chapters",
+      argumentsJson: JSON.stringify({
+        scope: "all_chapters",
+        mode: "summary",
+        focus: "facts"
+      }),
+      runtime: {
+        projectId,
+        currentChapterId: chapterRepo.listByProject(projectId)[0].id,
+        userMessage: "所有章节都缓存完了，帮我总结时间线",
+        chapterRepo: guardedRepo,
+        summaryRepo,
+        scratchRepo,
+        tokenBudget: {
+          maxInputTokens,
+          maxOutputTokens: 4096
+        }
+      }
+    });
+    const result = parseToolJson(output);
+
+    expect(estimateTextTokens(output)).toBeLessThanOrEqual(Math.floor(maxInputTokens * 0.65));
+    expect(result.contextTruncated).toBe(true);
+    expect(String(result.contextText)).toContain("工具结果已按当前模型窗口压缩");
+    expect(String(result.contextText)).not.toContain("原文不应被读取");
+    db.close();
+  });
+
+  it("reads timeline-focused summary fields for all chapters without raw text", async () => {
+    const { chapterRepo, db, scratchRepo, summaryRepo } = createRepos();
+    const projectId = "project_read_timeline_focus";
+    createProject(new ProjectRepository(db), projectId);
+    const first = createChapter(chapterRepo, {
+      projectId,
+      title: "第1章 清晨",
+      sortOrder: 0,
+      plainText: "第一章时间线原文不应被读取。"
+    });
+    const second = createChapter(chapterRepo, {
+      projectId,
+      title: "第2章 入夜",
+      sortOrder: 1,
+      plainText: "第二章时间线原文不应被读取。"
+    });
+    [first, second].forEach((chapter, index) => {
+      const ordinal = index + 1;
+      const structured = createSummaryPayload({
+        oneLine: `第${ordinal}章时间短摘要。`,
+        synopsis: `第${ordinal}章时间长摘要。`
+      }) as ChapterAiSummaryPayloadV2;
+      structured.时间与地点 = {
+        ...structured.时间与地点,
+        本章时间: ordinal === 1 ? "清晨" : "入夜",
+        主要地点: ordinal === 1 ? ["坊市入口"] : ["萧家大厅"],
+        相对时间锚点: ordinal === 1 ? ["纳兰来访前"] : ["当天夜里"]
+      };
+      structured.可核对事实 = [
+        {
+          事实编号: `时间事实-${ordinal}`,
+          事实类型: "时间",
+          主体: `第${ordinal}章`,
+          属性: "时间锚点",
+          取值: ordinal === 1 ? "清晨" : "入夜",
+          时间范围: ordinal === 1 ? "清晨" : "夜间",
+          地点: ordinal === 1 ? "坊市入口" : "萧家大厅",
+          确定性: "确定",
+          后文核对意义: "用于整理全书时间线",
+          证据短句: []
+        }
+      ];
+      summaryRepo.upsertChapterSummary({
+        id: `summary_timeline_focus_${ordinal}`,
+        projectId,
+        chapterId: chapter.id,
+        chapterTitle: chapter.title,
+        chapterOrder: ordinal,
+        contentHash: computeChapterContentHash(`timeline-focus-${ordinal}`),
+        summaryShort: `第${ordinal}章时间短摘要。`,
+        summaryLong: `第${ordinal}章时间长摘要。`,
+        structured,
+        tokenCount: 60,
+        status: "ready",
+        error: null,
+        createdAt: "2026-05-01T00:00:00.000Z",
+        updatedAt: "2026-05-01T00:00:00.000Z"
+      });
+    });
+    const guardedRepo = Object.create(chapterRepo) as ChapterRepository;
+    guardedRepo.getContent = () => {
+      throw new Error("timeline-focused reads must use summary caches");
+    };
+
+    const result = parseToolJson(
+      await executeChatAgentTool({
+        name: "read_chapters",
+        argumentsJson: JSON.stringify({
+          scope: "all_chapters",
+          focus: "timeline"
+        }),
+        runtime: {
+          projectId,
+          currentChapterId: first.id,
+          userMessage: "所有章节都缓存完了，帮我总结时间线",
+          chapterRepo: guardedRepo,
+          summaryRepo,
+          scratchRepo,
+          tokenBudget: getTokenBudget("chat")
+        }
+      })
+    );
+
+    expect(result.scopeLabel).toBe("全部章节时间线索引");
+    expect(result.indexMode).toBe("summary_cache");
+    expect(result.contextText).toContain("时间与地点");
+    expect(result.contextText).toContain("清晨");
+    expect(result.contextText).toContain("入夜");
+    expect(result.contextText).not.toContain("伏笔与线索");
+    expect(result.contextText).not.toContain("时间线原文不应被读取");
 
     db.close();
   });

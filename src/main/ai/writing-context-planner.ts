@@ -33,7 +33,7 @@ const TARGET_TEXT_RESERVE_TOKENS = 600;
 function assertTargetFits(targetText: string, tokenBudget: TokenBudget): void {
   const estimated = estimateTextTokens(targetText) + TARGET_TEXT_RESERVE_TOKENS;
   if (estimated > tokenBudget.maxInputTokens) {
-    throw new Error(`目标文本太长，预计输入约 ${estimated} tokens，超过上限 ${tokenBudget.maxInputTokens}。请缩短选区后重试。`);
+    throw new Error("目标文本太长，无法一次可靠处理。请缩短选区，或改为分段/分章处理。");
   }
 }
 

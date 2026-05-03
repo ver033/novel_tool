@@ -172,6 +172,8 @@ export type AiStreamContextEvent = {
   readonly totalChapterCount?: number;
   readonly staleChapterCount?: number;
   readonly skippedTooShortChapterCount?: number;
+  readonly memoryCompacted?: boolean;
+  readonly memoryCompactedThisRun?: boolean;
 };
 
 export type AiStreamDoneEvent = {

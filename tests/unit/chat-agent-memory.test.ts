@@ -50,18 +50,19 @@ describe("chat agent memory", () => {
     expect(memory).toContain("对话内容19");
   });
 
-  it("throws when long memory has not been compacted", () => {
+  it("locally compacts long memory instead of throwing a budget error", () => {
     const smallBudget = {
       maxInputTokens: 2200,
       maxOutputTokens: 512
     };
 
-    expect(() =>
-      buildChatAgentMemoryText({
-        history: Array.from({ length: 16 }, (_, index) => message(index % 2 === 0 ? "user" : "assistant", `未压缩对话${index}。`.repeat(300), index)),
-        tokenBudget: smallBudget
-      })
-    ).toThrow("AI 对话记忆超过预算");
+    const memory = buildChatAgentMemoryText({
+      history: Array.from({ length: 16 }, (_, index) => message(index % 2 === 0 ? "user" : "assistant", `未压缩对话${index}。`.repeat(300), index)),
+      tokenBudget: smallBudget
+    });
+
+    expect(memory).toContain("已按当前模型窗口压缩");
+    expect(estimateTextTokens(memory)).toBeLessThanOrEqual(Math.floor(smallBudget.maxInputTokens * 0.75));
   });
 
   it("does not compact a short history just because the model has a large context window", () => {

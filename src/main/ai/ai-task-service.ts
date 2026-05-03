@@ -24,7 +24,7 @@ import { parseChatScopeReference } from "./chat-reference-parser";
 import { isOpenRouterCanceledError } from "./openrouter-error";
 import type { OpenRouterToolCall, OpenRouterToolDefinition } from "./openrouter-client";
 import type { ContinuityCheckInput } from "./summary-prompts";
-import { estimateTextTokens } from "./token-estimator";
+import { estimateTextTokens, truncateTextToTokenBudget } from "./token-estimator";
 import { WritingOperationRunner } from "./writing-operation-runner";
 import type { WritingOperationOutputKind, WritingOperationResult, WritingOperationTarget } from "./writing-operation-types";
 import type { AiChatRepository } from "../db/repositories/ai-chat-repo";
@@ -32,9 +32,10 @@ import { AiTaskRepository } from "../db/repositories/ai-task-repo";
 import type { ChapterRepository } from "../db/repositories/chapter-repo";
 import type { ScratchNoteRepository } from "../db/repositories/scratch-note-repo";
 import type { SummaryRepository } from "../db/repositories/summary-repo";
-import type { ProofreadIssue } from "../shared/proofread";
+import { proofreadIssueLabels, type ProofreadIssue } from "../shared/proofread";
 import type { ContinuityCheckResult } from "../shared/summary-index";
 import { getTokenBudget, type TokenBudget } from "./token-budget";
+import { countWritingUnits } from "../shared/text";
 import type {
   AiApplyCandidateInput,
   AiChatAction,
@@ -82,6 +83,94 @@ function formatChatWritingOperationTitle(operation: TaskType): string {
     return "校对结果";
   }
   return "润色稿";
+}
+
+const proofreadSeverityLabels: Record<ProofreadIssue["severity"], string> = {
+  low: "低",
+  medium: "中",
+  high: "高",
+  critical: "严重"
+};
+
+type InlineWritingOperationRequest = {
+  readonly operation: TaskType;
+  readonly text: string;
+  readonly instruction: string;
+};
+
+function stripCodeFenceForInlineText(message: string): string | null {
+  const match = /```[^\n]*\n([\s\S]*?)\n?```/u.exec(message);
+  return match?.[1]?.trim() || null;
+}
+
+function inferInlineWritingOperationRequest(message: string): InlineWritingOperationRequest | null {
+  if (/(草稿纸|草稿|素材).{0,12}(加入|保存|存到|放到|记录)/u.test(message)) {
+    return null;
+  }
+  if (/(当前章|当前章节|本章|这一章|这章|选区|选中文本|第[0-9０-９一二三四五六七八九十百千]+章|前[0-9０-９一二三四五六七八九十百千]+章)/u.test(message)) {
+    return null;
+  }
+
+  const operation: TaskType | null = /(校对|审校|纠错)/u.test(message)
+    ? "proofread"
+    : /(续写|接着写|继续写)/u.test(message)
+      ? "continue"
+      : /(扩写|展开|丰富(?:一下)?)/u.test(message)
+        ? "expand"
+        : /(润色|润一下|改写)/u.test(message)
+          ? "polish"
+          : null;
+  if (!operation) {
+    return null;
+  }
+
+  const fenced = stripCodeFenceForInlineText(message);
+  const candidate = fenced ?? message;
+  const text = candidate
+    .replace(/^(?:请|帮我|麻烦你)?(?:把|将)?(?:下面|以下|这一段|这段|这段话|内容|文字|段落)?[：:\s\n]*/u, "")
+    .replace(/(?:请|帮我|麻烦你|顺着这个场景|根据这段|沿着这段)?(?:把|将)?(?:这一段|这段|这段话|上面|以上|内容|文字|段落)?(?:润色|润一下色|润一下|改写|扩写|展开|丰富(?:一下)?|续写|接着写|继续写|校对|审校|纠错)(?:一下|一小段|动作和心理|，并稍微扩写动作和心理|并稍微扩写动作和心理|。|！|!|？|\?)?.*$/u, "")
+    .trim();
+  if (!/[\u3400-\u9fff]/u.test(text) || countWritingUnits(text) < 10) {
+    return null;
+  }
+  return {
+    operation,
+    text,
+    instruction: message.replace(text, "").trim()
+  };
+}
+
+function formatProofreadIssuesForChat(issues: readonly ProofreadIssue[] | null | undefined): string {
+  if (!issues || issues.length === 0) {
+    return "【校对结果】\n未发现明确问题。";
+  }
+
+  const lines = issues.map((issue, index) => {
+    const evidenceLines = issue.evidence.map((item) => {
+      const note = item.note.trim();
+      const quote = item.quote.trim();
+      return `- **证据**：${note}${note && quote ? " - " : ""}${quote}`;
+    });
+    return [
+      `### ${index + 1}. ${proofreadIssueLabels[issue.code]}`,
+      `- **严重程度**：${proofreadSeverityLabels[issue.severity]}`,
+      `- **原文**：${issue.quote}`,
+      `- **建议**：${issue.suggestion}`,
+      `- **说明**：${issue.explanation}`,
+      ...evidenceLines,
+      issue.needsAuthorJudgment ? "- **需要作者判断**：是" : null
+    ]
+      .filter(Boolean)
+      .join("\n");
+  });
+  return ["【校对结果】", ...lines].join("\n");
+}
+
+function formatChatWritingOperationResult(operation: TaskType, result: WritingOperationResult): string {
+  if (operation === "proofread") {
+    return formatProofreadIssuesForChat(result.proofreadIssues);
+  }
+  return `【${formatChatWritingOperationTitle(operation)}】\n${result.generatedText.trim()}`;
 }
 
 export type AiTaskGenerator = {
@@ -282,6 +371,7 @@ function advanceSessionContextUsageAfterAnswer(
     ...previous,
     requestId: input.requestId,
     estimatedInputTokens: Math.min(previous.maxInputTokens, previous.estimatedInputTokens + exchangeTokens),
+    memoryCompactedThisRun: false,
     scopeLabel: "会话背景窗口"
   };
 }
@@ -533,7 +623,11 @@ export class AiTaskService {
         contextText: `[${resolved.agentContext.scopeLabel} | 聚合摘要]\n${mergedSummary.trim()}`
       };
       if (isChatAgentContextTooLarge(message, agentContext.contextText, chatBudget)) {
-        throw new Error("AI 对话聚合摘要仍然超过输入预算，请缩小章节范围后重试。");
+        const textBudget = Math.max(0, chatBudget.maxInputTokens - estimateTextTokens(message) - 900);
+        agentContext = {
+          ...agentContext,
+          contextText: `${truncateTextToTokenBudget(agentContext.contextText, textBudget).text.trim()}\n（聚合摘要已按当前模型窗口压缩；需要完整细节时请缩小章节范围继续追问。）`
+        };
       }
     }
 
@@ -1111,6 +1205,10 @@ export class AiTaskService {
     const abortController = this.registerStream(input.requestId);
 
     try {
+      let memoryContextState: Pick<AiStreamContextEvent, "memoryCompacted" | "memoryCompactedThisRun"> = {
+        memoryCompacted: false,
+        memoryCompactedThisRun: false
+      };
       const streamHandlers = {
         onChunk: (event: { readonly content: string }) => {
           handlers.onChunk?.({ requestId: input.requestId, content: event.content });
@@ -1123,7 +1221,7 @@ export class AiTaskService {
             projectId: input.projectId,
             sessionId: input.sessionId
           }).lastContextUsage;
-          const contextUsage = mergeSessionContextUsage(previousUsage, { ...event, requestId: input.requestId });
+          const contextUsage = mergeSessionContextUsage(previousUsage, { ...event, ...memoryContextState, requestId: input.requestId });
           chatRepo.updateSessionContextUsage({
             projectId: input.projectId,
             sessionId: input.sessionId,
@@ -1132,13 +1230,45 @@ export class AiTaskService {
           handlers.onContext?.(contextUsage);
         }
       } satisfies AiChatStreamHandlers;
+      const inlineWritingOperation = inferInlineWritingOperationRequest(input.message);
+      if (inlineWritingOperation) {
+        const generated = await this.runChatWritingOperation({
+          projectId: input.projectId,
+          operation: inlineWritingOperation.operation,
+          target: {
+            kind: "inline_text",
+            text: inlineWritingOperation.text
+          },
+          instruction: inlineWritingOperation.instruction,
+          signal: abortController.signal,
+          streamHandlers
+        });
+        const content = formatChatWritingOperationResult(inlineWritingOperation.operation, generated);
+        const assistantMessage = chatRepo.createMessage({
+          projectId: input.projectId,
+          sessionId: input.sessionId,
+          role: "assistant",
+          content,
+          action: null
+        });
+        const result = {
+          messages: [userMessage, assistantMessage],
+          action: null
+        };
+        handlers.onDone?.({ requestId: input.requestId, payload: result });
+        return result;
+      }
       const memory = await this.compactChatMemoryIfNeeded(input, chatRepo, history, abortController.signal);
+      memoryContextState = {
+        memoryCompacted: Boolean(memory.compactedMemorySummary),
+        memoryCompactedThisRun: memory.memoryCompacted
+      };
       let legacyAgenticGeneration: Awaited<ReturnType<AiTaskService["buildAgenticChatGenerationInput"]>> = null;
       try {
         legacyAgenticGeneration = await this.buildAgenticChatGenerationInput(input, history, memory, abortController.signal, { allowPlanner: false });
       } catch (reason) {
         const message = reason instanceof Error ? reason.message : String(reason);
-        if (!message.includes("当前没有打开章节")) {
+        if (!message.includes("当前没有打开章节") && !message.includes("找不到第")) {
           throw reason;
         }
       }

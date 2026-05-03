@@ -9,6 +9,7 @@ import type {
 } from "./openrouter-client";
 import { buildChatAgentMemoryText } from "./chat-agent-memory";
 import { isOpenRouterCanceledError } from "./openrouter-error";
+import { compactOpenRouterInput, compactToolResultContent } from "./openrouter-input-compactor";
 import { buildReasoningConfig } from "./reasoning-budget";
 import { estimateMessagesTokens, estimateTextTokens, truncateTextToTokenBudget } from "./token-estimator";
 import type { TokenBudget } from "./token-budget";
@@ -152,7 +153,7 @@ function buildSystemPrompt(): string {
   return [
     "你是墨枢的中文小说写作 agent，服务对象是正在写长篇中文小说的作者。",
     "你可以使用工具读取项目章节、读取选区、处理作者在当前消息里直接粘贴的正文、把内容写入草稿纸。工具结果，以及作者当前消息里明确粘贴的待处理正文，才是可靠的正文来源。",
-    "工具优先级：只有用户明确要求润色、扩写、校对或续写时，才优先调用 run_writing_operation。不要把总结、分析、查询、比对、提取信息、生成大纲、简介、人物卡、设定卡、时间线、格式转换等非四类请求强行归类为润色、扩写、校对或续写。",
+    "工具优先级：写作操作意图优先于章节查询意图，但只有用户明确要求润色、扩写、校对或续写时，才优先调用 run_writing_operation。不要把总结、分析、查询、比对、提取信息、生成大纲、简介、人物卡、设定卡、时间线、格式转换等非四类请求强行归类为润色、扩写、校对或续写。",
     "如果用户说“改写”，先判断真实意图：若只是要求语言层面的顺滑、风格微调或更好读，可按润色处理；若要求改变叙事人称、体裁、结构、格式、提取信息、总结内容或生成资料卡，不要调用 run_writing_operation，应读取必要上下文后按用户原意回答。",
     "如果写作操作目标是当前选区、当前消息粘贴正文、整章或章节范围，直接用 run_writing_operation 的 selection、inline_text、chapter 或 chapter_range 目标表达；不要先用 read_chapters 代替明确的润色、扩写、校对或续写操作。只有目标范围不明确时，才先 list_chapters/read_chapters 确认范围。",
     "总结、人物分析、剧情分析、伏笔查询、设定查询和连续性问答必须读取对应范围，不要只根据当前打开章节或章节目录回答。",
@@ -160,7 +161,7 @@ function buildSystemPrompt(): string {
     "read_selection 只用于读取真实编辑器选区；如果确实要读取当前消息里的粘贴正文，必须由你把正文原样填入 read_selection.inlineText，本地不会根据关键词猜测正文范围。",
     "如果用户使用自然语言追问，例如“同时”“还有”“顺便”，要结合最近对话记忆判断上一轮范围；不确定时可以先 list_chapters 或 read_chapters，而不是直接要求用户重复。",
     "如果用户明确要求保存到草稿纸，先整理要保存的正文，再调用 add_to_scratchpad；工具成功后再给最终回复。",
-    "slash 只是显式快捷方式，不是唯一触发方式。作者自然语言明确提出润色、扩写、校对或续写，也应调用 run_writing_operation。",
+    "slash 只是显式快捷方式，不是唯一触发方式。作者自然语言明确提出润色、扩写、校对或续写，也应调用 run_writing_operation；自然语言提出润色、扩写、校对或续写，也应调用 run_writing_operation。",
     "作者输入 /润色、/扩写、/校对 或 /续写 时，这是强烈的写作操作意图；没有 slash 时，你也必须根据作者自然语言自由决定是否调用 run_writing_operation，但不能把不属于四类的请求硬塞进四类工具。",
     "扩写是替换目标文本，续写是插入到目标文本之后。扩写必须返回包含原目标含义的完整扩写版；续写只返回新增续写正文，不重复目标文本。",
     "没有粘贴正文、没有真实选区、也没有明确章节范围时，先请作者提供目标文本或选择范围，不要猜测。",
@@ -171,6 +172,7 @@ function buildSystemPrompt(): string {
     "这类正文生成任务不能只给改进建议，不能说“已提供润色建议”却不输出正文；若范围过长，应先说明需要缩小范围，而不是丢掉候选正文。",
     "如果 run_writing_operation 返回 candidate_text，最终回答必须展示完整候选正文，使用【润色稿】、【扩写稿】或【续写稿】标题。不能只总结改进点。",
     "如果 run_writing_operation 返回 proofread_issues，最终回答必须按问题列表展示全部问题。不能说已经自动修改正文。",
+    "如果工具返回 ok:false 或 error 字段，不能原样抛给作者，也不要反复调用同一个失败工具；请用简洁中文说明失败原因、可用范围和下一步选择。",
     "除非用户明确要求加入草稿纸，不能在写作操作后调用 add_to_scratchpad。",
     "不要伪造未读取的章节内容。工具返回摘要时，要说明结论基于压缩后的上下文。",
     "最终回答要简洁、具体、可执行。"
@@ -214,16 +216,25 @@ function buildUserPrompt(input: ChatAgentLoopInput): string {
 
 function shouldForceWritingOperationTool(userMessage: string): boolean {
   const normalized = userMessage.replace(/\s+/g, "");
-  if (!/(润色|润一下|改写|扩写|续写|校对|审校|纠错)/u.test(normalized)) {
+  const positiveIntentText = normalized.replace(
+    /(?:不要|不用|别|无需|不需要|不能|禁止|避免|不是|并非).{0,10}(?:润色|润一下|改写|扩写|续写|校对|审校|纠错)/gu,
+    ""
+  );
+  if (/(总结|摘要|概括|分析|查询|比对|提取|整理|大纲|节点表|时间线|人物卡|设定卡|格式转换|列出|梳理|归纳)/u.test(normalized)) {
+    if (!/(润色|润一下|扩写|续写|校对|审校|纠错)/u.test(positiveIntentText)) {
+      return false;
+    }
+  }
+  if (!/(润色|润一下|改写|扩写|续写|校对|审校|纠错)/u.test(positiveIntentText)) {
     return false;
   }
-  if (/^\/(?:润色|扩写|续写|校对|审校|纠错)/u.test(normalized)) {
+  if (/^\/(?:润色|扩写|续写|校对|审校|纠错)/u.test(positiveIntentText)) {
     return true;
   }
-  if (/(当前章|当前章节|本章|这一章|这章|选区|选中文本|第[0-9一二三四五六七八九十百千]+章|前[0-9一二三四五六七八九十百千]+章|第[0-9一二三四五六七八九十百千]+章?(?:到|至|~|～|-|—)第?[0-9一二三四五六七八九十百千]+章?)/u.test(normalized)) {
+  if (/(当前章|当前章节|本章|这一章|这章|选区|选中文本|第[0-9一二三四五六七八九十百千]+章|前[0-9一二三四五六七八九十百千]+章|第[0-9一二三四五六七八九十百千]+章?(?:到|至|~|～|-|—)第?[0-9一二三四五六七八九十百千]+章?)/u.test(positiveIntentText)) {
     return true;
   }
-  const possibleInlineText = normalized
+  const possibleInlineText = positiveIntentText
     .replace(/(帮我|请|麻烦|这一段|这段|这段话|下面|以下|内容|文字|段落|一下|一下色|润色|润一下|改写|扩写|续写|校对|审校|纠错|看看|处理|：|:|。|，|、|“|”|"|')/gu, "")
     .trim();
   return countWritingUnits(possibleInlineText) >= 10;
@@ -310,11 +321,12 @@ function emitContextUsage(
   input: ChatAgentLoopInput,
   handlers: ChatAgentLoopHandlers,
   messages: readonly OpenRouterMessage[],
-  contextStatus: ChatAgentContextStatus
+  contextStatus: ChatAgentContextStatus,
+  tools: readonly OpenRouterToolDefinition[] = input.tools
 ): void {
   handlers.onContext?.({
     requestId: input.requestId,
-    estimatedInputTokens: estimateMessagesTokens(messages, input.tools),
+    estimatedInputTokens: estimateMessagesTokens(messages, tools),
     maxInputTokens: input.tokenBudget.maxInputTokens,
     maxOutputTokens: input.tokenBudget.maxOutputTokens,
     modelContextTokens: input.modelContextTokens,
@@ -327,15 +339,6 @@ function emitContextUsage(
     staleChapterCount: contextStatus.staleChapterCount,
     skippedTooShortChapterCount: contextStatus.skippedTooShortChapterCount
   });
-}
-
-function assertMessagesWithinBudget(messages: readonly OpenRouterMessage[], tools: readonly OpenRouterToolDefinition[], maxInputTokens: number): void {
-  const estimated = estimateMessagesTokens(messages, tools);
-  if (estimated <= maxInputTokens) {
-    return;
-  }
-
-  throw new Error(`AI 对话上下文太长，预计输入约 ${estimated} tokens，超过上限 ${maxInputTokens}。请缩小章节范围或开启新对话后重试。`);
 }
 
 function flushFinalContent(
@@ -593,19 +596,26 @@ export async function runChatAgentLoop(input: ChatAgentLoopInput, handlers: Chat
 
   for (let iteration = 0; iteration < CHAT_AGENT_MAX_ITERATIONS; iteration += 1) {
     assertNotCanceled(input.signal);
-    assertMessagesWithinBudget(messages, input.tools, input.tokenBudget.maxInputTokens);
+    const preparedInput = compactOpenRouterInput({
+      messages,
+      tools: input.tools,
+      maxInputTokens: input.tokenBudget.maxInputTokens
+    });
+    if (preparedInput.compacted) {
+      messages.splice(0, messages.length, ...preparedInput.messages);
+    }
     if (hasAuthorContext) {
-      emitContextUsage(input, handlers, messages, contextStatus);
+      emitContextUsage(input, handlers, preparedInput.messages, contextStatus, preparedInput.tools);
     }
 
     let streamedContent = "";
     let forwardedFinalTokenContent = "";
     const mayNeedProofreadConsistencyRetry = isProofreadRequest && !cleanProofreadAnswerRetryUsed;
-    const shouldForwardFinalTokensLive = messages.some((message) => message.role === "tool") && !mayNeedProofreadConsistencyRetry;
+    const shouldForwardFinalTokensLive = preparedInput.messages.some((message) => message.role === "tool") && !mayNeedProofreadConsistencyRetry;
     const result = await input.model.stream(
       {
-        messages,
-        tools: input.tools,
+        messages: preparedInput.messages,
+        tools: preparedInput.tools,
         maxCompletionTokens: input.tokenBudget.maxOutputTokens,
         temperature: isProofreadRequest ? CHAT_AGENT_PROOFREAD_TEMPERATURE : CHAT_AGENT_DEFAULT_TEMPERATURE,
         toolChoice:
@@ -686,7 +696,7 @@ export async function runChatAgentLoop(input: ChatAgentLoopInput, handlers: Chat
           toolContent = formatToolExecutionError(call, reason);
         }
         if (estimateTextTokens(toolContent) > input.tokenBudget.maxInputTokens) {
-          throw new Error(`AI 工具 ${call.name} 返回内容超过模型输入预算。`);
+          toolContent = compactToolResultContent(toolContent, Math.max(160, Math.floor(input.tokenBudget.maxInputTokens * 0.35)));
         }
         messages.push({
           role: "tool",
