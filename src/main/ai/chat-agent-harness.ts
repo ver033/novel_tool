@@ -184,12 +184,26 @@ function formatChapterDirectory(chapters: readonly ChatAgentDirectoryItem[]): st
     return "（当前项目没有章节）";
   }
 
-  return chapters
+  const maxInlineChapters = 160;
+  const listedChapters =
+    chapters.length > maxInlineChapters
+      ? [...chapters.slice(0, 80), ...chapters.slice(-80)]
+      : chapters;
+  const lines = listedChapters
     .map((chapter) => {
       const marker = chapter.current ? " | 当前打开" : "";
       return `${chapter.ordinal}. ${chapter.title} | id=${chapter.id} | 字数=${chapter.wordCount}${marker}`;
-    })
-    .join("\n");
+    });
+
+  if (listedChapters.length === chapters.length) {
+    return lines.join("\n");
+  }
+
+  return [
+    `项目实际共有 ${chapters.length} 章。为控制上下文，这里只列出前80章和后80章。`,
+    "中间未列出的章节只可根据序号判断是否在 1 到总章数范围内；不能声称知道其标题、字数、剧情或内容。需要中间章节标题或正文时，必须按明确序号调用工具读取。",
+    ...lines
+  ].join("\n");
 }
 
 function buildUserPrompt(input: ChatAgentLoopInput): string {

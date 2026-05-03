@@ -758,7 +758,7 @@ async function executeListChapters(runtime: ChatAgentToolRuntime): Promise<ChatA
       omittedChapterCount: Math.max(0, chapters.length - listedChapters.length),
       note:
         listedChapters.length < chapters.length
-          ? `章节目录已截断展示，只列出前120章和后120章。项目实际共有 ${chapters.length} 章。判断章节是否存在时必须使用 totalChapters。`
+          ? `章节目录已截断展示，只列出前120章和后120章。项目实际共有 ${chapters.length} 章。判断章节是否存在时必须使用 totalChapters。未列出的中间章节只能判断序号是否在范围内，不能声称知道标题、剧情或内容；需要标题或内容时必须按明确序号再次调用 read_chapters。`
           : "章节目录完整。"
     })
   };

@@ -328,9 +328,15 @@ function assertScenarioOutput(record) {
     throw new Error("不存在章节被错误改读为其他章节。");
   }
   if (record.name === "不存在章节" && record.totalChapters) {
-    const statedTotal = /(?:共有|从第1章到第|1-)(\d{2,5})章/u.exec(record.content)?.[1];
-    if (statedTotal && Number.parseInt(statedTotal, 10) !== record.totalChapters) {
-      throw new Error(`不存在章节回复中的总章数错误：${statedTotal}，实际 ${record.totalChapters}。`);
+    const totalMatch =
+      /(?:总章节数|总章数)\s*[：:]\s*(\d{2,5})\s*章/u.exec(record.content) ??
+      /(?:总共只有|实际共有|项目(?:实际)?共有)\s*(\d{2,5})\s*章/u.exec(record.content) ??
+      /(?:实际章节范围|可用章节范围)[^\n]*第\s*1\s*章[^\n]*第\s*(\d{2,5})\s*章/u.exec(record.content);
+    if (totalMatch && Number.parseInt(totalMatch[1], 10) !== record.totalChapters) {
+      throw new Error(`不存在章节回复中的总章数错误：${totalMatch[1]}，实际 ${record.totalChapters}。`);
+    }
+    if (/第999章[^\n]*(?:标题为|内容|剧情|主要情节|核心事件)/u.test(record.content)) {
+      throw new Error("不存在章节回复声称知道未读取的中间章节标题或内容。");
     }
   }
 }
