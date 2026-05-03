@@ -21,14 +21,21 @@ describe("phase 3 renderer project and chapter wiring", () => {
   it("renders the chapter tree from props with create and select callbacks", () => {
     const chapterTree = readSource("src/renderer/layout/LeftChapterTree.tsx");
     const appStore = readSource("src/renderer/state/app-store.ts");
+    const writingPage = readSource("src/renderer/routes/WritingPage.tsx");
+    const styles = readSource("src/renderer/styles/globals.css");
 
     expect(chapterTree).toContain("chapters.map");
     expect(chapterTree).toContain("onCreateChapter");
+    expect(chapterTree).toContain("onCreateChapterAfter");
+    expect(chapterTree).toContain("在本章后新建");
     expect(chapterTree).toContain("onSelectChapter");
     expect(chapterTree).toContain("onRenameChapter");
     expect(chapterTree).toContain("onDeleteChapter");
+    expect(writingPage).toContain("onCreateChapter({ afterChapterId: chapterId })");
+    expect(appStore).toContain("suggestNewChapterTitle");
     expect(appStore).toContain("renameChapter");
     expect(appStore).toContain("deleteChapter");
+    expect(styles).toContain("position: sticky");
     expect(chapterTree).not.toContain("const chapters =");
   });
 

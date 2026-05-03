@@ -286,7 +286,7 @@ export const MOSHU_CHAT_AGENT_TOOLS: readonly OpenRouterToolDefinition[] = [
     function: {
       name: "run_writing_operation",
       description:
-        "执行中文小说写作操作：润色、扩写、校对、续写。自然语言请求也可以调用。只生成候选文本或校对问题，不写回正文，不保存草稿纸。没有明确目标时不要调用本工具；用户要求保存时必须另行调用 add_to_scratchpad。",
+        "执行中文小说写作操作：润色、扩写、校对、续写。自然语言明确提出这四类任务时也可以调用。只生成候选文本或校对问题，不写回正文，不保存草稿纸。不要把总结、分析、提取信息、生成大纲/简介/人物卡/设定卡/时间线、格式转换等非四类请求强行归类到本工具；没有明确目标时不要调用本工具；用户要求保存时必须另行调用 add_to_scratchpad。",
       parameters: runWritingOperationToolParameters
     }
   },

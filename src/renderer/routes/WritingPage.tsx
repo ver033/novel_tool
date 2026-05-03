@@ -111,7 +111,7 @@ type WritingPageProps = {
   readonly selectionSnapshot: SelectionSnapshot | null;
   readonly taskPromptPreset: TaskPromptPreset | null;
   readonly taskType: TaskType;
-  readonly onCreateChapter: () => void;
+  readonly onCreateChapter: (options?: { readonly afterChapterId?: string }) => void;
   readonly onDeleteChapter: (chapterId: string) => void;
   readonly onRenameChapter: (chapterId: string, currentTitle: string) => void;
   readonly onSelectChapter: (chapterId: string) => void;
@@ -295,7 +295,11 @@ export function WritingPage({
       cancelled = true;
     };
   }, [api, chapters, currentProject, searchValue]);
-  const handleCreateChapter = useCallback(() => flushBeforeNavigation(onCreateChapter), [flushBeforeNavigation, onCreateChapter]);
+  const handleCreateChapter = useCallback(() => flushBeforeNavigation(() => onCreateChapter()), [flushBeforeNavigation, onCreateChapter]);
+  const handleCreateChapterAfter = useCallback(
+    (chapterId: string) => flushBeforeNavigation(() => onCreateChapter({ afterChapterId: chapterId })),
+    [flushBeforeNavigation, onCreateChapter]
+  );
   const handleSelectChapter = useCallback(
     (chapterId: string) => {
       flushBeforeNavigation(() => onSelectChapter(chapterId));
@@ -502,6 +506,7 @@ export function WritingPage({
             activeChapterId={activeChapterId}
             chapters={chapters}
             onCreateChapter={handleCreateChapter}
+            onCreateChapterAfter={handleCreateChapterAfter}
             onDeleteChapter={handleDeleteChapter}
             onRenameChapter={startChapterRename}
             onSelectChapter={handleSelectChapter}

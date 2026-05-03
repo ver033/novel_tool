@@ -67,30 +67,43 @@ function mapSnapshot(row: SnapshotRow): ChapterSnapshot {
 export class ChapterRepository {
   constructor(private readonly db: SqliteDatabase) {}
 
-  create(chapter: ChapterContent): ChapterSummary {
-    this.db
-      .prepare(
-        `INSERT INTO chapters (
+  create(chapter: ChapterContent, options: { readonly shiftExistingAtSortOrder?: boolean } = {}): ChapterSummary {
+    const insertChapter = () => {
+      if (options.shiftExistingAtSortOrder) {
+        this.db
+          .prepare("UPDATE chapters SET sort_order = sort_order + 1, updated_at = ? WHERE project_id = ? AND sort_order >= ?")
+          .run(chapter.updatedAt, chapter.projectId, chapter.sortOrder);
+      }
+      this.db
+        .prepare(
+          `INSERT INTO chapters (
           id, project_id, title, volume_title, sort_order, content_json, plain_text,
           word_count, daily_word_count, daily_word_count_date, target_word_count, status, created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      )
-      .run(
-        chapter.id,
-        chapter.projectId,
-        chapter.title,
-        chapter.volumeTitle,
-        chapter.sortOrder,
-        serializeContentJson(chapter.contentJson),
-        chapter.plainText,
-        chapter.wordCount,
-        chapter.dailyWordCount,
-        chapter.dailyWordCountDate,
-        chapter.targetWordCount,
-        chapter.status,
-        chapter.createdAt,
-        chapter.updatedAt
-      );
+        )
+        .run(
+          chapter.id,
+          chapter.projectId,
+          chapter.title,
+          chapter.volumeTitle,
+          chapter.sortOrder,
+          serializeContentJson(chapter.contentJson),
+          chapter.plainText,
+          chapter.wordCount,
+          chapter.dailyWordCount,
+          chapter.dailyWordCountDate,
+          chapter.targetWordCount,
+          chapter.status,
+          chapter.createdAt,
+          chapter.updatedAt
+        );
+    };
+
+    if (options.shiftExistingAtSortOrder) {
+      this.db.transaction(insertChapter)();
+    } else {
+      insertChapter();
+    }
 
     return mapSummary(this.findRowById(chapter.id));
   }

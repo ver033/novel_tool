@@ -63,12 +63,13 @@ export class ChapterService {
   createChapter(input: ChapterCreateInput): ChapterSummary {
     const chapterRepo = this.resolveChapterRepo(input.projectId);
     const createdAt = nowIso();
+    const sortOrder = input.sortOrder ?? chapterRepo.nextSortOrder(input.projectId);
     return chapterRepo.create({
       id: createId("chapter"),
       projectId: input.projectId,
       title: input.title,
       volumeTitle: input.volumeTitle ?? "第一卷",
-      sortOrder: input.sortOrder ?? chapterRepo.nextSortOrder(input.projectId),
+      sortOrder,
       contentJson: emptyChapterContent,
       plainText: "",
       wordCount: 0,
@@ -78,7 +79,7 @@ export class ChapterService {
       status: "draft",
       createdAt,
       updatedAt: createdAt
-    });
+    }, { shiftExistingAtSortOrder: input.sortOrder !== undefined });
   }
 
   renameChapter(input: ChapterRenameInput): ChapterSummary {

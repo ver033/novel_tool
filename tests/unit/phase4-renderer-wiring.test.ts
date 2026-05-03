@@ -47,7 +47,7 @@ describe("phase 4 renderer Tiptap wiring", () => {
     expect(editorStore).toContain("flushPendingSave");
     expect(writingPage).toContain("flushBeforeNavigation");
     expect(writingPage).toContain("flushBeforeNavigation(() => onSelectChapter(chapterId))");
-    expect(writingPage).toContain("flushBeforeNavigation(onCreateChapter)");
+    expect(writingPage).toContain("flushBeforeNavigation(() => onCreateChapter())");
     expect(writingPage).toContain("handleDeleteChapter");
     expect(writingPage).toContain("flushBeforeNavigation(() => onDeleteChapter(chapterId))");
     expect(writingPage).toContain("onDeleteChapter={handleDeleteChapter}");
