@@ -342,6 +342,20 @@ describe("summary index schemas", () => {
     });
   });
 
+  it("normalizes full chapter caches when the model copies the chunk-only Lite version label", () => {
+    const payload = JSON.parse(JSON.stringify(validChapterIndexPayloadV3Lite));
+    payload.章节信息.缓存版本 = "二-Lite";
+
+    const parsed = chapterAiSummaryPayloadSchema.parse(payload);
+
+    expect(parsed.章节信息.缓存版本).toBe("三-Lite");
+    expect(parsed).toMatchObject({
+      章节作用: validChapterIndexPayloadV3Lite.章节作用,
+      关键事件: validChapterIndexPayloadV3Lite.关键事件,
+      不可丢失信息: validChapterIndexPayloadV3Lite.不可丢失信息
+    });
+  });
+
   it("continues to accept legacy V2 Chinese chapter fact indexes as read-only cache data", () => {
     const parsed = chapterAiSummaryPayloadSchema.parse(validChapterIndexPayloadV2);
 

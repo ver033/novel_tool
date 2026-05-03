@@ -150,6 +150,55 @@ function stripJsonCodeFence(content: string): string {
   return (fenced?.[1] ?? trimmed).trim();
 }
 
+type SummarySchemaIssue = {
+  readonly path?: readonly PropertyKey[];
+  readonly code?: string;
+  readonly message?: string;
+  readonly keys?: readonly string[];
+};
+
+function formatSummarySchemaPath(path: readonly PropertyKey[] | undefined): string {
+  if (!path?.length) {
+    return "根对象";
+  }
+  return path.map((part) => String(part)).join(".");
+}
+
+function describeSummarySchemaIssue(issue: SummarySchemaIssue): string {
+  const path = formatSummarySchemaPath(issue.path);
+  if (issue.path?.some((part) => String(part) === "缓存版本")) {
+    return `缓存版本错误：${path} 不符合当前章节缓存模板。完整章节缓存必须使用“三-Lite”；“二-Lite”只用于长章节片段缓存。`;
+  }
+  if (issue.code === "unrecognized_keys") {
+    const keys = issue.keys?.length ? `（${issue.keys.join("、")}）` : "";
+    return `包含旧版或多余字段：${path}${keys}。`;
+  }
+  if (issue.code === "invalid_type") {
+    return `字段类型错误：${path} 的类型不符合模板要求。`;
+  }
+  if (issue.code === "too_small") {
+    return `必要字段为空或项目不足：${path}。`;
+  }
+  if (issue.code === "invalid_value") {
+    return `字段取值错误：${path} 的取值不在允许范围内。`;
+  }
+  return `${path}：${issue.message ?? "不符合模板要求"}`;
+}
+
+function formatSummarySchemaError(label: string, issues: readonly SummarySchemaIssue[]): string {
+  const shownIssues = issues.slice(0, 8).map((issue) => `- ${describeSummarySchemaIssue(issue)}`).join("\n");
+  const extraCount = Math.max(0, issues.length - 8);
+  const extraText = extraCount > 0 ? `\n- 另有 ${extraCount} 个结构问题未展开。` : "";
+  return [
+    `${label}无效：模型返回的 JSON 结构不符合章节缓存模板。`,
+    shownIssues,
+    extraText,
+    "这通常是模型没有严格按章节缓存模板输出，不是章节正文内容问题；此类结构错误不会自动反复重试。建议换用更稳定的模型，或手动重试本章。"
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 function parseSummaryIndexJson<T>(label: string, content: string, schema: z.ZodType<T>): T {
   if (!content.trim()) {
     throw new Error(`${label}为空。`);
@@ -158,11 +207,12 @@ function parseSummaryIndexJson<T>(label: string, content: string, schema: z.ZodT
   try {
     parsed = JSON.parse(stripJsonCodeFence(content));
   } catch (error) {
-    throw new Error(`${label}无效：${error instanceof Error ? error.message : String(error)}`);
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`${label}无效：模型没有返回合法 JSON（${reason}）。这通常是模型输出被截断或混入了非 JSON 文本，不是章节正文内容问题。`);
   }
   const result = schema.safeParse(parsed);
   if (!result.success) {
-    throw new Error(`${label}无效：${result.error.message}`);
+    throw new Error(formatSummarySchemaError(label, result.error.issues as readonly SummarySchemaIssue[]));
   }
   return result.data;
 }
@@ -208,6 +258,14 @@ export class OpenRouterChatGenerator implements AiChatGenerator {
         baseUrl: config.baseUrl,
         modelName: config.modelName
       })
+    };
+  }
+
+  async getSummaryIndexBudget(): Promise<{ readonly maxInputTokens: number; readonly modelContextTokens: number | null }> {
+    const { chatBudget, contextLength } = await this.createClient();
+    return {
+      maxInputTokens: chatBudget.maxInputTokens,
+      modelContextTokens: contextLength
     };
   }
 

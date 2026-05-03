@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { SummaryService, splitChapterForSummaryIndex } from "../../src/main/ai/summary-service";
+import { SummaryService, splitChapterForSummaryIndex, type SummaryIndexGenerator } from "../../src/main/ai/summary-service";
 import { ChapterRepository } from "../../src/main/db/repositories/chapter-repo";
 import { ProjectRepository } from "../../src/main/db/repositories/project-repo";
 import { SummaryRepository } from "../../src/main/db/repositories/summary-repo";
@@ -373,6 +373,69 @@ describe("summary service generation", () => {
     expect(summary.summaryShort).toBe("林远在雨夜回到故乡并发现旧信。");
     expect(summary.summaryLong).toBe("林远在雨夜回到故乡，旧宅环境和旧信共同触发了他对失踪往事的追查。本章记录了他的回归状态、旧信作为关键道具的出现，以及后续必须承接的调查动机。");
     expect(summary.structured).toEqual(payload);
+    db.close();
+  });
+
+  it("indexes a 15000-unit chapter directly when the selected model has a large context window", async () => {
+    const db = createDb();
+    const { chapterRepo, summaryRepo } = seedProject(db);
+    const content = "春".repeat(15_000);
+    createChapter(chapterRepo, "chapter_1", content);
+    const calls: string[] = [];
+    const generator = {
+      getSummaryIndexBudget: async () => ({
+        maxInputTokens: 90_000,
+        modelContextTokens: 160_000
+      }),
+      summarizeChapterForIndex: async (input) => {
+        calls.push(`direct:${input.plainText.length}`);
+        return chapterIndexPayloadV2();
+      },
+      summarizeChapterChunkForIndex: async () => {
+        throw new Error("large-context 15000-unit chapters should not be split");
+      }
+    } satisfies SummaryIndexGenerator;
+    const service = new SummaryService(summaryRepo, chapterRepo, { generator });
+
+    const summary = await service.summarizeChapter("project_1", "chapter_1", computeChapterContentHash(content), "2026-05-01T00:10:00.000Z");
+
+    expect(summary.status).toBe("ready");
+    expect(calls).toEqual([`direct:${content.length}`]);
+    expect(summaryRepo.listChapterSummaryChunks("project_1", "chapter_1", computeChapterContentHash(content))).toEqual([]);
+    db.close();
+  });
+
+  it("uses larger chapter chunks on large-context models when the chapter is still too long for direct indexing", async () => {
+    const db = createDb();
+    const { chapterRepo, summaryRepo } = seedProject(db);
+    const content = "春".repeat(42_000);
+    createChapter(chapterRepo, "chapter_1", content);
+    const chunkInputs: Array<{ readonly index: number; readonly units: number }> = [];
+    const generator = {
+      getSummaryIndexBudget: async () => ({
+        maxInputTokens: 90_000,
+        modelContextTokens: 160_000
+      }),
+      summarizeChapterForIndex: async () => {
+        throw new Error("very long chapters should still use chunk indexing");
+      },
+      summarizeChapterChunkForIndex: async (input) => {
+        chunkInputs.push({ index: input.chunkIndex, units: input.plainText.length });
+        return chapterChunkIndexPayload({
+          chunkIndex: input.chunkIndex,
+          chunkCount: input.chunkCount,
+          summary: `第${input.chunkIndex + 1}个大片段缓存摘要`
+        });
+      }
+    } satisfies SummaryIndexGenerator;
+    const service = new SummaryService(summaryRepo, chapterRepo, { generator });
+
+    await service.summarizeChapter("project_1", "chapter_1", computeChapterContentHash(content), "2026-05-01T00:10:00.000Z");
+
+    expect(chunkInputs.length).toBeGreaterThan(1);
+    expect(chunkInputs.length).toBeLessThanOrEqual(5);
+    expect(Math.max(...chunkInputs.map((chunk) => chunk.units))).toBeGreaterThan(10_000);
+    expect(chunkInputs.slice(0, -1).every((chunk) => chunk.units > 7000)).toBe(true);
     db.close();
   });
 
@@ -942,6 +1005,80 @@ describe("summary index status and rebuild controls", () => {
       cacheState: "ready",
       jobStatus: null,
       jobError: null
+    });
+    db.close();
+  });
+
+  it("does not show a later failed job once a ready summary already covers the same source hash", () => {
+    const db = createDb();
+    const { chapterRepo, summaryRepo } = seedProject(db);
+    const content = "春".repeat(620);
+    createChapter(chapterRepo, "chapter_1", content);
+    const contentHash = computeChapterContentHash(content);
+    summaryRepo.upsertChapterSummary({
+      id: "summary_chapter_1",
+      projectId: "project_1",
+      chapterId: "chapter_1",
+      chapterTitle: "第1章",
+      chapterOrder: 1,
+      contentHash,
+      summaryShort: "第1章短摘要",
+      summaryLong: "第1章长摘要",
+      structured: summaryPayloadV2(),
+      tokenCount: 30,
+      status: "ready",
+      error: null,
+      createdAt,
+      updatedAt: "2026-05-01T00:12:00.000Z"
+    });
+    const service = new SummaryService(summaryRepo, chapterRepo);
+    const job = summaryRepo.enqueueSummaryJob({
+      projectId: "project_1",
+      jobType: "chapter_summary",
+      targetId: "chapter_1",
+      sourceHash: contentHash,
+      priority: 5,
+      now: "2026-05-01T00:13:00.000Z"
+    });
+    const running = summaryRepo.claimNextSummaryJob("project_1", "2026-05-01T00:14:00.000Z");
+    summaryRepo.failSummaryJob(running?.id ?? job.id, "晚到的结构校验错误", null, "2026-05-01T00:15:00.000Z");
+
+    const status = service.getIndexStatus("project_1", "2026-05-01T00:16:00.000Z");
+    const [entry] = service.listChapterCacheEntries("project_1", "2026-05-01T00:16:00.000Z");
+
+    expect(status.failedJobCount).toBe(0);
+    expect(status.recentFailedJobs).toEqual([]);
+    expect(entry).toMatchObject({
+      cacheState: "ready",
+      jobStatus: null,
+      jobError: null
+    });
+    db.close();
+  });
+
+  it("classifies chapter cache entry failures so the UI does not need to show raw schema dumps", () => {
+    const db = createDb();
+    const { chapterRepo, summaryRepo } = seedProject(db);
+    const content = "春".repeat(620);
+    createChapter(chapterRepo, "chapter_1", content);
+    const service = new SummaryService(summaryRepo, chapterRepo);
+    const job = summaryRepo.enqueueSummaryJob({
+      projectId: "project_1",
+      jobType: "chapter_summary",
+      targetId: "chapter_1",
+      sourceHash: computeChapterContentHash(content),
+      priority: 5,
+      now: "2026-05-01T00:10:00.000Z"
+    });
+    const running = summaryRepo.claimNextSummaryJob("project_1", "2026-05-01T00:11:00.000Z");
+    summaryRepo.failSummaryJob(running?.id ?? job.id, "章节索引摘要无效：模型返回的 JSON 结构不符合章节缓存模板。", null, "2026-05-01T00:12:00.000Z");
+
+    const [entry] = service.listChapterCacheEntries("project_1", "2026-05-01T00:13:00.000Z");
+
+    expect(entry).toMatchObject({
+      cacheState: "failed",
+      jobFailureCategory: "模型输出结构无效",
+      jobActionHint: expect.stringContaining("不是章节正文内容问题")
     });
     db.close();
   });

@@ -225,10 +225,12 @@ function formatDateTime(value: string | null): string {
 }
 
 function formatCacheJobNote(entry: SummaryChapterCacheEntry): string | null {
-  if (entry.jobError) {
-    return `错误：${entry.jobError}`;
+  if (entry.cacheState !== "ready" && entry.jobError) {
+    const fallback = entry.jobError.length > 140 ? `${entry.jobError.slice(0, 140)}...` : entry.jobError;
+    const reason = entry.jobFailureCategory ?? fallback;
+    return `错误：${reason}${entry.jobActionHint ? `；${entry.jobActionHint}` : ""}`;
   }
-  if (entry.nextRunAt) {
+  if (entry.cacheState !== "ready" && entry.nextRunAt) {
     return `等待重试：${formatDateTime(entry.nextRunAt)}`;
   }
   if (entry.jobStatus === "queued") {
