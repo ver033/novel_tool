@@ -8,6 +8,7 @@ import {
   getBookSummaryCoverage,
   getChapterSummaryLongText,
   getChapterSummaryShortText,
+  isChapterAiSummaryPayloadV3Lite,
   summaryJobStatusSchema,
   summaryStatusSchema,
   type ChapterAiSummaryPayloadV2
@@ -384,25 +385,90 @@ describe("summary index schemas", () => {
     expect(legacy.人物认知边界[0].新得知).toEqual(["众人对他的轻视仍然存在"]);
   });
 
-  it("rejects thin V2 chapter fact indexes without continuity facts", () => {
-    expect(() =>
-      chapterAiSummaryPayloadSchema.parse({
-        ...validChapterIndexPayloadV2,
-        可核对事实: []
-      })
-    ).toThrow();
+  it("keeps thin but otherwise usable chapter fact indexes instead of forcing a retry", () => {
+    const parsed = chapterAiSummaryPayloadSchema.parse({
+      ...validChapterIndexPayloadV2,
+      可核对事实: []
+    });
+
+    expect(parsed.可核对事实).toEqual([]);
   });
 
-  it("rejects generated English text in V2 chapter fact indexes outside evidence quotes", () => {
-    expect(() =>
-      chapterAiSummaryPayloadSchema.parse({
-        ...validChapterIndexPayloadV2,
-        缓存质量: {
-          ...validChapterIndexPayloadV2.缓存质量,
-          缺失说明: ["missing character state"]
-        }
-      })
-    ).toThrow();
+  it("allows mixed source terms in Chinese values and strips extra model fields", () => {
+    const mixedTermPayload = JSON.parse(JSON.stringify(validChapterIndexPayloadV3Lite));
+    mixedTermPayload.一句话摘要 = "萧炎发现 U盘 线索，并将 AI 标记视为后文疑点。";
+    mixedTermPayload.englishKey = "不合法但可忽略";
+
+    const parsed = chapterAiSummaryPayloadSchema.parse(mixedTermPayload);
+
+    expect(parsed.一句话摘要).toContain("U盘");
+    expect(parsed).not.toHaveProperty("englishKey");
+  });
+
+  it("accepts recoverable V3 Lite shape drift from model output", () => {
+    const payload = JSON.parse(JSON.stringify(validChapterIndexPayloadV3Lite));
+    payload.章节信息.章节序号 = "第2章";
+    payload.章节信息.缓存版本 = "三 Lite";
+    payload.详细梗概 = "主角逃离商场后发现U盘线索。";
+    payload.适合回答的问题 = ["这一章讲了什么？"];
+    payload.章节作用.结构作用 = "承接前文冲突";
+    payload.关键事件 = [
+      {
+        事件: "主角拿走书包",
+        涉及人物: ["主角", "马俊明"],
+        时间地点: "商场",
+        事件结果: "主角获得U盘线索",
+        后续影响: "主角开始怀疑吕曼华身份",
+        证据短句: ["伸手拿上他的书包跑出了商场"]
+      }
+    ];
+    payload.人物状态 = [
+      {
+        人物: "主角",
+        本章出场状态: "被卷入冲突",
+        本章结束状态: "发现U盘线索",
+        动机: "查清书包内容",
+        目标: "读取U盘",
+        行动: ["逃跑", "检查书包"],
+        新获得信息: ["书包内有U盘"],
+        仍不知道的信息: ["U盘内容"],
+        与他人关系变化: [],
+        证据短句: []
+      }
+    ];
+    payload.人物认知边界 = [
+      {
+        人物: "主角",
+        新得知: ["U盘写有吕曼华名字"],
+        尚不知道: ["U盘内容"],
+        误以为: [],
+        证据短句: []
+      }
+    ];
+    payload.伏笔与线索 = [
+      {
+        线索: "U盘标签",
+        类型: "关键线索",
+        本章状态: "待判断",
+        可能指向: "吕曼华与马俊明关系",
+        证据短句: []
+      }
+    ];
+    payload.可核对事实 = [];
+
+    const parsed = chapterAiSummaryPayloadSchema.parse(payload);
+
+    expect(parsed.章节信息.章节序号).toBe(2);
+    expect(parsed.章节信息.缓存版本).toBe("三-Lite");
+    expect(parsed.详细梗概).toBe("主角逃离商场后发现U盘线索。");
+    if (!isChapterAiSummaryPayloadV3Lite(parsed)) {
+      throw new Error("expected V3 Lite payload");
+    }
+    expect(parsed.关键事件[0].结果).toBe("主角获得U盘线索");
+    expect(parsed.人物状态[0].本章变化).toContain("被卷入冲突");
+    expect(parsed.人物认知边界[0].仍不知道).toEqual(["U盘内容"]);
+    expect(parsed.伏笔与线索[0].指向或意义).toBe("吕曼华与马俊明关系");
+    expect(parsed).not.toHaveProperty("适合回答的问题");
   });
 
   it("rejects empty required chapter summary fields", () => {

@@ -38,12 +38,18 @@ describe("writing skill loader", () => {
     expect(expand).toContain("只输出扩写后的候选正文");
     expect(expand).toContain("扩写结果用于替换原选区");
     expect(expand).toContain("不要只输出新增补充内容");
+    expect(expand).toContain("必须保持原文文风");
+    expect(expand).toContain("句式节奏");
+    expect(expand).toContain("描写密度");
 
     expect(continuation).toContain("保持当前 POV");
     expect(continuation).toContain("不让角色知道他当前不应知道的信息");
     expect(continuation).toContain("不要重复已给出的前文");
     expect(continuation).toContain("续写结果用于插入选区下方");
     expect(continuation).toContain("不要改写选区正文");
+    expect(continuation).toContain("必须延续当前章节文风");
+    expect(continuation).toContain("对白习惯");
+    expect(continuation).toContain("信息释放速度");
 
     expect(proofread).toContain("人物认知冲突");
     expect(proofread).toContain("道具状态冲突");
