@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { getHighlightedSearchParts } from "../../src/renderer/routes/WritingPage";
+import { findChapterSearchMatch, findChapterSearchMatches, getHighlightedSearchParts } from "../../src/renderer/routes/WritingPage";
+import { createTiptapDocumentFromPlainText } from "../../src/renderer/editor/tiptap/converters";
 
 const rootDir = process.cwd();
 
@@ -43,6 +44,64 @@ describe("editor writing experience optimizations", () => {
       { highlighted: true, text: "Said" },
       { highlighted: false, text: " ok" }
     ]);
+  });
+
+  it("finds the paragraph that contains a search result keyword", () => {
+    const contentJson = createTiptapDocumentFromPlainText("第一段没有。\n\n第二段出现星火。\n\n第三段。");
+
+    expect(findChapterSearchMatch("第1章", contentJson, "第一段没有。\n\n第二段出现星火。\n\n第三段。", "星火")).toMatchObject({
+      paragraphIndex: 1,
+      snippet: "第二段出现星火。"
+    });
+  });
+
+  it("returns every matching paragraph inside the same chapter", () => {
+    const contentJson = createTiptapDocumentFromPlainText("星火在第一段。\n\n第二段没有。\n\n第三段再次出现星火。");
+
+    expect(findChapterSearchMatches("第1章", contentJson, "星火在第一段。\n\n第二段没有。\n\n第三段再次出现星火。", "星火")).toMatchObject([
+      {
+        paragraphIndex: 0,
+        snippet: "星火在第一段。"
+      },
+      {
+        paragraphIndex: 2,
+        snippet: "第三段再次出现星火。"
+      }
+    ]);
+  });
+
+  it("keeps title-only search results as chapter-level targets", () => {
+    const contentJson = createTiptapDocumentFromPlainText("正文没有关键词。");
+
+    expect(findChapterSearchMatch("星火之章", contentJson, "正文没有关键词。", "星火")).toMatchObject({
+      paragraphId: null,
+      snippet: "匹配章节标题"
+    });
+  });
+
+  it("keeps a pending search jump until the editor can resolve the target paragraph", () => {
+    const novelEditor = readSource("src/renderer/editor/NovelEditor.tsx");
+
+    expect(novelEditor).toMatch(/const range = resolveSearchTargetRange\(editor, searchTarget\);[\s\S]*if \(!range\) \{\s*return;\s*\}/);
+    expect(novelEditor).toMatch(/if \(!range\) \{\s*return;\s*\}[\s\S]*onSearchTargetResolved\?\.\(searchTarget\.id\);/);
+  });
+
+  it("does not pass a search jump to stale editor content while a new chapter is still loading", () => {
+    const editorStore = readSource("src/renderer/state/editor-store.ts");
+    const writingPage = readSource("src/renderer/routes/WritingPage.tsx");
+
+    expect(editorStore).toContain("loadedChapterId");
+    expect(writingPage).toContain("editorStore.loadedChapterId === activeChapter.id ? searchJumpTarget : null");
+  });
+
+  it("highlights the jumped keyword inside the editor manuscript", () => {
+    const novelEditor = readSource("src/renderer/editor/NovelEditor.tsx");
+    const css = readSource("src/renderer/styles/globals.css");
+
+    expect(novelEditor).toContain("searchJumpHighlightPluginKey");
+    expect(novelEditor).toContain("Decoration.inline");
+    expect(novelEditor).toContain("scrollSearchRangeIntoEditorView");
+    expect(css).toContain(".search-jump-highlight");
   });
 
   it("allows direct chapter title editing from the editor heading", () => {

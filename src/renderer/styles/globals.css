@@ -1429,6 +1429,14 @@ select:focus-visible {
   background: rgba(30, 136, 229, 0.2);
 }
 
+.search-jump-highlight {
+  border-radius: 4px;
+  padding: 0 2px;
+  background: #fff2a8;
+  color: #1f2937;
+  box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.24);
+}
+
 .bubble-menu {
   height: 60px;
   display: flex;

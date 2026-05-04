@@ -101,6 +101,7 @@ export function useEditorStore(activeChapter: ChapterSummary | null) {
   const api = useMemo(getNovelToolApi, []);
   const [contentJson, setContentJson] = useState<TiptapDocument>(() => createTiptapDocumentFromPlainText(""));
   const [contentVersion, setContentVersion] = useState(0);
+  const [loadedChapterId, setLoadedChapterId] = useState<string | null>(null);
   const [plainText, setPlainText] = useState("");
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("saved");
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
@@ -180,6 +181,7 @@ export function useEditorStore(activeChapter: ChapterSummary | null) {
       const emptyDocument = createTiptapDocumentFromPlainText("");
       setContentJson(emptyDocument);
       setContentVersion((current) => current + 1);
+      setLoadedChapterId(null);
       setPlainText("");
       setWordCount(0);
       setDailyWordCount(0);
@@ -197,6 +199,7 @@ export function useEditorStore(activeChapter: ChapterSummary | null) {
     const currentProjectId = projectId;
     const currentScopeId = editorScope.current;
     let cancelled = false;
+    setLoadedChapterId(null);
 
     async function loadChapterContent() {
       setSaveStatus("saved");
@@ -218,6 +221,7 @@ export function useEditorStore(activeChapter: ChapterSummary | null) {
         const nextDocument = normalizeTiptapDocument(content.contentJson, nextPlainText);
         setContentJson(nextDocument);
         setContentVersion((current) => current + 1);
+        setLoadedChapterId(currentChapterId);
         setPlainText(nextPlainText);
         setWordCount(content.wordCount ?? countWritingUnits(nextPlainText));
         setDailyWordCount(content.dailyWordCount ?? 0);
@@ -262,6 +266,7 @@ export function useEditorStore(activeChapter: ChapterSummary | null) {
         const nextDocument = createTiptapDocumentFromPlainText("");
         setContentJson(nextDocument);
         setContentVersion((current) => current + 1);
+        setLoadedChapterId(null);
         setPlainText("");
         setWordCount(0);
         setDailyWordCount(0);
@@ -456,6 +461,7 @@ export function useEditorStore(activeChapter: ChapterSummary | null) {
   return {
     contentJson,
     contentVersion,
+    loadedChapterId,
     editorSettings,
     dailyWordCount: visibleDailyWordCount,
     dismissDraftRecovery,
