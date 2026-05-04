@@ -290,6 +290,32 @@ describe("project and chapter lifecycle", () => {
     db.close();
   });
 
+  it("inserts a newly created chapter after the requested chapter without duplicate sort orders", () => {
+    const { db, projectService, chapterService } = createServices();
+    const { project, initialChapter } = projectService.createProject({ name: "归途" });
+    chapterService.renameChapter({ projectId: project.id, chapterId: initialChapter.id, title: "第1章 起点" });
+    const thirdChapter = chapterService.createChapter({
+      projectId: project.id,
+      title: "第3章 归途"
+    });
+
+    const secondChapter = chapterService.createChapter({
+      projectId: project.id,
+      title: "第2章 中途",
+      sortOrder: initialChapter.sortOrder + 1
+    });
+
+    expect(chapterService.listChapters({ projectId: project.id }).map((chapter) => [chapter.title, chapter.sortOrder])).toEqual([
+      ["第1章 起点", 0],
+      ["第2章 中途", 1],
+      ["第3章 归途", 2]
+    ]);
+    expect(thirdChapter.sortOrder).toBe(1);
+    expect(secondChapter.sortOrder).toBe(1);
+
+    db.close();
+  });
+
   it("keeps saved chapter content after service recreation", () => {
     const { db, dir, projectService, chapterService } = createServices();
     const { initialChapter } = projectService.createProject({ name: "归途" });

@@ -71,4 +71,18 @@ describe("AI chat author interaction regressions", () => {
     expect(chat).toContain("chatStore.streamingReasoning");
     expect(chat).toContain("chat-scroll-anchor");
   });
+
+  it("shows icon-only copy controls for AI chat replies and streamed output", () => {
+    const chat = readSource("src/renderer/sidebar/AiChatTab.tsx");
+    const css = readSource("src/renderer/styles/globals.css");
+
+    expect(chat).toContain("CopySimple");
+    expect(chat).toContain("Check");
+    expect(chat).toContain("copyChatMessage");
+    expect(chat).toContain("copyStreamingReply");
+    expect(chat).toContain('label="复制 AI 回复"');
+    expect(chat).toContain('label="复制正在生成的 AI 回复"');
+    expect(css).toContain(".message-copy-button");
+    expect(css).toContain(".chat-copy-error");
+  });
 });

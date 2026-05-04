@@ -67,15 +67,18 @@ describe("OpenRouter chat generator prompt assembly", () => {
     expect(estimateMessagesTokens(messages)).toBeLessThanOrEqual(getTokenBudget("chat").maxInputTokens);
   });
 
-  it("throws a clear error when the current chat prompt alone exceeds the input budget", () => {
-    expect(() =>
-      buildChatCompletionMessages(
-        createInput({
-          message: "这段怎么改？",
-          selectionText: "长选区".repeat(30000)
-        })
-      )
-    ).toThrow("AI 对话上下文太长");
+  it("truncates an oversized current chat prompt instead of throwing a context budget error", () => {
+    const messages = buildChatCompletionMessages(
+      createInput({
+        message: "这段怎么改？",
+        selectionText: "长选区".repeat(30000)
+      })
+    );
+    const joined = messages.map((message) => message.content).join("\n");
+
+    expect(joined).toContain("这段怎么改？");
+    expect(joined).toContain("已按当前模型输入窗口压缩");
+    expect(estimateMessagesTokens(messages)).toBeLessThanOrEqual(getTokenBudget("chat").maxInputTokens);
   });
 
   it("uses resolved agent context instead of stale renderer chapter excerpts", () => {
@@ -481,7 +484,7 @@ describe("OpenRouter persistent summary index generation", () => {
     expect(requests[0].maxCompletionTokens).toBeLessThanOrEqual(12_000);
   });
 
-  it("rejects invalid persistent chapter summary JSON instead of accepting malformed index data", async () => {
+  it("rejects irrecoverable persistent chapter summary JSON instead of accepting empty index data", async () => {
     const generator = new OpenRouterChatGenerator({} as never);
     Object.assign(generator as unknown as { createClient: () => Promise<unknown> }, {
       createClient: async () => ({
@@ -490,7 +493,7 @@ describe("OpenRouter persistent summary index generation", () => {
         modelName: "summary/model",
         client: {
           streamChatCompletion: async () => ({
-            content: JSON.stringify({ ...chapterSummary, extra: "not allowed" }),
+            content: JSON.stringify({ 章节信息: { 缓存版本: "三-Lite" } }),
             reasoning: "",
             truncated: false,
             toolCalls: []

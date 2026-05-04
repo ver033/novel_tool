@@ -1,8 +1,10 @@
 import { z } from "zod";
 import { resolveChatAgentContext, type ResolvedChatAgentContext, type SummaryIndexFocus } from "./chat-agent-context";
 import { chatAgentScopeSchema, type ChatAgentContext, type ChatAgentPlan, type ChatAgentScope } from "./chat-agent-types";
+import { parseChatScopeReference } from "./chat-reference-parser";
 import type { ContinuityCheckInput } from "./summary-prompts";
 import type { OpenRouterToolDefinition } from "./openrouter-client";
+import { estimateTextTokens, truncateTextToTokenBudget } from "./token-estimator";
 import type { TokenBudget } from "./token-budget";
 import type { ChapterRepository } from "../db/repositories/chapter-repo";
 import type { ScratchNoteRepository } from "../db/repositories/scratch-note-repo";
@@ -66,7 +68,7 @@ const readChaptersArgsSchema = z
   .object({
     scope: chatAgentScopeSchema,
     mode: z.enum(["raw", "summary", "hybrid"]).optional(),
-    focus: z.enum(["overview", "characters", "foreshadowing", "facts"]).optional(),
+    focus: z.enum(["overview", "characters", "foreshadowing", "facts", "timeline"]).optional(),
     inlineText: z.string().trim().min(1).optional()
   })
   .strict();
@@ -120,9 +122,9 @@ const readChaptersToolParameters = {
     },
     focus: {
       type: "string",
-      enum: ["overview", "characters", "foreshadowing", "facts"],
+      enum: ["overview", "characters", "foreshadowing", "facts", "timeline"],
       description:
-        "摘要索引聚焦字段。问人物、角色特征或关系变化时用 characters；问伏笔、线索或未解决问题时用 foreshadowing；问可核对事实或连续性线索时用 facts；普通总结可省略或用 overview。"
+        "摘要索引聚焦字段。问人物、角色特征或关系变化时用 characters；问伏笔、线索或未解决问题时用 foreshadowing；问时间线、时间地点、地点移动或事件先后顺序时用 timeline；问其他可核对事实或连续性线索时用 facts；普通总结可省略或用 overview。"
     }
   },
   required: ["scope"]
@@ -286,7 +288,7 @@ export const MOSHU_CHAT_AGENT_TOOLS: readonly OpenRouterToolDefinition[] = [
     function: {
       name: "run_writing_operation",
       description:
-        "执行中文小说写作操作：润色、扩写、校对、续写。自然语言请求也可以调用。只生成候选文本或校对问题，不写回正文，不保存草稿纸。没有明确目标时不要调用本工具；用户要求保存时必须另行调用 add_to_scratchpad。",
+        "执行中文小说写作操作：润色、扩写、校对、续写。自然语言明确提出这四类任务时也可以调用。只生成候选文本或校对问题，不写回正文，不保存草稿纸。不要把总结、分析、提取信息、生成大纲/简介/人物卡/设定卡/时间线、格式转换等非四类请求强行归类到本工具；没有明确目标时不要调用本工具；用户要求保存时必须另行调用 add_to_scratchpad。",
       parameters: runWritingOperationToolParameters
     }
   },
@@ -492,6 +494,82 @@ function stringifyToolResult(value: unknown): string {
   return JSON.stringify(value);
 }
 
+type ReadContextToolResultPayload = {
+  readonly scopeLabel: string;
+  readonly mode: string;
+  readonly indexMode?: string;
+  readonly indexedChapterCount?: number;
+  readonly totalChapterCount?: number;
+  readonly staleChapterCount?: number;
+  readonly skippedTooShortChapterCount?: number;
+  readonly sourceChapterIds: readonly string[];
+  readonly contextText: string;
+  readonly contextTruncated?: boolean;
+  readonly sourceChapterIdsTruncated?: boolean;
+};
+
+const TOOL_CONTEXT_RESULT_INPUT_RATIO = 0.65;
+const TOOL_CONTEXT_RESULT_MIN_TOKENS = 256;
+const TOOL_CONTEXT_TRUNCATION_NOTICE = "（工具结果已按当前模型窗口压缩；如果需要更完整结果，请按章节范围继续读取。）";
+
+function compactSourceChapterIds(sourceChapterIds: readonly string[]): {
+  readonly sourceChapterIds: readonly string[];
+  readonly sourceChapterIdsTruncated: boolean;
+} {
+  if (sourceChapterIds.length <= 80) {
+    return {
+      sourceChapterIds,
+      sourceChapterIdsTruncated: false
+    };
+  }
+  return {
+    sourceChapterIds: [...sourceChapterIds.slice(0, 40), ...sourceChapterIds.slice(-40)],
+    sourceChapterIdsTruncated: true
+  };
+}
+
+function stringifyReadContextToolResult(runtime: ChatAgentToolRuntime, payload: ReadContextToolResultPayload): string {
+  const full = stringifyToolResult(payload);
+  const maxToolTokens = Math.max(TOOL_CONTEXT_RESULT_MIN_TOKENS, Math.floor(runtime.tokenBudget.maxInputTokens * TOOL_CONTEXT_RESULT_INPUT_RATIO));
+  if (estimateTextTokens(full) <= maxToolTokens) {
+    return full;
+  }
+
+  const compactedSources = compactSourceChapterIds(payload.sourceChapterIds);
+  const basePayload = {
+    ...payload,
+    sourceChapterIds: compactedSources.sourceChapterIds,
+    contextTruncated: true,
+    sourceChapterIdsTruncated: compactedSources.sourceChapterIdsTruncated || payload.sourceChapterIdsTruncated
+  };
+  const emptyContextPayload = {
+    ...basePayload,
+    contextText: TOOL_CONTEXT_TRUNCATION_NOTICE
+  };
+  const wrapperTokens = estimateTextTokens(stringifyToolResult(emptyContextPayload));
+  const availableContextTokens = Math.max(0, maxToolTokens - wrapperTokens - 16);
+
+  for (const ratio of [1, 0.85, 0.7, 0.55, 0.4, 0.25, 0.1, 0] as const) {
+    const contextBudget = Math.floor(availableContextTokens * ratio);
+    const truncatedContext =
+      contextBudget > 0
+        ? `${truncateTextToTokenBudget(payload.contextText, contextBudget).text.trim()}\n${TOOL_CONTEXT_TRUNCATION_NOTICE}`.trim()
+        : TOOL_CONTEXT_TRUNCATION_NOTICE;
+    const candidate = stringifyToolResult({
+      ...basePayload,
+      contextText: truncatedContext
+    });
+    if (estimateTextTokens(candidate) <= maxToolTokens) {
+      return candidate;
+    }
+  }
+
+  return stringifyToolResult({
+    ...basePayload,
+    contextText: TOOL_CONTEXT_TRUNCATION_NOTICE
+  });
+}
+
 function assertNotCanceled(signal?: AbortSignal): void {
   if (signal?.aborted) {
     throw new Error("AI 对话已取消。");
@@ -562,6 +640,91 @@ function shouldUseSummaryIndex(args: { readonly scope: ChatAgentScope; readonly 
   return args.scope.type === "chapter_range" && args.scope.to - args.scope.from + 1 > 3;
 }
 
+function isExplicitRawContextRequest(message: string): boolean {
+  const normalized = message.replace(/\s+/g, "");
+  return /(原文|完整正文|逐字|逐句|引用|摘录|节选|直接读取|读取正文|查看正文)/u.test(normalized);
+}
+
+function normalizeReadModeForSafety(
+  runtime: ChatAgentToolRuntime,
+  args: {
+    readonly scope: ChatAgentScope;
+    readonly mode?: "raw" | "summary" | "hybrid";
+    readonly focus?: SummaryIndexFocus;
+    readonly inlineText?: string;
+  }
+): typeof args {
+  if (args.mode !== "raw") {
+    return args;
+  }
+  if (args.scope.type === "all_chapters") {
+    return { ...args, mode: "summary" };
+  }
+  if (args.scope.type === "chapter_range") {
+    const rangeSize = args.scope.to - args.scope.from + 1;
+    if (rangeSize > 3 && !isExplicitRawContextRequest(runtime.userMessage)) {
+      return { ...args, mode: "summary" };
+    }
+  }
+  return args;
+}
+
+function formatToolScopeLabel(scope: ChatAgentScope): string {
+  if (scope.type === "chapter") {
+    return `第${scope.ordinal}章`;
+  }
+  if (scope.type === "chapter_range") {
+    return `第${scope.from}-${scope.to}章`;
+  }
+  if (scope.type === "all_chapters") {
+    return "全部章节";
+  }
+  if (scope.type === "current_chapter") {
+    return "当前章节";
+  }
+  return "选中文本";
+}
+
+function isSameExplicitScope(left: ChatAgentScope, right: ChatAgentScope): boolean {
+  if (left.type !== right.type) {
+    return false;
+  }
+  if (left.type === "chapter" && right.type === "chapter") {
+    return left.ordinal === right.ordinal;
+  }
+  if (left.type === "chapter_range" && right.type === "chapter_range") {
+    return left.from === right.from && left.to === right.to;
+  }
+  return true;
+}
+
+function isScopeAllowedByExplicitReference(explicitScope: ChatAgentScope, requestedScope: ChatAgentScope): boolean {
+  if (isSameExplicitScope(explicitScope, requestedScope)) {
+    return true;
+  }
+  if (explicitScope.type !== "chapter_range") {
+    return false;
+  }
+  if (requestedScope.type === "chapter") {
+    return requestedScope.ordinal >= explicitScope.from && requestedScope.ordinal <= explicitScope.to;
+  }
+  if (requestedScope.type === "chapter_range") {
+    return requestedScope.from >= explicitScope.from && requestedScope.to <= explicitScope.to;
+  }
+  return false;
+}
+
+function assertMatchesExplicitUserScope(runtime: ChatAgentToolRuntime, scope: ChatAgentScope): void {
+  const explicitScope = parseChatScopeReference(runtime.userMessage)?.scope;
+  if (explicitScope?.type === "current_chapter" || explicitScope?.type === "selection") {
+    return;
+  }
+  if (!explicitScope || isScopeAllowedByExplicitReference(explicitScope, scope)) {
+    return;
+  }
+  throw new Error(`用户明确要求${formatToolScopeLabel(explicitScope)}，但工具请求了${formatToolScopeLabel(scope)}。请按用户指定范围重新调用工具。`);
+}
+
 function hasCompleteReadySummaryCoverage(runtime: ChatAgentToolRuntime, scope: ChatAgentScope): boolean {
   if (scope.type !== "chapter_range" || !runtime.summaryRepo) {
     return false;
@@ -595,11 +758,24 @@ async function executeListChapters(runtime: ChatAgentToolRuntime): Promise<ChatA
     wordCount: chapter.wordCount,
     current: chapter.id === runtime.currentChapterId
   }));
+  const maxListedChapters = 240;
+  const listedChapters =
+    chapters.length > maxListedChapters
+      ? [...chapters.slice(0, 120), ...chapters.slice(-120)]
+      : chapters;
 
   return {
     action: null,
     content: stringifyToolResult({
-      chapters
+      totalChapters: chapters.length,
+      listedChapters,
+      chapters: listedChapters,
+      truncated: listedChapters.length < chapters.length,
+      omittedChapterCount: Math.max(0, chapters.length - listedChapters.length),
+      note:
+        listedChapters.length < chapters.length
+          ? `章节目录已截断展示，只列出前120章和后120章。项目实际共有 ${chapters.length} 章。判断章节是否存在时必须使用 totalChapters。未列出的中间章节只能判断序号是否在范围内，不能声称知道标题、剧情或内容；需要标题或内容时必须按明确序号再次调用 read_chapters。`
+          : "章节目录完整。"
     })
   };
 }
@@ -629,7 +805,8 @@ async function executeGetProjectContext(runtime: ChatAgentToolRuntime): Promise<
 
 async function executeReadChapters(runtime: ChatAgentToolRuntime, argumentsJson: string): Promise<ChatAgentToolExecutionResult> {
   assertNotCanceled(runtime.signal);
-  const args = parseReadChaptersArgs(argumentsJson);
+  const args = normalizeReadModeForSafety(runtime, parseReadChaptersArgs(argumentsJson));
+  assertMatchesExplicitUserScope(runtime, args.scope);
   if (args.scope.type === "selection") {
     const source = resolveSelectionSource(runtime, args.inlineText);
     if (!source) {
@@ -637,7 +814,7 @@ async function executeReadChapters(runtime: ChatAgentToolRuntime, argumentsJson:
     }
     return {
       action: null,
-      content: stringifyToolResult({
+      content: stringifyReadContextToolResult(runtime, {
         scopeLabel: source.scopeLabel,
         mode: "direct",
         sourceChapterIds: source.sourceChapterIds,
@@ -663,20 +840,20 @@ async function executeReadChapters(runtime: ChatAgentToolRuntime, argumentsJson:
     { summaryRepo: useSummaryIndex ? runtime.summaryRepo : undefined, summaryFocus: args.focus }
   );
   if (args.mode === "raw" && args.scope.type === "all_chapters" && resolved.requiresSummaries) {
-    throw new Error("全部章节原文超过模型输入预算，不能按 raw 模式读取。请改用 summary 模式或缩小章节范围。");
+    throw new Error("全部章节原文太长，不能一次读取原文。请改用 summary 模式，或缩小章节范围。");
   }
   let agentContext = resolved.agentContext;
 
   if (resolved.requiresSummaries) {
     if (!runtime.summarizeResolvedContext) {
-      throw new Error("章节上下文超过模型输入预算，需要摘要压缩，但 AI 摘要服务未初始化。");
+      throw new Error("AI 摘要服务未初始化，无法可靠处理这个章节范围。");
     }
     agentContext = await runtime.summarizeResolvedContext(resolved, runtime.signal);
   }
 
   return {
     action: null,
-    content: stringifyToolResult({
+    content: stringifyReadContextToolResult(runtime, {
       scopeLabel: agentContext.scopeLabel,
       mode: agentContext.mode,
       indexMode: agentContext.indexMode,
@@ -700,7 +877,7 @@ async function executeReadSelection(runtime: ChatAgentToolRuntime, argumentsJson
 
   return {
     action: null,
-    content: stringifyToolResult({
+    content: stringifyReadContextToolResult(runtime, {
       scopeLabel: source.scopeLabel,
       mode: "direct",
       sourceChapterIds: source.sourceChapterIds,

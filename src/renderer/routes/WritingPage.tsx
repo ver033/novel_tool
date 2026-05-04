@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties, type FormEvent } from "react";
 import type { Editor } from "@tiptap/react";
+import { Group as PanelGroup, Panel, Separator as PanelResizeHandle, useDefaultLayout } from "react-resizable-panels";
 import { Button } from "../components/Button";
+import { DraftRecoveryPrompt } from "../components/DraftRecoveryPrompt";
 import { Input } from "../components/Input";
 import { Modal } from "../components/Modal";
 import { FloatingAiButton } from "../editor/FloatingAiButton";
@@ -110,7 +112,7 @@ type WritingPageProps = {
   readonly selectionSnapshot: SelectionSnapshot | null;
   readonly taskPromptPreset: TaskPromptPreset | null;
   readonly taskType: TaskType;
-  readonly onCreateChapter: () => void;
+  readonly onCreateChapter: (options?: { readonly afterChapterId?: string }) => void;
   readonly onDeleteChapter: (chapterId: string) => void;
   readonly onRenameChapter: (chapterId: string, currentTitle: string) => void;
   readonly onSelectChapter: (chapterId: string) => void;
@@ -174,6 +176,7 @@ export function WritingPage({
   const [searchValue, setSearchValue] = useState("");
   const [searchResults, setSearchResults] = useState<EditorSearchResult[]>([]);
   const [searchBusy, setSearchBusy] = useState(false);
+  const [undoRedoState, setUndoRedoState] = useState({ canRedo: false, canUndo: false });
   const targetWordCount = activeChapter?.targetWordCount ?? null;
   const targetProgressLabel = useMemo(() => {
     if (!targetWordCount) {
@@ -194,6 +197,8 @@ export function WritingPage({
     maxWidth: pageWidthBySetting[editorStore.editorSettings.pageWidth] ?? pageWidthBySetting.medium
   };
   const editorThemeClass = themeClassBySetting[editorStore.editorSettings.theme] ?? themeClassBySetting.light;
+  const sidebarLayoutPanelIds = useMemo(() => (!focusMode && sidebarOpen ? ["editor", "right-sidebar"] : ["editor"]), [focusMode, sidebarOpen]);
+  const sidebarLayout = useDefaultLayout({ id: "moshu-writing-sidebar-v2", panelIds: sidebarLayoutPanelIds });
   const flushBeforeNavigation = useCallback(
     (next: () => void) => {
       setNavigationError(null);
@@ -227,6 +232,25 @@ export function WritingPage({
       cancelled = true;
     };
   }, [api]);
+  useEffect(() => {
+    if (!editor) {
+      setUndoRedoState({ canRedo: false, canUndo: false });
+      return undefined;
+    }
+
+    const updateUndoRedoState = () => {
+      setUndoRedoState({
+        canRedo: editor.can().redo(),
+        canUndo: editor.can().undo()
+      });
+    };
+
+    updateUndoRedoState();
+    editor.on("transaction", updateUndoRedoState);
+    return () => {
+      editor.off("transaction", updateUndoRedoState);
+    };
+  }, [editor]);
   useEffect(() => {
     const query = searchValue.trim();
     if (!currentProject || !query) {
@@ -274,7 +298,11 @@ export function WritingPage({
       cancelled = true;
     };
   }, [api, chapters, currentProject, searchValue]);
-  const handleCreateChapter = useCallback(() => flushBeforeNavigation(onCreateChapter), [flushBeforeNavigation, onCreateChapter]);
+  const handleCreateChapter = useCallback(() => flushBeforeNavigation(() => onCreateChapter()), [flushBeforeNavigation, onCreateChapter]);
+  const handleCreateChapterAfter = useCallback(
+    (chapterId: string) => flushBeforeNavigation(() => onCreateChapter({ afterChapterId: chapterId })),
+    [flushBeforeNavigation, onCreateChapter]
+  );
   const handleSelectChapter = useCallback(
     (chapterId: string) => {
       flushBeforeNavigation(() => onSelectChapter(chapterId));
@@ -304,6 +332,12 @@ export function WritingPage({
     setFocusMode((current) => !current);
     setSearchValue("");
   }, []);
+  const handleUndo = useCallback(() => {
+    editor?.chain().focus().undo().run();
+  }, [editor]);
+  const handleRedo = useCallback(() => {
+    editor?.chain().focus().redo().run();
+  }, [editor]);
   const handleSearchResultSelect = useCallback(
     (chapterId: string) => {
       setSearchValue("");
@@ -439,8 +473,12 @@ export function WritingPage({
         saveStatus={editorStore.saveStatus}
         searchValue={searchValue}
         editorSettings={editorStore.editorSettings}
+        canRedo={undoRedoState.canRedo}
+        canUndo={undoRedoState.canUndo}
         onExport={handleExport}
         onImport={handleImport}
+        onRedo={editor ? handleRedo : undefined}
+        onUndo={editor ? handleUndo : undefined}
         onEditorSettingsChange={editorStore.updateEditorSettings}
         onFocusModeToggle={handleFocusModeToggle}
         onSearchChange={setSearchValue}
@@ -471,107 +509,131 @@ export function WritingPage({
             activeChapterId={activeChapterId}
             chapters={chapters}
             onCreateChapter={handleCreateChapter}
+            onCreateChapterAfter={handleCreateChapterAfter}
             onDeleteChapter={handleDeleteChapter}
             onRenameChapter={startChapterRename}
             onSelectChapter={handleSelectChapter}
           />
         ) : null}
 
-        <section className="editor-wrap">
-          <div className="editor-scroll">
-            <div className="editor-inner" style={editorInnerStyle}>
-              {taskPromptPresetError ? (
-                <div className="inline-error-banner" role="alert">
-                  提示词预设加载失败：{taskPromptPresetError}
-                </div>
-              ) : null}
-              {activeChapter ? (
-                <>
-                  {inlineChapterRenameActive ? (
-                    <form className="chapter-title-form" onSubmit={submitInlineChapterRename}>
-                      <Input
-                        autoFocus
-                        id="chapter-title-input"
-                        value={inlineChapterTitle}
-                        onChange={(event) => setInlineChapterTitle(event.target.value)}
-                        onKeyDown={(event) => {
-                          if (event.key === "Escape") {
-                            cancelInlineChapterRename();
-                          }
-                        }}
+        <PanelGroup
+          className="workspace-main-panels"
+          defaultLayout={sidebarLayout.defaultLayout}
+          id="moshu-writing-sidebar-v2"
+          onLayoutChanged={sidebarLayout.onLayoutChanged}
+          orientation="horizontal"
+        >
+          <Panel className="editor-panel" defaultSize="100%" id="editor" minSize={!focusMode && sidebarOpen ? "360px" : "100%"}>
+            <section className="editor-wrap">
+              <div className="editor-scroll">
+                <div className="editor-inner" style={editorInnerStyle}>
+                  {taskPromptPresetError ? (
+                    <div className="inline-error-banner" role="alert">
+                      提示词预设加载失败：{taskPromptPresetError}
+                    </div>
+                  ) : null}
+                  {editorStore.pendingDraftRecovery ? (
+                    <DraftRecoveryPrompt
+                      draft={editorStore.pendingDraftRecovery}
+                      onDismiss={editorStore.dismissDraftRecovery}
+                      onRecover={editorStore.recoverDraft}
+                    />
+                  ) : null}
+                  {activeChapter ? (
+                    <>
+                      {inlineChapterRenameActive ? (
+                        <form className="chapter-title-form" onSubmit={submitInlineChapterRename}>
+                          <Input
+                            autoFocus
+                            id="chapter-title-input"
+                            value={inlineChapterTitle}
+                            onChange={(event) => setInlineChapterTitle(event.target.value)}
+                            onKeyDown={(event) => {
+                              if (event.key === "Escape") {
+                                cancelInlineChapterRename();
+                              }
+                            }}
+                          />
+                          <button className="small-button blue" disabled={!inlineChapterTitle.trim()} type="submit">
+                            保存
+                          </button>
+                        </form>
+                      ) : (
+                        <button className="chapter-heading chapter-heading-button" onClick={startInlineChapterRename} title="点击重命名章节" type="button">
+                          {activeChapter.title}
+                        </button>
+                      )}
+                      <NovelEditor
+                        chapterId={activeChapter.id}
+                        contentJson={editorStore.contentJson}
+                        contentVersion={editorStore.contentVersion}
+                        editorSettings={editorStore.editorSettings}
+                        key={`${activeChapter.id}:${editorStore.contentVersion}`}
+                        taskPromptPresets={taskPromptPresets}
+                        onContentChange={editorStore.handleContentChange}
+                        onEditorReady={setEditor}
+                        onSelectionToChat={onSelectionToChat}
+                        onSelectionToScratchpad={handleSelectionToScratchpad}
+                        onTask={onTask}
                       />
-                      <button className="small-button blue" disabled={!inlineChapterTitle.trim()} type="submit">
-                        保存
-                      </button>
-                    </form>
+                    </>
                   ) : (
-                    <button className="chapter-heading chapter-heading-button" onClick={startInlineChapterRename} title="点击重命名章节" type="button">
-                      {activeChapter.title}
-                    </button>
+                    <div className="empty-editor-state">
+                      <h1 className="chapter-heading">请选择或新建章节</h1>
+                      <p>从左侧章节列表选择一个章节，或新建章节后开始写作。</p>
+                      <button className="small-button blue" onClick={handleCreateChapter} type="button">
+                        新建章节
+                      </button>
+                    </div>
                   )}
-                  <NovelEditor
-                    chapterId={activeChapter.id}
-                    contentJson={editorStore.contentJson}
-                    contentVersion={editorStore.contentVersion}
-                    editorSettings={editorStore.editorSettings}
-                    taskPromptPresets={taskPromptPresets}
-                    onContentChange={editorStore.handleContentChange}
-                    onEditorReady={setEditor}
-                    onSelectionToChat={onSelectionToChat}
-                    onSelectionToScratchpad={handleSelectionToScratchpad}
-                    onTask={onTask}
-                  />
-                </>
-              ) : (
-                <div className="empty-editor-state">
-                  <h1 className="chapter-heading">请选择或新建章节</h1>
-                  <p>从左侧章节列表选择一个章节，或新建章节后开始写作。</p>
-                  <button className="small-button blue" onClick={handleCreateChapter} type="button">
-                    新建章节
-                  </button>
                 </div>
-              )}
-            </div>
-          </div>
-
-          {!focusMode && !sidebarOpen && activeChapter ? <FloatingAiButton onClick={onOpenAiChat} /> : null}
-
-          <footer className="bottom-metrics">
-            <div className="metrics-inner">
-              <div className="metric-left">
-                <span>字数：{editorStore.wordCount.toLocaleString("zh-CN")}</span>
-                <span>今日：{editorStore.dailyWordCount.toLocaleString("zh-CN")}</span>
-                <button className="metric-button" disabled={!activeChapter} onClick={openTargetWordCountModal} type="button">
-                  本章目标：{targetWordCount ? targetWordCount.toLocaleString("zh-CN") : "设置"}
-                </button>
-                {targetProgressLabel ? <span className="metric-progress">{targetProgressLabel}</span> : null}
               </div>
-              <div className="metric-right">
-                <span>{editorStore.saveStatusLabel}</span>
-              </div>
-            </div>
-          </footer>
-        </section>
 
-        {!focusMode && sidebarOpen ? (
-          <RightUtilitySidebar
-            activeTab={sidebarTab}
-            aiChatDraftSeed={aiChatDraftSeed}
-            chapters={chapters}
-            currentChapterId={activeChapter?.id ?? null}
-            currentChapterTitle={activeChapter?.title ?? null}
-            currentProjectId={currentProject?.id ?? null}
-            scratchpadRefreshToken={scratchpadRefreshToken}
-            selectionSnapshot={selectionSnapshot}
-            taskPromptPreset={taskPromptPreset}
-            taskType={taskType}
-            editor={editor}
-            flushPendingSave={editorStore.flushPendingSave}
-            onTabChange={onSidebarTabChange}
-            onClose={onCloseSidebar}
-            onOpenSettings={handleSettings}
-          />
-        ) : null}
+              {!focusMode && !sidebarOpen && activeChapter ? <FloatingAiButton onClick={onOpenAiChat} /> : null}
+
+              <footer className="bottom-metrics">
+                <div className="metrics-inner">
+                  <div className="metric-left">
+                    <span>字数：{editorStore.wordCount.toLocaleString("zh-CN")}</span>
+                    <span>今日：{editorStore.dailyWordCount.toLocaleString("zh-CN")}</span>
+                    <button className="metric-button" disabled={!activeChapter} onClick={openTargetWordCountModal} type="button">
+                      本章目标：{targetWordCount ? targetWordCount.toLocaleString("zh-CN") : "设置"}
+                    </button>
+                    {targetProgressLabel ? <span className="metric-progress">{targetProgressLabel}</span> : null}
+                  </div>
+                  <div className="metric-right">
+                    <span>{editorStore.saveStatusLabel}</span>
+                  </div>
+                </div>
+              </footer>
+            </section>
+          </Panel>
+
+          {!focusMode && sidebarOpen ? (
+            <>
+              <PanelResizeHandle className="sidebar-resize-handle" />
+              <Panel className="right-sidebar-panel" defaultSize="520px" groupResizeBehavior="preserve-pixel-size" id="right-sidebar" maxSize="75%" minSize="360px">
+                <RightUtilitySidebar
+                  activeTab={sidebarTab}
+                  aiChatDraftSeed={aiChatDraftSeed}
+                  chapters={chapters}
+                  currentChapterId={activeChapter?.id ?? null}
+                  currentChapterTitle={activeChapter?.title ?? null}
+                  currentProjectId={currentProject?.id ?? null}
+                  scratchpadRefreshToken={scratchpadRefreshToken}
+                  selectionSnapshot={selectionSnapshot}
+                  taskPromptPreset={taskPromptPreset}
+                  taskType={taskType}
+                  editor={editor}
+                  flushPendingSave={editorStore.flushPendingSave}
+                  onTabChange={onSidebarTabChange}
+                  onClose={onCloseSidebar}
+                  onOpenSettings={handleSettings}
+                />
+              </Panel>
+            </>
+          ) : null}
+        </PanelGroup>
       </main>
 
       <Modal open={Boolean(renameChapterDraft)} title="重命名章节" onClose={cancelChapterRename}>

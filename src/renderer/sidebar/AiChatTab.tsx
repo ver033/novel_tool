@@ -1,7 +1,8 @@
-import { PaperPlaneRight, Plus, Stop, Trash } from "@phosphor-icons/react";
+import { Check, CopySimple, PaperPlaneRight, Plus, Stop, Trash } from "@phosphor-icons/react";
 import { type CSSProperties, type KeyboardEvent, type ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { AiChatMessageRecord, ChapterSummary, SelectionSnapshot, SummaryIndexStatus } from "../../main/shared/types";
 import { Button } from "../components/Button";
+import { IconButton } from "../components/IconButton";
 import { Modal } from "../components/Modal";
 import type { SettingsCategory } from "../routes/SettingsPage";
 import { useChatStore } from "../state/chat-store";
@@ -87,7 +88,7 @@ function isMissingChapterError(error: string): boolean {
 }
 
 function isChatInputTooLongError(error: string): boolean {
-  return error.includes("AI 对话上下文太长") || error.includes("选区太长");
+  return error.includes("AI 对话上下文太长") || error.includes("选区太长") || error.includes("目标文本太长");
 }
 
 function chatErrorTitle(error: string): string {
@@ -285,6 +286,9 @@ function filterCommandSuggestions(suggestions: readonly ChatCommandSuggestion[],
 
 export function AiChatTab({ chapters, currentChapterId, currentChapterTitle, currentProjectId, draftSeed, selectionSnapshot, onOpenSettings }: AiChatTabProps) {
   const [draft, setDraft] = useState("");
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+  const [copiedStreaming, setCopiedStreaming] = useState(false);
+  const [copyError, setCopyError] = useState<string | null>(null);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [cursorIndex, setCursorIndex] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -408,6 +412,42 @@ export function AiChatTab({ chapters, currentChapterId, currentChapterTitle, cur
     await chatStore.sendMessage(lastUserMessage.content);
   }
 
+  async function copyChatText(text: string, onCopied: () => void): Promise<void> {
+    setCopyError(null);
+    const trimmedText = text.trim();
+    if (!trimmedText) {
+      setCopyError("当前没有可复制的 AI 回复。");
+      return;
+    }
+    if (!navigator.clipboard) {
+      setCopyError("系统剪贴板不可用。");
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(trimmedText);
+      onCopied();
+    } catch (reason) {
+      setCopyError(reason instanceof Error ? reason.message : "复制失败");
+    }
+  }
+
+  async function copyChatMessage(message: AiChatMessageRecord): Promise<void> {
+    await copyChatText(message.content, () => {
+      setCopiedMessageId(message.id);
+      window.setTimeout(() => {
+        setCopiedMessageId((current) => (current === message.id ? null : current));
+      }, 1600);
+    });
+  }
+
+  async function copyStreamingReply(): Promise<void> {
+    await copyChatText(chatStore.streamingText, () => {
+      setCopiedStreaming(true);
+      window.setTimeout(() => setCopiedStreaming(false), 1600);
+    });
+  }
+
   async function deleteCurrentSession(): Promise<void> {
     setDeleteConfirmOpen(false);
     await chatStore.deleteCurrentSession();
@@ -524,12 +564,30 @@ export function AiChatTab({ chapters, currentChapterId, currentChapterTitle, cur
           ) : null}
           {chatStore.messages.map((message) => (
             <div className={messageClassName(message)} key={message.id}>
+              {message.role === "assistant" && message.content.trim() ? (
+                <IconButton
+                  className={`message-copy-button ${copiedMessageId === message.id ? "copied" : ""}`}
+                  label="复制 AI 回复"
+                  onClick={() => void copyChatMessage(message)}
+                >
+                  {copiedMessageId === message.id ? <Check size={16} weight="bold" /> : <CopySimple size={16} />}
+                </IconButton>
+              ) : null}
               <ChatMessageContent content={message.content} rich={message.role === "assistant"} />
               <div className="message-time">{new Date(message.createdAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}</div>
             </div>
           ))}
           {chatStore.busy ? (
             <div className="message pending" role="status">
+              {chatStore.streamingText.trim() ? (
+                <IconButton
+                  className={`message-copy-button ${copiedStreaming ? "copied" : ""}`}
+                  label="复制正在生成的 AI 回复"
+                  onClick={() => void copyStreamingReply()}
+                >
+                  {copiedStreaming ? <Check size={16} weight="bold" /> : <CopySimple size={16} />}
+                </IconButton>
+              ) : null}
               {chatStore.streamingReasoning ? (
                 <details className="chat-reasoning" open>
                   <summary>思考</summary>
@@ -540,6 +598,11 @@ export function AiChatTab({ chapters, currentChapterId, currentChapterTitle, cur
                 content={chatStore.streamingText ? chatStore.streamingText : chatStore.contextUsagePending ? "正在分析上下文..." : "AI 正在思考中"}
                 rich={Boolean(chatStore.streamingText)}
               />
+            </div>
+          ) : null}
+          {copyError ? (
+            <div className="chat-copy-error" role="alert">
+              {copyError}
             </div>
           ) : null}
           {chatStore.error ? (
@@ -606,6 +669,7 @@ export function AiChatTab({ chapters, currentChapterId, currentChapterTitle, cur
                     {contextDisplay ? <span>{contextDisplay.usedLabel}</span> : null}
                     <span className="chat-context-model-label">{contextDisplay?.modelLabel ?? "准备上下文"}</span>
                     {contextDisplay ? <span className="chat-context-source-label">{contextDisplay.sourceLabel}</span> : null}
+                    {contextDisplay?.memoryLabel ? <span className="chat-context-source-label">{contextDisplay.memoryLabel}</span> : null}
                     {chatStore.contextUsagePending ? <span className="context-updating">更新中</span> : null}
                   </div>
                   {contextDisplay ? (
@@ -614,6 +678,7 @@ export function AiChatTab({ chapters, currentChapterId, currentChapterTitle, cur
                       <div className="chat-context-popover-percent">{contextDisplay.percentText} 已用</div>
                       <div className="chat-context-popover-total">{contextDisplay.usedOfTotalLabel}</div>
                       <div className="chat-context-popover-strong">{contextDisplay.compressionLabel}</div>
+                      {contextDisplay.memoryLabel ? <div className="chat-context-popover-strong">{contextDisplay.memoryLabel}</div> : null}
                       {chatStore.contextUsagePending ? (
                         <div className="chat-context-popover-pending">正在准备新上下文，新用量会在最终请求开始时刷新。</div>
                       ) : null}
@@ -621,6 +686,7 @@ export function AiChatTab({ chapters, currentChapterId, currentChapterTitle, cur
                         <span>模型 {contextDisplay.modelLabel}</span>
                         <span>范围 {contextDisplay.scopeLabel}</span>
                         <span>上下文 {contextDisplay.sourceLabel}</span>
+                        {contextDisplay.memoryLabel ? <span>对话记忆 {contextDisplay.memoryLabel}</span> : null}
                         {contextDisplay.coverageLabel ? <span>{contextDisplay.coverageLabel}</span> : null}
                         <span>模型窗口 {contextDisplay.windowLabel}</span>
                         <span>输入预算 {contextDisplay.inputBudgetLabel}</span>

@@ -32,6 +32,21 @@ describe("chat agent memory", () => {
     expect(memory).not.toContain("已加入草稿纸");
   });
 
+  it("drops failed user turns from follow-up memory so they do not hijack the next request", () => {
+    const memory = buildChatAgentMemoryText({
+      history: [
+        message("user", "@选区 帮我润色一下", 1),
+        message("error", "当前没有选中文本，请先选择正文。", 2),
+        message("user", "总结第9999章的内容", 3)
+      ],
+      tokenBudget: getTokenBudget("chat")
+    });
+
+    expect(memory).not.toContain("@选区 帮我润色一下");
+    expect(memory).not.toContain("当前没有选中文本");
+    expect(memory).toContain("作者：总结第9999章的内容");
+  });
+
   it("uses compacted memory plus recent raw messages instead of truncating history", () => {
     const smallBudget = {
       maxInputTokens: 2200,
@@ -50,18 +65,19 @@ describe("chat agent memory", () => {
     expect(memory).toContain("对话内容19");
   });
 
-  it("throws when long memory has not been compacted", () => {
+  it("locally compacts long memory instead of throwing a budget error", () => {
     const smallBudget = {
       maxInputTokens: 2200,
       maxOutputTokens: 512
     };
 
-    expect(() =>
-      buildChatAgentMemoryText({
-        history: Array.from({ length: 16 }, (_, index) => message(index % 2 === 0 ? "user" : "assistant", `未压缩对话${index}。`.repeat(300), index)),
-        tokenBudget: smallBudget
-      })
-    ).toThrow("AI 对话记忆超过预算");
+    const memory = buildChatAgentMemoryText({
+      history: Array.from({ length: 16 }, (_, index) => message(index % 2 === 0 ? "user" : "assistant", `未压缩对话${index}。`.repeat(300), index)),
+      tokenBudget: smallBudget
+    });
+
+    expect(memory).toContain("已按当前模型窗口压缩");
+    expect(estimateTextTokens(memory)).toBeLessThanOrEqual(Math.floor(smallBudget.maxInputTokens * 0.75));
   });
 
   it("does not compact a short history just because the model has a large context window", () => {

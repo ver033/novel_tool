@@ -7,6 +7,11 @@ import type {
   ProjectRecord,
   RecentProjectEntry
 } from "../../main/shared/types";
+import { suggestNewChapterTitle } from "./chapter-title";
+
+type CreateChapterOptions = {
+  readonly afterChapterId?: string;
+};
 
 type CreatedProjectResult = {
   readonly project: ProjectRecord;
@@ -129,19 +134,25 @@ export function useAppStore() {
     [api, currentProject?.id]
   );
 
-  const createChapter = useCallback(async () => {
+  const createChapter = useCallback(async (options: CreateChapterOptions = {}) => {
     if (!currentProject) {
       return;
     }
 
-    const title = `第${chapters.length + 1}章`;
-    const inheritedTargetWordCount = chapters[chapters.length - 1]?.targetWordCount ?? null;
+    const sortedChapters = [...chapters].sort((a, b) => a.sortOrder - b.sortOrder || a.createdAt.localeCompare(b.createdAt));
+    const lastChapter = sortedChapters[sortedChapters.length - 1] ?? null;
+    const requestedAfterChapter = options.afterChapterId ? sortedChapters.find((chapter) => chapter.id === options.afterChapterId) ?? null : null;
+    const afterChapter = requestedAfterChapter?.id === lastChapter?.id ? requestedAfterChapter : null;
+    const title = suggestNewChapterTitle(sortedChapters, afterChapter ? { afterChapterId: afterChapter.id } : {});
+    const inheritedTargetWordCount = (afterChapter ?? sortedChapters[sortedChapters.length - 1])?.targetWordCount ?? null;
     const chapter = (await api.chapter.create({
       projectId: currentProject.id,
       title,
+      sortOrder: afterChapter ? afterChapter.sortOrder + 1 : undefined,
       targetWordCount: inheritedTargetWordCount
     })) as ChapterSummary;
-    setChapters((current) => [...current, chapter]);
+    const refreshedChapters = (await api.chapter.list({ projectId: currentProject.id })) as ChapterSummary[];
+    setChapters([...refreshedChapters]);
     setActiveChapterId(chapter.id);
   }, [api, chapters, currentProject]);
 

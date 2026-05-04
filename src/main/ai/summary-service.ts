@@ -869,7 +869,16 @@ export class SummaryService implements SummaryIndexInvalidator {
       staleChapterCount += 1;
     }
 
-    const jobs = this.summaryRepo.listSummaryJobs(projectId).filter((job) => !this.isChapterJobResolvedByReadySummary(summaries.get(job.targetId ?? "") ?? null, job));
+    const jobResolutionCache = {
+      chapterSummaries: summaries,
+      arcSummaries: new Map(this.summaryRepo.listArcSummaries(projectId).map((summary) => [summary.arcKey, summary])),
+      bookSummary: this.summaryRepo.getLatestBookSummary(projectId)
+    };
+    const rawJobs = this.summaryRepo.listSummaryJobs(projectId);
+    const queuedRetryKeys = new Set(
+      rawJobs.filter((job) => job.status === "queued" && job.nextRunAt).map((job) => this.summaryJobResolutionKey(job))
+    );
+    const jobs = rawJobs.filter((job) => !this.isJobResolvedByCurrentSummaryIndex(job, jobResolutionCache, queuedRetryKeys));
     const runningJob = jobs.find((job) => job.status === "running") ?? null;
     const failedJobs = jobs.filter((job) => job.status === "failed");
     const retryingJobs = jobs
@@ -1048,6 +1057,38 @@ export class SummaryService implements SummaryIndexInvalidator {
       return false;
     }
     return summary.status === "ready" && summary.contentHash === job.sourceHash;
+  }
+
+  private isJobResolvedByCurrentSummaryIndex(
+    job: SummaryJobRecord,
+    cache: {
+      readonly chapterSummaries: ReadonlyMap<string, ChapterAiSummaryRecord>;
+      readonly arcSummaries: ReadonlyMap<string, ArcAiSummaryRecord>;
+      readonly bookSummary: BookAiSummaryRecord | null;
+    },
+    queuedRetryKeys: ReadonlySet<string>
+  ): boolean {
+    if (job.status !== "failed") {
+      return false;
+    }
+    if (job.nextRunAt && queuedRetryKeys.has(this.summaryJobResolutionKey(job))) {
+      return true;
+    }
+    if (job.jobType === "chapter_summary") {
+      return this.isChapterJobResolvedByReadySummary(cache.chapterSummaries.get(job.targetId ?? "") ?? null, job);
+    }
+    if (job.jobType === "arc_summary" && job.targetId) {
+      const summary = cache.arcSummaries.get(job.targetId);
+      return summary?.status === "ready" && summary.sourceHash === job.sourceHash;
+    }
+    if (job.jobType === "book_summary") {
+      return cache.bookSummary?.status === "ready" && cache.bookSummary.sourceHash === job.sourceHash;
+    }
+    return false;
+  }
+
+  private summaryJobResolutionKey(job: SummaryJobRecord): string {
+    return `${job.jobType}:${job.targetId ?? ""}:${job.sourceHash}`;
   }
 
   async summarizeChapter(projectId: string, chapterId: string, sourceHash: string, now: string, options: { readonly signal?: AbortSignal } = {}): Promise<ChapterAiSummaryRecord> {

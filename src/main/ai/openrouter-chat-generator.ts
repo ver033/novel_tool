@@ -34,6 +34,7 @@ import type {
 import { logDevLlmPrompt } from "./dev-prompt-logger";
 import type { OpenRouterChatCompletionResult, OpenRouterMessage } from "./openrouter-client";
 import { OpenRouterClient } from "./openrouter-client";
+import { compactOpenRouterInput } from "./openrouter-input-compactor";
 import { buildReasoningConfig } from "./reasoning-budget";
 import {
   arcAiSummaryPayloadSchema,
@@ -135,15 +136,6 @@ function buildHistoryMessages(input: AiChatGenerationInput, chatBudget: TokenBud
   ];
 }
 
-function assertChatMessagesWithinBudget(messages: readonly OpenRouterMessage[], maxInputTokens: number): void {
-  const estimatedTokens = estimateMessagesTokens(messages);
-  if (estimatedTokens <= maxInputTokens) {
-    return;
-  }
-
-  throw new Error(`AI 对话上下文太长，预计输入约 ${estimatedTokens} tokens，超过上限 ${maxInputTokens}。请缩短问题或选中文本后重试。`);
-}
-
 function stripJsonCodeFence(content: string): string {
   const trimmed = content.trim();
   const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(trimmed);
@@ -226,17 +218,31 @@ export function buildChatCompletionMessages(input: AiChatGenerationInput, chatBu
     role: "user",
     content: buildUserPrompt(input)
   } satisfies OpenRouterMessage;
-  assertChatMessagesWithinBudget([systemMessage, userMessage], chatBudget.maxInputTokens);
+  const compactedBase = compactOpenRouterInput({
+    messages: [systemMessage, userMessage],
+    maxInputTokens: chatBudget.maxInputTokens
+  }).messages;
+  let compactedUserMessage: OpenRouterMessage = userMessage;
+  for (let index = compactedBase.length - 1; index >= 0; index -= 1) {
+    const message = compactedBase[index];
+    if (message.role === "user") {
+      compactedUserMessage = message;
+      break;
+    }
+  }
   const selectedHistory: OpenRouterMessage[] = [];
 
   for (const historyMessage of buildHistoryMessages(input, chatBudget).reverse()) {
-    const candidate = [systemMessage, historyMessage, ...selectedHistory, userMessage];
+    const candidate = [systemMessage, historyMessage, ...selectedHistory, compactedUserMessage];
     if (estimateMessagesTokens(candidate) <= chatBudget.maxInputTokens) {
       selectedHistory.unshift(historyMessage);
     }
   }
 
-  return [systemMessage, ...selectedHistory, userMessage];
+  return [...compactOpenRouterInput({
+    messages: [systemMessage, ...selectedHistory, compactedUserMessage],
+    maxInputTokens: chatBudget.maxInputTokens
+  }).messages];
 }
 
 export class OpenRouterChatGenerator implements AiChatGenerator {
@@ -939,7 +945,7 @@ export class OpenRouterChatGenerator implements AiChatGenerator {
       }
     }
     if (estimateTextTokens(summary) > summaryBudget) {
-      throw new Error("AI 对话记忆压缩结果仍然超过输入预算，请开启新对话，或换用上下文更大的模型后重试。");
+      summary = `${truncateTextToTokenBudget(summary, summaryBudget).text.trim()}\n（对话记忆已按当前模型窗口进一步压缩。）`.trim();
     }
     return summary;
   }
@@ -1208,7 +1214,7 @@ function buildChatMemoryRecompressionMessages(summary: string, targetTokens: num
     {
       role: "user",
       content: [
-        `目标上限：约 ${targetTokens} tokens`,
+        `目标长度：尽量控制在约 ${targetTokens} 个估算标记以内`,
         `压缩轮次：${round}`,
         "上一轮压缩记忆：",
         summary,

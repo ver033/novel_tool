@@ -1,4 +1,4 @@
-import { estimateTextTokens } from "./token-estimator";
+import { estimateTextTokens, truncateTextToTokenBudget } from "./token-estimator";
 import type { TokenBudget } from "./token-budget";
 import type { AiChatMessageRecord } from "../shared/types";
 
@@ -8,6 +8,7 @@ const CHAT_MEMORY_MAX_RECENT_TAIL_TOKENS = 8000;
 const CHAT_MEMORY_MIN_RECENT_TAIL_TOKENS = 2000;
 const CHAT_MEMORY_MIN_BUDGET_TOKENS = 400;
 const CHAT_MEMORY_TAIL_BUDGET_RATIO = 0.55;
+const CHAT_MEMORY_LOCAL_COMPACTION_NOTICE = "（较早对话或超长消息已按当前模型窗口压缩。）";
 
 export type ChatAgentMemoryInput = {
   readonly history: readonly AiChatMessageRecord[];
@@ -45,7 +46,18 @@ function getChatAgentMemoryPolicy(tokenBudget: TokenBudget, reservedInputTokens 
 }
 
 function relevantChatMessages(history: readonly AiChatMessageRecord[]): readonly AiChatMessageRecord[] {
-  return history.filter((message) => message.role === "user" || message.role === "assistant");
+  const messages: AiChatMessageRecord[] = [];
+  for (let index = 0; index < history.length; index += 1) {
+    const message = history[index];
+    if (message.role !== "user" && message.role !== "assistant") {
+      continue;
+    }
+    if (message.role === "user" && history[index + 1]?.role === "error") {
+      continue;
+    }
+    messages.push(message);
+  }
+  return messages;
 }
 
 function formatChatMessage(message: AiChatMessageRecord): string {
@@ -70,6 +82,53 @@ function buildMemoryText(compactedSummary: string, recentMessages: readonly AiCh
     sections.push(["【最近对话原文】", recentText].join("\n"));
   }
   return sections.join("\n\n");
+}
+
+function buildBudgetedMemoryText(
+  compactedSummary: string,
+  recentMessages: readonly AiChatMessageRecord[],
+  memoryTokenBudget: number
+): string {
+  const fullMemoryText = buildMemoryText(compactedSummary, recentMessages);
+  if (estimateTextTokens(fullMemoryText) <= memoryTokenBudget) {
+    return fullMemoryText;
+  }
+
+  const summaryBudget = compactedSummary ? Math.max(80, Math.floor(memoryTokenBudget * 0.35)) : 0;
+  const compactedSummaryText =
+    compactedSummary && summaryBudget > 0
+      ? `${truncateTextToTokenBudget(compactedSummary, summaryBudget).text.trim()}\n${CHAT_MEMORY_LOCAL_COMPACTION_NOTICE}`.trim()
+      : "";
+  const sections: string[] = [];
+  if (compactedSummaryText) {
+    sections.push(["【已压缩的较早对话】", compactedSummaryText].join("\n"));
+  }
+
+  const recentLines: string[] = [];
+  const wrapperTokens = estimateTextTokens(buildMemoryText(compactedSummaryText, [])) + estimateTextTokens("【最近对话原文】") + 32;
+  let remainingTailBudget = Math.max(80, memoryTokenBudget - wrapperTokens);
+  for (let index = recentMessages.length - 1; index >= 0; index -= 1) {
+    const line = formatChatMessage(recentMessages[index]);
+    const lineTokens = estimateTextTokens(line);
+    if (lineTokens <= remainingTailBudget) {
+      recentLines.unshift(line);
+      remainingTailBudget -= lineTokens;
+      continue;
+    }
+    if (recentLines.length === 0 && remainingTailBudget > 80) {
+      recentLines.unshift(`${truncateTextToTokenBudget(line, remainingTailBudget).text.trim()}\n${CHAT_MEMORY_LOCAL_COMPACTION_NOTICE}`.trim());
+    }
+    break;
+  }
+  if (recentLines.length > 0) {
+    sections.push(["【最近对话原文】", recentLines.join("\n")].join("\n"));
+  }
+
+  const candidate = sections.join("\n\n") || CHAT_MEMORY_LOCAL_COMPACTION_NOTICE;
+  if (estimateTextTokens(candidate) <= memoryTokenBudget) {
+    return candidate;
+  }
+  return `${truncateTextToTokenBudget(candidate, memoryTokenBudget).text.trim()}\n${CHAT_MEMORY_LOCAL_COMPACTION_NOTICE}`.trim();
 }
 
 function findCompactedThroughIndex(messages: readonly AiChatMessageRecord[], compactedThroughMessageId?: string | null): number {
@@ -106,7 +165,7 @@ export function selectChatMemoryCompactionTarget(input: ChatAgentMemoryInput): C
   const messagesToCompact = messages.slice(compactedThroughIndex + 1, tailStartIndex);
   const compactedThroughMessage = messagesToCompact.at(-1);
   if (!compactedThroughMessage) {
-    throw new Error("AI 对话记忆超过预算，且最近消息本身过长。请开启新对话，或缩短上一轮超长回复后重试。");
+    return null;
   }
 
   return {
@@ -122,8 +181,7 @@ export function buildChatAgentMemoryText(input: ChatAgentMemoryInput): string {
   const compactedSummary = input.compactedSummary?.trim() ?? "";
   const memoryText = buildMemoryText(compactedSummary, recentMessages);
   const memoryPolicy = getChatAgentMemoryPolicy(input.tokenBudget, input.reservedInputTokens);
-  if (estimateTextTokens(memoryText) > memoryPolicy.memoryTokenBudget) {
-    throw new Error("AI 对话记忆超过预算，需要先压缩上下文。");
-  }
-  return memoryText;
+  return estimateTextTokens(memoryText) <= memoryPolicy.memoryTokenBudget
+    ? memoryText
+    : buildBudgetedMemoryText(compactedSummary, recentMessages, memoryPolicy.memoryTokenBudget);
 }

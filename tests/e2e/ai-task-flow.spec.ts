@@ -9,8 +9,10 @@ type TaskCase = {
   readonly input: string;
   readonly expectedText: string;
   readonly applyButton: RegExp;
-  readonly previewText?: RegExp;
+  readonly generateButton?: RegExp | string;
+  readonly previewText?: RegExp | string;
   readonly absentTextAfterApply?: string;
+  readonly skipApply?: boolean;
 };
 
 const rootDir = path.resolve(__dirname, "../..");
@@ -37,8 +39,9 @@ const taskCases: readonly TaskCase[] = [
     input: "他勒住马缰。。",
     expectedText: "他勒住马缰。",
     applyButton: /^应用$/,
-    previewText: /建议：他勒住马缰。/,
-    absentTextAfterApply: "他勒住马缰。。"
+    generateButton: /开始校对/,
+    previewText: "E2E 校对建议",
+    skipApply: true
   },
   {
     name: "continue",
@@ -49,15 +52,26 @@ const taskCases: readonly TaskCase[] = [
   }
 ];
 
-async function launchNovelTool(homeDir: string): Promise<ElectronApplication> {
-  const executablePath = path.join(rootDir, `out/novel-tool-${process.platform}-${process.arch}/novel-tool.app/Contents/MacOS/novel-tool`);
-  if (!existsSync(executablePath)) {
-    throw new Error("Packaged Electron app not found. Run `npm run build` before `npm run test:e2e`.");
-  }
+function resolveElectronExecutablePath(): string {
+  const platform = process.platform;
+  const candidates =
+    platform === "darwin"
+      ? [path.join(rootDir, "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron")]
+      : platform === "win32"
+        ? [path.join(rootDir, "node_modules/electron/dist/electron.exe")]
+        : [path.join(rootDir, "node_modules/electron/dist/electron")];
 
+  const executablePath = candidates.find((candidate) => existsSync(candidate));
+  if (!executablePath) {
+    throw new Error(`Electron executable not found. Run \`npm install\` before \`npm run test:e2e\`. Checked:\n${candidates.join("\n")}`);
+  }
+  return executablePath;
+}
+
+async function launchNovelTool(homeDir: string): Promise<ElectronApplication> {
   return electron.launch({
-    executablePath,
-    args: [`--user-data-dir=${path.join(homeDir, "user-data")}`],
+    executablePath: resolveElectronExecutablePath(),
+    args: [rootDir, `--user-data-dir=${path.join(homeDir, "user-data")}`],
     env: {
       ...process.env,
       HOME: homeDir,
@@ -75,7 +89,9 @@ async function firstPage(app: ElectronApplication): Promise<Page> {
 
 async function createProjectWithSelectedText(page: Page, text: string): Promise<void> {
   await page.getByRole("button", { name: /新建作品\s+从空白开始/ }).click();
-  await expect(page.getByRole("heading", { name: "第1章" })).toBeVisible();
+  await page.getByPlaceholder("例如：长夜归途").fill("我的小说");
+  await page.getByRole("button", { name: "创建并开始写作" }).click();
+  await expect(page.locator(".chapter-heading-button")).toContainText("第1章");
 
   const editor = page.locator(".tiptap-manuscript");
   await editor.click();
@@ -89,8 +105,12 @@ async function runTask(page: Page, taskCase: TaskCase): Promise<void> {
   await page.getByRole("button", { name: taskCase.label }).click();
   await expect(page.getByRole("heading", { name: /当前任务/ })).toBeVisible();
 
-  await page.getByRole("button", { name: "生成预览" }).click();
+  await page.getByRole("button", { name: taskCase.generateButton ?? "生成预览" }).click();
   await expect(page.getByText(taskCase.previewText ?? taskCase.expectedText)).toBeVisible();
+  if (taskCase.skipApply) {
+    await expect(page.locator(".tiptap-manuscript")).toContainText(taskCase.input);
+    return;
+  }
   await page.getByRole("button", { name: taskCase.applyButton }).click();
   await expect(page.locator(".tiptap-manuscript")).toContainText(taskCase.expectedText);
   if (taskCase.absentTextAfterApply) {

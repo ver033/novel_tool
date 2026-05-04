@@ -1056,6 +1056,116 @@ describe("summary index status and rebuild controls", () => {
     db.close();
   });
 
+  it("does not surface covered derived summary failures or retry-scheduled attempts as active failures", () => {
+    const db = createDb();
+    const { chapterRepo, summaryRepo } = seedProject(db);
+    const firstContent = "春".repeat(620);
+    const secondContent = "夏".repeat(620);
+    createChapter(chapterRepo, "chapter_1", firstContent);
+    createChapter(chapterRepo, "chapter_2", secondContent);
+    const firstHash = computeChapterContentHash(firstContent);
+    const secondHash = computeChapterContentHash(secondContent);
+    upsertReadyChapterSummary(summaryRepo, {
+      chapterId: "chapter_1",
+      title: "第1章",
+      order: 1,
+      content: firstContent
+    });
+    upsertReadyChapterSummary(summaryRepo, {
+      chapterId: "chapter_2",
+      title: "第2章",
+      order: 2,
+      content: secondContent
+    });
+    const arcSourceHash = computeSourceHash([firstHash, secondHash]);
+    summaryRepo.upsertArcSummary({
+      id: "arc_ready_1_2",
+      projectId: "project_1",
+      arcKey: "auto:001-002",
+      chapterFrom: 1,
+      chapterTo: 2,
+      sourceHash: arcSourceHash,
+      summary: "阶段摘要已完成",
+      structured: arcIndexPayloadV2(),
+      status: "ready",
+      error: null,
+      createdAt,
+      updatedAt: "2026-05-01T00:12:00.000Z"
+    });
+    const bookSourceHash = computeSourceHash([
+      arcSourceHash,
+      JSON.stringify({
+        indexed: 2,
+        total: 2,
+        stale: [],
+        missing: [],
+        skipped: []
+      })
+    ]);
+    summaryRepo.upsertBookSummary({
+      id: "book_ready",
+      projectId: "project_1",
+      sourceHash: bookSourceHash,
+      summaryShort: "全书短摘要已完成",
+      summaryLong: "全书长摘要已完成",
+      structured: bookIndexPayloadV2(),
+      status: "ready",
+      error: null,
+      createdAt,
+      updatedAt: "2026-05-01T00:13:00.000Z"
+    });
+    const failedArc = summaryRepo.enqueueSummaryJob({
+      projectId: "project_1",
+      jobType: "arc_summary",
+      targetId: "auto:001-002",
+      sourceHash: arcSourceHash,
+      priority: 6,
+      now: "2026-05-01T00:14:00.000Z"
+    });
+    const runningArc = summaryRepo.claimNextSummaryJob("project_1", "2026-05-01T00:15:00.000Z");
+    summaryRepo.failSummaryJob(runningArc?.id ?? failedArc.id, "旧的阶段摘要错误", null, "2026-05-01T00:16:00.000Z");
+    const failedBook = summaryRepo.enqueueSummaryJob({
+      projectId: "project_1",
+      jobType: "book_summary",
+      targetId: null,
+      sourceHash: bookSourceHash,
+      priority: 4,
+      now: "2026-05-01T00:17:00.000Z"
+    });
+    const runningBook = summaryRepo.claimNextSummaryJob("project_1", "2026-05-01T00:18:00.000Z");
+    summaryRepo.failSummaryJob(runningBook?.id ?? failedBook.id, "旧的全书摘要错误", null, "2026-05-01T00:19:00.000Z");
+    const retryingChapter = summaryRepo.enqueueSummaryJob({
+      projectId: "project_1",
+      jobType: "chapter_summary",
+      targetId: "chapter_2",
+      sourceHash: secondHash,
+      priority: 5,
+      now: "2026-05-01T00:20:00.000Z"
+    });
+    const runningRetry = summaryRepo.claimNextSummaryJob("project_1", "2026-05-01T00:21:00.000Z");
+    summaryRepo.failSummaryJob(runningRetry?.id ?? retryingChapter.id, "上游限流", "2026-05-01T00:36:00.000Z", "2026-05-01T00:22:00.000Z");
+    summaryRepo.enqueueSummaryJob({
+      projectId: "project_1",
+      jobType: "chapter_summary",
+      targetId: "chapter_2",
+      sourceHash: secondHash,
+      priority: 5,
+      attemptCount: 1,
+      now: "2026-05-01T00:22:00.000Z",
+      nextRunAt: "2026-05-01T00:36:00.000Z"
+    });
+    const service = new SummaryService(summaryRepo, chapterRepo);
+
+    const status = service.getIndexStatus("project_1", "2026-05-01T00:23:00.000Z");
+
+    expect(status.readyChapterCount).toBe(2);
+    expect(status.failedJobCount).toBe(0);
+    expect(status.recentFailedJobs).toEqual([]);
+    expect(status.retryingJobs).toHaveLength(1);
+    expect(status.nextRetryJobLabel).toBe("第1章");
+    db.close();
+  });
+
   it("classifies chapter cache entry failures so the UI does not need to show raw schema dumps", () => {
     const db = createDb();
     const { chapterRepo, summaryRepo } = seedProject(db);
