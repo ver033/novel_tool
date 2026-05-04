@@ -241,6 +241,7 @@ type GeneratedPreview = {
 
 export type AiTaskStreamHandlers = {
   readonly onChunk?: (event: { readonly requestId: string; readonly content: string }) => void;
+  readonly onReasoning?: (event: { readonly requestId: string; readonly content: string }) => void;
   readonly onContext?: (event: AiStreamContextEvent) => void;
   readonly onDone?: (event: { readonly requestId: string; readonly payload: GeneratedPreview }) => void;
   readonly onError?: (event: { readonly requestId: string; readonly error: string }) => void;
@@ -730,12 +731,17 @@ export class AiTaskService {
     }
     const outputKind: WritingOperationOutputKind = input.operation === "proofread" ? "proofread_issues" : "candidate_text";
     const shouldStreamToChat = outputKind === "candidate_text" && Boolean(input.streamHandlers?.onChunk);
-    if (shouldStreamToChat) {
+    let streamedTitle = false;
+    const streamTitleOnce = (): void => {
+      if (!shouldStreamToChat || streamedTitle) {
+        return;
+      }
+      streamedTitle = true;
       input.streamHandlers?.onChunk?.({
         requestId: "",
         content: `【${formatChatWritingOperationTitle(input.operation)}】\n`
       });
-    }
+    };
     const result = await this.writingOperationRunner.runRequest(
       {
         projectId: input.projectId,
@@ -749,7 +755,14 @@ export class AiTaskService {
       shouldStreamToChat
         ? {
             onChunk: (event) => {
+              streamTitleOnce();
               input.streamHandlers?.onChunk?.({
+                requestId: "",
+                content: event.content
+              });
+            },
+            onReasoning: (event) => {
+              input.streamHandlers?.onReasoning?.({
                 requestId: "",
                 content: event.content
               });
@@ -757,6 +770,12 @@ export class AiTaskService {
             onContext: input.streamHandlers?.onContext
           }
         : {
+            onReasoning: (event) => {
+              input.streamHandlers?.onReasoning?.({
+                requestId: "",
+                content: event.content
+              });
+            },
             onContext: input.streamHandlers?.onContext
           }
     );

@@ -38,7 +38,7 @@ describe("chapter title suggestion", () => {
     expect(suggestNewChapterTitle(chapters)).toBe("第15章");
   });
 
-  it("skips already used chapter numbers instead of creating duplicate chapter labels", () => {
+  it("still avoids duplicate chapter labels when called with a middle chapter", () => {
     const chapters = [
       chapter({ id: "chapter_14", title: "第十四章 坊市", sortOrder: 13 }),
       chapter({ id: "chapter_15", title: "第十五章 米特尔拍卖场", sortOrder: 14 })

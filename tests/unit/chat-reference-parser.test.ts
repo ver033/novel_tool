@@ -83,5 +83,9 @@ describe("chat @ reference parser", () => {
       scope: { type: "chapter_range", from: 2, to: 3 },
       messageWithoutReference: "梳理主线"
     });
+    expect(parseChatScopeReference("对比第3章和第6章，人物关系有什么变化")).toEqual({
+      scope: { type: "chapter_range", from: 3, to: 6 },
+      messageWithoutReference: "对比，人物关系有什么变化"
+    });
   });
 });

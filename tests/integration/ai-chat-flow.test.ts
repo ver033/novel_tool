@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { AiTaskService, type AiChatGenerator, type AiChatMessageResult } from "../../src/main/ai/ai-task-service";
 import type { ChatPlanner } from "../../src/main/ai/chat-agent-planner";
 import type { ChatAgentPlan } from "../../src/main/ai/chat-agent-types";
+import type { OpenRouterChatCompletionInput, OpenRouterStreamHandlers } from "../../src/main/ai/openrouter-client";
 import { emptyChapterContent } from "../../src/main/chapter/default-content";
 import { createDatabase } from "../../src/main/db/database";
 import { runMigrations } from "../../src/main/db/migrations";
@@ -20,6 +21,7 @@ import { computeChapterContentHash, computeSourceHash, type ChapterAiSummaryPayl
 import type { AiChatMessageRecord, AiStreamContextEvent, ChapterSummary } from "../../src/main/shared/types";
 import { estimateTextTokens } from "../../src/main/ai/token-estimator";
 import { getTokenBudget } from "../../src/main/ai/token-budget";
+import { WritingOperationRunner } from "../../src/main/ai/writing-operation-runner";
 import { arcIndexPayloadV2, bookIndexPayloadV2, chapterIndexPayloadV2 } from "../helpers/summary-index-fixtures";
 
 const tempDirs: string[] = [];
@@ -1066,6 +1068,79 @@ describe("AI chat flow", () => {
     );
 
     expect(reasoningChunks).toEqual(["先判断章节范围。"]);
+
+    db.close();
+  });
+
+  it("forwards reasoning chunks from inline chat writing operations", async () => {
+    const streamEvents: string[] = [];
+    const { aiTaskRepo, chapterRepo, chatRepo, db, projectService, scratchRepo, summaryRepo } = createServices();
+    const { project } = projectService.createProject({ name: "雨夜" });
+    const chatGenerator: AiChatGenerator = {
+      async sendAgentMessageStream() {
+        throw new Error("inline writing operation should not fall through to the agent generator");
+      }
+    };
+    const runner = new WritingOperationRunner({
+      resolveChapterRepo: (projectId) => chapterRepo(projectId),
+      resolveSummaryRepo: (projectId) => summaryRepo(projectId),
+      resolveTaskPreset: () => null,
+      resolveModelConfig: async () => ({
+        apiKey: "sk-or-v1-test",
+        modelName: "test/model",
+        contextLength: null
+      }),
+      createClient: () => ({
+        async createChatCompletion() {
+          throw new Error("inline chat writing operation should use streamChatCompletion");
+        },
+        async streamChatCompletion(input: OpenRouterChatCompletionInput, handlers?: OpenRouterStreamHandlers) {
+          expect(input.reasoning).not.toMatchObject({ exclude: true });
+          handlers?.onReasoning?.("先判断润色目标和边界。");
+          handlers?.onToken?.("萧炎缓缓垂下眼，紧攥的指节在袖中一点点泛白。");
+          return {
+            content: "萧炎缓缓垂下眼，紧攥的指节在袖中一点点泛白。",
+            truncated: false
+          };
+        }
+      })
+    });
+    const aiTaskService = new AiTaskService(
+      aiTaskRepo,
+      undefined,
+      chatGenerator,
+      chatRepo,
+      scratchRepo,
+      chapterRepo,
+      undefined,
+      () => getTokenBudget("chat"),
+      runner,
+      summaryRepo
+    );
+    const session = aiTaskService.getChatSession({ projectId: project.id });
+
+    await aiTaskService.sendChatMessageStream(
+      {
+        requestId: "chat_inline_reasoning",
+        projectId: project.id,
+        sessionId: session.id,
+        message: "萧炎垂下眼，指节慢慢攥紧。\n帮我润色一下"
+      },
+      {
+        onChunk(event) {
+          streamEvents.push(`chunk:${event.content}`);
+        },
+        onReasoning(event) {
+          streamEvents.push(`reasoning:${event.content}`);
+        }
+      }
+    );
+
+    expect(streamEvents).toEqual([
+      "reasoning:先判断润色目标和边界。",
+      "chunk:【润色稿】\n",
+      "chunk:萧炎缓缓垂下眼，紧攥的指节在袖中一点点泛白。"
+    ]);
 
     db.close();
   });

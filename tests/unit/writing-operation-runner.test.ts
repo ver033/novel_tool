@@ -241,6 +241,61 @@ describe("WritingOperationRunner", () => {
     db.close();
   });
 
+  it("forwards reasoning chunks for chat-tool writing operations", async () => {
+    const projectId = "project_runner_stream_reasoning";
+    const { db, chapterRepo } = createRunnerRepo(projectId);
+    let capturedReasoning: OpenRouterChatCompletionInput["reasoning"] | undefined;
+    const runner = new WritingOperationRunner({
+      resolveChapterRepo: () => chapterRepo,
+      resolveTaskPreset: () => null,
+      resolveModelConfig: async () => ({
+        apiKey: "sk-or-v1-test",
+        modelName: "test/model",
+        contextLength: null
+      }),
+      createClient: () => ({
+        async createChatCompletion() {
+          throw new Error("chat-tool writing operations should use streamChatCompletion");
+        },
+        async streamChatCompletion(input: OpenRouterChatCompletionInput, handlers?: OpenRouterStreamHandlers) {
+          capturedReasoning = input.reasoning;
+          handlers?.onReasoning?.("先判断润色目标和边界。");
+          handlers?.onToken?.("萧炎缓缓垂下眼，紧攥的指节在袖中一点点泛白。");
+          return {
+            content: "萧炎缓缓垂下眼，紧攥的指节在袖中一点点泛白。",
+            truncated: false
+          };
+        }
+      })
+    });
+
+    const streamedReasoning: string[] = [];
+    const result = await runner.runRequest(
+      {
+        projectId,
+        source: "chat_tool",
+        operation: "polish",
+        target: {
+          kind: "inline_text",
+          text: "萧炎垂下眼，指节慢慢攥紧。"
+        },
+        userInstruction: "更有压迫感。"
+      },
+      {},
+      {
+        onReasoning(event) {
+          streamedReasoning.push(event.content);
+        }
+      }
+    );
+
+    expect(capturedReasoning).not.toMatchObject({ exclude: true });
+    expect(streamedReasoning).toEqual(["先判断润色目标和边界。"]);
+    expect(result.generatedText).toContain("萧炎缓缓垂下眼");
+
+    db.close();
+  });
+
   it("continues a truncated candidate through the same writing operation context", async () => {
     const projectId = "project_runner_continue";
     const chapterId = "chapter_runner_continue";

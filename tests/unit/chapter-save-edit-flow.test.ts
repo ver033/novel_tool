@@ -85,7 +85,9 @@ describe("chapter save and edit flow", () => {
       plainText: "新正文\n\n第二段",
       wordCount: 7
     });
-    expect(service.getContent({ projectId: "project_1", chapterId: first.id }).plainText).toBe("新正文\n\n第二段");
+    const reloaded = service.getContent({ projectId: "project_1", chapterId: first.id });
+    expect(reloaded.plainText).toBe("新正文\n\n第二段");
+    expect(reloaded.contentJson).toEqual(createTiptapDocumentFromPlainText("新正文\n\n第二段"));
     expect(service.getContent({ projectId: "project_1", chapterId: second.id }).plainText).toBe("第二章不应被修改");
   });
 
@@ -117,6 +119,38 @@ describe("chapter save and edit flow", () => {
       )
     ).toThrow("章节内容已被其他操作更新");
     expect(service.getContent({ projectId: "project_1", chapterId: chapter.id }).plainText).toBe(firstSave.plainText);
+  });
+
+  it("rejects a save when the database read-back content does not match the submitted text", () => {
+    const db = createTestDatabase();
+    const projectRepo = new ProjectRepository(db);
+    const chapterRepo = new ChapterRepository(db);
+    createProject(projectRepo, "project_1");
+    const chapter = createChapter(chapterRepo, { chapterId: "chapter_1", projectId: "project_1", title: "第1章", text: "原始正文" });
+    const invalidator: SummaryIndexInvalidator = {
+      markChapterContentChanged: vi.fn()
+    };
+    const service = new ChapterService(chapterRepo, { summaryIndexInvalidator: invalidator });
+
+    db.prepare(
+      `CREATE TRIGGER corrupt_chapter_plain_text_after_save
+       AFTER UPDATE ON chapters
+       BEGIN
+         UPDATE chapters SET plain_text = '被篡改正文' WHERE id = NEW.id;
+       END`
+    ).run();
+
+    expect(() =>
+      service.saveContent({
+        projectId: "project_1",
+        chapterId: chapter.id,
+        contentJson: createTiptapDocumentFromPlainText("用户新正文"),
+        plainText: "用户新正文",
+        wordCount: 5
+      })
+    ).toThrow("章节保存后读回校验失败");
+    expect(service.getContent({ projectId: "project_1", chapterId: chapter.id }).plainText).toBe("原始正文");
+    expect(invalidator.markChapterContentChanged).not.toHaveBeenCalled();
   });
 
   it("never lets save, rename, delete, target updates, or snapshots cross project boundaries", () => {

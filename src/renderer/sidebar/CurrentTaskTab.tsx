@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Editor } from "@tiptap/react";
+import { Check, CopySimple } from "@phosphor-icons/react";
 import { proofreadIssueLabels, type ProofreadIssue } from "../../main/shared/proofread";
 import type { SelectionSnapshot, TaskPromptPreset, TaskType } from "../../main/shared/types";
 import { Button } from "../components/Button";
+import { IconButton } from "../components/IconButton";
 import { Textarea } from "../components/Textarea";
 import type { SettingsCategory } from "../routes/SettingsPage";
 import { candidateStatusLabels, taskLabels, taskStatusLabels } from "../state/sidebar-store";
@@ -115,6 +117,14 @@ function formatProofreadIssueDraft(issue: ProofreadIssue): string {
   return lines.join("\n");
 }
 
+function formatAllProofreadIssues(issues: readonly ProofreadIssue[]): string {
+  if (issues.length === 0) {
+    return "未发现明显问题。";
+  }
+
+  return issues.map((issue, index) => `${index + 1}. ${formatProofreadIssueDraft(issue)}`).join("\n\n");
+}
+
 export function CurrentTaskTab({
   chapterId,
   currentChapterTitle,
@@ -128,10 +138,14 @@ export function CurrentTaskTab({
 }: CurrentTaskTabProps) {
   const [instruction, setInstruction] = useState(initialInstructionForTask(taskType, taskPromptPreset));
   const [copiedIssueIndex, setCopiedIssueIndex] = useState<number | null>(null);
+  const [copiedCandidate, setCopiedCandidate] = useState(false);
+  const [copiedAllProofread, setCopiedAllProofread] = useState(false);
   const [copyError, setCopyError] = useState<string | null>(null);
   useEffect(() => {
     setInstruction(initialInstructionForTask(taskType, taskPromptPreset));
     setCopiedIssueIndex(null);
+    setCopiedCandidate(false);
+    setCopiedAllProofread(false);
     setCopyError(null);
   }, [taskType, taskPromptPreset?.id, selectionSnapshot?.selectionHash]);
 
@@ -149,6 +163,7 @@ export function CurrentTaskTab({
   });
   const primaryLabel = taskType === "expand" ? "替换原文" : taskType === "continue" ? "插入下方" : "应用替换";
   const hasCandidateText = Boolean(taskStore.candidate?.generatedText.trim());
+  const candidateCopyText = taskStore.streamingText || taskStore.candidate?.generatedText || taskStore.task?.outputText || "";
   const partialTruncatedText = taskStore.streamingText || taskStore.task?.outputText || "";
   const canContinueTruncated = Boolean(taskStore.task && taskStore.error?.includes("截断") && partialTruncatedText.trim() && taskType !== "proofread");
   const statusText = useMemo(() => {
@@ -171,24 +186,63 @@ export function CurrentTaskTab({
   ) : null;
   const copyErrorPanel = copyError ? (
     <div className="task-error-panel" role="alert">
-      <b>复制建议失败</b>
+      <b>复制失败</b>
       <p>{copyError}</p>
     </div>
   ) : null;
 
-  async function copyProofreadIssue(issue: ProofreadIssue, issueIndex: number): Promise<void> {
+  function markCopied(type: "candidate" | "proofread-all" | "proofread-issue", issueIndex?: number): void {
+    if (type === "candidate") {
+      setCopiedCandidate(true);
+      window.setTimeout(() => setCopiedCandidate(false), 1600);
+      return;
+    }
+
+    if (type === "proofread-all") {
+      setCopiedAllProofread(true);
+      window.setTimeout(() => setCopiedAllProofread(false), 1600);
+      return;
+    }
+
+    if (typeof issueIndex === "number") {
+      setCopiedIssueIndex(issueIndex);
+      window.setTimeout(() => {
+        setCopiedIssueIndex((current) => (current === issueIndex ? null : current));
+      }, 1600);
+    }
+  }
+
+  async function copyText(text: string, onCopied: () => void): Promise<void> {
     setCopyError(null);
     if (!navigator.clipboard) {
       setCopyError("系统剪贴板不可用。");
       return;
     }
 
-    try {
-      await navigator.clipboard.writeText(formatProofreadIssueDraft(issue));
-      setCopiedIssueIndex(issueIndex);
-    } catch (reason) {
-      setCopyError(reason instanceof Error ? reason.message : "复制建议失败");
+    const trimmedText = text.trim();
+    if (!trimmedText) {
+      setCopyError("当前没有可复制的内容。");
+      return;
     }
+
+    try {
+      await navigator.clipboard.writeText(trimmedText);
+      onCopied();
+    } catch (reason) {
+      setCopyError(reason instanceof Error ? reason.message : "复制失败");
+    }
+  }
+
+  async function copyGeneratedCandidate(): Promise<void> {
+    await copyText(candidateCopyText, () => markCopied("candidate"));
+  }
+
+  async function copyAllProofreadIssues(issues: readonly ProofreadIssue[]): Promise<void> {
+    await copyText(formatAllProofreadIssues(issues), () => markCopied("proofread-all"));
+  }
+
+  async function copyProofreadIssue(issue: ProofreadIssue, issueIndex: number): Promise<void> {
+    await copyText(formatProofreadIssueDraft(issue), () => markCopied("proofread-issue", issueIndex));
   }
 
   if (taskType === "proofread") {
@@ -209,7 +263,17 @@ export function CurrentTaskTab({
         <Textarea value={instruction} onChange={(event) => setInstruction(event.target.value)} />
         <label className="field-label">原文节选</label>
         <div className="preview-box">{selectedText}</div>
-        <label className="field-label">校对发现</label>
+        <div className="field-label-row">
+          <label className="field-label">校对发现</label>
+          <IconButton
+            className={`copy-icon-button ${copiedAllProofread ? "copied" : ""}`}
+            disabled={taskStore.busy || !taskStore.candidate || taskStore.candidate.proofreadIssues === null}
+            label="复制全部校对结果"
+            onClick={() => void copyAllProofreadIssues(proofreadIssues)}
+          >
+            {copiedAllProofread ? <Check size={17} weight="bold" /> : <CopySimple size={17} />}
+          </IconButton>
+        </div>
         {taskStore.busy && !taskStore.candidate ? (
           <div className="preview-box result" role="status">AI 正在生成校对结果...</div>
         ) : !taskStore.candidate ? (
@@ -286,7 +350,14 @@ export function CurrentTaskTab({
                   </div>
                 </div>
                 <div className="small-actions">
-                  <button className="small-button blue" disabled={taskStore.busy} onClick={() => void copyProofreadIssue(issue, index)} type="button">复制建议</button>
+                  <IconButton
+                    className={`copy-icon-button ${copiedIssueIndex === index ? "copied" : ""}`}
+                    disabled={taskStore.busy}
+                    label="复制这条校对建议"
+                    onClick={() => void copyProofreadIssue(issue, index)}
+                  >
+                    {copiedIssueIndex === index ? <Check size={17} weight="bold" /> : <CopySimple size={17} />}
+                  </IconButton>
                   <button className="small-button" disabled={taskStore.busy} onClick={() => void taskStore.saveTextToScratchpad(formatProofreadIssueDraft(issue))} type="button">加入草稿纸</button>
                   {copiedIssueIndex === index ? <span className="issue-copy-status">已复制</span> : null}
                 </div>
@@ -337,7 +408,17 @@ export function CurrentTaskTab({
       />
       <label className="field-label">原文节选</label>
       <div className="preview-box">{selectedText}</div>
-      <label className="field-label">预览结果</label>
+      <div className="field-label-row">
+        <label className="field-label">预览结果</label>
+        <IconButton
+          className={`copy-icon-button ${copiedCandidate ? "copied" : ""}`}
+          disabled={!candidateCopyText.trim()}
+          label="复制候选正文"
+          onClick={() => void copyGeneratedCandidate()}
+        >
+          {copiedCandidate ? <Check size={17} weight="bold" /> : <CopySimple size={17} />}
+        </IconButton>
+      </div>
       <div className="preview-box result">
         {taskStore.streamingText ? (
           <>

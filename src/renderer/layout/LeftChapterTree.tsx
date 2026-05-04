@@ -23,6 +23,7 @@ export function LeftChapterTree({
   onSelectChapter
 }: LeftChapterTreeProps) {
   const activeItemRef = useRef<HTMLDivElement | null>(null);
+  const lastChapterId = chapters.length > 0 ? chapters[chapters.length - 1]?.id ?? null : null;
 
   useEffect(() => {
     activeItemRef.current?.scrollIntoView({ block: "nearest" });
@@ -54,15 +55,17 @@ export function LeftChapterTree({
               <span className="chapter-name">{chapter.title}</span>
             </button>
             <div className="chapter-actions" aria-label={`${chapter.title} 操作`}>
-              <button
-                className="chapter-action"
-                onClick={() => onCreateChapterAfter(chapter.id)}
-                type="button"
-                aria-label={`在 ${chapter.title} 后新建章节`}
-                title="在本章后新建"
-              >
-                <Plus size={15} />
-              </button>
+              {chapter.id === lastChapterId ? (
+                <button
+                  className="chapter-action"
+                  onClick={() => onCreateChapterAfter(chapter.id)}
+                  type="button"
+                  aria-label={`在 ${chapter.title} 后新建章节`}
+                  title="在最后一章后新建"
+                >
+                  <Plus size={15} />
+                </button>
+              ) : null}
               <button
                 className="chapter-action"
                 onClick={() => onRenameChapter(chapter.id, chapter.title)}

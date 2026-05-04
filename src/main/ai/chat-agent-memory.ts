@@ -46,7 +46,18 @@ function getChatAgentMemoryPolicy(tokenBudget: TokenBudget, reservedInputTokens 
 }
 
 function relevantChatMessages(history: readonly AiChatMessageRecord[]): readonly AiChatMessageRecord[] {
-  return history.filter((message) => message.role === "user" || message.role === "assistant");
+  const messages: AiChatMessageRecord[] = [];
+  for (let index = 0; index < history.length; index += 1) {
+    const message = history[index];
+    if (message.role !== "user" && message.role !== "assistant") {
+      continue;
+    }
+    if (message.role === "user" && history[index + 1]?.role === "error") {
+      continue;
+    }
+    messages.push(message);
+  }
+  return messages;
 }
 
 function formatChatMessage(message: AiChatMessageRecord): string {

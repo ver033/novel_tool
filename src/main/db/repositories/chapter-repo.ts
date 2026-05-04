@@ -19,6 +19,15 @@ type ChapterRow = {
   readonly updated_at: string;
 };
 
+type ExpectedChapterSaveRow = {
+  readonly contentJson: string;
+  readonly dailyWordCount: number;
+  readonly dailyWordCountDate: string;
+  readonly plainText: string;
+  readonly updatedAt: string;
+  readonly wordCount: number;
+};
+
 type SnapshotRow = {
   readonly id: string;
   readonly chapter_id: string;
@@ -62,6 +71,31 @@ function mapSnapshot(row: SnapshotRow): ChapterSnapshot {
     reason: row.reason,
     createdAt: row.created_at
   };
+}
+
+function assertSavedRowMatches(row: ChapterRow, expected: ExpectedChapterSaveRow): void {
+  const mismatches: string[] = [];
+  if (row.content_json !== expected.contentJson) {
+    mismatches.push("格式内容");
+  }
+  if (row.plain_text !== expected.plainText) {
+    mismatches.push("纯文本");
+  }
+  if (row.word_count !== expected.wordCount) {
+    mismatches.push("字数");
+  }
+  if (row.daily_word_count !== expected.dailyWordCount) {
+    mismatches.push("今日字数");
+  }
+  if (row.daily_word_count_date !== expected.dailyWordCountDate) {
+    mismatches.push("今日字数日期");
+  }
+  if (row.updated_at !== expected.updatedAt) {
+    mismatches.push("更新时间");
+  }
+  if (mismatches.length > 0) {
+    throw new Error(`章节保存后读回校验失败：${mismatches.join("、")}不一致。为防止丢稿，本次保存已中止。`);
+  }
 }
 
 export class ChapterRepository {
@@ -139,28 +173,35 @@ export class ChapterRepository {
     expectedUpdatedAt?: string
   ): ChapterContent {
     const serializedContent = serializeContentJson(contentJson);
-    const result = expectedUpdatedAt
-      ? this.db
-          .prepare(
-            `UPDATE chapters
-             SET content_json = ?, plain_text = ?, word_count = ?, daily_word_count = ?, daily_word_count_date = ?, updated_at = ?
-             WHERE id = ? AND updated_at = ?`
-          )
-          .run(serializedContent, plainText, wordCount, dailyWordCount, dailyWordCountDate, updatedAt, chapterId, expectedUpdatedAt)
-      : this.db
-          .prepare(
-            "UPDATE chapters SET content_json = ?, plain_text = ?, word_count = ?, daily_word_count = ?, daily_word_count_date = ?, updated_at = ? WHERE id = ?"
-          )
-          .run(serializedContent, plainText, wordCount, dailyWordCount, dailyWordCountDate, updatedAt, chapterId);
-    if (expectedUpdatedAt && result.changes === 0) {
-      throw new Error("章节内容已被其他操作更新，请重新载入后再保存。");
-    }
+    return this.db.transaction(() => {
+      const result = expectedUpdatedAt
+        ? this.db
+            .prepare(
+              `UPDATE chapters
+               SET content_json = ?, plain_text = ?, word_count = ?, daily_word_count = ?, daily_word_count_date = ?, updated_at = ?
+               WHERE id = ? AND updated_at = ?`
+            )
+            .run(serializedContent, plainText, wordCount, dailyWordCount, dailyWordCountDate, updatedAt, chapterId, expectedUpdatedAt)
+        : this.db
+            .prepare(
+              "UPDATE chapters SET content_json = ?, plain_text = ?, word_count = ?, daily_word_count = ?, daily_word_count_date = ?, updated_at = ? WHERE id = ?"
+            )
+            .run(serializedContent, plainText, wordCount, dailyWordCount, dailyWordCountDate, updatedAt, chapterId);
+      if (expectedUpdatedAt && result.changes === 0) {
+        throw new Error("章节内容已被其他操作更新，请重新载入后再保存。");
+      }
 
-    const content = this.getContent(chapterId);
-    if (!content) {
-      throw new Error("Chapter not found");
-    }
-    return content;
+      const row = this.findRowById(chapterId);
+      assertSavedRowMatches(row, {
+        contentJson: serializedContent,
+        dailyWordCount,
+        dailyWordCountDate,
+        plainText,
+        updatedAt,
+        wordCount
+      });
+      return mapContent(row);
+    })();
   }
 
   updateTargetWordCount(chapterId: string, targetWordCount: number | null, updatedAt: string): ChapterSummary {

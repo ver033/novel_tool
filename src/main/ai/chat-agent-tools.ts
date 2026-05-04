@@ -698,12 +698,28 @@ function isSameExplicitScope(left: ChatAgentScope, right: ChatAgentScope): boole
   return true;
 }
 
+function isScopeAllowedByExplicitReference(explicitScope: ChatAgentScope, requestedScope: ChatAgentScope): boolean {
+  if (isSameExplicitScope(explicitScope, requestedScope)) {
+    return true;
+  }
+  if (explicitScope.type !== "chapter_range") {
+    return false;
+  }
+  if (requestedScope.type === "chapter") {
+    return requestedScope.ordinal >= explicitScope.from && requestedScope.ordinal <= explicitScope.to;
+  }
+  if (requestedScope.type === "chapter_range") {
+    return requestedScope.from >= explicitScope.from && requestedScope.to <= explicitScope.to;
+  }
+  return false;
+}
+
 function assertMatchesExplicitUserScope(runtime: ChatAgentToolRuntime, scope: ChatAgentScope): void {
   const explicitScope = parseChatScopeReference(runtime.userMessage)?.scope;
   if (explicitScope?.type === "current_chapter" || explicitScope?.type === "selection") {
     return;
   }
-  if (!explicitScope || isSameExplicitScope(explicitScope, scope)) {
+  if (!explicitScope || isScopeAllowedByExplicitReference(explicitScope, scope)) {
     return;
   }
   throw new Error(`用户明确要求${formatToolScopeLabel(explicitScope)}，但工具请求了${formatToolScopeLabel(scope)}。请按用户指定范围重新调用工具。`);

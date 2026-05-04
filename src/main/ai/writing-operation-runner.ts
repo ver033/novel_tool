@@ -134,7 +134,8 @@ export class WritingOperationRunner {
       contextPlan,
       userInstruction: request.userInstruction,
       preset: request.preset ?? null,
-      tokenBudget
+      tokenBudget,
+      source: request.source
     });
 
     return { config, contextPlan, operation, prompt };
@@ -200,6 +201,9 @@ export class WritingOperationRunner {
           if (operation.outputKind === "candidate_text") {
             handlers.onChunk?.({ requestId: "", content: token });
           }
+        },
+        onReasoning(token) {
+          handlers.onReasoning?.({ requestId: "", content: token });
         }
       }
     );
