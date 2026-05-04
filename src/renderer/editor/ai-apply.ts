@@ -9,6 +9,7 @@ import type {
 } from "../../main/shared/types";
 import { createTiptapDocumentFromPlainText, extractPlainTextFromTiptapJson, type TiptapDocument } from "./tiptap/converters";
 import { createSelectionHash } from "./tiptap/selection-utils";
+import { appendEmergencyJournalEntry } from "../state/draft-recovery-store";
 
 type ApplyResult = {
   readonly task: AiTaskRecord;
@@ -128,6 +129,15 @@ export async function applyAiCandidateToEditor({
 
   const contentJson = editor.getJSON() as TiptapDocument;
   const plainText = extractPlainTextFromTiptapJson(contentJson);
+  appendEmergencyJournalEntry({
+    projectId: task.projectId,
+    chapterId: task.chapterId,
+    chapterTitle: task.chapterId,
+    plainText,
+    wordCount: countWritingUnits(plainText),
+    dbUpdatedAt: null,
+    reason: "before_ai_apply"
+  });
   await api.chapter.saveContent({
     projectId: task.projectId,
     chapterId: task.chapterId,

@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  appendEmergencyJournalEntry,
   createDraftKey,
   createDraftTextHash,
   draftRecoveryStore,
+  getEmergencyJournalEntries,
   shouldOfferDraftRecovery,
   shouldPruneDraft,
   type EditorDraftRecord
@@ -235,5 +237,105 @@ describe("draft recovery store helpers", () => {
 
     await expect(draftRecoveryStore.getDraft("project_1", "chapter_saved")).resolves.toBeNull();
     await expect(draftRecoveryStore.getDraft("project_1", "chapter_dirty")).resolves.toMatchObject({ plainText: "未保存草稿" });
+  });
+
+  it("keeps a bounded per-chapter emergency journal for save checkpoints", () => {
+    for (let index = 0; index < 8; index += 1) {
+      appendEmergencyJournalEntry({
+        projectId: "project_1",
+        chapterId: "chapter_1",
+        chapterTitle: "第1章",
+        plainText: `保存前正文 ${index}`,
+        wordCount: 6,
+        dbUpdatedAt: "2026-05-03T10:00:00.000Z",
+        reason: "before_save"
+      });
+    }
+
+    const entries = getEmergencyJournalEntries("project_1", "chapter_1");
+
+    expect(entries).toHaveLength(5);
+    expect(entries[0]).toMatchObject({ plainText: "保存前正文 3", reason: "before_save" });
+    expect(entries.at(-1)).toMatchObject({ plainText: "保存前正文 7", reason: "before_save" });
+  });
+
+  it("does not append duplicate emergency journal entries for the same content hash", () => {
+    appendEmergencyJournalEntry({
+      projectId: "project_1",
+      chapterId: "chapter_1",
+      chapterTitle: "第1章",
+      plainText: "同一份正文",
+      wordCount: 5,
+      dbUpdatedAt: "2026-05-03T10:00:00.000Z",
+      reason: "before_save"
+    });
+    appendEmergencyJournalEntry({
+      projectId: "project_1",
+      chapterId: "chapter_1",
+      chapterTitle: "第1章",
+      plainText: "同一份正文",
+      wordCount: 5,
+      dbUpdatedAt: "2026-05-03T10:00:00.000Z",
+      reason: "before_save"
+    });
+
+    expect(getEmergencyJournalEntries("project_1", "chapter_1")).toHaveLength(1);
+  });
+
+  it("keeps emergency journal entries isolated by project and chapter", () => {
+    appendEmergencyJournalEntry({
+      projectId: "project_1",
+      chapterId: "chapter_1",
+      chapterTitle: "项目一第1章",
+      plainText: "项目一正文",
+      wordCount: 5,
+      dbUpdatedAt: null,
+      reason: "before_save"
+    });
+    appendEmergencyJournalEntry({
+      projectId: "project_1",
+      chapterId: "chapter_2",
+      chapterTitle: "项目一第2章",
+      plainText: "项目一第二章正文",
+      wordCount: 8,
+      dbUpdatedAt: null,
+      reason: "before_save"
+    });
+    appendEmergencyJournalEntry({
+      projectId: "project_2",
+      chapterId: "chapter_1",
+      chapterTitle: "项目二第1章",
+      plainText: "项目二正文",
+      wordCount: 5,
+      dbUpdatedAt: null,
+      reason: "before_ai_apply"
+    });
+
+    expect(getEmergencyJournalEntries("project_1", "chapter_1").map((entry) => entry.plainText)).toEqual(["项目一正文"]);
+    expect(getEmergencyJournalEntries("project_1", "chapter_2").map((entry) => entry.plainText)).toEqual(["项目一第二章正文"]);
+    expect(getEmergencyJournalEntries("project_2", "chapter_1").map((entry) => entry.reason)).toEqual(["before_ai_apply"]);
+  });
+
+  it("treats malformed emergency journal storage as empty instead of blocking recovery", () => {
+    localStorage.setItem("moshu-editor-journal:project_1:chapter_1", "{ broken json");
+
+    expect(getEmergencyJournalEntries("project_1", "chapter_1")).toEqual([]);
+  });
+
+  it("does not throw when emergency journal storage is unavailable", () => {
+    Reflect.deleteProperty(globalThis, "localStorage");
+
+    expect(() =>
+      appendEmergencyJournalEntry({
+        projectId: "project_1",
+        chapterId: "chapter_1",
+        chapterTitle: "第1章",
+        plainText: "无法写入本地存储时的正文",
+        wordCount: 12,
+        dbUpdatedAt: null,
+        reason: "before_save"
+      })
+    ).not.toThrow();
+    expect(getEmergencyJournalEntries("project_1", "chapter_1")).toEqual([]);
   });
 });

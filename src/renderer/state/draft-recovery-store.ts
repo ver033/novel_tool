@@ -14,6 +14,21 @@ export type EditorDraftRecord = {
   readonly updatedAt: string;
 };
 
+export type EmergencyJournalReason = "before_ai_apply" | "before_save";
+
+export type EmergencyJournalEntry = {
+  readonly key: string;
+  readonly projectId: string;
+  readonly chapterId: string;
+  readonly chapterTitle: string;
+  readonly plainText: string;
+  readonly wordCount: number;
+  readonly contentHash: string;
+  readonly dbUpdatedAt: string | null;
+  readonly reason: EmergencyJournalReason;
+  readonly createdAt: string;
+};
+
 export type DraftRecoveryDecisionInput = {
   readonly draftStatus: DraftStatus;
   readonly draftUpdatedAt: string;
@@ -23,12 +38,15 @@ export type DraftRecoveryDecisionInput = {
 };
 
 type PutDraftInput = Omit<EditorDraftRecord, "key" | "contentHash" | "updatedAt">;
+type PutEmergencyJournalInput = Omit<EmergencyJournalEntry, "contentHash" | "createdAt" | "key">;
 
 const DATABASE_NAME = "moshu-draft-recovery";
 const DATABASE_VERSION = 1;
 const STORE_NAME = "editor_drafts";
+const EMERGENCY_JOURNAL_LOCAL_STORAGE_PREFIX = "moshu-editor-journal:";
 const LOCAL_STORAGE_PREFIX = "moshu-editor-draft:";
 const LOCAL_STORAGE_CONTENT_JSON_LIMIT = 1_500_000;
+const MAX_EMERGENCY_JOURNAL_ENTRIES_PER_CHAPTER = 5;
 const SAVED_DRAFT_STATUSES = new Set<DraftStatus>(["saved", "dismissed"]);
 
 let databasePromise: Promise<IDBDatabase> | null = null;
@@ -66,12 +84,25 @@ function localStorageKey(projectId: string, chapterId: string): string {
   return `${LOCAL_STORAGE_PREFIX}${createDraftKey(projectId, chapterId)}`;
 }
 
+function emergencyJournalLocalStorageKey(projectId: string, chapterId: string): string {
+  return `${EMERGENCY_JOURNAL_LOCAL_STORAGE_PREFIX}${createDraftKey(projectId, chapterId)}`;
+}
+
 function createDraftRecord(input: PutDraftInput, updatedAt = new Date().toISOString()): EditorDraftRecord {
   return {
     ...input,
     key: createDraftKey(input.projectId, input.chapterId),
     contentHash: createDraftTextHash(input.plainText),
     updatedAt
+  };
+}
+
+function createEmergencyJournalEntry(input: PutEmergencyJournalInput, createdAt = new Date().toISOString()): EmergencyJournalEntry {
+  return {
+    ...input,
+    key: createDraftKey(input.projectId, input.chapterId),
+    contentHash: createDraftTextHash(input.plainText),
+    createdAt
   };
 }
 
@@ -122,6 +153,37 @@ function getLocalDraft(projectId: string, chapterId: string): EditorDraftRecord 
   }
 }
 
+function getLocalEmergencyJournalEntries(projectId: string, chapterId: string): EmergencyJournalEntry[] {
+  const store = storage();
+  if (!store) {
+    return [];
+  }
+
+  try {
+    const raw = store.getItem(emergencyJournalLocalStorageKey(projectId, chapterId));
+    if (!raw) {
+      return [];
+    }
+    const parsed = JSON.parse(raw) as EmergencyJournalEntry[];
+    return Array.isArray(parsed) ? parsed.filter((entry) => entry.projectId === projectId && entry.chapterId === chapterId) : [];
+  } catch {
+    return [];
+  }
+}
+
+function putLocalEmergencyJournalEntries(projectId: string, chapterId: string, entries: EmergencyJournalEntry[]): void {
+  const store = storage();
+  if (!store) {
+    return;
+  }
+
+  try {
+    store.setItem(emergencyJournalLocalStorageKey(projectId, chapterId), JSON.stringify(entries));
+  } catch {
+    // The normal emergency draft is still the primary recovery layer. The append journal is best-effort.
+  }
+}
+
 function pruneLocalDrafts(nowIso: string, keepDays: number): void {
   const store = storage();
   if (!store) {
@@ -143,6 +205,23 @@ function pruneLocalDrafts(nowIso: string, keepDays: number): void {
       store.removeItem(key);
     }
   }
+}
+
+export function appendEmergencyJournalEntry(input: PutEmergencyJournalInput): EmergencyJournalEntry | null {
+  const entry = createEmergencyJournalEntry(input);
+  const existingEntries = getLocalEmergencyJournalEntries(input.projectId, input.chapterId);
+  const latestEntry = existingEntries.at(-1);
+  if (latestEntry?.contentHash === entry.contentHash) {
+    return latestEntry;
+  }
+
+  const nextEntries = [...existingEntries, entry].slice(-MAX_EMERGENCY_JOURNAL_ENTRIES_PER_CHAPTER);
+  putLocalEmergencyJournalEntries(input.projectId, input.chapterId, nextEntries);
+  return entry;
+}
+
+export function getEmergencyJournalEntries(projectId: string, chapterId: string): EmergencyJournalEntry[] {
+  return getLocalEmergencyJournalEntries(projectId, chapterId);
 }
 
 function chooseDraft(indexedDraft: EditorDraftRecord | null, localDraft: EditorDraftRecord | null): EditorDraftRecord | null {
@@ -226,6 +305,10 @@ async function putRecord(record: EditorDraftRecord): Promise<EditorDraftRecord> 
 }
 
 export const draftRecoveryStore = {
+  appendEmergencyJournalEntry,
+
+  getEmergencyJournalEntries,
+
   putEmergencyDraft(input: PutDraftInput): EditorDraftRecord {
     const record = createDraftRecord(input);
     putLocalDraft(record);

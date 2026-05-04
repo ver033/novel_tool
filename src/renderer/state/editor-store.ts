@@ -352,9 +352,20 @@ export function useEditorStore(activeChapter: ChapterSummary | null) {
 
       const snapshotChapterId = snapshot.chapterId;
       const snapshotProjectId = snapshot.projectId;
+      const snapshotDraftContext = draftWriteContext.current;
       const saveStartedAtRevision = editRevision.current;
       setSaveStatus("saving");
       const savePromise = (async () => {
+        draftRecoveryStore.appendEmergencyJournalEntry({
+          projectId: snapshotProjectId,
+          chapterId: snapshotChapterId,
+          chapterTitle: snapshotDraftContext.chapterId === snapshotChapterId ? snapshotDraftContext.chapterTitle : "未命名章节",
+          plainText: snapshot.plainText,
+          wordCount: snapshot.wordCount,
+          dbUpdatedAt: snapshotDraftContext.chapterId === snapshotChapterId ? snapshotDraftContext.dbUpdatedAt : savedDbUpdatedAt.current,
+          reason: "before_save"
+        });
+
         const content = (await api.chapter.saveContent({
           projectId: snapshotProjectId,
           chapterId: snapshotChapterId,
