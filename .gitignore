@@ -24,7 +24,9 @@ playwright-report/
 manual-test-import.txt
 
 # Project planning, design references, and prototypes
-docs/
+docs/*
+!docs/USER_GUIDE_V1.md
+!docs/USER_MANUAL.md
 
 # Local app data and user project files
 *.noveltool

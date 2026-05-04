@@ -140,8 +140,10 @@ export function useAppStore() {
     }
 
     const sortedChapters = [...chapters].sort((a, b) => a.sortOrder - b.sortOrder || a.createdAt.localeCompare(b.createdAt));
-    const afterChapter = options.afterChapterId ? sortedChapters.find((chapter) => chapter.id === options.afterChapterId) ?? null : null;
-    const title = suggestNewChapterTitle(sortedChapters, options);
+    const lastChapter = sortedChapters[sortedChapters.length - 1] ?? null;
+    const requestedAfterChapter = options.afterChapterId ? sortedChapters.find((chapter) => chapter.id === options.afterChapterId) ?? null : null;
+    const afterChapter = requestedAfterChapter?.id === lastChapter?.id ? requestedAfterChapter : null;
+    const title = suggestNewChapterTitle(sortedChapters, afterChapter ? { afterChapterId: afterChapter.id } : {});
     const inheritedTargetWordCount = (afterChapter ?? sortedChapters[sortedChapters.length - 1])?.targetWordCount ?? null;
     const chapter = (await api.chapter.create({
       projectId: currentProject.id,

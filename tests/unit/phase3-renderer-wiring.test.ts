@@ -27,7 +27,7 @@ describe("phase 3 renderer project and chapter wiring", () => {
     expect(chapterTree).toContain("chapters.map");
     expect(chapterTree).toContain("onCreateChapter");
     expect(chapterTree).toContain("onCreateChapterAfter");
-    expect(chapterTree).toContain("在本章后新建");
+    expect(chapterTree).toContain("在最后一章后新建");
     expect(chapterTree).toContain("onSelectChapter");
     expect(chapterTree).toContain("onRenameChapter");
     expect(chapterTree).toContain("onDeleteChapter");
@@ -37,6 +37,17 @@ describe("phase 3 renderer project and chapter wiring", () => {
     expect(appStore).toContain("deleteChapter");
     expect(styles).toContain("position: sticky");
     expect(chapterTree).not.toContain("const chapters =");
+  });
+
+  it("only exposes after-chapter creation on the last chapter", () => {
+    const chapterTree = readSource("src/renderer/layout/LeftChapterTree.tsx");
+    const appStore = readSource("src/renderer/state/app-store.ts");
+
+    expect(chapterTree).toContain("lastChapterId");
+    expect(chapterTree).toContain("chapter.id === lastChapterId");
+    expect(chapterTree).toContain("在最后一章后新建");
+    expect(appStore).toContain("requestedAfterChapter");
+    expect(appStore).toContain("requestedAfterChapter?.id === lastChapter?.id");
   });
 
   it("returns from settings to the page that opened settings", () => {

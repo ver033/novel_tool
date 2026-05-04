@@ -337,9 +337,12 @@ describe("phase 11 V1 hardening", () => {
     expect(css).toContain("@media (max-width: 760px)");
   });
 
-  it("keeps local-only docs out of the versioned test contract", () => {
+  it("keeps local-only docs out of the versioned test contract while allowing user manuals", () => {
     const gitignore = readSource(".gitignore");
 
-    expect(gitignore).toMatch(/^docs\/$/m);
+    expect(gitignore).toContain("docs/*");
+    expect(gitignore).toContain("!docs/USER_GUIDE_V1.md");
+    expect(gitignore).toContain("!docs/USER_MANUAL.md");
+    expect(gitignore).not.toContain("!docs/*.md");
   });
 });
