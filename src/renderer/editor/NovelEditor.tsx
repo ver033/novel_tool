@@ -1,10 +1,13 @@
 import { memo, useEffect, useRef, type CSSProperties } from "react";
+import { Extension } from "@tiptap/core";
 import { EditorContent, useEditor, type Editor } from "@tiptap/react";
 import Link from "@tiptap/extension-link";
 import { BackgroundColor, FontSize, TextStyle } from "@tiptap/extension-text-style";
 import StarterKit from "@tiptap/starter-kit";
 import { CharacterCount, Placeholder } from "@tiptap/extensions";
 import { closeHistory } from "@tiptap/pm/history";
+import { Plugin, PluginKey, TextSelection } from "@tiptap/pm/state";
+import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import { UniqueID } from "@tiptap/extension-unique-id";
 import { countWritingUnits } from "../../main/shared/text";
 import type { EditorSettings, SelectionSnapshot, TaskPromptPreset, TaskType } from "../../main/shared/types";
@@ -18,12 +21,22 @@ export type NovelEditorProps = {
   readonly contentJson: TiptapDocument;
   readonly contentVersion: number;
   readonly editorSettings: EditorSettings;
+  readonly searchTarget?: EditorSearchTarget | null;
   readonly taskPromptPresets: readonly TaskPromptPreset[];
   readonly onContentChange: (contentJson: TiptapDocument) => void;
   readonly onEditorReady?: (editor: Editor | null) => void;
+  readonly onSearchTargetResolved?: (targetId: number) => void;
   readonly onSelectionToChat?: (snapshot: SelectionSnapshot) => void;
   readonly onSelectionToScratchpad?: (snapshot: SelectionSnapshot) => Promise<void> | void;
   readonly onTask: (task: TaskType, snapshot?: SelectionSnapshot | null, preset?: TaskPromptPreset | null) => void;
+};
+
+export type EditorSearchTarget = {
+  readonly chapterId: string;
+  readonly id: number;
+  readonly paragraphId: string | null;
+  readonly paragraphIndex: number | null;
+  readonly query: string;
 };
 
 type EditorContentStyle = CSSProperties & {
@@ -53,6 +66,44 @@ const firstLineIndentBySetting = {
   four: "4em"
 } as const;
 
+const searchJumpHighlightPluginKey = new PluginKey<DecorationSet>("moshuSearchJumpHighlight");
+
+const SearchJumpHighlightExtension = Extension.create({
+  name: "moshuSearchJumpHighlight",
+
+  addProseMirrorPlugins() {
+    return [
+      new Plugin<DecorationSet>({
+        key: searchJumpHighlightPluginKey,
+        props: {
+          decorations(state) {
+            return searchJumpHighlightPluginKey.getState(state);
+          }
+        },
+        state: {
+          init() {
+            return DecorationSet.empty;
+          },
+          apply(transaction, previousDecorations) {
+            const highlightRange = transaction.getMeta(searchJumpHighlightPluginKey) as { readonly from: number; readonly to: number } | null | undefined;
+            if (highlightRange === null) {
+              return DecorationSet.empty;
+            }
+            if (highlightRange) {
+              return DecorationSet.create(transaction.doc, [
+                Decoration.inline(highlightRange.from, highlightRange.to, {
+                  class: "search-jump-highlight"
+                })
+              ]);
+            }
+            return previousDecorations.map(transaction.mapping, transaction.doc);
+          }
+        }
+      })
+    ];
+  }
+});
+
 function replaceEditorContentWithoutUndo(editor: Editor, contentJson: TiptapDocument): void {
   const document = editor.schema.nodeFromJSON(ensureParagraphIds(contentJson));
   const transaction = editor.state.tr
@@ -64,14 +115,64 @@ function replaceEditorContentWithoutUndo(editor: Editor, contentJson: TiptapDocu
   editor.view.dispatch(transaction);
 }
 
+function resolveSearchTargetRange(editor: Editor, target: EditorSearchTarget): { readonly from: number; readonly to: number } | null {
+  const query = target.query.trim();
+  const lowerQuery = query.toLocaleLowerCase("zh-CN");
+  let textBlockIndex = -1;
+  let range: { from: number; to: number } | null = null;
+
+  editor.state.doc.descendants((node, position) => {
+    if (!node.isTextblock) {
+      return true;
+    }
+
+    textBlockIndex += 1;
+    const nodeParagraphId = typeof node.attrs.paragraphId === "string" ? node.attrs.paragraphId : null;
+    const isTargetBlock = target.paragraphId ? nodeParagraphId === target.paragraphId : target.paragraphIndex === textBlockIndex;
+    if (!isTargetBlock) {
+      return true;
+    }
+
+    const matchIndex = lowerQuery ? node.textContent.toLocaleLowerCase("zh-CN").indexOf(lowerQuery) : -1;
+    const from = position + 1 + Math.max(0, matchIndex);
+    range = {
+      from,
+      to: matchIndex >= 0 ? from + query.length : from
+    };
+    return false;
+  });
+
+  return range;
+}
+
+function scrollSearchRangeIntoEditorView(editor: Editor, position: number): void {
+  window.requestAnimationFrame(() => {
+    const scrollContainer = editor.view.dom.closest(".editor-scroll");
+    if (!(scrollContainer instanceof HTMLElement)) {
+      editor.commands.scrollIntoView();
+      return;
+    }
+
+    const coordinates = editor.view.coordsAtPos(position);
+    const containerRect = scrollContainer.getBoundingClientRect();
+    const targetTop = scrollContainer.scrollTop + coordinates.top - containerRect.top - 96;
+    scrollContainer.scrollTo({
+      behavior: "smooth",
+      top: Math.max(0, targetTop)
+    });
+  });
+}
+
 export const NovelEditor = memo(function NovelEditor({
   chapterId,
   contentJson,
   contentVersion,
   editorSettings,
+  searchTarget,
   taskPromptPresets,
   onContentChange,
   onEditorReady,
+  onSearchTargetResolved,
   onSelectionToChat,
   onSelectionToScratchpad,
   onTask
@@ -116,6 +217,7 @@ export const NovelEditor = memo(function NovelEditor({
         textCounter: countWritingUnits,
         wordCounter: countWritingUnits
       }),
+      SearchJumpHighlightExtension,
       UniqueID.configure({
         attributeName: "paragraphId",
         types: ["paragraph", "heading"],
@@ -146,6 +248,26 @@ export const NovelEditor = memo(function NovelEditor({
     onEditorReady?.(editor);
     return () => onEditorReady?.(null);
   }, [editor, onEditorReady]);
+
+  useEffect(() => {
+    if (!editor || !searchTarget || searchTarget.chapterId !== chapterId) {
+      return;
+    }
+
+    const range = resolveSearchTargetRange(editor, searchTarget);
+    if (!range) {
+      return;
+    }
+
+    const transaction = editor.state.tr
+      .setSelection(TextSelection.create(editor.state.doc, range.from, range.to))
+      .setMeta(searchJumpHighlightPluginKey, range.to > range.from ? range : null)
+      .scrollIntoView();
+    editor.view.dispatch(transaction);
+    editor.view.focus();
+    scrollSearchRangeIntoEditorView(editor, range.from);
+    onSearchTargetResolved?.(searchTarget.id);
+  }, [chapterId, contentVersion, editor, onSearchTargetResolved, searchTarget]);
 
   function handleTask(task: TaskType, snapshot: SelectionSnapshot, taskPromptPreset?: TaskPromptPreset | null): void {
     onTask(task, snapshot, taskPromptPreset);

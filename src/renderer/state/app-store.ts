@@ -8,6 +8,7 @@ import type {
   RecentProjectEntry
 } from "../../main/shared/types";
 import { suggestNewChapterTitle } from "./chapter-title";
+import { resolveInitialActiveChapterId, saveLastWritingPosition } from "./writing-position-store";
 
 type CreateChapterOptions = {
   readonly afterChapterId?: string;
@@ -53,7 +54,7 @@ export function useAppStore() {
       const opened = (await api.project.openProject({ projectId })) as OpenedProjectResult;
       setCurrentProject(opened.project);
       setChapters([...opened.chapters]);
-      setActiveChapterId(opened.chapters[0]?.id ?? null);
+      setActiveChapterId(resolveInitialActiveChapterId(opened.project.id, opened.chapters));
       await loadRecentProjects();
     },
     [api, loadRecentProjects]
@@ -68,7 +69,7 @@ export function useAppStore() {
     const opened = (await api.project.openProjectFile({ filePath: selected.filePath })) as OpenedProjectResult;
     setCurrentProject(opened.project);
     setChapters([...opened.chapters]);
-    setActiveChapterId(opened.chapters[0]?.id ?? null);
+    setActiveChapterId(resolveInitialActiveChapterId(opened.project.id, opened.chapters));
     await loadRecentProjects();
     return opened;
   }, [api, loadRecentProjects]);
@@ -207,6 +208,15 @@ export function useAppStore() {
   useEffect(() => {
     void loadRecentProjects();
   }, [loadRecentProjects]);
+
+  useEffect(() => {
+    if (currentProject && activeChapter) {
+      saveLastWritingPosition({
+        projectId: currentProject.id,
+        chapterId: activeChapter.id
+      });
+    }
+  }, [activeChapter?.id, currentProject?.id]);
 
   const selectChapter = useCallback((chapterId: string) => {
     setActiveChapterId(chapterId);
