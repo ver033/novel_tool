@@ -37,7 +37,8 @@ describe("writing operation prompt", () => {
       contextPlan: contextPlan(),
       userInstruction: "更有压迫感。",
       preset: null,
-      tokenBudget: getTokenBudget("polish")
+      tokenBudget: getTokenBudget("polish"),
+      source: "selection_toolbar"
     });
 
     const joined = prompt.messages.map((message) => message.content).join("\n");
@@ -56,7 +57,8 @@ describe("writing operation prompt", () => {
       contextPlan: { ...contextPlan(), supportingContext: [] },
       userInstruction: "检查明显问题。",
       preset: null,
-      tokenBudget: getTokenBudget("proofread")
+      tokenBudget: getTokenBudget("proofread"),
+      source: "selection_toolbar"
     });
     const polish = buildWritingOperationPrompt({
       operation: getWritingOperationDefinition("polish"),
@@ -64,7 +66,8 @@ describe("writing operation prompt", () => {
       contextPlan: contextPlan(),
       userInstruction: "",
       preset: null,
-      tokenBudget: getTokenBudget("polish")
+      tokenBudget: getTokenBudget("polish"),
+      source: "selection_toolbar"
     });
 
     expect(proofread.responseFormat).toMatchObject({ type: "json_schema" });
@@ -99,7 +102,8 @@ describe("writing operation prompt", () => {
         instruction: "表达更古雅，但不要改剧情。",
         showInSelectionMenu: true
       },
-      tokenBudget: getTokenBudget("polish")
+      tokenBudget: getTokenBudget("polish"),
+      source: "selection_toolbar"
     });
 
     const system = prompt.messages.find((message) => message.role === "system")?.content ?? "";
@@ -128,7 +132,8 @@ describe("writing operation prompt", () => {
       contextPlan: contextPlan(),
       userInstruction: "",
       preset: null,
-      tokenBudget: getTokenBudget("polish")
+      tokenBudget: getTokenBudget("polish"),
+      source: "selection_toolbar"
     });
     const proofread = buildWritingOperationPrompt({
       operation: getWritingOperationDefinition("proofread"),
@@ -136,11 +141,24 @@ describe("writing operation prompt", () => {
       contextPlan: { ...contextPlan(), supportingContext: [] },
       userInstruction: "",
       preset: null,
-      tokenBudget: getTokenBudget("proofread")
+      tokenBudget: getTokenBudget("proofread"),
+      source: "selection_toolbar"
     });
 
     expect(polish.reasoning).toEqual({ max_tokens: 2000, exclude: true });
     expect(proofread.reasoning).toEqual({ max_tokens: 4000, exclude: true });
+
+    const chatPolish = buildWritingOperationPrompt({
+      operation: getWritingOperationDefinition("polish"),
+      skill: loadWritingSkill("moshu.polish"),
+      contextPlan: contextPlan(),
+      userInstruction: "",
+      preset: null,
+      tokenBudget: getTokenBudget("polish"),
+      source: "chat_tool"
+    });
+
+    expect(chatPolish.reasoning).toEqual({ max_tokens: 2000, exclude: false });
   });
 
   it("parses proofread issues without replacement text", () => {

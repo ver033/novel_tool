@@ -1,7 +1,7 @@
 {
   "name": "novel-tool",
   "productName": "墨枢",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "private": true,
   "description": "Local-first Chinese long-form novel editing workstation.",
   "main": ".vite/build/index.js",
@@ -44,6 +44,7 @@
     "parse5": "8.0.0",
     "react": "19.2.4",
     "react-dom": "19.2.4",
+    "react-resizable-panels": "4.9.0",
     "zod": "4.3.6"
   },
   "devDependencies": {

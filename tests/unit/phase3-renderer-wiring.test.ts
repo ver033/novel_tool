@@ -57,4 +57,25 @@ describe("phase 3 renderer project and chapter wiring", () => {
     expect(app).toContain("returnFromSettings");
     expect(app).toContain("onClose={returnFromSettings}");
   });
+
+  it("uses persisted resizable panels for the editor and right utility sidebar", () => {
+    const packageJson = JSON.parse(readSource("package.json")) as { dependencies?: Record<string, string> };
+    const writingPage = readSource("src/renderer/routes/WritingPage.tsx");
+    const styles = readSource("src/renderer/styles/globals.css");
+
+    expect(packageJson.dependencies?.["react-resizable-panels"]).toBe("4.9.0");
+    expect(writingPage).toContain("PanelGroup");
+    expect(writingPage).toContain("PanelResizeHandle");
+    expect(writingPage).toContain('id="moshu-writing-sidebar-v2"');
+    expect(writingPage).toContain("useDefaultLayout");
+    expect(writingPage).toContain('defaultSize="520px"');
+    expect(writingPage).toContain('minSize="360px"');
+    expect(writingPage).toContain('maxSize="75%"');
+    expect(writingPage).not.toContain("defaultSize={34}");
+    expect(writingPage).not.toContain("maxSize={48}");
+    expect(writingPage).toContain('className="sidebar-resize-handle"');
+    expect(styles).toContain(".workspace-main-panels");
+    expect(styles).toContain(".sidebar-resize-handle");
+    expect(styles).toContain("cursor: col-resize");
+  });
 });

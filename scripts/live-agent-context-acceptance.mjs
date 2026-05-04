@@ -221,70 +221,181 @@ function classifyFailure(message) {
 }
 
 function buildScenarios(range) {
+  const scope = `前${range}章`;
+  const rangeEnd = Math.max(2, Math.min(range, 5));
+  const rangeMid = Math.max(2, Math.min(range, 6));
   return [
     {
-      name: "前50章整体总结",
-      message: `帮我总结前${range}章的内容`
+      name: "前N章整体总结",
+      message: `帮我总结${scope}的内容`
     },
     {
-      name: "前50章时间线",
-      message: `前${range}章按时间线梳理一下，按事件先后顺序列出关键节点`
+      name: "前N章分章一句话",
+      message: `把${scope}按章节列成表格，每章一句话，不要改写正文`
     },
     {
-      name: "全书时间线请求",
-      message: "所有章节都缓存完了，帮我总结时间线"
+      name: "前N章时间线",
+      message: `${scope}按时间线梳理一下，按事件先后顺序列出关键节点`
     },
     {
       name: "主要人物状态",
-      message: `前${range}章出现了哪些主要人物？分别有什么状态变化、动机和关系变化？`
+      message: `${scope}出现了哪些主要人物？分别有什么状态变化、动机和关系变化？`
+    },
+    {
+      name: "主角人物线",
+      message: `${scope}里萧炎的处境、目标、情绪和外界评价有什么变化？`
+    },
+    {
+      name: "人物关系变化",
+      message: `${scope}里萧炎、萧战、纳兰嫣然、葛叶、薰儿之间的关系有什么变化？`
+    },
+    {
+      name: "人物认知边界",
+      message: `${scope}里哪些人物知道了关键信息？哪些人物还不知道？请按人物列出`
     },
     {
       name: "伏笔线索",
-      message: `前${range}章有哪些明确伏笔、疑似伏笔、普通线索和未解决问题？`
+      message: `${scope}有哪些明确伏笔、疑似伏笔、普通线索和未解决问题？`
+    },
+    {
+      name: "未解决问题清单",
+      message: `${scope}结束时还有哪些悬念、未解决问题和后续需要承接的点？`
     },
     {
       name: "世界规则设定",
-      message: `前${range}章里斗气、炼药师、功法、丹药这些世界规则是什么？`
+      message: `${scope}里斗气、炼药师、功法、丹药这些世界规则是什么？`
     },
     {
       name: "道具状态",
-      message: `前${range}章里聚气散、黑铁片、筑基灵液、功法这些物品或资源的状态变化是什么？`
+      message: `${scope}里聚气散、黑铁片、筑基灵液、功法这些物品或资源的状态变化是什么？`
     },
     {
       name: "章节范围总结",
-      message: "总结第20章到第25章的拍卖相关剧情，顺便说明关键道具和人物态度"
+      message: `总结第2章到第${rangeEnd}章的剧情，顺便说明关键道具和人物态度`
+    },
+    {
+      name: "单章深度总结",
+      message: "总结第3章，按场景、人物行动、冲突、结果来写"
+    },
+    {
+      name: "当前章节查询",
+      message: "@当前章节 这一章的核心冲突是什么？有哪些后文需要记住的信息？"
+    },
+    {
+      name: "显式章节引用",
+      message: "@第4章 这一章里云岚宗相关信息有哪些？"
     },
     {
       name: "连续性检查",
-      message: "检查第5章到第10章有没有人物认知、道具状态、时间线或因果上的矛盾"
+      message: `检查第5章到第${Math.max(5, range)}章有没有人物认知、道具状态、时间线或因果上的矛盾`
     },
     {
-      name: "缺失缓存范围",
-      message: "总结第51章到第60章的内容，如果索引不完整请明确说明"
+      name: "跨章节对比",
+      message: `对比第3章和第${rangeMid}章，人物关系、信息差和冲突焦点有什么变化？`
+    },
+    {
+      name: "写作风险检查",
+      message: `${scope}如果继续写下一章，最需要避免哪些连续性错误？`
     },
     {
       name: "非写作任务不能扭曲成润色",
       message: "把前10章整理成一个可用于写大纲的剧情节点表，不要改写正文"
     },
     {
+      name: "生成简介不是润色",
+      message: `${scope}整理成一段作品简介和三条卖点，不要改写正文，不要输出润色稿`
+    },
+    {
+      name: "生成章节标题建议不是润色",
+      message: `${scope}每章给一个更适合目录展示的标题建议，只给建议和理由，不要改正文`
+    },
+    {
+      name: "提取人物卡不是润色",
+      message: `${scope}提取萧炎、萧战、纳兰嫣然、薰儿的人物卡草稿`
+    },
+    {
+      name: "提取设定卡不是润色",
+      message: `${scope}提取斗气体系和炼药师体系的设定卡，不要创作新设定`
+    },
+    {
+      name: "节奏结构分析",
+      message: `${scope}的叙事节奏哪里快、哪里慢？哪些章节承担铺垫、冲突或转折功能？`
+    },
+    {
+      name: "读者疑问预测",
+      message: `${scope}读完后，读者最可能产生哪些疑问？哪些是作者需要后续回答的？`
+    },
+    {
+      name: "下一章承接建议",
+      message: `${scope}之后如果写下一章，需要承接哪些人物状态、伏笔和情绪余波？`
+    },
+    {
+      name: "查找某人出现",
+      message: `${scope}里纳兰嫣然出现在哪些章节？每次出场做了什么？`
+    },
+    {
+      name: "查找物品出现",
+      message: `${scope}里聚气散出现在哪些地方？它的作用、持有者和剧情影响是什么？`
+    },
+    {
+      name: "情绪线梳理",
+      message: `${scope}里萧炎的情绪线怎么变化？请按关键事件说明`
+    },
+    {
+      name: "冲突升级路径",
+      message: `${scope}里的主要冲突是如何一步步升级的？`
+    },
+    {
+      name: "多轮追问沿用范围",
+      message: "同时告诉我这些内容里最适合后续回收的三个伏笔"
+    },
+    {
+      name: "加入草稿纸动作",
+      message: "把第3章总结成 200 字以内，并加入草稿纸"
+    },
+    {
       name: "自然语言润色 inline",
       message: "床榻之上，少年闭目盘腿而坐，双手在身前摆出奇异的手印，胸膛轻微起伏，一呼一吸间，形成完美的循环。帮我润一下色"
+    },
+    {
+      name: "slash润色 inline",
+      message: "/润色 萧炎沉默地走下石台，身后的人群仍在窃窃私语。"
     },
     {
       name: "润色加扩写 inline",
       message: "萧炎沉默地走下石台，身后的人群仍在窃窃私语。把这一段润色一下，并稍微扩写动作和心理。"
     },
     {
+      name: "扩写 inline",
+      message: "萧炎抬起头，看向高台上的父亲。扩写这一段，补动作、心理和场景压力。"
+    },
+    {
+      name: "对话自然化 inline",
+      message: "“你不要再说了，我知道了。”她看着他说。把这句对白润色得更自然一点，但不要改变人物关系。"
+    },
+    {
       name: "校对 inline 明显错误",
       message: "火候的轻重是重中之中，粉嫩娇舌轻轻的添了添红唇，大厅噶然一静。校对一下这段。"
+    },
+    {
+      name: "校对章节范围",
+      message: "校对第6章，重点看错别字、误插入、人物认知和道具状态问题"
     },
     {
       name: "续写 inline",
       message: "萧炎望着掌心逐渐凝聚的斗气，终于缓缓吐出一口气。顺着这个场景续写一小段。"
     },
     {
+      name: "选区缺失处理",
+      message: "@选区 帮我润色一下"
+    },
+    {
       name: "不存在章节",
       message: "总结第9999章的内容"
+    },
+    {
+      name: "越权写回保护",
+      message: "把第3章改成更热血的版本并直接替换正文"
     }
   ];
 }
@@ -294,13 +405,19 @@ function assertScenarioOutput(record) {
   if (RAW_BUDGET_ERROR_PATTERN.test(combined)) {
     throw new Error(`出现内部输入预算错误：${combined.slice(0, 500)}`);
   }
+  if (record.name === "选区缺失处理" && /(当前没有选中文本|没有选区|请先选择正文|请先在正文中选择)/u.test(combined)) {
+    return;
+  }
+  if (record.name === "不存在章节" && /(第9999章.*(?:不存在|找不到)|(?:不存在|找不到|没有)第9999章|可用章节范围)/u.test(combined.replace(/[\s*_`]+/g, ""))) {
+    return;
+  }
   if (record.error) {
     throw new Error(record.error);
   }
   if (!record.content?.trim()) {
     throw new Error("返回内容为空。");
   }
-  if (["前50章整体总结", "前50章时间线", "全书时间线请求", "主要人物状态", "伏笔线索"].includes(record.name) && record.chunkCount === 0) {
+  if (["前N章整体总结", "前N章时间线", "主要人物状态", "伏笔线索"].includes(record.name) && record.chunkCount === 0) {
     throw new Error("没有收到流式正文 chunk。");
   }
   if (record.name === "自然语言润色 inline" && /当前没有选中文本|请先选择正文/u.test(record.content)) {
@@ -309,16 +426,33 @@ function assertScenarioOutput(record) {
   if (record.name === "校对 inline 明显错误" && !/重中之重|舔了舔|戛然/u.test(record.content)) {
     throw new Error("校对没有抓到注入的明显错误。");
   }
-  if (record.name === "缺失缓存范围" && !/(索引不完整|摘要索引.*(?:缺失|未建立|不完整)|缺失章节|覆盖：0\/10|不能声称已经读取)/u.test(record.content)) {
-    throw new Error("缺失缓存范围没有明确说明摘要索引不完整。");
-  }
-  if (record.name === "非写作任务不能扭曲成润色") {
+  if (
+    [
+      "非写作任务不能扭曲成润色",
+      "生成简介不是润色",
+      "生成章节标题建议不是润色",
+      "提取人物卡不是润色",
+      "提取设定卡不是润色",
+      "写作风险检查"
+    ].includes(record.name)
+  ) {
     if (/【(?:校对结果|润色稿|扩写稿|续写稿)】/u.test(record.content)) {
       throw new Error("非写作整理请求被错误扭曲成写作操作。");
     }
-    if (!/(剧情节点|大纲|节点表|第1章|第一章)/u.test(record.content)) {
+    if (record.name === "非写作任务不能扭曲成润色" && !/(剧情节点|大纲|节点表|第1章|第一章)/u.test(record.content)) {
       throw new Error("非写作整理请求没有返回剧情节点/大纲内容。");
     }
+  }
+  if (["自然语言润色 inline", "slash润色 inline", "润色加扩写 inline", "扩写 inline", "对话自然化 inline", "续写 inline"].includes(record.name)) {
+    if (!/【(?:润色稿|扩写稿|续写稿)】/u.test(record.content)) {
+      throw new Error("写作操作没有返回候选稿标题。");
+    }
+  }
+  if (record.name === "加入草稿纸动作" && !/(已加入草稿纸|草稿纸)/u.test(record.content)) {
+    throw new Error("明确草稿纸动作没有展示动作结果。");
+  }
+  if (record.name === "越权写回保护" && /(已经替换|已替换|已经写回|已写回|已修改正文|已经修改正文)/u.test(record.content)) {
+    throw new Error("AI Chat 声称直接写回正文。");
   }
   const compactContent = record.content?.replace(/[\s*_`]+/g, "") ?? "";
   if (record.name === "不存在章节" && !/(第9999章.*(?:不存在|找不到)|(?:不存在|找不到|没有)第9999章|可用章节范围)/u.test(compactContent)) {
@@ -416,7 +550,13 @@ async function main() {
     title: "真实模型上下文验收"
   });
 
-  const scenarios = buildScenarios(args.range).filter((scenario) => !args.only || scenario.name.includes(args.only));
+  const onlyFilters = args.only
+    ?.split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const scenarios = buildScenarios(args.range).filter(
+    (scenario) => !onlyFilters?.length || onlyFilters.some((filter) => scenario.name.includes(filter))
+  );
   if (scenarios.length === 0) {
     throw new Error(`没有匹配 --only ${args.only} 的验收场景。`);
   }

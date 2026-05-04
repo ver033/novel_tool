@@ -8,6 +8,7 @@ import type {
   WritingContextPlan,
   WritingOperationDefinition,
   WritingOperationResult,
+  WritingOperationSource,
   WritingSkill
 } from "./writing-operation-types";
 
@@ -18,6 +19,7 @@ type BuildWritingOperationPromptInput = {
   readonly userInstruction: string;
   readonly preset: TaskPromptPreset | null;
   readonly tokenBudget: TokenBudget;
+  readonly source: WritingOperationSource;
 };
 
 const proofreadResponseFormat: OpenRouterResponseFormat = {
@@ -150,7 +152,7 @@ export function buildWritingOperationPrompt(input: BuildWritingOperationPromptIn
     maxCompletionTokens: input.tokenBudget.maxOutputTokens,
     temperature: input.operation.id === "polish" ? 0.45 : input.operation.id === "proofread" ? 0.2 : 0.65,
     responseFormat: input.operation.outputKind === "proofread_issues" ? proofreadResponseFormat : undefined,
-    reasoning: buildReasoningConfig(input.tokenBudget, { exclude: true, fallbackEffort: "medium" }),
+    reasoning: buildReasoningConfig(input.tokenBudget, { exclude: input.source !== "chat_tool", fallbackEffort: "medium" }),
     tokenBudget: input.tokenBudget
   };
 }

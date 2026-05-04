@@ -150,6 +150,21 @@ function parseNaturalReference(message: string): ChatAtReference | null {
     }
   }
 
+  const pairedChapterMatch = new RegExp(
+    `(?:第\\s*)?(${NUMERAL})\\s*[章节回]\\s*(?:和|与|及|、|跟|同)\\s*(?:第\\s*)?(${NUMERAL})\\s*[章节回]`
+  ).exec(normalized);
+  if (pairedChapterMatch) {
+    const left = parseChineseOrdinal(pairedChapterMatch[1]);
+    const right = parseChineseOrdinal(pairedChapterMatch[2]);
+    if (left && right) {
+      return buildReference(message, pairedChapterMatch.index, pairedChapterMatch[0].length, {
+        type: "chapter_range",
+        from: Math.min(left, right),
+        to: Math.max(left, right)
+      });
+    }
+  }
+
   const leadingRangeMatch = new RegExp(`前\\s*(${NUMERAL})\\s*[章节回]`).exec(normalized);
   if (leadingRangeMatch) {
     const to = parseChineseOrdinal(leadingRangeMatch[1]);

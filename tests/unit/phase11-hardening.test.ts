@@ -238,7 +238,7 @@ describe("phase 11 V1 hardening", () => {
     const currentTask = readSource("src/renderer/sidebar/CurrentTaskTab.tsx");
 
     expect(currentTask).toContain("校对发现");
-    expect(currentTask).toContain("复制建议");
+    expect(currentTask).toContain("复制这条校对建议");
     expect(currentTask).toContain("formatProofreadIssueDraft");
     expect(currentTask).not.toContain("应用建议");
     expect(currentTask).not.toContain("apply_proofread_suggestion");
