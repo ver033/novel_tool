@@ -7,6 +7,7 @@ import type { AiChatDraftSeed } from "../sidebar/chat-draft";
 import { CurrentTaskTab } from "../sidebar/CurrentTaskTab";
 import { ScratchpadTab } from "../sidebar/ScratchpadTab";
 import type { SettingsCategory } from "../routes/SettingsPage";
+import type { SavedChapterVersion } from "../state/editor-store";
 
 export type SidebarTab = "chat" | "task" | "scratch";
 export type TaskType = "polish" | "expand" | "proofread" | "continue";
@@ -23,7 +24,7 @@ type RightUtilitySidebarProps = {
   readonly taskPromptPreset: TaskPromptPreset | null;
   readonly taskType: TaskType;
   readonly editor: Editor | null;
-  readonly flushPendingSave: () => Promise<void>;
+  readonly flushPendingSave: () => Promise<SavedChapterVersion | null>;
   readonly onTabChange: (tab: SidebarTab) => void;
   readonly onClose: () => void;
   readonly onOpenSettings: (category?: SettingsCategory) => void;

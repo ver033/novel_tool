@@ -39,6 +39,8 @@ import type { ArcIndexSummaryInput, BookIndexSummaryInput, ChapterChunkIndexSumm
 export const MIN_AUTO_SUMMARY_UNITS = 500;
 export const MIN_MANUAL_SUMMARY_UNITS = 80;
 export const ACTIVE_CHAPTER_IDLE_MS = 15 * 60 * 1000;
+export const LATEST_CHAPTER_AUTO_PRIORITY = 11;
+export const LATEST_CHAPTER_IMMEDIATE_CACHE_MILESTONES = [500, 1500, 3000, 5000, 8000] as const;
 export const MIN_HIGH_PRIORITY_DELTA_UNITS = 500;
 export const MIN_NORMAL_PRIORITY_DELTA_UNITS = 100;
 export const AUTO_ARC_CHAPTER_COUNT = 20;
@@ -266,9 +268,12 @@ function skippedTooShortPayload(content: ChapterContent): ChapterAiSummaryPayloa
   };
 }
 
-function priorityFor(trigger: ChapterSummaryQueueTrigger, changedWritingUnits: number | null): number {
+function priorityFor(trigger: ChapterSummaryQueueTrigger, changedWritingUnits: number | null, isLatestChapter: boolean): number {
   if (trigger === "manual_rebuild" || trigger === "manual_continue") {
     return 10;
+  }
+  if (isLatestChapter) {
+    return LATEST_CHAPTER_AUTO_PRIORITY;
   }
   if (trigger === "import") {
     return 8;
@@ -281,6 +286,10 @@ function priorityFor(trigger: ChapterSummaryQueueTrigger, changedWritingUnits: n
     return 5;
   }
   return 1;
+}
+
+function crossesImmediateLatestChapterCacheMilestone(previousWordCount: number, nextWordCount: number): boolean {
+  return LATEST_CHAPTER_IMMEDIATE_CACHE_MILESTONES.some((milestone) => previousWordCount < milestone && nextWordCount >= milestone);
 }
 
 function isManualSummaryTrigger(trigger: ChapterSummaryQueueTrigger): boolean {
@@ -736,6 +745,7 @@ export function splitChapterForSummaryIndex(
 export class SummaryService implements SummaryIndexInvalidator {
   private readonly activeChapterEditTimes = new Map<string, string>();
   private readonly changedWritingUnits = new Map<string, number>();
+  private readonly immediateCacheMilestoneChapterHashes = new Map<string, string>();
 
   constructor(
     private readonly summaryRepo: SummaryRepository,
@@ -753,6 +763,12 @@ export class SummaryService implements SummaryIndexInvalidator {
     this.summaryRepo.markChapterStale(input.projectId, input.chapterId, nextHash, input.updatedAt);
     this.recordActiveChapterEdit(input.projectId, input.chapterId, input.updatedAt);
     this.changedWritingUnits.set(keyFor(input.projectId, input.chapterId), Math.abs(input.nextWordCount - input.previousWordCount));
+    const chapterKey = keyFor(input.projectId, input.chapterId);
+    if (crossesImmediateLatestChapterCacheMilestone(input.previousWordCount, input.nextWordCount)) {
+      this.immediateCacheMilestoneChapterHashes.set(chapterKey, nextHash);
+    } else {
+      this.immediateCacheMilestoneChapterHashes.delete(chapterKey);
+    }
   }
 
   recordActiveChapterEdit(projectId: string, chapterId: string, editedAt: string): void {
@@ -760,13 +776,16 @@ export class SummaryService implements SummaryIndexInvalidator {
   }
 
   onChapterBecameInactive(projectId: string, chapterId: string, now: string): SummaryJobRecord | null {
-    this.activeChapterEditTimes.delete(keyFor(projectId, chapterId));
-    return this.maybeEnqueueChapterSummary({
+    const job = this.maybeEnqueueChapterSummary({
       projectId,
       chapterId,
       trigger: "chapter_inactive",
       now
     });
+    if (job || this.isIdle(projectId, chapterId, now)) {
+      this.activeChapterEditTimes.delete(keyFor(projectId, chapterId));
+    }
+    return job;
   }
 
   maybeEnqueueChapterSummary(input: MaybeEnqueueChapterSummaryInput): SummaryJobRecord | null {
@@ -787,22 +806,34 @@ export class SummaryService implements SummaryIndexInvalidator {
     if (!isManualSummaryTrigger(input.trigger) && writingUnits < MIN_AUTO_SUMMARY_UNITS) {
       return null;
     }
-    if (input.trigger === "auto_idle" && !this.isIdle(input.projectId, input.chapterId, input.now)) {
-      return null;
-    }
     const existingSummary = this.summaryRepo.getChapterSummary(input.projectId, input.chapterId);
     if (input.trigger !== "manual_rebuild" && existingSummary && isReadyChapterSummary(existingSummary, sourceHash)) {
       return null;
     }
+    const isLatestChapter = this.isLatestChapter(input.projectId, content);
+    const canBypassIdle = this.canBypassIdleForImmediateLatestChapterSummary(
+      input.projectId,
+      input.chapterId,
+      sourceHash,
+      existingSummary,
+      isLatestChapter
+    );
+    if ((input.trigger === "auto_idle" || input.trigger === "chapter_inactive") && !canBypassIdle && !this.isIdle(input.projectId, input.chapterId, input.now)) {
+      return null;
+    }
 
-    return this.summaryRepo.enqueueSummaryJob({
+    const job = this.summaryRepo.enqueueSummaryJob({
       projectId: input.projectId,
       jobType: "chapter_summary" satisfies SummaryJobType,
       targetId: input.chapterId,
       sourceHash,
-      priority: priorityFor(input.trigger, this.changedWritingUnits.get(keyFor(input.projectId, input.chapterId)) ?? null),
+      priority: priorityFor(input.trigger, this.changedWritingUnits.get(keyFor(input.projectId, input.chapterId)) ?? null, isLatestChapter),
       now: input.now
     });
+    if (canBypassIdle) {
+      this.immediateCacheMilestoneChapterHashes.delete(keyFor(input.projectId, input.chapterId));
+    }
+    return job;
   }
 
   enqueueEligibleStaleChapterSummaries(projectId: string, now: string): SummaryJobRecord[] {
@@ -827,7 +858,7 @@ export class SummaryService implements SummaryIndexInvalidator {
       }
     }
     for (const chapter of this.chapterRepo.listByProject(projectId)) {
-      if (summaryChapterIds.has(chapter.id) || !this.activeChapterEditTimes.has(keyFor(projectId, chapter.id))) {
+      if (summaryChapterIds.has(chapter.id)) {
         continue;
       }
       const job = this.maybeEnqueueChapterSummary({
@@ -1395,11 +1426,31 @@ export class SummaryService implements SummaryIndexInvalidator {
   }
 
   private isIdle(projectId: string, chapterId: string, now: string): boolean {
-    const editedAt = this.activeChapterEditTimes.get(keyFor(projectId, chapterId));
+    const editedAt = this.activeChapterEditTimes.get(keyFor(projectId, chapterId)) ?? this.chapterRepo.getContent(chapterId)?.updatedAt;
     if (!editedAt) {
       return true;
     }
     return parseTime(now) - parseTime(editedAt) >= ACTIVE_CHAPTER_IDLE_MS;
+  }
+
+  private isLatestChapter(projectId: string, content: ChapterContent): boolean {
+    return content.projectId === projectId && content.sortOrder === this.chapterRepo.nextSortOrder(projectId) - 1;
+  }
+
+  private canBypassIdleForImmediateLatestChapterSummary(
+    projectId: string,
+    chapterId: string,
+    sourceHash: string,
+    existingSummary: ChapterAiSummaryRecord | null,
+    isLatestChapter: boolean
+  ): boolean {
+    if (!isLatestChapter) {
+      return false;
+    }
+    if (existingSummary?.status === "ready") {
+      return false;
+    }
+    return this.immediateCacheMilestoneChapterHashes.get(keyFor(projectId, chapterId)) === sourceHash;
   }
 
   private requireChapterContent(projectId: string, chapterId: string): ChapterContent {
@@ -1420,12 +1471,13 @@ export class SummaryService implements SummaryIndexInvalidator {
   }
 
   private requeueChapterSummary(projectId: string, chapterId: string, sourceHash: string, now: string): SummaryJobRecord {
+    const content = this.requireChapterContent(projectId, chapterId);
     return this.summaryRepo.enqueueSummaryJob({
       projectId,
       jobType: "chapter_summary",
       targetId: chapterId,
       sourceHash,
-      priority: 8,
+      priority: priorityFor("auto_idle", this.changedWritingUnits.get(keyFor(projectId, chapterId)) ?? null, this.isLatestChapter(projectId, content)),
       now
     });
   }

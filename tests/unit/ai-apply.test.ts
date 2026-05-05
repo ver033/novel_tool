@@ -158,6 +158,7 @@ describe("applyAiCandidateToEditor", () => {
     const calls: string[] = [];
     const appliedInputs: unknown[] = [];
     const savedPlainTexts: string[] = [];
+    const savedInputs: unknown[] = [];
     const task = createTask();
     const candidate = createCandidate();
 
@@ -170,6 +171,7 @@ describe("applyAiCandidateToEditor", () => {
           },
           async saveContent(input) {
             calls.push("save");
+            savedInputs.push(input);
             savedPlainTexts.push(input.plainText);
             expect(getEmergencyJournalEntries(task.projectId, task.chapterId!)).toEqual([
               expect.objectContaining({
@@ -198,11 +200,21 @@ describe("applyAiCandidateToEditor", () => {
       currentChapterId: "chapter_1",
       flushPendingSave: async () => {
         calls.push("flush");
+        return {
+          projectId: task.projectId,
+          chapterId: task.chapterId!,
+          updatedAt: "2026-05-01T00:00:00.000Z"
+        };
       }
     });
 
     expect(calls).toEqual(["flush", "snapshot", "save", "confirm"]);
     expect(savedPlainTexts[0]).toContain("他轻轻勒住马缰。");
+    expect(savedInputs[0]).toMatchObject({
+      projectId: task.projectId,
+      chapterId: task.chapterId,
+      expectedUpdatedAt: "2026-05-01T00:00:00.000Z"
+    });
     expect(appliedInputs[0]).toMatchObject({
       projectId: task.projectId,
       candidateId: "candidate_1",

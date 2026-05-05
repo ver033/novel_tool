@@ -249,6 +249,53 @@ describe("summary index migrations and repository", () => {
     db.close();
   });
 
+  it("claims queued chapter summary jobs from the newest chapter backward when priorities match", () => {
+    const db = createDb();
+    seedProjectAndChapter(db);
+    db.prepare(
+      `INSERT INTO chapters
+       (id, project_id, title, sort_order, content_json, plain_text, word_count, daily_word_count, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run("chapter_2", "project_1", "第2章", 1, JSON.stringify({ type: "doc", content: [] }), "第二章正文", 5, 0, createdAt, createdAt);
+    db.prepare(
+      `INSERT INTO chapters
+       (id, project_id, title, sort_order, content_json, plain_text, word_count, daily_word_count, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run("chapter_3", "project_1", "第3章", 2, JSON.stringify({ type: "doc", content: [] }), "第三章正文", 5, 0, createdAt, createdAt);
+    const repo = new SummaryRepository(db);
+
+    repo.enqueueSummaryJob({
+      projectId: "project_1",
+      jobType: "chapter_summary",
+      targetId: "chapter_1",
+      sourceHash: "hash_1",
+      priority: 8,
+      now: createdAt
+    });
+    repo.enqueueSummaryJob({
+      projectId: "project_1",
+      jobType: "chapter_summary",
+      targetId: "chapter_2",
+      sourceHash: "hash_2",
+      priority: 8,
+      now: createdAt
+    });
+    repo.enqueueSummaryJob({
+      projectId: "project_1",
+      jobType: "chapter_summary",
+      targetId: "chapter_3",
+      sourceHash: "hash_3",
+      priority: 8,
+      now: createdAt
+    });
+
+    expect(repo.claimNextSummaryJob("project_1", updatedAt)).toMatchObject({ targetId: "chapter_3" });
+    expect(repo.claimNextSummaryJob("project_1", "2026-05-01T00:02:00.000Z")).toMatchObject({ targetId: "chapter_2" });
+    expect(repo.claimNextSummaryJob("project_1", "2026-05-01T00:03:00.000Z")).toMatchObject({ targetId: "chapter_1" });
+
+    db.close();
+  });
+
   it("drops stale cancelled jobs when the same target is requeued", () => {
     const db = createDb();
     seedProjectAndChapter(db);

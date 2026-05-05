@@ -15,7 +15,7 @@ import { getNovelToolApi } from "../state/app-store";
 import { useEditorStore } from "../state/editor-store";
 import { formatIpcErrorMessage } from "../state/ipc-error";
 import type { SettingsCategory } from "./SettingsPage";
-import type { ChapterSummary, ProjectRecord, SelectionSnapshot, TaskPromptPreset } from "../../main/shared/types";
+import type { ChapterContent, ChapterSummary, ProjectRecord, SelectionSnapshot, TaskPromptPreset } from "../../main/shared/types";
 
 type EditorInnerStyle = CSSProperties & {
   readonly maxWidth: string;
@@ -216,6 +216,7 @@ type WritingPageProps = {
   readonly onDeleteChapter: (chapterId: string) => void;
   readonly onRenameChapter: (chapterId: string, currentTitle: string) => void;
   readonly onSelectChapter: (chapterId: string) => void;
+  readonly onChapterSaved: (content: ChapterContent) => void;
   readonly onUpdateChapterTargetWordCount: (chapterId: string, targetWordCount: number | null) => Promise<void>;
   readonly onSidebarTabChange: (tab: SidebarTab) => void;
   readonly onCloseSidebar: () => void;
@@ -245,6 +246,7 @@ export function WritingPage({
   onDeleteChapter,
   onRenameChapter,
   onSelectChapter,
+  onChapterSaved,
   onUpdateChapterTargetWordCount,
   onSidebarTabChange,
   onCloseSidebar,
@@ -258,7 +260,7 @@ export function WritingPage({
   onSettings
 }: WritingPageProps) {
   const api = useMemo(getNovelToolApi, []);
-  const editorStore = useEditorStore(activeChapter);
+  const editorStore = useEditorStore(activeChapter, onChapterSaved);
   const [editor, setEditor] = useState<Editor | null>(null);
   const [taskPromptPresets, setTaskPromptPresets] = useState<TaskPromptPreset[]>([]);
   const [taskPromptPresetError, setTaskPromptPresetError] = useState<string | null>(null);
