@@ -9,6 +9,7 @@ import { Textarea } from "../components/Textarea";
 import type { SettingsCategory } from "../routes/SettingsPage";
 import { candidateStatusLabels, taskLabels, taskStatusLabels } from "../state/sidebar-store";
 import { useTaskStore } from "../state/task-store";
+import type { SavedChapterVersion } from "../state/editor-store";
 
 type CurrentTaskTabProps = {
   readonly chapterId: string | null;
@@ -18,7 +19,7 @@ type CurrentTaskTabProps = {
   readonly taskPromptPreset: TaskPromptPreset | null;
   readonly taskType: TaskType;
   readonly editor: Editor | null;
-  readonly flushPendingSave: () => Promise<void>;
+  readonly flushPendingSave: () => Promise<SavedChapterVersion | null>;
   readonly onOpenSettings: (category?: SettingsCategory) => void;
 };
 

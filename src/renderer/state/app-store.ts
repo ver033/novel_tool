@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { NovelToolApi } from "../../preload/api";
 import type {
+  ChapterContent,
   ChapterSummary,
   ImportConfirmResult,
   ProjectCreateInput,
@@ -27,6 +28,17 @@ type OpenedProjectResult = {
 type SelectedProjectFile = {
   readonly filePath: string;
 };
+
+function chapterSummaryFromContent(content: ChapterContent): ChapterSummary {
+  const { contentJson: _contentJson, plainText: _plainText, ...summary } = content;
+  return summary;
+}
+
+export function mergeSavedChapterContentIntoChapters(chapters: readonly ChapterSummary[], content: ChapterContent): ChapterSummary[] {
+  return chapters.map((chapter) =>
+    chapter.id === content.id && chapter.projectId === content.projectId ? chapterSummaryFromContent(content) : chapter
+  );
+}
 
 export function getNovelToolApi(): NovelToolApi {
   const api = window.api ?? window.novelTool;
@@ -184,6 +196,10 @@ export function useAppStore() {
     [api, currentProject?.id]
   );
 
+  const updateChapterFromSavedContent = useCallback((content: ChapterContent) => {
+    setChapters((current) => mergeSavedChapterContentIntoChapters(current, content));
+  }, []);
+
   const deleteChapter = useCallback(
     async (chapterId: string) => {
       const chapterIndex = chapters.findIndex((chapter) => chapter.id === chapterId);
@@ -251,6 +267,7 @@ export function useAppStore() {
     renameProject,
     renameChapter,
     updateChapterTargetWordCount,
+    updateChapterFromSavedContent,
     refreshRecentProjects: loadRecentProjects,
     selectChapter,
     selectProjectSavePath,
@@ -272,6 +289,7 @@ export function useAppStore() {
     renameProject,
     renameChapter,
     updateChapterTargetWordCount,
+    updateChapterFromSavedContent,
     loadRecentProjects,
     selectChapter,
     selectProjectSavePath,

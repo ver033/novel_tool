@@ -8,6 +8,7 @@ import type {
   TaskType
 } from "../../main/shared/types";
 import { applyAiCandidateToEditor } from "../editor/ai-apply";
+import type { SavedChapterVersion } from "./editor-store";
 import { getNovelToolApi } from "./app-store";
 import { formatIpcErrorMessage } from "./ipc-error";
 
@@ -24,7 +25,7 @@ type UseTaskStoreOptions = {
   readonly selectionSnapshot: SelectionSnapshot | null;
   readonly instruction: string;
   readonly editor: Editor | null;
-  readonly flushPendingSave: () => Promise<void>;
+  readonly flushPendingSave: () => Promise<SavedChapterVersion | null>;
 };
 
 function isCanceledIpcError(reason: unknown): boolean {

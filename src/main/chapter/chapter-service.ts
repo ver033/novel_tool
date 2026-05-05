@@ -143,7 +143,7 @@ export class ChapterService {
       nextDailyWordCount,
       today,
       updatedAt,
-      previousContent.updatedAt
+      input.expectedUpdatedAt ?? previousContent.updatedAt
     );
 
     if (previousContent.plainText !== saved.plainText) {

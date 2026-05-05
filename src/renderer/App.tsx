@@ -237,6 +237,7 @@ export function App() {
           onOpenAiChat={openAiChat}
           onOpenScratchpad={openScratchpad}
           onSelectionToChat={sendSelectionToChat}
+          onChapterSaved={appStore.updateChapterFromSavedContent}
           onRenameChapter={renameChapter}
           onSelectChapter={appStore.selectChapter}
           onUpdateChapterTargetWordCount={updateChapterTargetWordCount}

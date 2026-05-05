@@ -26,6 +26,12 @@ type AiApplyApi = {
   };
 };
 
+type SavedChapterVersion = {
+  readonly chapterId: string;
+  readonly projectId: string;
+  readonly updatedAt: string | null;
+};
+
 type ApplyAiCandidateInput = {
   readonly api: AiApplyApi;
   readonly editor: Editor;
@@ -33,7 +39,7 @@ type ApplyAiCandidateInput = {
   readonly candidate: AiTaskCandidateRecord;
   readonly applyMode: AiApplyCandidateInput["applyMode"];
   readonly currentChapterId: string | null;
-  readonly flushPendingSave: () => Promise<void>;
+  readonly flushPendingSave: () => Promise<SavedChapterVersion | null | void>;
 };
 
 function assertSelectionStillMatches(editor: Editor, task: AiTaskRecord): void {
@@ -118,7 +124,7 @@ export async function applyAiCandidateToEditor({
   }
 
   assertSelectionStillMatches(editor, task);
-  await flushPendingSave();
+  const savedVersion = await flushPendingSave();
   await api.chapter.createSnapshot({
     projectId: task.projectId,
     chapterId: task.chapterId,
@@ -143,7 +149,8 @@ export async function applyAiCandidateToEditor({
     chapterId: task.chapterId,
     contentJson,
     plainText,
-    wordCount: countWritingUnits(plainText)
+    wordCount: countWritingUnits(plainText),
+    expectedUpdatedAt: savedVersion?.projectId === task.projectId && savedVersion.chapterId === task.chapterId ? savedVersion.updatedAt ?? undefined : undefined
   });
 
   return (await api.ai.applyCandidate({

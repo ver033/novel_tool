@@ -121,6 +121,34 @@ describe("chapter save and edit flow", () => {
     expect(service.getContent({ projectId: "project_1", chapterId: chapter.id }).plainText).toBe(firstSave.plainText);
   });
 
+  it("rejects stale client-version saves at the service boundary", () => {
+    const db = createTestDatabase();
+    const projectRepo = new ProjectRepository(db);
+    const chapterRepo = new ChapterRepository(db);
+    createProject(projectRepo, "project_1");
+    const chapter = createChapter(chapterRepo, { chapterId: "chapter_1", projectId: "project_1", title: "第1章", text: "初始正文" });
+    const service = new ChapterService(chapterRepo);
+    const firstSave = service.saveContent({
+      projectId: "project_1",
+      chapterId: chapter.id,
+      contentJson: createTiptapDocumentFromPlainText("较新的正文"),
+      plainText: "较新的正文",
+      wordCount: 5
+    });
+
+    expect(() =>
+      service.saveContent({
+        projectId: "project_1",
+        chapterId: chapter.id,
+        contentJson: createTiptapDocumentFromPlainText("旧客户端正文"),
+        plainText: "旧客户端正文",
+        wordCount: 6,
+        expectedUpdatedAt: chapter.updatedAt
+      } as Parameters<ChapterService["saveContent"]>[0])
+    ).toThrow("章节内容已被其他操作更新");
+    expect(service.getContent({ projectId: "project_1", chapterId: chapter.id }).plainText).toBe(firstSave.plainText);
+  });
+
   it("rejects a save when the database read-back content does not match the submitted text", () => {
     const db = createTestDatabase();
     const projectRepo = new ProjectRepository(db);
