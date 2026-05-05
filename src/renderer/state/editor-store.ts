@@ -228,11 +228,12 @@ export function useEditorStore(activeChapter: ChapterSummary | null, onChapterSa
         setContentJson(nextDocument);
         setContentVersion((current) => current + 1);
         setLoadedChapterId(currentChapterId);
+        const nextWordCount = countWritingUnits(nextPlainText);
         setPlainText(nextPlainText);
-        setWordCount(content.wordCount ?? countWritingUnits(nextPlainText));
+        setWordCount(nextWordCount);
         setDailyWordCount(content.dailyWordCount ?? 0);
         setDailyWordCountDate(content.dailyWordCountDate ?? null);
-        setSavedWordCount(content.wordCount ?? countWritingUnits(nextPlainText));
+        setSavedWordCount(nextWordCount);
         setLastSavedAt(content.updatedAt ? new Date(content.updatedAt) : null);
         savedDbUpdatedAt.current = content.updatedAt ?? null;
         try {
@@ -406,9 +407,13 @@ export function useEditorStore(activeChapter: ChapterSummary | null, onChapterSa
         }
 
         savedRevision.current = Math.max(savedRevision.current, saveStartedAtRevision);
+        const savedContentWordCount = content?.wordCount ?? countWritingUnits(snapshot.plainText);
+        if (editRevision.current === saveStartedAtRevision) {
+          setWordCount(savedContentWordCount);
+        }
         setDailyWordCount(content?.dailyWordCount ?? 0);
         setDailyWordCountDate(content?.dailyWordCountDate ?? localDateKey());
-        setSavedWordCount(content?.wordCount ?? snapshot.wordCount);
+        setSavedWordCount(savedContentWordCount);
         setLastSavedAt(content?.updatedAt ? new Date(content.updatedAt) : new Date());
         savedDbUpdatedAt.current = content?.updatedAt ?? null;
         setSaveStatus(
@@ -468,7 +473,7 @@ export function useEditorStore(activeChapter: ChapterSummary | null, onChapterSa
     setContentJson(nextDocument);
     setContentVersion((current) => current + 1);
     setPlainText(draft.plainText);
-    setWordCount(draft.wordCount);
+    setWordCount(countWritingUnits(draft.plainText));
     setErrorMessage(null);
     setSaveStatus("dirty");
     setPendingDraftRecovery(null);

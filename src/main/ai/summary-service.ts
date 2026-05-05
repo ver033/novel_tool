@@ -1087,7 +1087,7 @@ export class SummaryService implements SummaryIndexInvalidator {
     if (!summary || !job || job.jobType !== "chapter_summary" || job.status !== "failed" || job.targetId !== summary.chapterId) {
       return false;
     }
-    return summary.status === "ready" && summary.contentHash === job.sourceHash;
+    return summary.status === "ready" && (summary.contentHash === job.sourceHash || summary.updatedAt >= job.updatedAt);
   }
 
   private isJobResolvedByCurrentSummaryIndex(
@@ -1110,10 +1110,10 @@ export class SummaryService implements SummaryIndexInvalidator {
     }
     if (job.jobType === "arc_summary" && job.targetId) {
       const summary = cache.arcSummaries.get(job.targetId);
-      return summary?.status === "ready" && summary.sourceHash === job.sourceHash;
+      return summary?.status === "ready" && (summary.sourceHash === job.sourceHash || summary.updatedAt >= job.updatedAt);
     }
     if (job.jobType === "book_summary") {
-      return cache.bookSummary?.status === "ready" && cache.bookSummary.sourceHash === job.sourceHash;
+      return cache.bookSummary?.status === "ready" && (cache.bookSummary.sourceHash === job.sourceHash || cache.bookSummary.updatedAt >= job.updatedAt);
     }
     return false;
   }

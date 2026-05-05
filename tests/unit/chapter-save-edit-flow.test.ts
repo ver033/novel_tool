@@ -83,12 +83,45 @@ describe("chapter save and edit flow", () => {
       id: "chapter_1",
       projectId: "project_1",
       plainText: "新正文\n\n第二段",
-      wordCount: 7
+      wordCount: 6
     });
     const reloaded = service.getContent({ projectId: "project_1", chapterId: first.id });
     expect(reloaded.plainText).toBe("新正文\n\n第二段");
     expect(reloaded.contentJson).toEqual(createTiptapDocumentFromPlainText("新正文\n\n第二段"));
     expect(service.getContent({ projectId: "project_1", chapterId: second.id }).plainText).toBe("第二章不应被修改");
+  });
+
+  it("recomputes saved word count in main instead of trusting the renderer payload", () => {
+    const db = createTestDatabase();
+    const projectRepo = new ProjectRepository(db);
+    const chapterRepo = new ChapterRepository(db);
+    createProject(projectRepo, "project_1");
+    const chapter = createChapter(chapterRepo, { chapterId: "chapter_1", projectId: "project_1", title: "第1章", text: "旧正文" });
+    const service = new ChapterService(chapterRepo);
+
+    const saved = service.saveContent({
+      projectId: "project_1",
+      chapterId: chapter.id,
+      contentJson: createTiptapDocumentFromPlainText("林远abc，１２"),
+      plainText: "林远abc，１２",
+      wordCount: 999
+    });
+
+    expect(saved.wordCount).toBe(7);
+    expect(service.getContent({ projectId: "project_1", chapterId: chapter.id }).wordCount).toBe(7);
+  });
+
+  it("normalizes legacy stored word counts when reading chapters", () => {
+    const db = createTestDatabase();
+    const projectRepo = new ProjectRepository(db);
+    const chapterRepo = new ChapterRepository(db);
+    createProject(projectRepo, "project_1");
+    const chapter = createChapter(chapterRepo, { chapterId: "chapter_1", projectId: "project_1", title: "第1章", text: "母亲停下筷子。" });
+    db.prepare("UPDATE chapters SET word_count = ? WHERE id = ?").run(999, chapter.id);
+    const service = new ChapterService(chapterRepo);
+
+    expect(service.getContent({ projectId: "project_1", chapterId: chapter.id }).wordCount).toBe(6);
+    expect(service.listChapters({ projectId: "project_1" })[0]?.wordCount).toBe(6);
   });
 
   it("rejects stale saves instead of overwriting newer text", () => {

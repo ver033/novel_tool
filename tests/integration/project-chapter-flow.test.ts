@@ -276,7 +276,7 @@ describe("project and chapter lifecycle", () => {
       id: secondChapter.id,
       title: "第2章 晚饭",
       plainText: "母亲停下筷子。",
-      wordCount: 7
+      wordCount: 6
     });
     expect(snapshot).toMatchObject({
       chapterId: secondChapter.id,

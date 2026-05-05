@@ -1,6 +1,7 @@
 import { parseContentJson, serializeContentJson } from "../../chapter/default-content";
 import type { SqliteDatabase } from "../database";
 import type { ChapterContent, ChapterSnapshot, ChapterSummary } from "../../shared/types";
+import { countWritingUnits } from "../../shared/text";
 
 type ChapterRow = {
   readonly id: string;
@@ -38,13 +39,14 @@ type SnapshotRow = {
 };
 
 function mapSummary(row: ChapterRow): ChapterSummary {
+  const wordCount = countWritingUnits(row.plain_text);
   return {
     id: row.id,
     projectId: row.project_id,
     title: row.title,
     volumeTitle: row.volume_title,
     sortOrder: row.sort_order,
-    wordCount: row.word_count,
+    wordCount,
     dailyWordCount: row.daily_word_count,
     dailyWordCountDate: row.daily_word_count_date,
     targetWordCount: row.target_word_count,

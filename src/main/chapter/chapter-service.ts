@@ -128,7 +128,7 @@ export class ChapterService {
     }
     assertChapterBelongsToProject(previousContent, input.projectId);
 
-    const nextWordCount = input.wordCount ?? countWritingUnits(input.plainText);
+    const nextWordCount = countWritingUnits(input.plainText);
     const today = localDateKey();
     const wordCountDelta = nextWordCount - previousContent.wordCount;
     const nextDailyWordCount =

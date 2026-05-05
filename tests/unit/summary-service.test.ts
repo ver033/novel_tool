@@ -1215,6 +1215,63 @@ describe("summary index status and rebuild controls", () => {
     db.close();
   });
 
+  it("does not count old failed chapter jobs after the chapter is edited and cached again", () => {
+    const db = createDb();
+    const { chapterRepo, summaryRepo } = seedProject(db);
+    const oldContent = "春".repeat(620);
+    const newContent = "夏".repeat(620);
+    createChapter(chapterRepo, "chapter_1", oldContent);
+    const oldContentHash = computeChapterContentHash(oldContent);
+    const service = new SummaryService(summaryRepo, chapterRepo);
+    const job = summaryRepo.enqueueSummaryJob({
+      projectId: "project_1",
+      jobType: "chapter_summary",
+      targetId: "chapter_1",
+      sourceHash: oldContentHash,
+      priority: 5,
+      now: "2026-05-01T00:10:00.000Z"
+    });
+    const running = summaryRepo.claimNextSummaryJob("project_1", "2026-05-01T00:11:00.000Z");
+    summaryRepo.failSummaryJob(running?.id ?? job.id, "旧正文的结构校验错误", null, "2026-05-01T00:12:00.000Z");
+    chapterRepo.saveContent(
+      "chapter_1",
+      { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: newContent }] }] },
+      newContent,
+      newContent.length,
+      0,
+      "2026-05-01",
+      "2026-05-01T00:13:00.000Z"
+    );
+    summaryRepo.upsertChapterSummary({
+      id: "summary_chapter_1",
+      projectId: "project_1",
+      chapterId: "chapter_1",
+      chapterTitle: "第1章",
+      chapterOrder: 1,
+      contentHash: computeChapterContentHash(newContent),
+      summaryShort: "第1章新摘要",
+      summaryLong: "第1章新摘要",
+      structured: summaryPayloadV2(),
+      tokenCount: 30,
+      status: "ready",
+      error: null,
+      createdAt,
+      updatedAt: "2026-05-01T00:14:00.000Z"
+    });
+
+    const status = service.getIndexStatus("project_1", "2026-05-01T00:15:00.000Z");
+    const [entry] = service.listChapterCacheEntries("project_1", "2026-05-01T00:15:00.000Z");
+
+    expect(status.failedJobCount).toBe(0);
+    expect(status.recentFailedJobs).toEqual([]);
+    expect(entry).toMatchObject({
+      cacheState: "ready",
+      jobStatus: null,
+      jobError: null
+    });
+    db.close();
+  });
+
   it("does not surface covered derived summary failures or retry-scheduled attempts as active failures", () => {
     const db = createDb();
     const { chapterRepo, summaryRepo } = seedProject(db);
