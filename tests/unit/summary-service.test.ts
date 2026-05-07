@@ -1558,6 +1558,47 @@ describe("summary index status and rebuild controls", () => {
     db.close();
   });
 
+  it("does not surface legacy internal derived summary failures after chapter caches become ready", () => {
+    const db = createDb();
+    const { chapterRepo, summaryRepo } = seedProject(db);
+    const firstContent = "春".repeat(620);
+    const secondContent = "夏".repeat(620);
+    createChapterAtOrder(chapterRepo, "chapter_1", "第1章", 0, firstContent);
+    createChapterAtOrder(chapterRepo, "chapter_2", "第2章", 1, secondContent);
+    const firstHash = computeChapterContentHash(firstContent);
+    const secondHash = computeChapterContentHash(secondContent);
+    upsertReadyChapterSummary(summaryRepo, {
+      chapterId: "chapter_1",
+      title: "第1章",
+      order: 1,
+      content: firstContent
+    });
+    upsertReadyChapterSummary(summaryRepo, {
+      chapterId: "chapter_2",
+      title: "第2章",
+      order: 2,
+      content: secondContent
+    });
+    const job = summaryRepo.enqueueSummaryJob({
+      projectId: "project_1",
+      jobType: "arc_summary",
+      targetId: "auto:001-002",
+      sourceHash: computeSourceHash([firstHash, secondHash]),
+      priority: 6,
+      now: "2026-05-01T00:10:00.000Z"
+    });
+    const running = summaryRepo.claimNextSummaryJob("project_1", "2026-05-01T00:11:00.000Z");
+    summaryRepo.failSummaryJob(running?.id ?? job.id, "Cannot read properties of undefined (reading 'createClient')", null, "2026-05-01T00:12:00.000Z");
+    const service = new SummaryService(summaryRepo, chapterRepo);
+
+    const status = service.getIndexStatus("project_1", "2026-05-01T00:13:00.000Z");
+
+    expect(status.readyChapterCount).toBe(2);
+    expect(status.failedJobCount).toBe(0);
+    expect(status.recentFailedJobs).toEqual([]);
+    db.close();
+  });
+
   it("does not surface orphan chapter summary failures for chapters no longer in the project", () => {
     const db = createDb();
     const { chapterRepo, summaryRepo } = seedProject(db);
@@ -1673,6 +1714,44 @@ describe("summary index status and rebuild controls", () => {
     });
     expect(nextJob).toMatchObject({
       targetId: "chapter_2"
+    });
+    db.close();
+  });
+
+  it("continues indexing by enqueueing missing derived summaries after chapters are already ready", () => {
+    const db = createDb();
+    const { chapterRepo, summaryRepo } = seedProject(db);
+    const firstContent = "春".repeat(620);
+    const secondContent = "夏".repeat(620);
+    createChapterAtOrder(chapterRepo, "chapter_1", "第1章", 0, firstContent);
+    createChapterAtOrder(chapterRepo, "chapter_2", "第2章", 1, secondContent);
+    upsertReadyChapterSummary(summaryRepo, {
+      chapterId: "chapter_1",
+      title: "第1章",
+      order: 1,
+      content: firstContent
+    });
+    upsertReadyChapterSummary(summaryRepo, {
+      chapterId: "chapter_2",
+      title: "第2章",
+      order: 2,
+      content: secondContent
+    });
+    const service = new SummaryService(summaryRepo, chapterRepo);
+
+    const status = service.rebuildProjectIndex("project_1", "2026-05-01T00:30:00.000Z");
+    const nextJob = summaryRepo.claimNextSummaryJob("project_1", "2026-05-01T00:31:00.000Z");
+
+    expect(status).toMatchObject({
+      readyChapterCount: 2,
+      missingChapterCount: 0,
+      failedJobCount: 0,
+      queuedJobCount: 1
+    });
+    expect(nextJob).toMatchObject({
+      jobType: "arc_summary",
+      targetId: "auto:001-002",
+      sourceHash: computeSourceHash([computeChapterContentHash(firstContent), computeChapterContentHash(secondContent)])
     });
     db.close();
   });

@@ -142,6 +142,12 @@ function classifySummaryJobError(error: string | null): { readonly failureCatego
   if (!normalizedError) {
     return { failureCategory: null, actionHint: null };
   }
+  if (isKnownInternalSummaryJobBindingError(normalizedError)) {
+    return {
+      failureCategory: "应用内部错误",
+      actionHint: "这是旧版本阶段/全书缓存任务的内部调用错误，不是章节内容或模型问题。请继续建立索引，系统会用已缓存章节重新排队。"
+    };
+  }
   if (
     normalizedError.includes("429") ||
     normalizedError.includes("限流") ||
@@ -190,6 +196,14 @@ function classifySummaryJobError(error: string | null): { readonly failureCatego
 
 function hasSummaryJobError(job: SummaryJobRecord): boolean {
   return Boolean(job.error?.trim());
+}
+
+function isKnownInternalSummaryJobBindingError(error: string | null): boolean {
+  return /Cannot read propert(?:y|ies) of undefined \(reading ['"]createClient['"]\)/.test(error ?? "");
+}
+
+function isLegacyInternalDerivedSummaryFailure(job: SummaryJobRecord): boolean {
+  return (job.jobType === "arc_summary" || job.jobType === "book_summary") && isKnownInternalSummaryJobBindingError(job.error);
 }
 
 function getChapterIndexSizing(budget: SummaryIndexBudgetInfo | null): ChapterIndexSizing {
@@ -947,7 +961,7 @@ export class SummaryService implements SummaryIndexInvalidator {
     );
     const jobs = rawJobs.filter(
       (job) =>
-        (job.status !== "failed" || hasSummaryJobError(job)) &&
+        (job.status !== "failed" || (hasSummaryJobError(job) && !isLegacyInternalDerivedSummaryFailure(job))) &&
         this.isSummaryJobRelevantToCurrentIndex(projectId, job, jobResolutionCache) &&
         !this.isJobResolvedByCurrentSummaryIndex(job, jobResolutionCache, queuedRetryKeys)
     );
@@ -1073,6 +1087,9 @@ export class SummaryService implements SummaryIndexInvalidator {
         trigger,
         now
       });
+    }
+    if (!options.force) {
+      this.enqueueDerivedSummariesIfReady(projectId, now);
     }
     return this.getIndexStatus(projectId, now, options);
   }
@@ -1640,6 +1657,32 @@ export class SummaryService implements SummaryIndexInvalidator {
       priority: 6,
       now
     });
+  }
+
+  private enqueueDerivedSummariesIfReady(projectId: string, now: string): SummaryJobRecord[] {
+    const jobs: SummaryJobRecord[] = [];
+    const chapters = this.chapterRepo.listByProject(projectId);
+    const totalChapters = chapters.length;
+    const seenArcKeys = new Set<string>();
+    for (const chapter of chapters) {
+      const chapterOrder = chapter.sortOrder + 1;
+      const chapterFrom = Math.floor((chapterOrder - 1) / AUTO_ARC_CHAPTER_COUNT) * AUTO_ARC_CHAPTER_COUNT + 1;
+      const chapterTo = Math.min(chapterFrom + AUTO_ARC_CHAPTER_COUNT - 1, totalChapters);
+      const arcKey = formatAutoArcKey(chapterFrom, chapterTo);
+      if (seenArcKeys.has(arcKey)) {
+        continue;
+      }
+      seenArcKeys.add(arcKey);
+      const job = this.enqueueArcForChapterIfReady(projectId, chapterOrder, now);
+      if (job) {
+        jobs.push(job);
+      }
+    }
+    const bookJob = this.enqueueBookIfReady(projectId, now);
+    if (bookJob) {
+      jobs.push(bookJob);
+    }
+    return jobs;
   }
 
   private buildBookCoverage(projectId: string): BookSummaryCoverage {
