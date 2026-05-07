@@ -18,6 +18,7 @@ type ChapterRow = {
   readonly status: string;
   readonly created_at: string;
   readonly updated_at: string;
+  readonly content_updated_at: string | null;
 };
 
 type ExpectedChapterSaveRow = {
@@ -26,6 +27,7 @@ type ExpectedChapterSaveRow = {
   readonly dailyWordCountDate: string;
   readonly plainText: string;
   readonly updatedAt: string;
+  readonly contentUpdatedAt: string;
   readonly wordCount: number;
 };
 
@@ -37,6 +39,29 @@ type SnapshotRow = {
   readonly reason: string | null;
   readonly created_at: string;
 };
+
+const databasesCheckedForSaveSchema = new WeakSet<SqliteDatabase>();
+
+function ensureChapterSaveSchema(db: SqliteDatabase): void {
+  if (databasesCheckedForSaveSchema.has(db)) {
+    return;
+  }
+
+  const columns = db.prepare("PRAGMA table_info(chapters)").all() as Array<{ readonly name: string }>;
+  if (columns.length === 0) {
+    return;
+  }
+  const columnNames = new Set(columns.map((column) => column.name));
+  if (!columnNames.has("daily_word_count_date")) {
+    db.exec("ALTER TABLE chapters ADD COLUMN daily_word_count_date TEXT;");
+  }
+  if (!columnNames.has("content_updated_at")) {
+    db.exec("ALTER TABLE chapters ADD COLUMN content_updated_at TEXT;");
+  }
+  db.exec("UPDATE chapters SET content_updated_at = updated_at WHERE content_updated_at IS NULL;");
+
+  databasesCheckedForSaveSchema.add(db);
+}
 
 function mapSummary(row: ChapterRow): ChapterSummary {
   const wordCount = countWritingUnits(row.plain_text);
@@ -52,7 +77,8 @@ function mapSummary(row: ChapterRow): ChapterSummary {
     targetWordCount: row.target_word_count,
     status: row.status,
     createdAt: row.created_at,
-    updatedAt: row.updated_at
+    updatedAt: row.updated_at,
+    contentUpdatedAt: row.content_updated_at ?? row.updated_at
   };
 }
 
@@ -95,13 +121,18 @@ function assertSavedRowMatches(row: ChapterRow, expected: ExpectedChapterSaveRow
   if (row.updated_at !== expected.updatedAt) {
     mismatches.push("更新时间");
   }
+  if ((row.content_updated_at ?? row.updated_at) !== expected.contentUpdatedAt) {
+    mismatches.push("正文更新时间");
+  }
   if (mismatches.length > 0) {
     throw new Error(`章节保存后读回校验失败：${mismatches.join("、")}不一致。为防止丢稿，本次保存已中止。`);
   }
 }
 
 export class ChapterRepository {
-  constructor(private readonly db: SqliteDatabase) {}
+  constructor(private readonly db: SqliteDatabase) {
+    ensureChapterSaveSchema(db);
+  }
 
   create(chapter: ChapterContent, options: { readonly shiftExistingAtSortOrder?: boolean } = {}): ChapterSummary {
     const insertChapter = () => {
@@ -114,8 +145,8 @@ export class ChapterRepository {
         .prepare(
           `INSERT INTO chapters (
           id, project_id, title, volume_title, sort_order, content_json, plain_text,
-          word_count, daily_word_count, daily_word_count_date, target_word_count, status, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          word_count, daily_word_count, daily_word_count_date, target_word_count, status, created_at, updated_at, content_updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           chapter.id,
@@ -131,7 +162,8 @@ export class ChapterRepository {
           chapter.targetWordCount,
           chapter.status,
           chapter.createdAt,
-          chapter.updatedAt
+          chapter.updatedAt,
+          chapter.contentUpdatedAt ?? chapter.updatedAt
         );
     };
 
@@ -172,24 +204,35 @@ export class ChapterRepository {
     dailyWordCount: number,
     dailyWordCountDate: string,
     updatedAt: string,
-    expectedUpdatedAt?: string
+    expectedContentUpdatedAt?: string
   ): ChapterContent {
     const serializedContent = serializeContentJson(contentJson);
     return this.db.transaction(() => {
-      const result = expectedUpdatedAt
+      const result = expectedContentUpdatedAt
         ? this.db
             .prepare(
               `UPDATE chapters
-               SET content_json = ?, plain_text = ?, word_count = ?, daily_word_count = ?, daily_word_count_date = ?, updated_at = ?
-               WHERE id = ? AND updated_at = ?`
+               SET content_json = ?, plain_text = ?, word_count = ?, daily_word_count = ?, daily_word_count_date = ?, updated_at = ?, content_updated_at = ?
+               WHERE id = ? AND (COALESCE(content_updated_at, updated_at) = ? OR updated_at = ?)`
             )
-            .run(serializedContent, plainText, wordCount, dailyWordCount, dailyWordCountDate, updatedAt, chapterId, expectedUpdatedAt)
+            .run(
+              serializedContent,
+              plainText,
+              wordCount,
+              dailyWordCount,
+              dailyWordCountDate,
+              updatedAt,
+              updatedAt,
+              chapterId,
+              expectedContentUpdatedAt,
+              expectedContentUpdatedAt
+            )
         : this.db
             .prepare(
-              "UPDATE chapters SET content_json = ?, plain_text = ?, word_count = ?, daily_word_count = ?, daily_word_count_date = ?, updated_at = ? WHERE id = ?"
+              "UPDATE chapters SET content_json = ?, plain_text = ?, word_count = ?, daily_word_count = ?, daily_word_count_date = ?, updated_at = ?, content_updated_at = ? WHERE id = ?"
             )
-            .run(serializedContent, plainText, wordCount, dailyWordCount, dailyWordCountDate, updatedAt, chapterId);
-      if (expectedUpdatedAt && result.changes === 0) {
+            .run(serializedContent, plainText, wordCount, dailyWordCount, dailyWordCountDate, updatedAt, updatedAt, chapterId);
+      if (expectedContentUpdatedAt && result.changes === 0) {
         throw new Error("章节内容已被其他操作更新，请重新载入后再保存。");
       }
 
@@ -200,6 +243,7 @@ export class ChapterRepository {
         dailyWordCountDate,
         plainText,
         updatedAt,
+        contentUpdatedAt: updatedAt,
         wordCount
       });
       return mapContent(row);

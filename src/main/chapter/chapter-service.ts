@@ -40,6 +40,20 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+function parseIsoTime(value: string | null | undefined): number {
+  if (!value) {
+    return 0;
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function nextIsoAfter(...values: Array<string | null | undefined>): string {
+  const now = Date.now();
+  const previous = Math.max(0, ...values.map(parseIsoTime));
+  return new Date(Math.max(now, previous + 1)).toISOString();
+}
+
 function localDateKey(value: Date = new Date()): string {
   const year = value.getFullYear();
   const month = String(value.getMonth() + 1).padStart(2, "0");
@@ -87,7 +101,8 @@ export class ChapterService {
       targetWordCount: input.targetWordCount ?? null,
       status: "draft",
       createdAt,
-      updatedAt: createdAt
+      updatedAt: createdAt,
+      contentUpdatedAt: createdAt
     }, { shiftExistingAtSortOrder: input.sortOrder !== undefined });
   }
 
@@ -98,7 +113,7 @@ export class ChapterService {
       throw new Error("Chapter not found");
     }
     assertChapterBelongsToProject(content, input.projectId);
-    return chapterRepo.rename(input.chapterId, input.title, nowIso());
+    return chapterRepo.rename(input.chapterId, input.title, nextIsoAfter(content.updatedAt));
   }
 
   deleteChapter(input: ChapterDeleteInput): void {
@@ -134,7 +149,7 @@ export class ChapterService {
     const nextDailyWordCount =
       previousContent.dailyWordCountDate === today ? Math.max(0, previousContent.dailyWordCount + wordCountDelta) : Math.max(0, wordCountDelta);
 
-    const updatedAt = nowIso();
+    const updatedAt = nextIsoAfter(previousContent.updatedAt, previousContent.contentUpdatedAt);
     const saved = chapterRepo.saveContent(
       input.chapterId,
       input.contentJson,
@@ -143,19 +158,23 @@ export class ChapterService {
       nextDailyWordCount,
       today,
       updatedAt,
-      input.expectedUpdatedAt ?? previousContent.updatedAt
+      input.expectedUpdatedAt ?? previousContent.contentUpdatedAt ?? previousContent.updatedAt
     );
 
     if (previousContent.plainText !== saved.plainText) {
-      this.summaryIndexInvalidator?.markChapterContentChanged({
-        projectId: saved.projectId,
-        chapterId: saved.id,
-        previousPlainText: previousContent.plainText,
-        nextPlainText: saved.plainText,
-        previousWordCount: previousContent.wordCount,
-        nextWordCount: saved.wordCount,
-        updatedAt
-      });
+      try {
+        this.summaryIndexInvalidator?.markChapterContentChanged({
+          projectId: saved.projectId,
+          chapterId: saved.id,
+          previousPlainText: previousContent.plainText,
+          nextPlainText: saved.plainText,
+          previousWordCount: previousContent.wordCount,
+          nextWordCount: saved.wordCount,
+          updatedAt
+        });
+      } catch (reason) {
+        console.warn("Failed to invalidate chapter summary cache after content save", reason);
+      }
     }
 
     return saved;
@@ -168,7 +187,7 @@ export class ChapterService {
       throw new Error("Chapter not found");
     }
     assertChapterBelongsToProject(content, input.projectId);
-    return chapterRepo.updateTargetWordCount(input.chapterId, input.targetWordCount, nowIso());
+    return chapterRepo.updateTargetWordCount(input.chapterId, input.targetWordCount, nextIsoAfter(content.updatedAt));
   }
 
   createSnapshot(input: ChapterCreateSnapshotInput): ChapterSnapshot {

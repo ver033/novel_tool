@@ -1409,6 +1409,74 @@ describe("summary index status and rebuild controls", () => {
     db.close();
   });
 
+  it("keeps raw cache errors visible when they do not match a known failure category", () => {
+    const db = createDb();
+    const { chapterRepo, summaryRepo } = seedProject(db);
+    const content = "春".repeat(620);
+    createChapter(chapterRepo, "chapter_1", content);
+    const service = new SummaryService(summaryRepo, chapterRepo);
+    const job = summaryRepo.enqueueSummaryJob({
+      projectId: "project_1",
+      jobType: "chapter_summary",
+      targetId: "chapter_1",
+      sourceHash: computeChapterContentHash(content),
+      priority: 5,
+      now: "2026-05-01T00:10:00.000Z"
+    });
+    const running = summaryRepo.claimNextSummaryJob("project_1", "2026-05-01T00:11:00.000Z");
+    summaryRepo.failSummaryJob(running?.id ?? job.id, "TypeError: Cannot read properties of undefined (reading '章节')", null, "2026-05-01T00:12:00.000Z");
+
+    const status = service.getIndexStatus("project_1", "2026-05-01T00:13:00.000Z");
+    const [entry] = service.listChapterCacheEntries("project_1", "2026-05-01T00:13:00.000Z");
+
+    expect(status.recentFailedJobs[0]).toMatchObject({
+      error: "TypeError: Cannot read properties of undefined (reading '章节')",
+      failureCategory: null,
+      actionHint: expect.stringContaining("单章重试")
+    });
+    expect(entry).toMatchObject({
+      cacheState: "failed",
+      jobError: "TypeError: Cannot read properties of undefined (reading '章节')",
+      jobFailureCategory: null,
+      jobActionHint: expect.stringContaining("单章重试")
+    });
+    db.close();
+  });
+
+  it("does not surface legacy failed jobs without error details as active cache failures", () => {
+    const db = createDb();
+    const { chapterRepo, summaryRepo } = seedProject(db);
+    const content = "春".repeat(620);
+    createChapter(chapterRepo, "chapter_1", content);
+    const service = new SummaryService(summaryRepo, chapterRepo);
+    const job = summaryRepo.enqueueSummaryJob({
+      projectId: "project_1",
+      jobType: "chapter_summary",
+      targetId: "chapter_1",
+      sourceHash: computeChapterContentHash(content),
+      priority: 5,
+      now: "2026-05-01T00:10:00.000Z"
+    });
+    const running = summaryRepo.claimNextSummaryJob("project_1", "2026-05-01T00:11:00.000Z");
+    db.prepare("UPDATE summary_jobs SET status = 'failed', error = NULL, finished_at = ?, updated_at = ? WHERE id = ?").run(
+      "2026-05-01T00:12:00.000Z",
+      "2026-05-01T00:12:00.000Z",
+      running?.id ?? job.id
+    );
+
+    const status = service.getIndexStatus("project_1", "2026-05-01T00:13:00.000Z");
+    const [entry] = service.listChapterCacheEntries("project_1", "2026-05-01T00:13:00.000Z");
+
+    expect(status.failedJobCount).toBe(0);
+    expect(status.recentFailedJobs).toEqual([]);
+    expect(entry).toMatchObject({
+      cacheState: "missing",
+      jobStatus: null,
+      jobError: null
+    });
+    db.close();
+  });
+
   it("enables background indexing when the user explicitly rebuilds the project index", () => {
     const db = createDb();
     const { chapterRepo, summaryRepo } = seedProject(db);

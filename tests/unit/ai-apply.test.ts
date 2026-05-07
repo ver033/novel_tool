@@ -159,6 +159,7 @@ describe("applyAiCandidateToEditor", () => {
     const appliedInputs: unknown[] = [];
     const savedPlainTexts: string[] = [];
     const savedInputs: unknown[] = [];
+    const savedContentNotifications: unknown[] = [];
     const task = createTask();
     const candidate = createCandidate();
 
@@ -179,7 +180,13 @@ describe("applyAiCandidateToEditor", () => {
                 reason: "before_ai_apply"
               })
             ]);
-            return {};
+            return {
+              id: task.chapterId,
+              projectId: task.projectId,
+              updatedAt: "2026-05-01T00:01:00.000Z",
+              contentUpdatedAt: "2026-05-01T00:01:00.000Z",
+              wordCount: input.wordCount
+            };
           }
         },
         ai: {
@@ -205,7 +212,8 @@ describe("applyAiCandidateToEditor", () => {
           chapterId: task.chapterId!,
           updatedAt: "2026-05-01T00:00:00.000Z"
         };
-      }
+      },
+      onContentSaved: (content) => savedContentNotifications.push(content)
     });
 
     expect(calls).toEqual(["flush", "snapshot", "save", "confirm"]);
@@ -215,6 +223,12 @@ describe("applyAiCandidateToEditor", () => {
       chapterId: task.chapterId,
       expectedUpdatedAt: "2026-05-01T00:00:00.000Z"
     });
+    expect(savedContentNotifications).toEqual([
+      expect.objectContaining({
+        id: task.chapterId,
+        contentUpdatedAt: "2026-05-01T00:01:00.000Z"
+      })
+    ]);
     expect(appliedInputs[0]).toMatchObject({
       projectId: task.projectId,
       candidateId: "candidate_1",

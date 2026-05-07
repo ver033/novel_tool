@@ -129,43 +129,58 @@ function parseTime(value: string): number {
 }
 
 function classifySummaryJobError(error: string | null): { readonly failureCategory: string | null; readonly actionHint: string | null } {
-  if (!error) {
+  const normalizedError = error?.trim();
+  if (!normalizedError) {
     return { failureCategory: null, actionHint: null };
   }
-  if (error.includes("429") || error.includes("限流") || /rate.?limit/i.test(error) || error.includes("Resource has been exhausted")) {
+  if (
+    normalizedError.includes("429") ||
+    normalizedError.includes("限流") ||
+    /rate.?limit/i.test(normalizedError) ||
+    normalizedError.includes("Resource has been exhausted")
+  ) {
     return {
       failureCategory: "上游限流",
       actionHint: "OpenRouter 或模型供应商暂时限流。系统只会延迟自动重试一次；如果反复失败，请稍后重试或换用更稳定的模型。"
     };
   }
-  if (error.includes("finish_reason: length") || error.includes("被截断") || /truncated/i.test(error)) {
+  if (normalizedError.includes("finish_reason: length") || normalizedError.includes("被截断") || /truncated/i.test(normalizedError)) {
     return {
       failureCategory: "输出被截断",
       actionHint: "章节缓存输出超出模型额度。请换用输出上限更高的模型，或先按单章手动重试确认该模型能返回完整 JSON。"
     };
   }
-  if (error.includes("结构无效") || error.includes("索引摘要无效") || error.includes("Unexpected end of JSON") || /JSON|schema|zod/i.test(error)) {
+  if (
+    normalizedError.includes("结构无效") ||
+    normalizedError.includes("索引摘要无效") ||
+    normalizedError.includes("Unexpected end of JSON") ||
+    /JSON|schema|zod/i.test(normalizedError)
+  ) {
     return {
       failureCategory: "模型输出结构无效",
       actionHint: "模型没有返回合法章节缓存 JSON。这通常不是章节正文内容问题；此类错误不会自动反复重试，建议换用更稳定的模型或手动重试单章。"
     };
   }
-  if (/timeout|timed?out|network|ECONN|ENOTFOUND|EAI_AGAIN/i.test(error) || error.includes("超时")) {
+  if (/timeout|timed?out|network|ECONN|ENOTFOUND|EAI_AGAIN/i.test(normalizedError) || normalizedError.includes("超时")) {
     return {
       failureCategory: "网络或上游超时",
       actionHint: "请求没有稳定完成。系统只会延迟自动重试一次；如果反复失败，请稍后重试或换模型。"
     };
   }
-  if (error.includes("API Key") || error.includes("模型名称") || error.includes("未配置")) {
+  if (normalizedError.includes("API Key") || normalizedError.includes("模型名称") || normalizedError.includes("未配置")) {
     return {
       failureCategory: "AI 配置不可用",
       actionHint: "请先在 AI 服务设置中测试并保存 OpenRouter API Key 和模型。"
     };
   }
   return {
-    failureCategory: "未知错误",
-    actionHint: "请查看原始错误信息。若同一章节多次失败，建议先单章重试或换用更稳定的模型。"
+    failureCategory: null,
+    actionHint: "若同一缓存任务多次失败，建议先单章重试或换用更稳定的模型。"
   };
+}
+
+function hasSummaryJobError(job: SummaryJobRecord): boolean {
+  return Boolean(job.error?.trim());
 }
 
 function getChapterIndexSizing(budget: SummaryIndexBudgetInfo | null): ChapterIndexSizing {
@@ -909,7 +924,9 @@ export class SummaryService implements SummaryIndexInvalidator {
     const queuedRetryKeys = new Set(
       rawJobs.filter((job) => job.status === "queued" && job.nextRunAt).map((job) => this.summaryJobResolutionKey(job))
     );
-    const jobs = rawJobs.filter((job) => !this.isJobResolvedByCurrentSummaryIndex(job, jobResolutionCache, queuedRetryKeys));
+    const jobs = rawJobs.filter(
+      (job) => (job.status !== "failed" || hasSummaryJobError(job)) && !this.isJobResolvedByCurrentSummaryIndex(job, jobResolutionCache, queuedRetryKeys)
+    );
     const runningJob = jobs.find((job) => job.status === "running") ?? null;
     const failedJobs = jobs.filter((job) => job.status === "failed");
     const retryingJobs = jobs
@@ -960,7 +977,7 @@ export class SummaryService implements SummaryIndexInvalidator {
         summaryUpdatedAt: summary?.updatedAt ?? null,
         contentHash: summary?.contentHash ?? null,
         jobStatus: job?.status ?? null,
-        jobError: job?.error ?? null,
+        jobError: job?.error?.trim() || null,
         jobFailureCategory: failure.failureCategory,
         jobActionHint: failure.actionHint,
         nextRunAt: job?.nextRunAt ?? null
@@ -1048,6 +1065,9 @@ export class SummaryService implements SummaryIndexInvalidator {
     const jobs = new Map<string, SummaryJobRecord>();
     for (const job of this.summaryRepo.listSummaryJobs(projectId)) {
       if (job.jobType !== "chapter_summary" || !job.targetId || jobs.has(job.targetId)) {
+        continue;
+      }
+      if (job.status === "failed" && !hasSummaryJobError(job)) {
         continue;
       }
       if (job.status === "completed" || job.status === "skipped") {
@@ -1668,7 +1688,7 @@ export class SummaryService implements SummaryIndexInvalidator {
       jobType: job.jobType,
       targetId: job.targetId,
       label: this.formatPendingRetryJobLabel(projectId, job),
-      error: job.error,
+      error: job.error?.trim() || null,
       failureCategory: failure.failureCategory,
       actionHint: failure.actionHint,
       attemptCount: job.attemptCount,

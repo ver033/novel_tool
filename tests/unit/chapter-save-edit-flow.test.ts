@@ -22,6 +22,50 @@ function createTestDatabase() {
   return db;
 }
 
+function createLegacyDatabaseWithoutSaveSchema() {
+  const dir = mkdtempSync(join(tmpdir(), "moshu-legacy-chapter-save-flow-"));
+  tempDirs.push(dir);
+  const db = createDatabase(join(dir, "test.sqlite3"));
+  databases.push(db);
+  db.exec(`
+    CREATE TABLE projects (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      root_path TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE chapters (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      volume_title TEXT,
+      sort_order INTEGER NOT NULL,
+      content_json TEXT NOT NULL,
+      plain_text TEXT NOT NULL,
+      word_count INTEGER NOT NULL DEFAULT 0,
+      daily_word_count INTEGER NOT NULL DEFAULT 0,
+      target_word_count INTEGER,
+      status TEXT NOT NULL DEFAULT 'draft',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE chapter_snapshots (
+      id TEXT PRIMARY KEY,
+      chapter_id TEXT NOT NULL,
+      content_json TEXT NOT NULL,
+      plain_text TEXT NOT NULL,
+      reason TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (chapter_id) REFERENCES chapters(id) ON DELETE CASCADE
+    );
+  `);
+  return db;
+}
+
 function createProject(repo: ProjectRepository, id: string) {
   return repo.create({
     id,
@@ -124,6 +168,46 @@ describe("chapter save and edit flow", () => {
     expect(service.listChapters({ projectId: "project_1" })[0]?.wordCount).toBe(6);
   });
 
+  it("self-heals already-open legacy chapter databases before saving content", () => {
+    const db = createLegacyDatabaseWithoutSaveSchema();
+    const projectRepo = new ProjectRepository(db);
+    createProject(projectRepo, "project_1");
+    const insertedAt = "2026-05-04T00:00:00.000Z";
+    db.prepare(
+      `INSERT INTO chapters
+       (id, project_id, title, sort_order, content_json, plain_text, word_count, daily_word_count, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      "chapter_legacy",
+      "project_1",
+      "第1章",
+      0,
+      JSON.stringify(createTiptapDocumentFromPlainText("旧正文")),
+      "旧正文",
+      3,
+      0,
+      insertedAt,
+      insertedAt
+    );
+
+    const chapterRepo = new ChapterRepository(db);
+    const service = new ChapterService(chapterRepo);
+    const saved = service.saveContent({
+      projectId: "project_1",
+      chapterId: "chapter_legacy",
+      contentJson: createTiptapDocumentFromPlainText("新正文"),
+      plainText: "新正文",
+      wordCount: 3,
+      expectedUpdatedAt: insertedAt
+    });
+
+    expect(saved.plainText).toBe("新正文");
+    expect(saved.contentUpdatedAt).toBe(saved.updatedAt);
+    const columns = db.prepare("PRAGMA table_info(chapters)").all().map((row) => row.name);
+    expect(columns).toContain("daily_word_count_date");
+    expect(columns).toContain("content_updated_at");
+  });
+
   it("rejects stale saves instead of overwriting newer text", () => {
     const db = createTestDatabase();
     const projectRepo = new ProjectRepository(db);
@@ -180,6 +264,81 @@ describe("chapter save and edit flow", () => {
       } as Parameters<ChapterService["saveContent"]>[0])
     ).toThrow("章节内容已被其他操作更新");
     expect(service.getContent({ projectId: "project_1", chapterId: chapter.id }).plainText).toBe(firstSave.plainText);
+  });
+
+  it("keeps content versions strictly increasing even when saves happen in the same millisecond", () => {
+    vi.useFakeTimers();
+    try {
+      const db = createTestDatabase();
+      const projectRepo = new ProjectRepository(db);
+      const chapterRepo = new ChapterRepository(db);
+      createProject(projectRepo, "project_1");
+      const chapter = createChapter(chapterRepo, { chapterId: "chapter_1", projectId: "project_1", title: "第1章", text: "初始正文" });
+      const service = new ChapterService(chapterRepo);
+      vi.setSystemTime(new Date(chapter.updatedAt));
+
+      const firstSave = service.saveContent({
+        projectId: "project_1",
+        chapterId: chapter.id,
+        contentJson: createTiptapDocumentFromPlainText("第一版正文"),
+        plainText: "第一版正文",
+        wordCount: 5,
+        expectedUpdatedAt: chapter.updatedAt
+      });
+      const secondSave = service.saveContent({
+        projectId: "project_1",
+        chapterId: chapter.id,
+        contentJson: createTiptapDocumentFromPlainText("第二版正文"),
+        plainText: "第二版正文",
+        wordCount: 5,
+        expectedUpdatedAt: firstSave.contentUpdatedAt
+      });
+
+      expect(firstSave.contentUpdatedAt).not.toBe(chapter.updatedAt);
+      expect(secondSave.contentUpdatedAt).not.toBe(firstSave.contentUpdatedAt);
+      expect(() =>
+        service.saveContent({
+          projectId: "project_1",
+          chapterId: chapter.id,
+          contentJson: createTiptapDocumentFromPlainText("旧第一版覆盖"),
+          plainText: "旧第一版覆盖",
+          wordCount: 6,
+          expectedUpdatedAt: firstSave.contentUpdatedAt
+        } as Parameters<ChapterService["saveContent"]>[0])
+      ).toThrow("章节内容已被其他操作更新");
+      expect(service.getContent({ projectId: "project_1", chapterId: chapter.id }).plainText).toBe("第二版正文");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not treat chapter metadata edits as competing content saves", () => {
+    const db = createTestDatabase();
+    const projectRepo = new ProjectRepository(db);
+    const chapterRepo = new ChapterRepository(db);
+    createProject(projectRepo, "project_1");
+    const chapter = createChapter(chapterRepo, { chapterId: "chapter_1", projectId: "project_1", title: "第1章", text: "编辑器已加载正文" });
+    const service = new ChapterService(chapterRepo);
+    const loaded = service.getContent({ projectId: "project_1", chapterId: chapter.id });
+
+    const updatedMetadata = service.updateTargetWordCount({
+      projectId: "project_1",
+      chapterId: chapter.id,
+      targetWordCount: 3000
+    });
+    expect(updatedMetadata.updatedAt).not.toBe(loaded.updatedAt);
+
+    const saved = service.saveContent({
+      projectId: "project_1",
+      chapterId: chapter.id,
+      contentJson: createTiptapDocumentFromPlainText("编辑器已加载正文\n\n追加正文"),
+      plainText: "编辑器已加载正文\n\n追加正文",
+      wordCount: 13,
+      expectedUpdatedAt: loaded.updatedAt
+    });
+
+    expect(saved.plainText).toBe("编辑器已加载正文\n\n追加正文");
+    expect(saved.targetWordCount).toBe(3000);
   });
 
   it("rejects a save when the database read-back content does not match the submitted text", () => {
@@ -281,6 +440,38 @@ describe("chapter save and edit flow", () => {
         nextPlainText: "新原文"
       })
     );
+  });
+
+  it("does not report the chapter save as failed when post-save summary invalidation fails", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const db = createTestDatabase();
+      const projectRepo = new ProjectRepository(db);
+      const chapterRepo = new ChapterRepository(db);
+      createProject(projectRepo, "project_1");
+      const chapter = createChapter(chapterRepo, { chapterId: "chapter_1", projectId: "project_1", title: "第1章", text: "原文" });
+      const invalidator: SummaryIndexInvalidator = {
+        markChapterContentChanged() {
+          throw new Error("summary cache schema unavailable");
+        }
+      };
+      const service = new ChapterService(chapterRepo, { summaryIndexInvalidator: invalidator });
+
+      const saved = service.saveContent({
+        projectId: "project_1",
+        chapterId: chapter.id,
+        contentJson: createTiptapDocumentFromPlainText("新正文"),
+        plainText: "新正文",
+        wordCount: 3,
+        expectedUpdatedAt: chapter.updatedAt
+      });
+
+      expect(saved.plainText).toBe("新正文");
+      expect(service.getContent({ projectId: "project_1", chapterId: chapter.id }).plainText).toBe("新正文");
+      expect(warn).toHaveBeenCalledWith("Failed to invalidate chapter summary cache after content save", expect.any(Error));
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("daily word count follows additions, deletions, and full undo-like saves without going negative", () => {

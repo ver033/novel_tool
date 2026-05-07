@@ -4,6 +4,7 @@ import type {
   AiApplyCandidateInput,
   AiTaskCandidateRecord,
   AiTaskRecord,
+  ChapterContent,
   ChapterCreateSnapshotInput,
   ChapterSaveContentInput
 } from "../../main/shared/types";
@@ -40,6 +41,7 @@ type ApplyAiCandidateInput = {
   readonly applyMode: AiApplyCandidateInput["applyMode"];
   readonly currentChapterId: string | null;
   readonly flushPendingSave: () => Promise<SavedChapterVersion | null | void>;
+  readonly onContentSaved?: (content: ChapterContent) => void;
 };
 
 function assertSelectionStillMatches(editor: Editor, task: AiTaskRecord): void {
@@ -114,7 +116,8 @@ export async function applyAiCandidateToEditor({
   candidate,
   applyMode,
   currentChapterId,
-  flushPendingSave
+  flushPendingSave,
+  onContentSaved
 }: ApplyAiCandidateInput): Promise<ApplyResult> {
   if (!task.chapterId) {
     throw new Error("当前 AI 任务没有关联章节，不能应用到正文。");
@@ -144,14 +147,17 @@ export async function applyAiCandidateToEditor({
     dbUpdatedAt: null,
     reason: "before_ai_apply"
   });
-  await api.chapter.saveContent({
+  const savedContent = (await api.chapter.saveContent({
     projectId: task.projectId,
     chapterId: task.chapterId,
     contentJson,
     plainText,
     wordCount: countWritingUnits(plainText),
     expectedUpdatedAt: savedVersion?.projectId === task.projectId && savedVersion.chapterId === task.chapterId ? savedVersion.updatedAt ?? undefined : undefined
-  });
+  })) as ChapterContent | undefined;
+  if (savedContent) {
+    onContentSaved?.(savedContent);
+  }
 
   return (await api.ai.applyCandidate({
     projectId: task.projectId,
