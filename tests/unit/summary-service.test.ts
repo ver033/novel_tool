@@ -909,6 +909,38 @@ describe("summary service generation", () => {
     db.close();
   });
 
+  it("keeps generator method bindings when building derived summaries", async () => {
+    const db = createDb();
+    const { chapterRepo, summaryRepo } = seedProject(db);
+    createChapter(chapterRepo, "chapter_1", "春".repeat(620));
+    createChapter(chapterRepo, "chapter_2", "夏".repeat(620));
+    chapterRepo.rename("chapter_2", "第2章", "2026-05-01T00:09:00.000Z");
+    upsertReadyChapterSummary(summaryRepo, { chapterId: "chapter_1", title: "第1章", order: 1, content: "春".repeat(620) });
+    upsertReadyChapterSummary(summaryRepo, { chapterId: "chapter_2", title: "第2章", order: 2, content: "夏".repeat(620) });
+    const sourceHash = computeSourceHash([computeChapterContentHash("春".repeat(620)), computeChapterContentHash("夏".repeat(620))]);
+    type BoundGenerator = SummaryIndexGenerator & { readonly calls: string[] };
+    const generator: BoundGenerator = {
+      calls: [],
+      summarizeChapterForIndex: async () => summaryPayloadV2(),
+      summarizeArcForIndex: async function (this: BoundGenerator) {
+        this.calls.push("arc");
+        return arcIndexPayloadV2();
+      },
+      summarizeBookForIndex: async function (this: BoundGenerator) {
+        this.calls.push("book");
+        return bookIndexPayloadV2();
+      }
+    };
+    const service = new SummaryService(summaryRepo, chapterRepo, { generator });
+
+    await service.summarizeArc("project_1", "auto:001-002", 1, 2, sourceHash, "2026-05-01T00:10:00.000Z");
+    const bookJob = summaryRepo.claimNextSummaryJob("project_1", "2026-05-01T00:11:00.000Z");
+    await service.summarizeBook("project_1", bookJob?.sourceHash ?? "", "2026-05-01T00:12:00.000Z");
+
+    expect(generator.calls).toEqual(["arc", "book"]);
+    db.close();
+  });
+
   it("does not generate an arc summary while any child chapter summary is missing", async () => {
     const db = createDb();
     const { chapterRepo, summaryRepo } = seedProject(db);
@@ -1008,11 +1040,10 @@ describe("summary index status and rebuild controls", () => {
   it("reports summary coverage, stale chapters, skipped chapters, failed jobs, and the running job label", () => {
     const db = createDb();
     const { chapterRepo, summaryRepo } = seedProject(db);
-    createChapter(chapterRepo, "chapter_1", "春".repeat(620));
-    createChapter(chapterRepo, "chapter_2", "夏".repeat(620));
-    createChapter(chapterRepo, "chapter_3", "秋".repeat(20));
-    createChapter(chapterRepo, "chapter_4", "冬".repeat(620));
-    chapterRepo.rename("chapter_2", "第2章", "2026-05-01T00:09:00.000Z");
+    createChapterAtOrder(chapterRepo, "chapter_1", "第1章", 0, "春".repeat(620));
+    createChapterAtOrder(chapterRepo, "chapter_2", "第2章", 1, "夏".repeat(620));
+    createChapterAtOrder(chapterRepo, "chapter_3", "第3章", 2, "秋".repeat(20));
+    createChapterAtOrder(chapterRepo, "chapter_4", "第4章", 3, "冬".repeat(620));
     upsertReadyChapterSummary(summaryRepo, { chapterId: "chapter_1", title: "第1章", order: 1, content: "春".repeat(620) });
     summaryRepo.upsertChapterSummary({
       id: "summary_chapter_2",
@@ -1037,6 +1068,31 @@ describe("summary index status and rebuild controls", () => {
       trigger: "manual_rebuild",
       now: "2026-05-01T00:10:00.000Z"
     });
+    const arcSourceHash = "arc_status_hash";
+    summaryRepo.upsertArcSummary({
+      id: "arc_status",
+      projectId: "project_1",
+      arcKey: "auto:001-001",
+      chapterFrom: 1,
+      chapterTo: 1,
+      sourceHash: arcSourceHash,
+      summary: "第1章阶段摘要。",
+      structured: arcIndexPayloadV2(),
+      status: "ready",
+      error: null,
+      createdAt,
+      updatedAt: "2026-05-01T00:10:30.000Z"
+    });
+    const bookStatusSourceHash = computeSourceHash([
+      arcSourceHash,
+      JSON.stringify({
+        indexed: 1,
+        total: 4,
+        stale: ["第2章"],
+        missing: ["第4章"],
+        skipped: ["第3章"]
+      })
+    ]);
     summaryRepo.enqueueSummaryJob({
       projectId: "project_1",
       jobType: "chapter_summary",
@@ -1050,7 +1106,7 @@ describe("summary index status and rebuild controls", () => {
       projectId: "project_1",
       jobType: "book_summary",
       targetId: null,
-      sourceHash: "book_hash",
+      sourceHash: bookStatusSourceHash,
       priority: 4,
       now: "2026-05-01T00:13:00.000Z"
     });
@@ -1081,11 +1137,11 @@ describe("summary index status and rebuild controls", () => {
       queuedJobCount: 1,
       runningJobLabel: "正在摘要：第2章",
       nextRetryAt: "2026-05-01T00:21:00.000Z",
-      nextRetryJobLabel: "第1章",
+      nextRetryJobLabel: "第4章",
       backgroundEnabled: true,
       retryingJobs: [
         {
-          label: "第1章",
+          label: "第4章",
           error: null,
           attemptCount: 0,
           nextRunAt: "2026-05-01T00:21:00.000Z"
@@ -1473,6 +1529,80 @@ describe("summary index status and rebuild controls", () => {
       cacheState: "missing",
       jobStatus: null,
       jobError: null
+    });
+    db.close();
+  });
+
+  it("does not surface derived summary failures while chapter caches are not ready", () => {
+    const db = createDb();
+    const { chapterRepo, summaryRepo } = seedProject(db);
+    createChapter(chapterRepo, "chapter_1", "春".repeat(620));
+    createChapter(chapterRepo, "chapter_2", "夏".repeat(620));
+    const service = new SummaryService(summaryRepo, chapterRepo);
+    const job = summaryRepo.enqueueSummaryJob({
+      projectId: "project_1",
+      jobType: "arc_summary",
+      targetId: "auto:001-002",
+      sourceHash: computeSourceHash([computeChapterContentHash("春".repeat(620)), computeChapterContentHash("夏".repeat(620))]),
+      priority: 6,
+      now: "2026-05-01T00:10:00.000Z"
+    });
+    const running = summaryRepo.claimNextSummaryJob("project_1", "2026-05-01T00:11:00.000Z");
+    summaryRepo.failSummaryJob(running?.id ?? job.id, "Cannot read properties of undefined (reading 'createClient')", null, "2026-05-01T00:12:00.000Z");
+
+    const status = service.getIndexStatus("project_1", "2026-05-01T00:13:00.000Z");
+
+    expect(status.readyChapterCount).toBe(0);
+    expect(status.failedJobCount).toBe(0);
+    expect(status.recentFailedJobs).toEqual([]);
+    db.close();
+  });
+
+  it("does not surface orphan chapter summary failures for chapters no longer in the project", () => {
+    const db = createDb();
+    const { chapterRepo, summaryRepo } = seedProject(db);
+    createChapter(chapterRepo, "chapter_1", "春".repeat(620));
+    const service = new SummaryService(summaryRepo, chapterRepo);
+    const job = summaryRepo.enqueueSummaryJob({
+      projectId: "project_1",
+      jobType: "chapter_summary",
+      targetId: "chapter_deleted",
+      sourceHash: "deleted_hash",
+      priority: 5,
+      now: "2026-05-01T00:10:00.000Z"
+    });
+    const running = summaryRepo.claimNextSummaryJob("project_1", "2026-05-01T00:11:00.000Z");
+    summaryRepo.failSummaryJob(running?.id ?? job.id, "找不到需要建立摘要的章节。", null, "2026-05-01T00:12:00.000Z");
+
+    const status = service.getIndexStatus("project_1", "2026-05-01T00:13:00.000Z");
+
+    expect(status.failedJobCount).toBe(0);
+    expect(status.recentFailedJobs).toEqual([]);
+    db.close();
+  });
+
+  it("labels active chapter summary failures with the chapter order and title", () => {
+    const db = createDb();
+    const { chapterRepo, summaryRepo } = seedProject(db);
+    createChapter(chapterRepo, "chapter_1", "春".repeat(620));
+    chapterRepo.rename("chapter_1", "风雪归人", "2026-05-01T00:09:00.000Z");
+    const service = new SummaryService(summaryRepo, chapterRepo);
+    const job = summaryRepo.enqueueSummaryJob({
+      projectId: "project_1",
+      jobType: "chapter_summary",
+      targetId: "chapter_1",
+      sourceHash: computeChapterContentHash("春".repeat(620)),
+      priority: 5,
+      now: "2026-05-01T00:10:00.000Z"
+    });
+    const running = summaryRepo.claimNextSummaryJob("project_1", "2026-05-01T00:11:00.000Z");
+    summaryRepo.failSummaryJob(running?.id ?? job.id, "Provider disconnected", null, "2026-05-01T00:12:00.000Z");
+
+    const status = service.getIndexStatus("project_1", "2026-05-01T00:13:00.000Z");
+
+    expect(status.recentFailedJobs[0]).toMatchObject({
+      label: "第1章 风雪归人",
+      error: "Provider disconnected"
     });
     db.close();
   });
