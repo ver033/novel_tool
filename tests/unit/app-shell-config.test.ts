@@ -25,8 +25,8 @@ describe("app shell configuration", () => {
       packages?: { "": { version?: string } };
     };
 
-    expect(packageJson.version).toBe("1.3.0");
-    expect(packageLock.version).toBe("1.3.0");
-    expect(packageLock.packages?.[""].version).toBe("1.3.0");
+    expect(packageJson.version).toBe("1.3.1");
+    expect(packageLock.version).toBe("1.3.1");
+    expect(packageLock.packages?.[""].version).toBe("1.3.1");
   });
 });
