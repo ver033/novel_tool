@@ -27,6 +27,7 @@ import {
 import { countWritingUnits } from "../shared/text";
 import type {
   ChapterContent,
+  ChapterSummary,
   SummaryChapterCacheDetail,
   SummaryChapterCacheEntry,
   SummaryIndexJobDetail,
@@ -109,6 +110,14 @@ type SummaryRebuildProjectIndexOptions = SummaryIndexStatusOptions & {
 
 type SummarySetBackgroundIndexOptions = SummaryIndexStatusOptions & {
   readonly cancelQueuedAndRunning?: boolean;
+};
+
+type SummaryJobRelevanceCache = {
+  readonly arcSummaries: ReadonlyMap<string, ArcAiSummaryRecord>;
+  readonly bookSummary: BookAiSummaryRecord | null;
+  readonly chapterIds: ReadonlySet<string>;
+  readonly chapterSummaries: ReadonlyMap<string, ChapterAiSummaryRecord>;
+  readonly chapters: readonly ChapterSummary[];
 };
 
 export type ChapterSummaryIndexChunk = {
@@ -313,6 +322,16 @@ function isManualSummaryTrigger(trigger: ChapterSummaryQueueTrigger): boolean {
 
 function formatAutoArcKey(chapterFrom: number, chapterTo: number): string {
   return `auto:${String(chapterFrom).padStart(3, "0")}-${String(chapterTo).padStart(3, "0")}`;
+}
+
+function parseAutoArcKey(arcKey: string): { readonly from: number; readonly to: number } | null {
+  const match = /^auto:(\d+)-(\d+)$/.exec(arcKey);
+  if (!match) {
+    return null;
+  }
+  const from = Number.parseInt(match[1], 10);
+  const to = Number.parseInt(match[2], 10);
+  return Number.isSafeInteger(from) && Number.isSafeInteger(to) && from > 0 && to >= from ? { from, to } : null;
 }
 
 function isReadyChapterSummary(summary: ChapterAiSummaryRecord, sourceHash: string): boolean {
@@ -916,6 +935,8 @@ export class SummaryService implements SummaryIndexInvalidator {
     }
 
     const jobResolutionCache = {
+      chapters,
+      chapterIds: new Set(chapters.map((chapter) => chapter.id)),
       chapterSummaries: summaries,
       arcSummaries: new Map(this.summaryRepo.listArcSummaries(projectId).map((summary) => [summary.arcKey, summary])),
       bookSummary: this.summaryRepo.getLatestBookSummary(projectId)
@@ -925,7 +946,10 @@ export class SummaryService implements SummaryIndexInvalidator {
       rawJobs.filter((job) => job.status === "queued" && job.nextRunAt).map((job) => this.summaryJobResolutionKey(job))
     );
     const jobs = rawJobs.filter(
-      (job) => (job.status !== "failed" || hasSummaryJobError(job)) && !this.isJobResolvedByCurrentSummaryIndex(job, jobResolutionCache, queuedRetryKeys)
+      (job) =>
+        (job.status !== "failed" || hasSummaryJobError(job)) &&
+        this.isSummaryJobRelevantToCurrentIndex(projectId, job, jobResolutionCache) &&
+        !this.isJobResolvedByCurrentSummaryIndex(job, jobResolutionCache, queuedRetryKeys)
     );
     const runningJob = jobs.find((job) => job.status === "running") ?? null;
     const failedJobs = jobs.filter((job) => job.status === "failed");
@@ -1112,11 +1136,7 @@ export class SummaryService implements SummaryIndexInvalidator {
 
   private isJobResolvedByCurrentSummaryIndex(
     job: SummaryJobRecord,
-    cache: {
-      readonly chapterSummaries: ReadonlyMap<string, ChapterAiSummaryRecord>;
-      readonly arcSummaries: ReadonlyMap<string, ArcAiSummaryRecord>;
-      readonly bookSummary: BookAiSummaryRecord | null;
-    },
+    cache: SummaryJobRelevanceCache,
     queuedRetryKeys: ReadonlySet<string>
   ): boolean {
     if (job.status !== "failed") {
@@ -1136,6 +1156,60 @@ export class SummaryService implements SummaryIndexInvalidator {
       return cache.bookSummary?.status === "ready" && (cache.bookSummary.sourceHash === job.sourceHash || cache.bookSummary.updatedAt >= job.updatedAt);
     }
     return false;
+  }
+
+  private isSummaryJobRelevantToCurrentIndex(projectId: string, job: SummaryJobRecord, cache: SummaryJobRelevanceCache): boolean {
+    if (job.jobType === "chapter_summary") {
+      return Boolean(job.targetId && cache.chapterIds.has(job.targetId));
+    }
+    if (job.jobType === "arc_summary") {
+      return this.isArcSummaryJobRelevantToCurrentIndex(job, cache);
+    }
+    if (job.jobType === "book_summary") {
+      return this.isBookSummaryJobRelevantToCurrentIndex(projectId, job, cache);
+    }
+    return true;
+  }
+
+  private isArcSummaryJobRelevantToCurrentIndex(job: SummaryJobRecord, cache: SummaryJobRelevanceCache): boolean {
+    if (!job.targetId) {
+      return false;
+    }
+    const range = parseAutoArcKey(job.targetId);
+    if (!range) {
+      return false;
+    }
+    const chapters = cache.chapters.filter((chapter) => {
+      const ordinal = chapter.sortOrder + 1;
+      return ordinal >= range.from && ordinal <= range.to;
+    });
+    if (chapters.length === 0) {
+      return false;
+    }
+
+    const readySummaries: ChapterAiSummaryRecord[] = [];
+    for (const chapter of chapters) {
+      const summary = cache.chapterSummaries.get(chapter.id);
+      if (!summary || (summary.status !== "ready" && summary.status !== "skipped_too_short")) {
+        return false;
+      }
+      if (summary.status === "ready") {
+        readySummaries.push(summary);
+      }
+    }
+    if (readySummaries.length === 0) {
+      return false;
+    }
+
+    return computeSourceHash(readySummaries.map((summary) => summary.contentHash)) === job.sourceHash;
+  }
+
+  private isBookSummaryJobRelevantToCurrentIndex(projectId: string, job: SummaryJobRecord, cache: SummaryJobRelevanceCache): boolean {
+    const readyArcs = [...cache.arcSummaries.values()].filter((summary) => summary.status === "ready");
+    if (readyArcs.length === 0) {
+      return false;
+    }
+    return this.computeBookSourceHash(readyArcs.map((summary) => summary.sourceHash), this.buildBookCoverage(projectId)) === job.sourceHash;
   }
 
   private summaryJobResolutionKey(job: SummaryJobRecord): string {
@@ -1328,8 +1402,8 @@ export class SummaryService implements SummaryIndexInvalidator {
     now: string,
     options: { readonly signal?: AbortSignal } = {}
   ): Promise<ArcAiSummaryRecord> {
-    const generator = this.options.generator?.summarizeArcForIndex;
-    if (!generator) {
+    const generator = this.options.generator;
+    if (!generator?.summarizeArcForIndex) {
       throw new Error("AI 阶段摘要生成器未配置。");
     }
     const readySummaries = this.collectReadyChapterSummariesForArc(projectId, chapterFrom, chapterTo);
@@ -1339,7 +1413,7 @@ export class SummaryService implements SummaryIndexInvalidator {
       throw new SummarySourceChangedError("阶段摘要来源已变化，已重新排队最新摘要任务。");
     }
 
-    const structured = await generator(
+    const structured = await generator.summarizeArcForIndex(
       {
         arcKey,
         chapterFrom,
@@ -1381,8 +1455,8 @@ export class SummaryService implements SummaryIndexInvalidator {
   }
 
   async summarizeBook(projectId: string, sourceHash: string, now: string, options: { readonly signal?: AbortSignal } = {}): Promise<BookAiSummaryRecord> {
-    const generator = this.options.generator?.summarizeBookForIndex;
-    if (!generator) {
+    const generator = this.options.generator;
+    if (!generator?.summarizeBookForIndex) {
       throw new Error("AI 全书摘要生成器未配置。");
     }
     const coverage = this.buildBookCoverage(projectId);
@@ -1396,7 +1470,7 @@ export class SummaryService implements SummaryIndexInvalidator {
       throw new SummarySourceChangedError("全书摘要来源已变化，已重新排队最新摘要任务。");
     }
 
-    const generated = await generator(
+    const generated = await generator.summarizeBookForIndex(
       {
         arcs: readyArcs.map((summary) => ({
           arcKey: summary.arcKey,
@@ -1651,12 +1725,12 @@ export class SummaryService implements SummaryIndexInvalidator {
     if (job.jobType === "chapter_summary" && job.targetId) {
       const content = this.chapterRepo.getContent(job.targetId);
       if (content?.projectId === projectId) {
-        return `正在摘要：${content.title}`;
+        return `正在摘要：${formatChapterCoverageLabel(content.sortOrder + 1, content.title)}`;
       }
-      return "正在摘要章节";
+      return `正在摘要：缺失章节 ${job.targetId}`;
     }
     if (job.jobType === "arc_summary") {
-      return "正在整理阶段摘要";
+      return `正在整理${this.formatArcSummaryJobLabel(job)}`;
     }
     if (job.jobType === "book_summary") {
       return "正在整理全书摘要";
@@ -1668,17 +1742,25 @@ export class SummaryService implements SummaryIndexInvalidator {
     if (job.jobType === "chapter_summary" && job.targetId) {
       const content = this.chapterRepo.getContent(job.targetId);
       if (content?.projectId === projectId) {
-        return content.title;
+        return formatChapterCoverageLabel(content.sortOrder + 1, content.title);
       }
-      return "章节摘要";
+      return `章节摘要（缺失章节 ID：${job.targetId}）`;
     }
     if (job.jobType === "arc_summary") {
-      return "阶段摘要";
+      return this.formatArcSummaryJobLabel(job);
     }
     if (job.jobType === "book_summary") {
       return "全书摘要";
     }
     return "全书索引";
+  }
+
+  private formatArcSummaryJobLabel(job: SummaryJobRecord): string {
+    if (!job.targetId) {
+      return "阶段摘要";
+    }
+    const range = parseAutoArcKey(job.targetId);
+    return range ? `阶段摘要（${formatArcCoverageLabel(range.from, range.to)}）` : `阶段摘要（${job.targetId}）`;
   }
 
   private formatSummaryJobDetail(projectId: string, job: SummaryJobRecord): SummaryIndexJobDetail {
