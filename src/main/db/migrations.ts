@@ -42,6 +42,7 @@ const migrations: readonly Migration[] = [
           status TEXT NOT NULL DEFAULT 'draft',
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL,
+          content_updated_at TEXT,
           FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
         );
 
@@ -393,6 +394,16 @@ const migrations: readonly Migration[] = [
             AND metadata_json LIKE '%"suggestion"%'
         `
       ).run(new Date().toISOString());
+    }
+  },
+  {
+    version: 12,
+    name: "chapter_content_updated_at",
+    up(db) {
+      if (!tableHasColumn(db, "chapters", "content_updated_at")) {
+        db.exec("ALTER TABLE chapters ADD COLUMN content_updated_at TEXT;");
+      }
+      db.exec("UPDATE chapters SET content_updated_at = updated_at WHERE content_updated_at IS NULL;");
     }
   }
 ];

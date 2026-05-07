@@ -745,6 +745,7 @@ export function WritingPage({
                   taskType={taskType}
                   editor={editor}
                   flushPendingSave={editorStore.flushPendingSave}
+                  onContentSaved={editorStore.markContentSaved}
                   onTabChange={onSidebarTabChange}
                   onClose={onCloseSidebar}
                   onOpenSettings={handleSettings}

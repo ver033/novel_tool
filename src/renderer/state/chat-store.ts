@@ -17,6 +17,7 @@ type UseChatStoreOptions = {
   readonly projectId: string | null;
   readonly currentChapterId: string | null;
   readonly currentChapterTitle: string | null;
+  readonly flushPendingSave: () => Promise<unknown>;
   readonly selectionSnapshot: SelectionSnapshot | null;
 };
 
@@ -53,7 +54,7 @@ function getSessionContextUsage(session: AiChatSessionRecord | null): AiStreamCo
   return session?.lastContextUsage ?? null;
 }
 
-export function useChatStore({ projectId, currentChapterId, currentChapterTitle, selectionSnapshot }: UseChatStoreOptions) {
+export function useChatStore({ projectId, currentChapterId, currentChapterTitle, flushPendingSave, selectionSnapshot }: UseChatStoreOptions) {
   const api = useMemo(getNovelToolApi, []);
   const [session, setSession] = useState<AiChatSessionRecord | null>(null);
   const [sessions, setSessions] = useState<readonly AiChatSessionRecord[]>([]);
@@ -440,6 +441,7 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
       setMessages((current) => [...current, pendingUser]);
 
       try {
+        await flushPendingSave();
         const content =
           currentChapterId && projectId
             ? ((await api.chapter.getContent({ projectId, chapterId: currentChapterId })) as ChapterContent | undefined)
@@ -545,7 +547,7 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
         }
       }
     },
-    [api, busy, cancelActiveStream, currentChapterId, currentChapterTitle, loadMessages, projectId, refreshSessions, selectionSnapshot, session]
+    [api, busy, cancelActiveStream, currentChapterId, currentChapterTitle, flushPendingSave, loadMessages, projectId, refreshSessions, selectionSnapshot, session]
   );
 
   return {

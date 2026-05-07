@@ -176,10 +176,8 @@ export function useAppStore() {
         return;
       }
 
-      await api.chapter.rename({ projectId: currentProject?.id, chapterId, title: trimmedTitle });
-      setChapters((current) =>
-        current.map((chapter) => (chapter.id === chapterId ? { ...chapter, title: trimmedTitle, updatedAt: new Date().toISOString() } : chapter))
-      );
+      const renamed = (await api.chapter.rename({ projectId: currentProject?.id, chapterId, title: trimmedTitle })) as ChapterSummary;
+      setChapters((current) => current.map((chapter) => (chapter.id === renamed.id ? renamed : chapter)));
     },
     [api, currentProject?.id]
   );

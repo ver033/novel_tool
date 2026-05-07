@@ -4,6 +4,7 @@ import type {
   AiTaskCandidateRecord,
   AiTaskRecord,
   AiApplyCandidateInput,
+  ChapterContent,
   SelectionSnapshot,
   TaskType
 } from "../../main/shared/types";
@@ -26,6 +27,7 @@ type UseTaskStoreOptions = {
   readonly instruction: string;
   readonly editor: Editor | null;
   readonly flushPendingSave: () => Promise<SavedChapterVersion | null>;
+  readonly onContentSaved: (content: ChapterContent) => void;
 };
 
 function isCanceledIpcError(reason: unknown): boolean {
@@ -33,7 +35,17 @@ function isCanceledIpcError(reason: unknown): boolean {
   return message.includes("canceled") || message.includes("AI 任务已取消");
 }
 
-export function useTaskStore({ projectId, chapterId, taskType, presetId, selectionSnapshot, instruction, editor, flushPendingSave }: UseTaskStoreOptions) {
+export function useTaskStore({
+  projectId,
+  chapterId,
+  taskType,
+  presetId,
+  selectionSnapshot,
+  instruction,
+  editor,
+  flushPendingSave,
+  onContentSaved
+}: UseTaskStoreOptions) {
   const api = useMemo(getNovelToolApi, []);
   const [task, setTask] = useState<AiTaskRecord | null>(null);
   const [candidate, setCandidate] = useState<AiTaskCandidateRecord | null>(null);
@@ -343,7 +355,8 @@ export function useTaskStore({ projectId, chapterId, taskType, presetId, selecti
           candidate,
           applyMode,
           currentChapterId: chapterId,
-          flushPendingSave
+          flushPendingSave,
+          onContentSaved
         });
         setTask(result.task);
         setCandidate(result.candidate);
@@ -353,7 +366,7 @@ export function useTaskStore({ projectId, chapterId, taskType, presetId, selecti
         setBusy(false);
       }
     },
-    [api, candidate, chapterId, editor, flushPendingSave, task]
+    [api, candidate, chapterId, editor, flushPendingSave, onContentSaved, task]
   );
 
   return {

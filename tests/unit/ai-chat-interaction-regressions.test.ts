@@ -62,6 +62,18 @@ describe("AI chat author interaction regressions", () => {
     expect(css).toContain(".send-to-chat-option");
   });
 
+  it("flushes pending editor saves before AI chat reads the current chapter", () => {
+    const chatStore = readSource("src/renderer/state/chat-store.ts");
+    const chat = readSource("src/renderer/sidebar/AiChatTab.tsx");
+    const sidebar = readSource("src/renderer/layout/RightUtilitySidebar.tsx");
+
+    expect(chatStore).toContain("readonly flushPendingSave");
+    expect(chatStore).toContain("await flushPendingSave()");
+    expect(chatStore.indexOf("await flushPendingSave()")).toBeLessThan(chatStore.indexOf("api.chapter.getContent"));
+    expect(chat).toContain("flushPendingSave");
+    expect(sidebar).toContain("flushPendingSave={flushPendingSave}");
+  });
+
   it("keeps the AI chat message list pinned to the newest output", () => {
     const chat = readSource("src/renderer/sidebar/AiChatTab.tsx");
 

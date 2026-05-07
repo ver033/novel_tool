@@ -240,6 +240,7 @@ export type ChapterSummary = {
   readonly status: string;
   readonly createdAt: string;
   readonly updatedAt: string;
+  readonly contentUpdatedAt?: string;
 };
 
 export type ChapterContent = ChapterSummary & {
