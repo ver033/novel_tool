@@ -4,11 +4,13 @@ import type {
   AiApplyCandidateInput,
   AiTaskCandidateRecord,
   AiTaskRecord,
+  ChapterContent,
   ChapterCreateSnapshotInput,
   ChapterSaveContentInput
 } from "../../main/shared/types";
 import { createTiptapDocumentFromPlainText, extractPlainTextFromTiptapJson, type TiptapDocument } from "./tiptap/converters";
 import { createSelectionHash } from "./tiptap/selection-utils";
+import { appendEmergencyJournalEntry } from "../state/draft-recovery-store";
 
 type ApplyResult = {
   readonly task: AiTaskRecord;
@@ -25,6 +27,12 @@ type AiApplyApi = {
   };
 };
 
+type SavedChapterVersion = {
+  readonly chapterId: string;
+  readonly projectId: string;
+  readonly updatedAt: string | null;
+};
+
 type ApplyAiCandidateInput = {
   readonly api: AiApplyApi;
   readonly editor: Editor;
@@ -32,7 +40,8 @@ type ApplyAiCandidateInput = {
   readonly candidate: AiTaskCandidateRecord;
   readonly applyMode: AiApplyCandidateInput["applyMode"];
   readonly currentChapterId: string | null;
-  readonly flushPendingSave: () => Promise<void>;
+  readonly flushPendingSave: () => Promise<SavedChapterVersion | null | void>;
+  readonly onContentSaved?: (content: ChapterContent) => void;
 };
 
 function assertSelectionStillMatches(editor: Editor, task: AiTaskRecord): void {
@@ -107,7 +116,8 @@ export async function applyAiCandidateToEditor({
   candidate,
   applyMode,
   currentChapterId,
-  flushPendingSave
+  flushPendingSave,
+  onContentSaved
 }: ApplyAiCandidateInput): Promise<ApplyResult> {
   if (!task.chapterId) {
     throw new Error("当前 AI 任务没有关联章节，不能应用到正文。");
@@ -117,7 +127,7 @@ export async function applyAiCandidateToEditor({
   }
 
   assertSelectionStillMatches(editor, task);
-  await flushPendingSave();
+  const savedVersion = await flushPendingSave();
   await api.chapter.createSnapshot({
     projectId: task.projectId,
     chapterId: task.chapterId,
@@ -128,13 +138,26 @@ export async function applyAiCandidateToEditor({
 
   const contentJson = editor.getJSON() as TiptapDocument;
   const plainText = extractPlainTextFromTiptapJson(contentJson);
-  await api.chapter.saveContent({
+  appendEmergencyJournalEntry({
+    projectId: task.projectId,
+    chapterId: task.chapterId,
+    chapterTitle: task.chapterId,
+    plainText,
+    wordCount: countWritingUnits(plainText),
+    dbUpdatedAt: null,
+    reason: "before_ai_apply"
+  });
+  const savedContent = (await api.chapter.saveContent({
     projectId: task.projectId,
     chapterId: task.chapterId,
     contentJson,
     plainText,
-    wordCount: countWritingUnits(plainText)
-  });
+    wordCount: countWritingUnits(plainText),
+    expectedUpdatedAt: savedVersion?.projectId === task.projectId && savedVersion.chapterId === task.chapterId ? savedVersion.updatedAt ?? undefined : undefined
+  })) as ChapterContent | undefined;
+  if (savedContent) {
+    onContentSaved?.(savedContent);
+  }
 
   return (await api.ai.applyCandidate({
     projectId: task.projectId,

@@ -118,7 +118,8 @@ export const chapterSaveContentInputSchema = z
     chapterId: idSchema,
     contentJson: tiptapJsonSchema,
     plainText: z.string().max(MAX_CHAPTER_PLAIN_TEXT_CHARS),
-    wordCount: z.number().int().nonnegative().optional()
+    wordCount: z.number().int().nonnegative().optional(),
+    expectedUpdatedAt: nonEmptyString.optional()
   })
   .strict();
 

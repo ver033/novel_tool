@@ -60,7 +60,8 @@ describe("phase 2 database migrations", () => {
       { version: 8 },
       { version: 9 },
       { version: 10 },
-      { version: 11 }
+      { version: 11 },
+      { version: 12 }
     ]);
     expect(db.prepare("PRAGMA table_info(import_jobs)").all().find((row) => row.name === "project_id")).toMatchObject({ notnull: 0 });
     expect(db.prepare("PRAGMA table_info(ai_task_candidates)").all().find((row) => row.name === "metadata_json")).toMatchObject({
@@ -70,6 +71,9 @@ describe("phase 2 database migrations", () => {
       notnull: 0
     });
     expect(db.prepare("PRAGMA table_info(chapters)").all().find((row) => row.name === "daily_word_count_date")).toMatchObject({
+      notnull: 0
+    });
+    expect(db.prepare("PRAGMA table_info(chapters)").all().find((row) => row.name === "content_updated_at")).toMatchObject({
       notnull: 0
     });
     expect(db.prepare("PRAGMA table_info(ai_chat_sessions)").all().find((row) => row.name === "context_usage_json")).toMatchObject({
@@ -91,7 +95,45 @@ describe("phase 2 database migrations", () => {
     runMigrations(db);
     runMigrations(db);
 
-    expect(db.prepare("SELECT COUNT(*) AS count FROM schema_migrations").get()).toEqual({ count: 11 });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM schema_migrations").get()).toEqual({ count: 12 });
+
+    db.close();
+  });
+
+  it("backfills chapter content version timestamps for existing projects", () => {
+    const db = createDatabase(createTempDbPath());
+
+    runMigrations(db);
+    db.prepare("INSERT INTO projects (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)").run(
+      "project_content_version",
+      "归途",
+      "2026-05-06T00:00:00.000Z",
+      "2026-05-06T00:00:00.000Z"
+    );
+    db.prepare(
+      `INSERT INTO chapters
+       (id, project_id, title, sort_order, content_json, plain_text, word_count, daily_word_count, created_at, updated_at, content_updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      "chapter_content_version",
+      "project_content_version",
+      "第1章",
+      0,
+      JSON.stringify({ type: "doc", content: [] }),
+      "正文",
+      2,
+      0,
+      "2026-05-06T00:00:00.000Z",
+      "2026-05-06T00:01:00.000Z",
+      null
+    );
+
+    db.prepare("DELETE FROM schema_migrations WHERE version = ?").run(12);
+    runMigrations(db);
+
+    expect(db.prepare("SELECT content_updated_at FROM chapters WHERE id = ?").get("chapter_content_version")).toEqual({
+      content_updated_at: "2026-05-06T00:01:00.000Z"
+    });
 
     db.close();
   });
@@ -139,7 +181,7 @@ describe("phase 2 database migrations", () => {
     expect(db.prepare("SELECT COUNT(*) AS count FROM arc_ai_summaries").get()).toEqual({ count: 0 });
     expect(db.prepare("SELECT COUNT(*) AS count FROM book_ai_summaries").get()).toEqual({ count: 0 });
     expect(db.prepare("SELECT COUNT(*) AS count FROM summary_jobs").get()).toEqual({ count: 0 });
-    expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").get()).toEqual({ version: 11 });
+    expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").get()).toEqual({ version: 12 });
 
     db.close();
   });
@@ -197,7 +239,7 @@ describe("phase 2 database migrations", () => {
       change_summary: "旧版校对结果已失效，请重新生成。",
       metadata_json: null
     });
-    expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").get()).toEqual({ version: 11 });
+    expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").get()).toEqual({ version: 12 });
 
     db.close();
   });

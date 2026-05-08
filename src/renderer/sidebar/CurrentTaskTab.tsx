@@ -2,13 +2,14 @@ import { useEffect, useMemo, useState } from "react";
 import type { Editor } from "@tiptap/react";
 import { Check, CopySimple } from "@phosphor-icons/react";
 import { proofreadIssueLabels, type ProofreadIssue } from "../../main/shared/proofread";
-import type { SelectionSnapshot, TaskPromptPreset, TaskType } from "../../main/shared/types";
+import type { ChapterContent, SelectionSnapshot, TaskPromptPreset, TaskType } from "../../main/shared/types";
 import { Button } from "../components/Button";
 import { IconButton } from "../components/IconButton";
 import { Textarea } from "../components/Textarea";
 import type { SettingsCategory } from "../routes/SettingsPage";
 import { candidateStatusLabels, taskLabels, taskStatusLabels } from "../state/sidebar-store";
 import { useTaskStore } from "../state/task-store";
+import type { SavedChapterVersion } from "../state/editor-store";
 
 type CurrentTaskTabProps = {
   readonly chapterId: string | null;
@@ -18,7 +19,8 @@ type CurrentTaskTabProps = {
   readonly taskPromptPreset: TaskPromptPreset | null;
   readonly taskType: TaskType;
   readonly editor: Editor | null;
-  readonly flushPendingSave: () => Promise<void>;
+  readonly flushPendingSave: () => Promise<SavedChapterVersion | null>;
+  readonly onContentSaved: (content: ChapterContent) => void;
   readonly onOpenSettings: (category?: SettingsCategory) => void;
 };
 
@@ -134,6 +136,7 @@ export function CurrentTaskTab({
   taskType,
   editor,
   flushPendingSave,
+  onContentSaved,
   onOpenSettings
 }: CurrentTaskTabProps) {
   const [instruction, setInstruction] = useState(initialInstructionForTask(taskType, taskPromptPreset));
@@ -159,7 +162,8 @@ export function CurrentTaskTab({
     selectionSnapshot,
     instruction,
     editor,
-    flushPendingSave
+    flushPendingSave,
+    onContentSaved
   });
   const primaryLabel = taskType === "expand" ? "替换原文" : taskType === "continue" ? "插入下方" : "应用替换";
   const hasCandidateText = Boolean(taskStore.candidate?.generatedText.trim());

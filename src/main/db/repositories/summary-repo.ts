@@ -785,9 +785,17 @@ export class SummaryRepository {
   private findNextRunnableJobRow(projectId: string, now: string): SummaryJobRow | null {
     const row = this.db
       .prepare(
-        `SELECT * FROM summary_jobs
-         WHERE project_id = ? AND status = 'queued' AND (next_run_at IS NULL OR next_run_at <= ?)
-         ORDER BY priority DESC, created_at ASC, rowid ASC
+        `SELECT summary_jobs.*
+         FROM summary_jobs
+         LEFT JOIN chapters ON summary_jobs.job_type = 'chapter_summary'
+          AND summary_jobs.target_id = chapters.id
+          AND summary_jobs.project_id = chapters.project_id
+         WHERE summary_jobs.project_id = ? AND summary_jobs.status = 'queued' AND (summary_jobs.next_run_at IS NULL OR summary_jobs.next_run_at <= ?)
+         ORDER BY
+           summary_jobs.priority DESC,
+           CASE WHEN summary_jobs.job_type = 'chapter_summary' THEN COALESCE(chapters.sort_order, -1) ELSE -1 END DESC,
+           summary_jobs.created_at ASC,
+           summary_jobs.rowid ASC
          LIMIT 1`
       )
       .get(projectId, now) as SummaryJobRow | undefined;

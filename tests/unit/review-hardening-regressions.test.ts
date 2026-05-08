@@ -79,6 +79,20 @@ describe("review hardening regressions", () => {
     ).toBe(false);
   });
 
+  it("accepts a client chapter version for stale-save protection", () => {
+    expect(
+      chapterSaveContentInputSchema.safeParse({
+        chapterId: "chapter_1",
+        contentJson: {
+          type: "doc",
+          content: []
+        },
+        plainText: "正文",
+        expectedUpdatedAt: "2026-05-04T00:00:00.000Z"
+      }).success
+    ).toBe(true);
+  });
+
   it("rejects oversized TXT imports before reading the whole file", () => {
     const dir = mkdtempSync(join(tmpdir(), "novel-tool-large-txt-"));
     const filePath = join(dir, "large.txt");

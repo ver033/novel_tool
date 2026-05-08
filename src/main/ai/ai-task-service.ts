@@ -606,11 +606,11 @@ export class AiTaskService {
     const summaryItems = await this.summarizeAgentContext(projectId, message, resolved, signal);
     let agentContext = buildSummarizedAgentContextFromItems(resolved, summaryItems);
     if (isChatAgentContextTooLarge(message, agentContext.contextText, chatBudget)) {
-      const mergeContextSummaries = this.chatGenerator?.mergeContextSummaries;
-      if (!mergeContextSummaries) {
+      const chatGenerator = this.chatGenerator;
+      if (!chatGenerator?.mergeContextSummaries) {
         throw new Error("AI 对话分章摘要仍然过长，需要聚合摘要，但聚合摘要服务未初始化。");
       }
-      const mergedSummary = await mergeContextSummaries(
+      const mergedSummary = await chatGenerator.mergeContextSummaries(
         {
           projectId,
           userMessage: message,

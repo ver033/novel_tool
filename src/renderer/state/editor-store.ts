@@ -26,6 +26,12 @@ const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
 
 export type SaveStatus = "saved" | "dirty" | "saving" | "failed";
 
+export type SavedChapterVersion = {
+  readonly chapterId: string;
+  readonly projectId: string;
+  readonly updatedAt: string | null;
+};
+
 function formatSavedAt(value: Date | null): string {
   if (!value) {
     return "已保存";
@@ -81,6 +87,14 @@ export function resolveSaveCompletionStatus(input: {
   return input.currentRevision === input.saveStartedAtRevision ? "saved" : "dirty";
 }
 
+function isSameJson(left: unknown, right: unknown): boolean {
+  try {
+    return JSON.stringify(left) === JSON.stringify(right);
+  } catch {
+    return false;
+  }
+}
+
 type SaveSnapshot = {
   readonly chapterId: string | null;
   readonly contentJson: TiptapDocument;
@@ -97,10 +111,11 @@ type DraftWriteContext = {
   readonly projectId: string | null;
 };
 
-export function useEditorStore(activeChapter: ChapterSummary | null) {
+export function useEditorStore(activeChapter: ChapterSummary | null, onChapterSaved?: (content: ChapterContent) => void) {
   const api = useMemo(getNovelToolApi, []);
   const [contentJson, setContentJson] = useState<TiptapDocument>(() => createTiptapDocumentFromPlainText(""));
   const [contentVersion, setContentVersion] = useState(0);
+  const [loadedChapterId, setLoadedChapterId] = useState<string | null>(null);
   const [plainText, setPlainText] = useState("");
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("saved");
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
@@ -111,11 +126,11 @@ export function useEditorStore(activeChapter: ChapterSummary | null) {
   const [dailyWordCountDate, setDailyWordCountDate] = useState<string | null>(null);
   const [savedWordCount, setSavedWordCount] = useState(0);
   const [pendingDraftRecovery, setPendingDraftRecovery] = useState<EditorDraftRecord | null>(null);
-  const saveInFlight = useRef<Promise<void> | null>(null);
+  const saveInFlight = useRef<Promise<SavedChapterVersion | null> | null>(null);
   const editRevision = useRef(0);
   const savedRevision = useRef(0);
   const editorScope = useRef(0);
-  const savedDbUpdatedAt = useRef<string | null>(null);
+  const savedContentUpdatedAt = useRef<string | null>(null);
   const draftWriteTimer = useRef<number | null>(null);
 
   const chapterId = activeChapter?.id ?? null;
@@ -123,13 +138,13 @@ export function useEditorStore(activeChapter: ChapterSummary | null) {
   const draftWriteContext = useRef<DraftWriteContext>({
     chapterId,
     chapterTitle: activeChapter?.title ?? "未命名章节",
-    dbUpdatedAt: savedDbUpdatedAt.current,
+    dbUpdatedAt: savedContentUpdatedAt.current,
     projectId
   });
   draftWriteContext.current = {
     chapterId,
     chapterTitle: activeChapter?.title ?? "未命名章节",
-    dbUpdatedAt: savedDbUpdatedAt.current,
+    dbUpdatedAt: savedContentUpdatedAt.current,
     projectId
   };
   const latestSaveSnapshot = useRef<SaveSnapshot>({
@@ -180,6 +195,7 @@ export function useEditorStore(activeChapter: ChapterSummary | null) {
       const emptyDocument = createTiptapDocumentFromPlainText("");
       setContentJson(emptyDocument);
       setContentVersion((current) => current + 1);
+      setLoadedChapterId(null);
       setPlainText("");
       setWordCount(0);
       setDailyWordCount(0);
@@ -187,7 +203,7 @@ export function useEditorStore(activeChapter: ChapterSummary | null) {
       setSavedWordCount(0);
       setSaveStatus("saved");
       setLastSavedAt(null);
-      savedDbUpdatedAt.current = null;
+      savedContentUpdatedAt.current = null;
       setErrorMessage(null);
       setPendingDraftRecovery(null);
       return;
@@ -197,6 +213,7 @@ export function useEditorStore(activeChapter: ChapterSummary | null) {
     const currentProjectId = projectId;
     const currentScopeId = editorScope.current;
     let cancelled = false;
+    setLoadedChapterId(null);
 
     async function loadChapterContent() {
       setSaveStatus("saved");
@@ -218,13 +235,15 @@ export function useEditorStore(activeChapter: ChapterSummary | null) {
         const nextDocument = normalizeTiptapDocument(content.contentJson, nextPlainText);
         setContentJson(nextDocument);
         setContentVersion((current) => current + 1);
+        setLoadedChapterId(currentChapterId);
+        const nextWordCount = countWritingUnits(nextPlainText);
         setPlainText(nextPlainText);
-        setWordCount(content.wordCount ?? countWritingUnits(nextPlainText));
+        setWordCount(nextWordCount);
         setDailyWordCount(content.dailyWordCount ?? 0);
         setDailyWordCountDate(content.dailyWordCountDate ?? null);
-        setSavedWordCount(content.wordCount ?? countWritingUnits(nextPlainText));
+        setSavedWordCount(nextWordCount);
         setLastSavedAt(content.updatedAt ? new Date(content.updatedAt) : null);
-        savedDbUpdatedAt.current = content.updatedAt ?? null;
+        savedContentUpdatedAt.current = content.contentUpdatedAt ?? content.updatedAt ?? null;
         try {
           const draft = await draftRecoveryStore.getDraft(currentProjectId, currentChapterId);
           if (cancelled || editorScope.current !== currentScopeId) {
@@ -262,12 +281,13 @@ export function useEditorStore(activeChapter: ChapterSummary | null) {
         const nextDocument = createTiptapDocumentFromPlainText("");
         setContentJson(nextDocument);
         setContentVersion((current) => current + 1);
+        setLoadedChapterId(null);
         setPlainText("");
         setWordCount(0);
         setDailyWordCount(0);
         setDailyWordCountDate(null);
         setSavedWordCount(0);
-        savedDbUpdatedAt.current = null;
+        savedContentUpdatedAt.current = null;
         setPendingDraftRecovery(null);
         setErrorMessage(formatError(reason));
         setSaveStatus("failed");
@@ -280,6 +300,16 @@ export function useEditorStore(activeChapter: ChapterSummary | null) {
       cancelled = true;
     };
   }, [api, chapterId, projectId]);
+
+  useEffect(() => {
+    if (activeChapter?.id !== loadedChapterId || !activeChapter.updatedAt) {
+      return;
+    }
+    const nextContentUpdatedAt = activeChapter.contentUpdatedAt ?? activeChapter.updatedAt;
+    if (!savedContentUpdatedAt.current || nextContentUpdatedAt > savedContentUpdatedAt.current) {
+      savedContentUpdatedAt.current = nextContentUpdatedAt;
+    }
+  }, [activeChapter?.contentUpdatedAt, activeChapter?.id, activeChapter?.updatedAt, loadedChapterId]);
 
   const handleContentChange = useCallback((nextContentJson: TiptapDocument) => {
     editRevision.current += 1;
@@ -339,7 +369,7 @@ export function useEditorStore(activeChapter: ChapterSummary | null) {
     [api]
   );
 
-  const flushPendingSave = useCallback(async () => {
+  const flushPendingSave = useCallback(async (): Promise<SavedChapterVersion | null> => {
     if (saveInFlight.current) {
       await saveInFlight.current;
     }
@@ -347,41 +377,61 @@ export function useEditorStore(activeChapter: ChapterSummary | null) {
     while (savedRevision.current < editRevision.current) {
       const snapshot = latestSaveSnapshot.current;
       if (!snapshot.chapterId || !snapshot.projectId) {
-        return;
+        return null;
       }
 
       const snapshotChapterId = snapshot.chapterId;
       const snapshotProjectId = snapshot.projectId;
+      const snapshotDraftContext = draftWriteContext.current;
       const saveStartedAtRevision = editRevision.current;
       setSaveStatus("saving");
       const savePromise = (async () => {
+        draftRecoveryStore.appendEmergencyJournalEntry({
+          projectId: snapshotProjectId,
+          chapterId: snapshotChapterId,
+          chapterTitle: snapshotDraftContext.chapterId === snapshotChapterId ? snapshotDraftContext.chapterTitle : "未命名章节",
+          plainText: snapshot.plainText,
+          wordCount: snapshot.wordCount,
+          dbUpdatedAt: snapshotDraftContext.chapterId === snapshotChapterId ? snapshotDraftContext.dbUpdatedAt : savedContentUpdatedAt.current,
+          reason: "before_save"
+        });
+
         const content = (await api.chapter.saveContent({
           projectId: snapshotProjectId,
           chapterId: snapshotChapterId,
           contentJson: snapshot.contentJson,
           plainText: snapshot.plainText,
-          wordCount: snapshot.wordCount
+          wordCount: snapshot.wordCount,
+          expectedUpdatedAt: savedContentUpdatedAt.current ?? undefined
         })) as ChapterContent | undefined;
+        if (content) {
+          onChapterSaved?.(content);
+        }
 
         void draftRecoveryStore.markDraftSaved(snapshotProjectId, snapshotChapterId, content?.updatedAt ?? new Date().toISOString())
           .catch((reason) => console.warn("Failed to mark local editor draft saved", reason));
 
         if (editorScope.current !== snapshot.scopeId) {
-          return;
+          return null;
         }
 
         savedRevision.current = Math.max(savedRevision.current, saveStartedAtRevision);
+        const savedContentWordCount = content?.wordCount ?? countWritingUnits(snapshot.plainText);
+        if (editRevision.current === saveStartedAtRevision) {
+          setWordCount(savedContentWordCount);
+        }
         setDailyWordCount(content?.dailyWordCount ?? 0);
         setDailyWordCountDate(content?.dailyWordCountDate ?? localDateKey());
-        setSavedWordCount(content?.wordCount ?? snapshot.wordCount);
+        setSavedWordCount(savedContentWordCount);
         setLastSavedAt(content?.updatedAt ? new Date(content.updatedAt) : new Date());
-        savedDbUpdatedAt.current = content?.updatedAt ?? null;
+        savedContentUpdatedAt.current = content?.contentUpdatedAt ?? content?.updatedAt ?? null;
         setSaveStatus(
           resolveSaveCompletionStatus({
             currentRevision: editRevision.current,
             saveStartedAtRevision
           })
         );
+        return content ? { chapterId: content.id, projectId: content.projectId, updatedAt: content.updatedAt ?? null } : null;
       })();
 
       saveInFlight.current = savePromise;
@@ -399,7 +449,46 @@ export function useEditorStore(activeChapter: ChapterSummary | null) {
         }
       }
     }
-  }, [api]);
+    const snapshot = latestSaveSnapshot.current;
+    if (!snapshot.chapterId || !snapshot.projectId) {
+      return null;
+    }
+    return {
+      chapterId: snapshot.chapterId,
+      projectId: snapshot.projectId,
+      updatedAt: savedContentUpdatedAt.current
+    };
+  }, [api, onChapterSaved]);
+
+  const markContentSaved = useCallback(
+    (content: ChapterContent) => {
+      const snapshot = latestSaveSnapshot.current;
+      if (content.id !== snapshot.chapterId || content.projectId !== snapshot.projectId) {
+        return;
+      }
+
+      onChapterSaved?.(content);
+      void draftRecoveryStore.markDraftSaved(content.projectId, content.id, content.contentUpdatedAt ?? content.updatedAt ?? new Date().toISOString())
+        .catch((reason) => console.warn("Failed to mark local editor draft saved", reason));
+
+      const savedContentWordCount = content.wordCount ?? countWritingUnits(content.plainText);
+      setDailyWordCount(content.dailyWordCount ?? 0);
+      setDailyWordCountDate(content.dailyWordCountDate ?? localDateKey());
+      setSavedWordCount(savedContentWordCount);
+      setLastSavedAt(content.updatedAt ? new Date(content.updatedAt) : new Date());
+      savedContentUpdatedAt.current = content.contentUpdatedAt ?? content.updatedAt ?? null;
+      setErrorMessage(null);
+
+      if (snapshot.plainText === content.plainText && isSameJson(snapshot.contentJson, content.contentJson)) {
+        savedRevision.current = editRevision.current;
+        setWordCount(savedContentWordCount);
+        setSaveStatus("saved");
+      } else {
+        setSaveStatus("dirty");
+      }
+    },
+    [onChapterSaved]
+  );
 
   useEffect(() => {
     if (!chapterId || saveStatus !== "dirty") {
@@ -423,7 +512,7 @@ export function useEditorStore(activeChapter: ChapterSummary | null) {
     setContentJson(nextDocument);
     setContentVersion((current) => current + 1);
     setPlainText(draft.plainText);
-    setWordCount(draft.wordCount);
+    setWordCount(countWritingUnits(draft.plainText));
     setErrorMessage(null);
     setSaveStatus("dirty");
     setPendingDraftRecovery(null);
@@ -445,11 +534,13 @@ export function useEditorStore(activeChapter: ChapterSummary | null) {
   return {
     contentJson,
     contentVersion,
+    loadedChapterId,
     editorSettings,
     dailyWordCount: visibleDailyWordCount,
     dismissDraftRecovery,
     flushPendingSave,
     handleContentChange,
+    markContentSaved,
     pendingDraftRecovery,
     plainText,
     recoverDraft,

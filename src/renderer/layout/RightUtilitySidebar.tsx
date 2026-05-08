@@ -1,12 +1,13 @@
 import { X } from "@phosphor-icons/react";
 import type { Editor } from "@tiptap/react";
-import type { ChapterSummary, SelectionSnapshot, TaskPromptPreset } from "../../main/shared/types";
+import type { ChapterContent, ChapterSummary, SelectionSnapshot, TaskPromptPreset } from "../../main/shared/types";
 import { IconButton } from "../components/IconButton";
 import { AiChatTab } from "../sidebar/AiChatTab";
 import type { AiChatDraftSeed } from "../sidebar/chat-draft";
 import { CurrentTaskTab } from "../sidebar/CurrentTaskTab";
 import { ScratchpadTab } from "../sidebar/ScratchpadTab";
 import type { SettingsCategory } from "../routes/SettingsPage";
+import type { SavedChapterVersion } from "../state/editor-store";
 
 export type SidebarTab = "chat" | "task" | "scratch";
 export type TaskType = "polish" | "expand" | "proofread" | "continue";
@@ -23,7 +24,8 @@ type RightUtilitySidebarProps = {
   readonly taskPromptPreset: TaskPromptPreset | null;
   readonly taskType: TaskType;
   readonly editor: Editor | null;
-  readonly flushPendingSave: () => Promise<void>;
+  readonly flushPendingSave: () => Promise<SavedChapterVersion | null>;
+  readonly onContentSaved: (content: ChapterContent) => void;
   readonly onTabChange: (tab: SidebarTab) => void;
   readonly onClose: () => void;
   readonly onOpenSettings: (category?: SettingsCategory) => void;
@@ -44,6 +46,7 @@ export function RightUtilitySidebar({
   currentProjectId,
   editor,
   flushPendingSave,
+  onContentSaved,
   scratchpadRefreshToken,
   selectionSnapshot,
   taskPromptPreset,
@@ -72,6 +75,7 @@ export function RightUtilitySidebar({
             currentChapterTitle={currentChapterTitle}
             currentProjectId={currentProjectId}
             draftSeed={aiChatDraftSeed}
+            flushPendingSave={flushPendingSave}
             selectionSnapshot={selectionSnapshot}
             onOpenSettings={onOpenSettings}
           />
@@ -86,6 +90,7 @@ export function RightUtilitySidebar({
             taskType={taskType}
             editor={editor}
             flushPendingSave={flushPendingSave}
+            onContentSaved={onContentSaved}
             onOpenSettings={onOpenSettings}
           />
         ) : null}

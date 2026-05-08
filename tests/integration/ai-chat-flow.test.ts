@@ -2145,15 +2145,19 @@ describe("AI chat flow", () => {
     let mergeCallCount = 0;
     const capturedInputs: unknown[] = [];
     const longText = "长章节正文。".repeat(20000);
-    const chatGenerator: AiChatGenerator & {
+    type BoundMergeGenerator = AiChatGenerator & {
+      readonly marker: "bound";
       summarizeChapterForContext: NonNullable<AiChatGenerator["summarizeChapterForContext"]>;
       mergeContextSummaries: NonNullable<AiChatGenerator["mergeContextSummaries"]>;
-    } = {
+    };
+    const chatGenerator: BoundMergeGenerator = {
+      marker: "bound",
       async summarizeChapterForContext(input) {
         return `${input.title} ${"摘要".repeat(10000)}`;
       },
-      async mergeContextSummaries(input) {
+      async mergeContextSummaries(this: BoundMergeGenerator, input) {
         mergeCallCount += 1;
+        expect(this.marker).toBe("bound");
         expect(input.summaries.map((summary) => summary.title)).toEqual(["第1章 长夜", "第2章 暗潮", "第3章 转折"]);
         return "聚合后的全书摘要";
       },

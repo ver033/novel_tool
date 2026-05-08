@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { NovelToolApi } from "../../preload/api";
 import type {
+  ChapterContent,
   ChapterSummary,
   ImportConfirmResult,
   ProjectCreateInput,
@@ -8,6 +9,7 @@ import type {
   RecentProjectEntry
 } from "../../main/shared/types";
 import { suggestNewChapterTitle } from "./chapter-title";
+import { resolveInitialActiveChapterId, saveLastWritingPosition } from "./writing-position-store";
 
 type CreateChapterOptions = {
   readonly afterChapterId?: string;
@@ -26,6 +28,17 @@ type OpenedProjectResult = {
 type SelectedProjectFile = {
   readonly filePath: string;
 };
+
+function chapterSummaryFromContent(content: ChapterContent): ChapterSummary {
+  const { contentJson: _contentJson, plainText: _plainText, ...summary } = content;
+  return summary;
+}
+
+export function mergeSavedChapterContentIntoChapters(chapters: readonly ChapterSummary[], content: ChapterContent): ChapterSummary[] {
+  return chapters.map((chapter) =>
+    chapter.id === content.id && chapter.projectId === content.projectId ? chapterSummaryFromContent(content) : chapter
+  );
+}
 
 export function getNovelToolApi(): NovelToolApi {
   const api = window.api ?? window.novelTool;
@@ -53,7 +66,7 @@ export function useAppStore() {
       const opened = (await api.project.openProject({ projectId })) as OpenedProjectResult;
       setCurrentProject(opened.project);
       setChapters([...opened.chapters]);
-      setActiveChapterId(opened.chapters[0]?.id ?? null);
+      setActiveChapterId(resolveInitialActiveChapterId(opened.project.id, opened.chapters));
       await loadRecentProjects();
     },
     [api, loadRecentProjects]
@@ -68,7 +81,7 @@ export function useAppStore() {
     const opened = (await api.project.openProjectFile({ filePath: selected.filePath })) as OpenedProjectResult;
     setCurrentProject(opened.project);
     setChapters([...opened.chapters]);
-    setActiveChapterId(opened.chapters[0]?.id ?? null);
+    setActiveChapterId(resolveInitialActiveChapterId(opened.project.id, opened.chapters));
     await loadRecentProjects();
     return opened;
   }, [api, loadRecentProjects]);
@@ -163,10 +176,8 @@ export function useAppStore() {
         return;
       }
 
-      await api.chapter.rename({ projectId: currentProject?.id, chapterId, title: trimmedTitle });
-      setChapters((current) =>
-        current.map((chapter) => (chapter.id === chapterId ? { ...chapter, title: trimmedTitle, updatedAt: new Date().toISOString() } : chapter))
-      );
+      const renamed = (await api.chapter.rename({ projectId: currentProject?.id, chapterId, title: trimmedTitle })) as ChapterSummary;
+      setChapters((current) => current.map((chapter) => (chapter.id === renamed.id ? renamed : chapter)));
     },
     [api, currentProject?.id]
   );
@@ -182,6 +193,10 @@ export function useAppStore() {
     },
     [api, currentProject?.id]
   );
+
+  const updateChapterFromSavedContent = useCallback((content: ChapterContent) => {
+    setChapters((current) => mergeSavedChapterContentIntoChapters(current, content));
+  }, []);
 
   const deleteChapter = useCallback(
     async (chapterId: string) => {
@@ -207,6 +222,15 @@ export function useAppStore() {
   useEffect(() => {
     void loadRecentProjects();
   }, [loadRecentProjects]);
+
+  useEffect(() => {
+    if (currentProject && activeChapter) {
+      saveLastWritingPosition({
+        projectId: currentProject.id,
+        chapterId: activeChapter.id
+      });
+    }
+  }, [activeChapter?.id, currentProject?.id]);
 
   const selectChapter = useCallback((chapterId: string) => {
     setActiveChapterId(chapterId);
@@ -241,6 +265,7 @@ export function useAppStore() {
     renameProject,
     renameChapter,
     updateChapterTargetWordCount,
+    updateChapterFromSavedContent,
     refreshRecentProjects: loadRecentProjects,
     selectChapter,
     selectProjectSavePath,
@@ -262,6 +287,7 @@ export function useAppStore() {
     renameProject,
     renameChapter,
     updateChapterTargetWordCount,
+    updateChapterFromSavedContent,
     loadRecentProjects,
     selectChapter,
     selectProjectSavePath,

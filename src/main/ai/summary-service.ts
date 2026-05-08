@@ -27,6 +27,7 @@ import {
 import { countWritingUnits } from "../shared/text";
 import type {
   ChapterContent,
+  ChapterSummary,
   SummaryChapterCacheDetail,
   SummaryChapterCacheEntry,
   SummaryIndexJobDetail,
@@ -39,6 +40,8 @@ import type { ArcIndexSummaryInput, BookIndexSummaryInput, ChapterChunkIndexSumm
 export const MIN_AUTO_SUMMARY_UNITS = 500;
 export const MIN_MANUAL_SUMMARY_UNITS = 80;
 export const ACTIVE_CHAPTER_IDLE_MS = 15 * 60 * 1000;
+export const LATEST_CHAPTER_AUTO_PRIORITY = 11;
+export const LATEST_CHAPTER_IMMEDIATE_CACHE_MILESTONES = [500, 1500, 3000, 5000, 8000] as const;
 export const MIN_HIGH_PRIORITY_DELTA_UNITS = 500;
 export const MIN_NORMAL_PRIORITY_DELTA_UNITS = 100;
 export const AUTO_ARC_CHAPTER_COUNT = 20;
@@ -109,6 +112,14 @@ type SummarySetBackgroundIndexOptions = SummaryIndexStatusOptions & {
   readonly cancelQueuedAndRunning?: boolean;
 };
 
+type SummaryJobRelevanceCache = {
+  readonly arcSummaries: ReadonlyMap<string, ArcAiSummaryRecord>;
+  readonly bookSummary: BookAiSummaryRecord | null;
+  readonly chapterIds: ReadonlySet<string>;
+  readonly chapterSummaries: ReadonlyMap<string, ChapterAiSummaryRecord>;
+  readonly chapters: readonly ChapterSummary[];
+};
+
 export type ChapterSummaryIndexChunk = {
   readonly chunkIndex: number;
   readonly chunkCount: number;
@@ -127,43 +138,72 @@ function parseTime(value: string): number {
 }
 
 function classifySummaryJobError(error: string | null): { readonly failureCategory: string | null; readonly actionHint: string | null } {
-  if (!error) {
+  const normalizedError = error?.trim();
+  if (!normalizedError) {
     return { failureCategory: null, actionHint: null };
   }
-  if (error.includes("429") || error.includes("限流") || /rate.?limit/i.test(error) || error.includes("Resource has been exhausted")) {
+  if (isKnownInternalSummaryJobBindingError(normalizedError)) {
+    return {
+      failureCategory: "应用内部错误",
+      actionHint: "这是旧版本阶段/全书缓存任务的内部调用错误，不是章节内容或模型问题。请继续建立索引，系统会用已缓存章节重新排队。"
+    };
+  }
+  if (
+    normalizedError.includes("429") ||
+    normalizedError.includes("限流") ||
+    /rate.?limit/i.test(normalizedError) ||
+    normalizedError.includes("Resource has been exhausted")
+  ) {
     return {
       failureCategory: "上游限流",
       actionHint: "OpenRouter 或模型供应商暂时限流。系统只会延迟自动重试一次；如果反复失败，请稍后重试或换用更稳定的模型。"
     };
   }
-  if (error.includes("finish_reason: length") || error.includes("被截断") || /truncated/i.test(error)) {
+  if (normalizedError.includes("finish_reason: length") || normalizedError.includes("被截断") || /truncated/i.test(normalizedError)) {
     return {
       failureCategory: "输出被截断",
       actionHint: "章节缓存输出超出模型额度。请换用输出上限更高的模型，或先按单章手动重试确认该模型能返回完整 JSON。"
     };
   }
-  if (error.includes("结构无效") || error.includes("索引摘要无效") || error.includes("Unexpected end of JSON") || /JSON|schema|zod/i.test(error)) {
+  if (
+    normalizedError.includes("结构无效") ||
+    normalizedError.includes("索引摘要无效") ||
+    normalizedError.includes("Unexpected end of JSON") ||
+    /JSON|schema|zod/i.test(normalizedError)
+  ) {
     return {
       failureCategory: "模型输出结构无效",
       actionHint: "模型没有返回合法章节缓存 JSON。这通常不是章节正文内容问题；此类错误不会自动反复重试，建议换用更稳定的模型或手动重试单章。"
     };
   }
-  if (/timeout|timed?out|network|ECONN|ENOTFOUND|EAI_AGAIN/i.test(error) || error.includes("超时")) {
+  if (/timeout|timed?out|network|ECONN|ENOTFOUND|EAI_AGAIN/i.test(normalizedError) || normalizedError.includes("超时")) {
     return {
       failureCategory: "网络或上游超时",
       actionHint: "请求没有稳定完成。系统只会延迟自动重试一次；如果反复失败，请稍后重试或换模型。"
     };
   }
-  if (error.includes("API Key") || error.includes("模型名称") || error.includes("未配置")) {
+  if (normalizedError.includes("API Key") || normalizedError.includes("模型名称") || normalizedError.includes("未配置")) {
     return {
       failureCategory: "AI 配置不可用",
       actionHint: "请先在 AI 服务设置中测试并保存 OpenRouter API Key 和模型。"
     };
   }
   return {
-    failureCategory: "未知错误",
-    actionHint: "请查看原始错误信息。若同一章节多次失败，建议先单章重试或换用更稳定的模型。"
+    failureCategory: null,
+    actionHint: "若同一缓存任务多次失败，建议先单章重试或换用更稳定的模型。"
   };
+}
+
+function hasSummaryJobError(job: SummaryJobRecord): boolean {
+  return Boolean(job.error?.trim());
+}
+
+function isKnownInternalSummaryJobBindingError(error: string | null): boolean {
+  return /Cannot read propert(?:y|ies) of undefined \(reading ['"]createClient['"]\)/.test(error ?? "");
+}
+
+function isLegacyInternalDerivedSummaryFailure(job: SummaryJobRecord): boolean {
+  return (job.jobType === "arc_summary" || job.jobType === "book_summary") && isKnownInternalSummaryJobBindingError(job.error);
 }
 
 function getChapterIndexSizing(budget: SummaryIndexBudgetInfo | null): ChapterIndexSizing {
@@ -266,9 +306,12 @@ function skippedTooShortPayload(content: ChapterContent): ChapterAiSummaryPayloa
   };
 }
 
-function priorityFor(trigger: ChapterSummaryQueueTrigger, changedWritingUnits: number | null): number {
+function priorityFor(trigger: ChapterSummaryQueueTrigger, changedWritingUnits: number | null, isLatestChapter: boolean): number {
   if (trigger === "manual_rebuild" || trigger === "manual_continue") {
     return 10;
+  }
+  if (isLatestChapter) {
+    return LATEST_CHAPTER_AUTO_PRIORITY;
   }
   if (trigger === "import") {
     return 8;
@@ -283,12 +326,26 @@ function priorityFor(trigger: ChapterSummaryQueueTrigger, changedWritingUnits: n
   return 1;
 }
 
+function crossesImmediateLatestChapterCacheMilestone(previousWordCount: number, nextWordCount: number): boolean {
+  return LATEST_CHAPTER_IMMEDIATE_CACHE_MILESTONES.some((milestone) => previousWordCount < milestone && nextWordCount >= milestone);
+}
+
 function isManualSummaryTrigger(trigger: ChapterSummaryQueueTrigger): boolean {
   return trigger === "manual_rebuild" || trigger === "manual_continue";
 }
 
 function formatAutoArcKey(chapterFrom: number, chapterTo: number): string {
   return `auto:${String(chapterFrom).padStart(3, "0")}-${String(chapterTo).padStart(3, "0")}`;
+}
+
+function parseAutoArcKey(arcKey: string): { readonly from: number; readonly to: number } | null {
+  const match = /^auto:(\d+)-(\d+)$/.exec(arcKey);
+  if (!match) {
+    return null;
+  }
+  const from = Number.parseInt(match[1], 10);
+  const to = Number.parseInt(match[2], 10);
+  return Number.isSafeInteger(from) && Number.isSafeInteger(to) && from > 0 && to >= from ? { from, to } : null;
 }
 
 function isReadyChapterSummary(summary: ChapterAiSummaryRecord, sourceHash: string): boolean {
@@ -736,6 +793,7 @@ export function splitChapterForSummaryIndex(
 export class SummaryService implements SummaryIndexInvalidator {
   private readonly activeChapterEditTimes = new Map<string, string>();
   private readonly changedWritingUnits = new Map<string, number>();
+  private readonly immediateCacheMilestoneChapterHashes = new Map<string, string>();
 
   constructor(
     private readonly summaryRepo: SummaryRepository,
@@ -753,6 +811,12 @@ export class SummaryService implements SummaryIndexInvalidator {
     this.summaryRepo.markChapterStale(input.projectId, input.chapterId, nextHash, input.updatedAt);
     this.recordActiveChapterEdit(input.projectId, input.chapterId, input.updatedAt);
     this.changedWritingUnits.set(keyFor(input.projectId, input.chapterId), Math.abs(input.nextWordCount - input.previousWordCount));
+    const chapterKey = keyFor(input.projectId, input.chapterId);
+    if (crossesImmediateLatestChapterCacheMilestone(input.previousWordCount, input.nextWordCount)) {
+      this.immediateCacheMilestoneChapterHashes.set(chapterKey, nextHash);
+    } else {
+      this.immediateCacheMilestoneChapterHashes.delete(chapterKey);
+    }
   }
 
   recordActiveChapterEdit(projectId: string, chapterId: string, editedAt: string): void {
@@ -760,13 +824,16 @@ export class SummaryService implements SummaryIndexInvalidator {
   }
 
   onChapterBecameInactive(projectId: string, chapterId: string, now: string): SummaryJobRecord | null {
-    this.activeChapterEditTimes.delete(keyFor(projectId, chapterId));
-    return this.maybeEnqueueChapterSummary({
+    const job = this.maybeEnqueueChapterSummary({
       projectId,
       chapterId,
       trigger: "chapter_inactive",
       now
     });
+    if (job || this.isIdle(projectId, chapterId, now)) {
+      this.activeChapterEditTimes.delete(keyFor(projectId, chapterId));
+    }
+    return job;
   }
 
   maybeEnqueueChapterSummary(input: MaybeEnqueueChapterSummaryInput): SummaryJobRecord | null {
@@ -787,22 +854,34 @@ export class SummaryService implements SummaryIndexInvalidator {
     if (!isManualSummaryTrigger(input.trigger) && writingUnits < MIN_AUTO_SUMMARY_UNITS) {
       return null;
     }
-    if (input.trigger === "auto_idle" && !this.isIdle(input.projectId, input.chapterId, input.now)) {
-      return null;
-    }
     const existingSummary = this.summaryRepo.getChapterSummary(input.projectId, input.chapterId);
     if (input.trigger !== "manual_rebuild" && existingSummary && isReadyChapterSummary(existingSummary, sourceHash)) {
       return null;
     }
+    const isLatestChapter = this.isLatestChapter(input.projectId, content);
+    const canBypassIdle = this.canBypassIdleForImmediateLatestChapterSummary(
+      input.projectId,
+      input.chapterId,
+      sourceHash,
+      existingSummary,
+      isLatestChapter
+    );
+    if ((input.trigger === "auto_idle" || input.trigger === "chapter_inactive") && !canBypassIdle && !this.isIdle(input.projectId, input.chapterId, input.now)) {
+      return null;
+    }
 
-    return this.summaryRepo.enqueueSummaryJob({
+    const job = this.summaryRepo.enqueueSummaryJob({
       projectId: input.projectId,
       jobType: "chapter_summary" satisfies SummaryJobType,
       targetId: input.chapterId,
       sourceHash,
-      priority: priorityFor(input.trigger, this.changedWritingUnits.get(keyFor(input.projectId, input.chapterId)) ?? null),
+      priority: priorityFor(input.trigger, this.changedWritingUnits.get(keyFor(input.projectId, input.chapterId)) ?? null, isLatestChapter),
       now: input.now
     });
+    if (canBypassIdle) {
+      this.immediateCacheMilestoneChapterHashes.delete(keyFor(input.projectId, input.chapterId));
+    }
+    return job;
   }
 
   enqueueEligibleStaleChapterSummaries(projectId: string, now: string): SummaryJobRecord[] {
@@ -827,7 +906,7 @@ export class SummaryService implements SummaryIndexInvalidator {
       }
     }
     for (const chapter of this.chapterRepo.listByProject(projectId)) {
-      if (summaryChapterIds.has(chapter.id) || !this.activeChapterEditTimes.has(keyFor(projectId, chapter.id))) {
+      if (summaryChapterIds.has(chapter.id)) {
         continue;
       }
       const job = this.maybeEnqueueChapterSummary({
@@ -870,6 +949,8 @@ export class SummaryService implements SummaryIndexInvalidator {
     }
 
     const jobResolutionCache = {
+      chapters,
+      chapterIds: new Set(chapters.map((chapter) => chapter.id)),
       chapterSummaries: summaries,
       arcSummaries: new Map(this.summaryRepo.listArcSummaries(projectId).map((summary) => [summary.arcKey, summary])),
       bookSummary: this.summaryRepo.getLatestBookSummary(projectId)
@@ -878,7 +959,12 @@ export class SummaryService implements SummaryIndexInvalidator {
     const queuedRetryKeys = new Set(
       rawJobs.filter((job) => job.status === "queued" && job.nextRunAt).map((job) => this.summaryJobResolutionKey(job))
     );
-    const jobs = rawJobs.filter((job) => !this.isJobResolvedByCurrentSummaryIndex(job, jobResolutionCache, queuedRetryKeys));
+    const jobs = rawJobs.filter(
+      (job) =>
+        (job.status !== "failed" || (hasSummaryJobError(job) && !isLegacyInternalDerivedSummaryFailure(job))) &&
+        this.isSummaryJobRelevantToCurrentIndex(projectId, job, jobResolutionCache) &&
+        !this.isJobResolvedByCurrentSummaryIndex(job, jobResolutionCache, queuedRetryKeys)
+    );
     const runningJob = jobs.find((job) => job.status === "running") ?? null;
     const failedJobs = jobs.filter((job) => job.status === "failed");
     const retryingJobs = jobs
@@ -929,7 +1015,7 @@ export class SummaryService implements SummaryIndexInvalidator {
         summaryUpdatedAt: summary?.updatedAt ?? null,
         contentHash: summary?.contentHash ?? null,
         jobStatus: job?.status ?? null,
-        jobError: job?.error ?? null,
+        jobError: job?.error?.trim() || null,
         jobFailureCategory: failure.failureCategory,
         jobActionHint: failure.actionHint,
         nextRunAt: job?.nextRunAt ?? null
@@ -1002,6 +1088,9 @@ export class SummaryService implements SummaryIndexInvalidator {
         now
       });
     }
+    if (!options.force) {
+      this.enqueueDerivedSummariesIfReady(projectId, now);
+    }
     return this.getIndexStatus(projectId, now, options);
   }
 
@@ -1017,6 +1106,9 @@ export class SummaryService implements SummaryIndexInvalidator {
     const jobs = new Map<string, SummaryJobRecord>();
     for (const job of this.summaryRepo.listSummaryJobs(projectId)) {
       if (job.jobType !== "chapter_summary" || !job.targetId || jobs.has(job.targetId)) {
+        continue;
+      }
+      if (job.status === "failed" && !hasSummaryJobError(job)) {
         continue;
       }
       if (job.status === "completed" || job.status === "skipped") {
@@ -1056,16 +1148,12 @@ export class SummaryService implements SummaryIndexInvalidator {
     if (!summary || !job || job.jobType !== "chapter_summary" || job.status !== "failed" || job.targetId !== summary.chapterId) {
       return false;
     }
-    return summary.status === "ready" && summary.contentHash === job.sourceHash;
+    return summary.status === "ready" && (summary.contentHash === job.sourceHash || summary.updatedAt >= job.updatedAt);
   }
 
   private isJobResolvedByCurrentSummaryIndex(
     job: SummaryJobRecord,
-    cache: {
-      readonly chapterSummaries: ReadonlyMap<string, ChapterAiSummaryRecord>;
-      readonly arcSummaries: ReadonlyMap<string, ArcAiSummaryRecord>;
-      readonly bookSummary: BookAiSummaryRecord | null;
-    },
+    cache: SummaryJobRelevanceCache,
     queuedRetryKeys: ReadonlySet<string>
   ): boolean {
     if (job.status !== "failed") {
@@ -1079,12 +1167,66 @@ export class SummaryService implements SummaryIndexInvalidator {
     }
     if (job.jobType === "arc_summary" && job.targetId) {
       const summary = cache.arcSummaries.get(job.targetId);
-      return summary?.status === "ready" && summary.sourceHash === job.sourceHash;
+      return summary?.status === "ready" && (summary.sourceHash === job.sourceHash || summary.updatedAt >= job.updatedAt);
     }
     if (job.jobType === "book_summary") {
-      return cache.bookSummary?.status === "ready" && cache.bookSummary.sourceHash === job.sourceHash;
+      return cache.bookSummary?.status === "ready" && (cache.bookSummary.sourceHash === job.sourceHash || cache.bookSummary.updatedAt >= job.updatedAt);
     }
     return false;
+  }
+
+  private isSummaryJobRelevantToCurrentIndex(projectId: string, job: SummaryJobRecord, cache: SummaryJobRelevanceCache): boolean {
+    if (job.jobType === "chapter_summary") {
+      return Boolean(job.targetId && cache.chapterIds.has(job.targetId));
+    }
+    if (job.jobType === "arc_summary") {
+      return this.isArcSummaryJobRelevantToCurrentIndex(job, cache);
+    }
+    if (job.jobType === "book_summary") {
+      return this.isBookSummaryJobRelevantToCurrentIndex(projectId, job, cache);
+    }
+    return true;
+  }
+
+  private isArcSummaryJobRelevantToCurrentIndex(job: SummaryJobRecord, cache: SummaryJobRelevanceCache): boolean {
+    if (!job.targetId) {
+      return false;
+    }
+    const range = parseAutoArcKey(job.targetId);
+    if (!range) {
+      return false;
+    }
+    const chapters = cache.chapters.filter((chapter) => {
+      const ordinal = chapter.sortOrder + 1;
+      return ordinal >= range.from && ordinal <= range.to;
+    });
+    if (chapters.length === 0) {
+      return false;
+    }
+
+    const readySummaries: ChapterAiSummaryRecord[] = [];
+    for (const chapter of chapters) {
+      const summary = cache.chapterSummaries.get(chapter.id);
+      if (!summary || (summary.status !== "ready" && summary.status !== "skipped_too_short")) {
+        return false;
+      }
+      if (summary.status === "ready") {
+        readySummaries.push(summary);
+      }
+    }
+    if (readySummaries.length === 0) {
+      return false;
+    }
+
+    return computeSourceHash(readySummaries.map((summary) => summary.contentHash)) === job.sourceHash;
+  }
+
+  private isBookSummaryJobRelevantToCurrentIndex(projectId: string, job: SummaryJobRecord, cache: SummaryJobRelevanceCache): boolean {
+    const readyArcs = [...cache.arcSummaries.values()].filter((summary) => summary.status === "ready");
+    if (readyArcs.length === 0) {
+      return false;
+    }
+    return this.computeBookSourceHash(readyArcs.map((summary) => summary.sourceHash), this.buildBookCoverage(projectId)) === job.sourceHash;
   }
 
   private summaryJobResolutionKey(job: SummaryJobRecord): string {
@@ -1277,8 +1419,8 @@ export class SummaryService implements SummaryIndexInvalidator {
     now: string,
     options: { readonly signal?: AbortSignal } = {}
   ): Promise<ArcAiSummaryRecord> {
-    const generator = this.options.generator?.summarizeArcForIndex;
-    if (!generator) {
+    const generator = this.options.generator;
+    if (!generator?.summarizeArcForIndex) {
       throw new Error("AI 阶段摘要生成器未配置。");
     }
     const readySummaries = this.collectReadyChapterSummariesForArc(projectId, chapterFrom, chapterTo);
@@ -1288,7 +1430,7 @@ export class SummaryService implements SummaryIndexInvalidator {
       throw new SummarySourceChangedError("阶段摘要来源已变化，已重新排队最新摘要任务。");
     }
 
-    const structured = await generator(
+    const structured = await generator.summarizeArcForIndex(
       {
         arcKey,
         chapterFrom,
@@ -1330,8 +1472,8 @@ export class SummaryService implements SummaryIndexInvalidator {
   }
 
   async summarizeBook(projectId: string, sourceHash: string, now: string, options: { readonly signal?: AbortSignal } = {}): Promise<BookAiSummaryRecord> {
-    const generator = this.options.generator?.summarizeBookForIndex;
-    if (!generator) {
+    const generator = this.options.generator;
+    if (!generator?.summarizeBookForIndex) {
       throw new Error("AI 全书摘要生成器未配置。");
     }
     const coverage = this.buildBookCoverage(projectId);
@@ -1345,7 +1487,7 @@ export class SummaryService implements SummaryIndexInvalidator {
       throw new SummarySourceChangedError("全书摘要来源已变化，已重新排队最新摘要任务。");
     }
 
-    const generated = await generator(
+    const generated = await generator.summarizeBookForIndex(
       {
         arcs: readyArcs.map((summary) => ({
           arcKey: summary.arcKey,
@@ -1395,11 +1537,31 @@ export class SummaryService implements SummaryIndexInvalidator {
   }
 
   private isIdle(projectId: string, chapterId: string, now: string): boolean {
-    const editedAt = this.activeChapterEditTimes.get(keyFor(projectId, chapterId));
+    const editedAt = this.activeChapterEditTimes.get(keyFor(projectId, chapterId)) ?? this.chapterRepo.getContent(chapterId)?.updatedAt;
     if (!editedAt) {
       return true;
     }
     return parseTime(now) - parseTime(editedAt) >= ACTIVE_CHAPTER_IDLE_MS;
+  }
+
+  private isLatestChapter(projectId: string, content: ChapterContent): boolean {
+    return content.projectId === projectId && content.sortOrder === this.chapterRepo.nextSortOrder(projectId) - 1;
+  }
+
+  private canBypassIdleForImmediateLatestChapterSummary(
+    projectId: string,
+    chapterId: string,
+    sourceHash: string,
+    existingSummary: ChapterAiSummaryRecord | null,
+    isLatestChapter: boolean
+  ): boolean {
+    if (!isLatestChapter) {
+      return false;
+    }
+    if (existingSummary?.status === "ready") {
+      return false;
+    }
+    return this.immediateCacheMilestoneChapterHashes.get(keyFor(projectId, chapterId)) === sourceHash;
   }
 
   private requireChapterContent(projectId: string, chapterId: string): ChapterContent {
@@ -1420,12 +1582,13 @@ export class SummaryService implements SummaryIndexInvalidator {
   }
 
   private requeueChapterSummary(projectId: string, chapterId: string, sourceHash: string, now: string): SummaryJobRecord {
+    const content = this.requireChapterContent(projectId, chapterId);
     return this.summaryRepo.enqueueSummaryJob({
       projectId,
       jobType: "chapter_summary",
       targetId: chapterId,
       sourceHash,
-      priority: 8,
+      priority: priorityFor("auto_idle", this.changedWritingUnits.get(keyFor(projectId, chapterId)) ?? null, this.isLatestChapter(projectId, content)),
       now
     });
   }
@@ -1494,6 +1657,32 @@ export class SummaryService implements SummaryIndexInvalidator {
       priority: 6,
       now
     });
+  }
+
+  private enqueueDerivedSummariesIfReady(projectId: string, now: string): SummaryJobRecord[] {
+    const jobs: SummaryJobRecord[] = [];
+    const chapters = this.chapterRepo.listByProject(projectId);
+    const totalChapters = chapters.length;
+    const seenArcKeys = new Set<string>();
+    for (const chapter of chapters) {
+      const chapterOrder = chapter.sortOrder + 1;
+      const chapterFrom = Math.floor((chapterOrder - 1) / AUTO_ARC_CHAPTER_COUNT) * AUTO_ARC_CHAPTER_COUNT + 1;
+      const chapterTo = Math.min(chapterFrom + AUTO_ARC_CHAPTER_COUNT - 1, totalChapters);
+      const arcKey = formatAutoArcKey(chapterFrom, chapterTo);
+      if (seenArcKeys.has(arcKey)) {
+        continue;
+      }
+      seenArcKeys.add(arcKey);
+      const job = this.enqueueArcForChapterIfReady(projectId, chapterOrder, now);
+      if (job) {
+        jobs.push(job);
+      }
+    }
+    const bookJob = this.enqueueBookIfReady(projectId, now);
+    if (bookJob) {
+      jobs.push(bookJob);
+    }
+    return jobs;
   }
 
   private buildBookCoverage(projectId: string): BookSummaryCoverage {
@@ -1579,12 +1768,12 @@ export class SummaryService implements SummaryIndexInvalidator {
     if (job.jobType === "chapter_summary" && job.targetId) {
       const content = this.chapterRepo.getContent(job.targetId);
       if (content?.projectId === projectId) {
-        return `正在摘要：${content.title}`;
+        return `正在摘要：${formatChapterCoverageLabel(content.sortOrder + 1, content.title)}`;
       }
-      return "正在摘要章节";
+      return `正在摘要：缺失章节 ${job.targetId}`;
     }
     if (job.jobType === "arc_summary") {
-      return "正在整理阶段摘要";
+      return `正在整理${this.formatArcSummaryJobLabel(job)}`;
     }
     if (job.jobType === "book_summary") {
       return "正在整理全书摘要";
@@ -1596,17 +1785,25 @@ export class SummaryService implements SummaryIndexInvalidator {
     if (job.jobType === "chapter_summary" && job.targetId) {
       const content = this.chapterRepo.getContent(job.targetId);
       if (content?.projectId === projectId) {
-        return content.title;
+        return formatChapterCoverageLabel(content.sortOrder + 1, content.title);
       }
-      return "章节摘要";
+      return `章节摘要（缺失章节 ID：${job.targetId}）`;
     }
     if (job.jobType === "arc_summary") {
-      return "阶段摘要";
+      return this.formatArcSummaryJobLabel(job);
     }
     if (job.jobType === "book_summary") {
       return "全书摘要";
     }
     return "全书索引";
+  }
+
+  private formatArcSummaryJobLabel(job: SummaryJobRecord): string {
+    if (!job.targetId) {
+      return "阶段摘要";
+    }
+    const range = parseAutoArcKey(job.targetId);
+    return range ? `阶段摘要（${formatArcCoverageLabel(range.from, range.to)}）` : `阶段摘要（${job.targetId}）`;
   }
 
   private formatSummaryJobDetail(projectId: string, job: SummaryJobRecord): SummaryIndexJobDetail {
@@ -1616,7 +1813,7 @@ export class SummaryService implements SummaryIndexInvalidator {
       jobType: job.jobType,
       targetId: job.targetId,
       label: this.formatPendingRetryJobLabel(projectId, job),
-      error: job.error,
+      error: job.error?.trim() || null,
       failureCategory: failure.failureCategory,
       actionHint: failure.actionHint,
       attemptCount: job.attemptCount,

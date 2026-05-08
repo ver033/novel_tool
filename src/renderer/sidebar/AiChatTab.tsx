@@ -6,6 +6,7 @@ import { IconButton } from "../components/IconButton";
 import { Modal } from "../components/Modal";
 import type { SettingsCategory } from "../routes/SettingsPage";
 import { useChatStore } from "../state/chat-store";
+import type { SavedChapterVersion } from "../state/editor-store";
 import { ChatMessageContent } from "./ChatMessageContent";
 import { buildChatContextUsageDisplay } from "./chat-context-display";
 import type { AiChatDraftSeed } from "./chat-draft";
@@ -16,6 +17,7 @@ type AiChatTabProps = {
   readonly currentChapterTitle: string | null;
   readonly currentProjectId: string | null;
   readonly draftSeed: AiChatDraftSeed | null;
+  readonly flushPendingSave: () => Promise<SavedChapterVersion | null>;
   readonly selectionSnapshot: SelectionSnapshot | null;
   readonly onOpenSettings: (category?: SettingsCategory) => void;
 };
@@ -284,7 +286,16 @@ function filterCommandSuggestions(suggestions: readonly ChatCommandSuggestion[],
     .slice(0, 8);
 }
 
-export function AiChatTab({ chapters, currentChapterId, currentChapterTitle, currentProjectId, draftSeed, selectionSnapshot, onOpenSettings }: AiChatTabProps) {
+export function AiChatTab({
+  chapters,
+  currentChapterId,
+  currentChapterTitle,
+  currentProjectId,
+  draftSeed,
+  flushPendingSave,
+  selectionSnapshot,
+  onOpenSettings
+}: AiChatTabProps) {
   const [draft, setDraft] = useState("");
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [copiedStreaming, setCopiedStreaming] = useState(false);
@@ -297,6 +308,7 @@ export function AiChatTab({ chapters, currentChapterId, currentChapterTitle, cur
     projectId: currentProjectId,
     currentChapterId,
     currentChapterTitle,
+    flushPendingSave,
     selectionSnapshot
   });
 

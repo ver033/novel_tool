@@ -1,9 +1,40 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { applyAiCandidateToEditor } from "../../src/renderer/editor/ai-apply";
 import { createSelectionHash } from "../../src/renderer/editor/tiptap/selection-utils";
 import { createTiptapDocumentFromPlainText, extractPlainTextFromTiptapJson } from "../../src/renderer/editor/tiptap/converters";
 import type { AiTaskCandidateRecord, AiTaskRecord } from "../../src/main/shared/types";
 import type { Editor } from "@tiptap/react";
+import { getEmergencyJournalEntries } from "../../src/renderer/state/draft-recovery-store";
+
+class MemoryStorage implements Storage {
+  private readonly values = new Map<string, string>();
+
+  get length(): number {
+    return this.values.size;
+  }
+
+  clear(): void {
+    this.values.clear();
+  }
+
+  getItem(key: string): string | null {
+    return this.values.get(key) ?? null;
+  }
+
+  key(index: number): string | null {
+    return Array.from(this.values.keys())[index] ?? null;
+  }
+
+  removeItem(key: string): void {
+    this.values.delete(key);
+  }
+
+  setItem(key: string, value: string): void {
+    this.values.set(key, value);
+  }
+}
+
+const originalLocalStorageDescriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
 
 function createTask(selectionText = "他勒住马缰", taskType: AiTaskRecord["taskType"] = "polish"): AiTaskRecord {
   return {
@@ -108,10 +139,27 @@ function createFakeEditor(currentSelectionText: string, options: { readonly para
 }
 
 describe("applyAiCandidateToEditor", () => {
+  beforeEach(() => {
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: new MemoryStorage()
+    });
+  });
+
+  afterEach(() => {
+    if (originalLocalStorageDescriptor) {
+      Object.defineProperty(globalThis, "localStorage", originalLocalStorageDescriptor);
+    } else {
+      Reflect.deleteProperty(globalThis, "localStorage");
+    }
+  });
+
   it("creates a snapshot, writes generated text into Tiptap, saves the chapter, then confirms the AI candidate", async () => {
     const calls: string[] = [];
     const appliedInputs: unknown[] = [];
     const savedPlainTexts: string[] = [];
+    const savedInputs: unknown[] = [];
+    const savedContentNotifications: unknown[] = [];
     const task = createTask();
     const candidate = createCandidate();
 
@@ -124,8 +172,21 @@ describe("applyAiCandidateToEditor", () => {
           },
           async saveContent(input) {
             calls.push("save");
+            savedInputs.push(input);
             savedPlainTexts.push(input.plainText);
-            return {};
+            expect(getEmergencyJournalEntries(task.projectId, task.chapterId!)).toEqual([
+              expect.objectContaining({
+                plainText: input.plainText,
+                reason: "before_ai_apply"
+              })
+            ]);
+            return {
+              id: task.chapterId,
+              projectId: task.projectId,
+              updatedAt: "2026-05-01T00:01:00.000Z",
+              contentUpdatedAt: "2026-05-01T00:01:00.000Z",
+              wordCount: input.wordCount
+            };
           }
         },
         ai: {
@@ -146,11 +207,28 @@ describe("applyAiCandidateToEditor", () => {
       currentChapterId: "chapter_1",
       flushPendingSave: async () => {
         calls.push("flush");
-      }
+        return {
+          projectId: task.projectId,
+          chapterId: task.chapterId!,
+          updatedAt: "2026-05-01T00:00:00.000Z"
+        };
+      },
+      onContentSaved: (content) => savedContentNotifications.push(content)
     });
 
     expect(calls).toEqual(["flush", "snapshot", "save", "confirm"]);
     expect(savedPlainTexts[0]).toContain("他轻轻勒住马缰。");
+    expect(savedInputs[0]).toMatchObject({
+      projectId: task.projectId,
+      chapterId: task.chapterId,
+      expectedUpdatedAt: "2026-05-01T00:00:00.000Z"
+    });
+    expect(savedContentNotifications).toEqual([
+      expect.objectContaining({
+        id: task.chapterId,
+        contentUpdatedAt: "2026-05-01T00:01:00.000Z"
+      })
+    ]);
     expect(appliedInputs[0]).toMatchObject({
       projectId: task.projectId,
       candidateId: "candidate_1",

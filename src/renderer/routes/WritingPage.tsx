@@ -15,7 +15,7 @@ import { getNovelToolApi } from "../state/app-store";
 import { useEditorStore } from "../state/editor-store";
 import { formatIpcErrorMessage } from "../state/ipc-error";
 import type { SettingsCategory } from "./SettingsPage";
-import type { ChapterSummary, ProjectRecord, SelectionSnapshot, TaskPromptPreset } from "../../main/shared/types";
+import type { ChapterContent, ChapterSummary, ProjectRecord, SelectionSnapshot, TaskPromptPreset } from "../../main/shared/types";
 
 type EditorInnerStyle = CSSProperties & {
   readonly maxWidth: string;
@@ -35,8 +35,19 @@ const themeClassBySetting = {
 
 type EditorSearchResult = {
   readonly chapterId: string;
+  readonly matchId: string;
+  readonly paragraphId: string | null;
+  readonly paragraphIndex: number | null;
   readonly snippet: string;
   readonly title: string;
+};
+
+type SearchJumpTarget = {
+  readonly chapterId: string;
+  readonly id: number;
+  readonly paragraphId: string | null;
+  readonly paragraphIndex: number | null;
+  readonly query: string;
 };
 
 export type SearchHighlightPart = {
@@ -88,6 +99,95 @@ function buildSearchSnippet(text: string, query: string): string {
   return `${start > 0 ? "..." : ""}${normalizedText.slice(start, end)}${end < normalizedText.length ? "..." : ""}`;
 }
 
+function nodeText(node: unknown): string {
+  if (!node || typeof node !== "object") {
+    return "";
+  }
+  const typedNode = node as { content?: unknown[]; text?: unknown; type?: unknown };
+  if (typedNode.type === "text") {
+    return typeof typedNode.text === "string" ? typedNode.text : "";
+  }
+  if (typedNode.type === "hardBreak") {
+    return "\n";
+  }
+  return Array.isArray(typedNode.content) ? typedNode.content.map(nodeText).join("") : "";
+}
+
+function contentBlocksFromDocument(contentJson: unknown): Array<{ readonly paragraphId: string | null; readonly text: string }> {
+  const document = contentJson as { content?: unknown[] } | null;
+  if (!document || !Array.isArray(document.content)) {
+    return [];
+  }
+
+  return document.content
+    .filter((node): node is { attrs?: Record<string, unknown>; content?: unknown[]; type?: unknown } => Boolean(node && typeof node === "object"))
+    .filter((node) => node.type === "paragraph" || node.type === "heading")
+    .map((node) => ({
+      paragraphId: typeof node.attrs?.paragraphId === "string" ? node.attrs.paragraphId : null,
+      text: nodeText(node)
+  }));
+}
+
+type ChapterSearchMatch = Pick<EditorSearchResult, "matchId" | "paragraphId" | "paragraphIndex" | "snippet">;
+
+export function findChapterSearchMatches(
+  title: string,
+  contentJson: unknown,
+  plainText: string,
+  query: string
+): ChapterSearchMatch[] {
+  const trimmedQuery = query.trim();
+  if (!trimmedQuery) {
+    return [];
+  }
+
+  const lowerQuery = trimmedQuery.toLocaleLowerCase("zh-CN");
+  const matches: ChapterSearchMatch[] = [];
+  if (title.toLocaleLowerCase("zh-CN").includes(lowerQuery)) {
+    matches.push({
+      matchId: "title",
+      paragraphId: null,
+      paragraphIndex: null,
+      snippet: "匹配章节标题"
+    });
+  }
+
+  const blocks = contentBlocksFromDocument(contentJson);
+  blocks.forEach((block, index) => {
+    if (!block.text.toLocaleLowerCase("zh-CN").includes(lowerQuery)) {
+      return;
+    }
+
+    matches.push({
+      matchId: `paragraph:${block.paragraphId ?? index}`,
+      paragraphId: block.paragraphId,
+      paragraphIndex: index,
+      snippet: buildSearchSnippet(block.text, trimmedQuery)
+    });
+  });
+
+  if (matches.every((match) => match.paragraphIndex === null) && plainText.toLocaleLowerCase("zh-CN").includes(lowerQuery)) {
+    matches.push({
+      matchId: "content",
+      paragraphId: null,
+      paragraphIndex: null,
+      snippet: buildSearchSnippet(plainText, trimmedQuery)
+    });
+  }
+
+  return matches;
+}
+
+export function findChapterSearchMatch(
+  title: string,
+  contentJson: unknown,
+  plainText: string,
+  query: string
+): Pick<EditorSearchResult, "paragraphId" | "paragraphIndex" | "snippet"> | null {
+  const [firstMatch] = findChapterSearchMatches(title, contentJson, plainText, query);
+  return firstMatch ? { paragraphId: firstMatch.paragraphId, paragraphIndex: firstMatch.paragraphIndex, snippet: firstMatch.snippet } : null;
+}
+
 function renderHighlightedSearchText(text: string, query: string) {
   return getHighlightedSearchParts(text, query).map((part, index) =>
     part.highlighted ? (
@@ -116,6 +216,7 @@ type WritingPageProps = {
   readonly onDeleteChapter: (chapterId: string) => void;
   readonly onRenameChapter: (chapterId: string, currentTitle: string) => void;
   readonly onSelectChapter: (chapterId: string) => void;
+  readonly onChapterSaved: (content: ChapterContent) => void;
   readonly onUpdateChapterTargetWordCount: (chapterId: string, targetWordCount: number | null) => Promise<void>;
   readonly onSidebarTabChange: (tab: SidebarTab) => void;
   readonly onCloseSidebar: () => void;
@@ -145,6 +246,7 @@ export function WritingPage({
   onDeleteChapter,
   onRenameChapter,
   onSelectChapter,
+  onChapterSaved,
   onUpdateChapterTargetWordCount,
   onSidebarTabChange,
   onCloseSidebar,
@@ -158,7 +260,7 @@ export function WritingPage({
   onSettings
 }: WritingPageProps) {
   const api = useMemo(getNovelToolApi, []);
-  const editorStore = useEditorStore(activeChapter);
+  const editorStore = useEditorStore(activeChapter, onChapterSaved);
   const [editor, setEditor] = useState<Editor | null>(null);
   const [taskPromptPresets, setTaskPromptPresets] = useState<TaskPromptPreset[]>([]);
   const [taskPromptPresetError, setTaskPromptPresetError] = useState<string | null>(null);
@@ -175,6 +277,7 @@ export function WritingPage({
   const [focusMode, setFocusMode] = useState(false);
   const [searchValue, setSearchValue] = useState("");
   const [searchResults, setSearchResults] = useState<EditorSearchResult[]>([]);
+  const [searchJumpTarget, setSearchJumpTarget] = useState<SearchJumpTarget | null>(null);
   const [searchBusy, setSearchBusy] = useState(false);
   const [undoRedoState, setUndoRedoState] = useState({ canRedo: false, canUndo: false });
   const targetWordCount = activeChapter?.targetWordCount ?? null;
@@ -263,24 +366,24 @@ export function WritingPage({
     setSearchBusy(true);
     void Promise.all(
       chapters.map(async (chapter) => {
-        const content = (await api.chapter.getContent({ projectId: currentProject.id, chapterId: chapter.id })) as { plainText?: string } | undefined;
+        const content = (await api.chapter.getContent({ projectId: currentProject.id, chapterId: chapter.id })) as
+          | { contentJson?: unknown; plainText?: string }
+          | undefined;
         const plainText = content?.plainText ?? "";
-        const titleMatches = chapter.title.toLocaleLowerCase("zh-CN").includes(query.toLocaleLowerCase("zh-CN"));
-        const contentMatches = plainText.toLocaleLowerCase("zh-CN").includes(query.toLocaleLowerCase("zh-CN"));
-        if (!titleMatches && !contentMatches) {
-          return null;
-        }
-
-        return {
+        const matches = findChapterSearchMatches(chapter.title, content?.contentJson, plainText, query);
+        return matches.map((match) => ({
           chapterId: chapter.id,
-          snippet: buildSearchSnippet(contentMatches ? plainText : chapter.title, query),
+          matchId: match.matchId,
+          paragraphId: match.paragraphId,
+          paragraphIndex: match.paragraphIndex,
+          snippet: match.snippet,
           title: chapter.title
-        } satisfies EditorSearchResult;
+        })) satisfies EditorSearchResult[];
       })
     )
       .then((results) => {
         if (!cancelled) {
-          setSearchResults(results.filter((result): result is EditorSearchResult => Boolean(result)));
+          setSearchResults(results.flat());
         }
       })
       .catch(() => {
@@ -339,11 +442,23 @@ export function WritingPage({
     editor?.chain().focus().redo().run();
   }, [editor]);
   const handleSearchResultSelect = useCallback(
-    (chapterId: string) => {
+    (result: EditorSearchResult) => {
+      const query = searchValue;
       setSearchValue("");
-      flushBeforeNavigation(() => onSelectChapter(chapterId));
+      if (result.paragraphId || result.paragraphIndex !== null) {
+        setSearchJumpTarget({
+          chapterId: result.chapterId,
+          id: Date.now(),
+          paragraphId: result.paragraphId,
+          paragraphIndex: result.paragraphIndex,
+          query
+        });
+      } else {
+        setSearchJumpTarget(null);
+      }
+      flushBeforeNavigation(() => onSelectChapter(result.chapterId));
     },
-    [flushBeforeNavigation, onSelectChapter]
+    [flushBeforeNavigation, onSelectChapter, searchValue]
   );
   const handleSelectionToScratchpad = useCallback(
     async (snapshot: SelectionSnapshot) => {
@@ -495,7 +610,7 @@ export function WritingPage({
           {searchBusy ? <div className="search-result-empty">正在搜索...</div> : null}
           {!searchBusy && searchResults.length === 0 ? <div className="search-result-empty">没有找到匹配内容</div> : null}
           {searchResults.map((result) => (
-            <button key={result.chapterId} onClick={() => handleSearchResultSelect(result.chapterId)} type="button">
+            <button key={`${result.chapterId}:${result.matchId}`} onClick={() => handleSearchResultSelect(result)} type="button">
               <strong>{renderHighlightedSearchText(result.title, searchValue)}</strong>
               <span>{renderHighlightedSearchText(result.snippet, searchValue)}</span>
             </button>
@@ -574,6 +689,10 @@ export function WritingPage({
                         onEditorReady={setEditor}
                         onSelectionToChat={onSelectionToChat}
                         onSelectionToScratchpad={handleSelectionToScratchpad}
+                        searchTarget={editorStore.loadedChapterId === activeChapter.id ? searchJumpTarget : null}
+                        onSearchTargetResolved={(targetId) => {
+                          setSearchJumpTarget((current) => (current?.id === targetId ? null : current));
+                        }}
                         onTask={onTask}
                       />
                     </>
@@ -626,6 +745,7 @@ export function WritingPage({
                   taskType={taskType}
                   editor={editor}
                   flushPendingSave={editorStore.flushPendingSave}
+                  onContentSaved={editorStore.markContentSaved}
                   onTabChange={onSidebarTabChange}
                   onClose={onCloseSidebar}
                   onOpenSettings={handleSettings}
