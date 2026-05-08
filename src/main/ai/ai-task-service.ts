@@ -49,6 +49,7 @@ import type {
   AiGetChatSessionInput,
   AiListChatSessionsInput,
   AiListChatMessagesInput,
+  AiRegenerateChatMessageStreamInput,
   AiRenameChatSessionInput,
   AiRejectCandidateInput,
   AiSaveCandidateToScratchpadInput,
@@ -640,7 +641,8 @@ export class AiTaskService {
     history: readonly AiChatMessageRecord[],
     memory: Pick<AiChatSessionRecord, "compactedMemorySummary" | "compactedMemoryThroughMessageId">,
     signal?: AbortSignal,
-    streamHandlers?: AiChatStreamHandlers
+    streamHandlers?: AiChatStreamHandlers,
+    options: { readonly allowActions?: boolean } = {}
   ): Promise<AiChatAgentGenerationInput | null> {
     if (!this.chatGenerator?.sendAgentMessageStream || !this.resolveChapterRepo) {
       return null;
@@ -650,7 +652,7 @@ export class AiTaskService {
     const chapters = chapterRepo.listByProject(input.projectId);
     const currentChapter = input.chapterId ? chapters.find((chapter) => chapter.id === input.chapterId) : null;
     const tokenBudget = await this.resolveChatTokenBudget();
-    const allowedActions = inferSafeChatActions(input.message).map((action) => action.type);
+    const allowedActions = options.allowActions === false ? [] : inferSafeChatActions(input.message).map((action) => action.type);
     const scratchRepo = this.resolveScratchRepo?.(input.projectId);
     const summaryRepo = this.resolveSummaryRepo?.(input.projectId);
     const checkContinuity = this.chatGenerator.checkContinuity?.bind(this.chatGenerator);
@@ -1186,6 +1188,126 @@ export class AiTaskService {
     this.getAiChatRepo(input.projectId).clearSession(input);
   }
 
+  private async generateChatAnswerStream(
+    input: AiSendChatMessageStreamInput,
+    chatRepo: AiChatRepository,
+    history: readonly AiChatMessageRecord[],
+    abortController: AbortController,
+    handlers: AiChatStreamHandlers,
+    options: { readonly allowActions?: boolean } = {}
+  ): Promise<{
+    readonly content: string;
+    readonly assistantAction: AiChatAction | null;
+    readonly action: AiChatAction | null;
+  }> {
+    let memoryContextState: Pick<AiStreamContextEvent, "memoryCompacted" | "memoryCompactedThisRun"> = {
+      memoryCompacted: false,
+      memoryCompactedThisRun: false
+    };
+    const streamHandlers = {
+      onChunk: (event: { readonly content: string }) => {
+        handlers.onChunk?.({ requestId: input.requestId, content: event.content });
+      },
+      onReasoning: (event: { readonly content: string }) => {
+        handlers.onReasoning?.({ requestId: input.requestId, content: event.content });
+      },
+      onContext: (event: Parameters<NonNullable<AiChatStreamHandlers["onContext"]>>[0]) => {
+        const previousUsage = chatRepo.getSession({
+          projectId: input.projectId,
+          sessionId: input.sessionId
+        }).lastContextUsage;
+        const contextUsage = mergeSessionContextUsage(previousUsage, { ...event, ...memoryContextState, requestId: input.requestId });
+        chatRepo.updateSessionContextUsage({
+          projectId: input.projectId,
+          sessionId: input.sessionId,
+          contextUsage
+        });
+        handlers.onContext?.(contextUsage);
+      }
+    } satisfies AiChatStreamHandlers;
+    const inlineWritingOperation = inferInlineWritingOperationRequest(input.message);
+    if (inlineWritingOperation) {
+      const generated = await this.runChatWritingOperation({
+        projectId: input.projectId,
+        operation: inlineWritingOperation.operation,
+        target: {
+          kind: "inline_text",
+          text: inlineWritingOperation.text
+        },
+        instruction: inlineWritingOperation.instruction,
+        signal: abortController.signal,
+        streamHandlers
+      });
+      return {
+        content: formatChatWritingOperationResult(inlineWritingOperation.operation, generated),
+        assistantAction: null,
+        action: null
+      };
+    }
+
+    const memory = await this.compactChatMemoryIfNeeded(input, chatRepo, history, abortController.signal);
+    memoryContextState = {
+      memoryCompacted: Boolean(memory.compactedMemorySummary),
+      memoryCompactedThisRun: memory.memoryCompacted
+    };
+    let legacyAgenticGeneration: Awaited<ReturnType<AiTaskService["buildAgenticChatGenerationInput"]>> = null;
+    try {
+      legacyAgenticGeneration = await this.buildAgenticChatGenerationInput(input, history, memory, abortController.signal, { allowPlanner: false });
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : String(reason);
+      if (!message.includes("当前没有打开章节") && !message.includes("找不到第")) {
+        throw reason;
+      }
+    }
+    const toolCallAgentBaseInput = await this.buildToolCallAgentGenerationInput(input, history, memory, abortController.signal, streamHandlers, {
+      allowActions: options.allowActions
+    });
+    if (!toolCallAgentBaseInput) {
+      throw new Error("AI 对话工具调用上下文服务未初始化。");
+    }
+    const toolCallAgentInput = legacyAgenticGeneration
+      ? {
+          ...toolCallAgentBaseInput,
+          chapterId: legacyAgenticGeneration.generationInput.chapterId,
+          currentChapterTitle: legacyAgenticGeneration.generationInput.currentChapterTitle,
+          chapterExcerpt: legacyAgenticGeneration.generationInput.chapterExcerpt,
+          agentContext: legacyAgenticGeneration.generationInput.agentContext
+        }
+      : toolCallAgentBaseInput;
+    const generated = await this.chatGenerator?.sendAgentMessageStream?.(toolCallAgentInput, streamHandlers, { signal: abortController.signal });
+    if (!generated) {
+      throw new Error("OpenRouter 对话工具调用服务未初始化。");
+    }
+    if (options.allowActions === false && generated.actions?.length) {
+      throw new Error("重新生成暂不执行草稿纸等工具操作。");
+    }
+    const action = generated.actions?.[0] ?? null;
+    const finalContextUsage = advanceSessionContextUsageAfterAnswer(
+      chatRepo.getSession({
+        projectId: input.projectId,
+        sessionId: input.sessionId
+      }).lastContextUsage,
+      input,
+      generated.content
+    );
+    if (finalContextUsage) {
+      chatRepo.updateSessionContextUsage({
+        projectId: input.projectId,
+        sessionId: input.sessionId,
+        contextUsage: finalContextUsage
+      });
+      handlers.onContext?.(finalContextUsage);
+    }
+
+    return {
+      content: generated.content,
+      assistantAction: {
+        type: "none"
+      },
+      action
+    };
+  }
+
   async sendChatMessageStream(input: AiSendChatMessageStreamInput, handlers: AiChatStreamHandlers = {}): Promise<AiChatStreamResult> {
     const chatRepo = this.getAiChatRepo(input.projectId);
     const history = chatRepo.listMessages({
@@ -1224,126 +1346,27 @@ export class AiTaskService {
     const abortController = this.registerStream(input.requestId);
 
     try {
-      let memoryContextState: Pick<AiStreamContextEvent, "memoryCompacted" | "memoryCompactedThisRun"> = {
-        memoryCompacted: false,
-        memoryCompactedThisRun: false
-      };
-      const streamHandlers = {
-        onChunk: (event: { readonly content: string }) => {
-          handlers.onChunk?.({ requestId: input.requestId, content: event.content });
-        },
-        onReasoning: (event: { readonly content: string }) => {
-          handlers.onReasoning?.({ requestId: input.requestId, content: event.content });
-        },
-        onContext: (event: Parameters<NonNullable<AiChatStreamHandlers["onContext"]>>[0]) => {
-          const previousUsage = chatRepo.getSession({
-            projectId: input.projectId,
-            sessionId: input.sessionId
-          }).lastContextUsage;
-          const contextUsage = mergeSessionContextUsage(previousUsage, { ...event, ...memoryContextState, requestId: input.requestId });
-          chatRepo.updateSessionContextUsage({
-            projectId: input.projectId,
-            sessionId: input.sessionId,
-            contextUsage
-          });
-          handlers.onContext?.(contextUsage);
-        }
-      } satisfies AiChatStreamHandlers;
-      const inlineWritingOperation = inferInlineWritingOperationRequest(input.message);
-      if (inlineWritingOperation) {
-        const generated = await this.runChatWritingOperation({
-          projectId: input.projectId,
-          operation: inlineWritingOperation.operation,
-          target: {
-            kind: "inline_text",
-            text: inlineWritingOperation.text
-          },
-          instruction: inlineWritingOperation.instruction,
-          signal: abortController.signal,
-          streamHandlers
-        });
-        const content = formatChatWritingOperationResult(inlineWritingOperation.operation, generated);
-        const assistantMessage = chatRepo.createMessage({
-          projectId: input.projectId,
-          sessionId: input.sessionId,
-          role: "assistant",
-          content,
-          action: null
-        });
-        const result = {
-          messages: [userMessage, assistantMessage],
-          action: null
-        };
-        handlers.onDone?.({ requestId: input.requestId, payload: result });
-        return result;
-      }
-      const memory = await this.compactChatMemoryIfNeeded(input, chatRepo, history, abortController.signal);
-      memoryContextState = {
-        memoryCompacted: Boolean(memory.compactedMemorySummary),
-        memoryCompactedThisRun: memory.memoryCompacted
-      };
-      let legacyAgenticGeneration: Awaited<ReturnType<AiTaskService["buildAgenticChatGenerationInput"]>> = null;
-      try {
-        legacyAgenticGeneration = await this.buildAgenticChatGenerationInput(input, history, memory, abortController.signal, { allowPlanner: false });
-      } catch (reason) {
-        const message = reason instanceof Error ? reason.message : String(reason);
-        if (!message.includes("当前没有打开章节") && !message.includes("找不到第")) {
-          throw reason;
-        }
-      }
-      const toolCallAgentBaseInput = await this.buildToolCallAgentGenerationInput(input, history, memory, abortController.signal, streamHandlers);
-      if (!toolCallAgentBaseInput) {
-        return fail("AI 对话工具调用上下文服务未初始化。");
-      }
-      const toolCallAgentInput = legacyAgenticGeneration
-        ? {
-            ...toolCallAgentBaseInput,
-            chapterId: legacyAgenticGeneration.generationInput.chapterId,
-            currentChapterTitle: legacyAgenticGeneration.generationInput.currentChapterTitle,
-            chapterExcerpt: legacyAgenticGeneration.generationInput.chapterExcerpt,
-            agentContext: legacyAgenticGeneration.generationInput.agentContext
-          }
-        : toolCallAgentBaseInput;
-      const generated = await this.chatGenerator.sendAgentMessageStream(toolCallAgentInput, streamHandlers, { signal: abortController.signal });
+      const generated = await this.generateChatAnswerStream(input, chatRepo, history, abortController, handlers);
       const assistantMessage = chatRepo.createMessage({
         projectId: input.projectId,
         sessionId: input.sessionId,
         role: "assistant",
         content: generated.content,
-          action: {
-            type: "none"
-          }
-        });
-      const action = generated.actions?.[0] ?? null;
-      const toolMessage = action
+        action: generated.assistantAction
+      });
+      const toolMessage = generated.action
         ? chatRepo.createMessage({
             projectId: input.projectId,
             sessionId: input.sessionId,
             role: "tool",
             content: "已加入草稿纸。",
-            action
+            action: generated.action
           })
         : null;
       const result = {
         messages: toolMessage ? [userMessage, assistantMessage, toolMessage] : [userMessage, assistantMessage],
-        action
+        action: generated.action
       };
-      const finalContextUsage = advanceSessionContextUsageAfterAnswer(
-        chatRepo.getSession({
-          projectId: input.projectId,
-          sessionId: input.sessionId
-        }).lastContextUsage,
-        input,
-        generated.content
-      );
-      if (finalContextUsage) {
-        chatRepo.updateSessionContextUsage({
-          projectId: input.projectId,
-          sessionId: input.sessionId,
-          contextUsage: finalContextUsage
-        });
-        handlers.onContext?.(finalContextUsage);
-      }
       handlers.onDone?.({ requestId: input.requestId, payload: result });
       return result;
     } catch (reason) {
@@ -1354,6 +1377,81 @@ export class AiTaskService {
         };
       }
       return fail(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      this.unregisterStreamIfCurrent(input.requestId, abortController);
+    }
+  }
+
+  async regenerateChatMessageStream(input: AiRegenerateChatMessageStreamInput, handlers: AiChatStreamHandlers = {}): Promise<AiChatStreamResult> {
+    const chatRepo = this.getAiChatRepo(input.projectId);
+    const messages = chatRepo.listMessages({
+      projectId: input.projectId,
+      sessionId: input.sessionId
+    });
+    const targetIndex = messages.findIndex((message) => message.id === input.assistantMessageId);
+    if (targetIndex < 0) {
+      throw new Error("AI 回复不存在，无法重新生成。");
+    }
+    const targetMessage = messages[targetIndex];
+    if (targetMessage.role !== "assistant") {
+      throw new Error("只能重新生成 AI 回复。");
+    }
+    const nextMessage = messages[targetIndex + 1];
+    if (nextMessage?.role === "tool") {
+      throw new Error("带有工具结果的 AI 回复暂不能重新生成。");
+    }
+    if (nextMessage) {
+      throw new Error("只能重新生成最新的 AI 回复。");
+    }
+    const userMessageIndex = targetIndex - 1;
+    const userMessage = messages[userMessageIndex];
+    if (!userMessage || userMessage.role !== "user") {
+      throw new Error("找不到这条 AI 回复对应的用户消息。");
+    }
+    if (inferSafeChatActions(userMessage.content).length > 0) {
+      throw new Error("包含草稿纸等工具操作的 AI 回复暂不能重新生成。");
+    }
+
+    const generationInput: AiSendChatMessageStreamInput = {
+      requestId: input.requestId,
+      projectId: input.projectId,
+      sessionId: input.sessionId,
+      message: userMessage.content,
+      ...(input.chapterId ? { chapterId: input.chapterId } : {}),
+      ...(input.currentChapterTitle ? { currentChapterTitle: input.currentChapterTitle } : {}),
+      ...(input.selectionText ? { selectionText: input.selectionText } : {}),
+      ...(input.chapterExcerpt ? { chapterExcerpt: input.chapterExcerpt } : {})
+    };
+    const history = messages.slice(0, userMessageIndex);
+    const abortController = this.registerStream(input.requestId);
+
+    try {
+      const generated = await this.generateChatAnswerStream(generationInput, chatRepo, history, abortController, handlers, {
+        allowActions: false
+      });
+      const assistantMessage = chatRepo.updateAssistantMessage({
+        projectId: input.projectId,
+        sessionId: input.sessionId,
+        messageId: input.assistantMessageId,
+        content: generated.content,
+        action: generated.assistantAction
+      });
+      const result = {
+        messages: [assistantMessage],
+        action: null
+      };
+      handlers.onDone?.({ requestId: input.requestId, payload: result });
+      return result;
+    } catch (reason) {
+      if (abortController.signal.aborted || isCancellationReason(reason)) {
+        return {
+          messages: [targetMessage],
+          action: null
+        };
+      }
+      const error = reason instanceof Error ? reason.message : String(reason);
+      handlers.onError?.({ requestId: input.requestId, error });
+      throw new Error(error);
     } finally {
       this.unregisterStreamIfCurrent(input.requestId, abortController);
     }

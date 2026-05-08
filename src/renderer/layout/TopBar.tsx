@@ -56,7 +56,8 @@ const layoutPresets = [
 const pageWidthOptions = [
   { value: "narrow", label: "窄栏" },
   { value: "medium", label: "适中" },
-  { value: "wide", label: "宽栏" }
+  { value: "wide", label: "宽栏" },
+  { value: "screen", label: "宽屏" }
 ] as const;
 
 const themeOptions = [
@@ -69,19 +70,27 @@ const fontFamilyOptions = [
   { value: "system", label: "默认" },
   { value: "song", label: "宋体感" },
   { value: "hei", label: "黑体感" },
-  { value: "fangsong", label: "仿宋感" }
+  { value: "fangsong", label: "仿宋感" },
+  { value: "kai", label: "楷体感" }
 ] as const;
 
-const fontSizeOptions = [
-  { value: 18, label: "小" },
-  { value: 20, label: "标准" },
-  { value: 22, label: "大" }
-] as const;
+const fontSizeOptions = Array.from({ length: 25 }, (_, index) => {
+  const value = index + 12;
+  return { value, label: `${value}px` };
+});
 
 const lineHeightOptions = [
-  { value: 1.82, label: "紧凑" },
-  { value: 2.08, label: "标准" },
-  { value: 2.32, label: "舒展" }
+  { value: 1.6, label: "1.6" },
+  { value: 1.82, label: "1.82" },
+  { value: 2.08, label: "2.08" },
+  { value: 2.32, label: "2.32" },
+  { value: 2.6, label: "2.6" }
+] as const;
+
+const editorPaddingOptions = [
+  { value: "compact", label: "紧凑" },
+  { value: "standard", label: "标准" },
+  { value: "relaxed", label: "舒展" }
 ] as const;
 
 const paragraphSpacingOptions = [
@@ -96,36 +105,52 @@ const firstLineIndentOptions = [
   { value: "four", label: "4字" }
 ] as const;
 
+const ruledPaperIntensityOptions = [
+  { value: "off", label: "关闭", ruledPaper: false },
+  { value: "soft", label: "淡", ruledPaper: true },
+  { value: "standard", label: "标准", ruledPaper: true },
+  { value: "strong", label: "清晰", ruledPaper: true }
+] as const;
+
 const presetSettings: Record<Exclude<EditorSettings["layoutPreset"], "custom">, Partial<EditorSettings>> = {
   immersive: {
     layoutPreset: "immersive",
-    pageWidth: "medium",
+    pageWidth: "screen",
     fontFamily: "system",
+    editorPadding: "compact",
     fontSize: 20,
     lineHeight: 2.32,
     paragraphSpacing: "standard",
-    firstLineIndent: "two",
-    theme: "light"
+    firstLineIndent: "none",
+    theme: "light",
+    ruledPaper: true,
+    ruledPaperIntensity: "standard"
   },
   review: {
     layoutPreset: "review",
     pageWidth: "wide",
     fontFamily: "hei",
+    editorPadding: "standard",
     fontSize: 18,
     lineHeight: 2.08,
     paragraphSpacing: "compact",
     firstLineIndent: "none",
-    theme: "light"
+    theme: "light",
+    ruledPaper: true,
+    ruledPaperIntensity: "soft"
   },
   reading: {
     layoutPreset: "reading",
     pageWidth: "narrow",
     fontFamily: "song",
+    editorPadding: "relaxed",
     fontSize: 22,
     lineHeight: 2.32,
     paragraphSpacing: "loose",
-    firstLineIndent: "two",
-    theme: "eye"
+    firstLineIndent: "none",
+    theme: "eye",
+    ruledPaper: true,
+    ruledPaperIntensity: "standard"
   }
 };
 
@@ -154,7 +179,8 @@ export function TopBar({
   searchValue = ""
 }: TopBarProps) {
   const [layoutPanelOpen, setLayoutPanelOpen] = useState(false);
-  const canShowLayoutPanel = mode === "writing" && editorSettings && onEditorSettingsChange && !focusMode;
+  const canShowLayoutPanel = mode === "writing" && editorSettings && onEditorSettingsChange;
+  const layoutPanelMode = focusMode ? "focus" : "normal";
   const updateEditorSetting = (patch: Partial<EditorSettings>) => {
     if (!onEditorSettingsChange) {
       return;
@@ -228,51 +254,73 @@ export function TopBar({
               Aa
             </button>
             {layoutPanelOpen ? (
-              <aside className="global-style-panel">
+              <aside className={`global-style-panel ${layoutPanelMode === "focus" ? "focus-mode-style-panel" : ""}`}>
                 <div className="global-style-head">
                   <div className="global-style-title">
                     <span className="global-style-title-icon">T</span>
-                    <span>页面与排版</span>
+                    <span>{focusMode ? "专注排版" : "页面与排版"}</span>
                   </div>
                   <button className="global-style-close" onClick={() => setLayoutPanelOpen(false)} type="button" aria-label="关闭页面与排版">
                     ×
                   </button>
                 </div>
-                <div className="global-style-group">
-                  <span className="global-style-label">写作预设</span>
-                  <div className="preset-grid">
-                    {layoutPresets.map((preset) => (
-                      <button
-                        className={`preset-button ${isActive(editorSettings.layoutPreset, preset.value)}`}
-                        data-editor-preset={preset.value}
-                        key={preset.value}
-                        onClick={() => updateEditorSetting(presetSettings[preset.value])}
-                        type="button"
-                      >
-                        <strong>{preset.label}</strong>
-                        <span>{preset.description}</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div className="global-style-row">
+                {!focusMode ? (
                   <div className="global-style-group">
-                    <span className="global-style-label">页面宽度</span>
-                    <div className="global-style-options">
-                      {pageWidthOptions.map((option) => (
+                    <span className="global-style-label">写作预设</span>
+                    <div className="preset-grid">
+                      {layoutPresets.map((preset) => (
                         <button
-                          className={`global-style-option ${isActive(editorSettings.pageWidth, option.value)}`}
-                          data-editor-style="pageWidth"
-                          data-editor-style-value={option.value}
-                          key={option.value}
-                          onClick={() => updateEditorSetting({ layoutPreset: "custom", pageWidth: option.value })}
+                          className={`preset-button ${isActive(editorSettings.layoutPreset, preset.value)}`}
+                          data-editor-preset={preset.value}
+                          key={preset.value}
+                          onClick={() => updateEditorSetting(presetSettings[preset.value])}
                           type="button"
                         >
-                          {option.label}
+                          <strong>{preset.label}</strong>
+                          <span>{preset.description}</span>
                         </button>
                       ))}
                     </div>
                   </div>
+                ) : null}
+                {!focusMode ? (
+                  <div className="global-style-row">
+                    <div className="global-style-group">
+                      <span className="global-style-label">页面宽度</span>
+                      <div className="global-style-options four">
+                        {pageWidthOptions.map((option) => (
+                          <button
+                            className={`global-style-option ${isActive(editorSettings.pageWidth, option.value)}`}
+                            data-editor-style="pageWidth"
+                            data-editor-style-value={option.value}
+                            key={option.value}
+                            onClick={() => updateEditorSetting({ layoutPreset: "custom", pageWidth: option.value })}
+                            type="button"
+                          >
+                            {option.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="global-style-group">
+                      <span className="global-style-label">主题</span>
+                      <div className="global-style-options">
+                        {themeOptions.map((option) => (
+                          <button
+                            className={`global-style-option ${isActive(editorSettings.theme, option.value)}`}
+                            data-editor-style="theme"
+                            data-editor-style-value={option.value}
+                            key={option.value}
+                            onClick={() => updateEditorSetting({ layoutPreset: "custom", theme: option.value })}
+                            type="button"
+                          >
+                            {option.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
                   <div className="global-style-group">
                     <span className="global-style-label">主题</span>
                     <div className="global-style-options">
@@ -290,10 +338,10 @@ export function TopBar({
                       ))}
                     </div>
                   </div>
-                </div>
+                )}
                 <div className="global-style-group">
                   <span className="global-style-label">正文风格</span>
-                  <div className="global-style-options four">
+                  <div className="global-style-options five">
                     {fontFamilyOptions.map((option) => (
                       <button
                         className={`global-style-option ${isActive(editorSettings.fontFamily, option.value)}`}
@@ -311,24 +359,24 @@ export function TopBar({
                 <div className="global-style-row">
                   <div className="global-style-group">
                     <span className="global-style-label">正文字号</span>
-                    <div className="global-style-options">
+                    <select
+                      className="global-style-select"
+                      data-editor-style="fontSize"
+                      onChange={(event) =>
+                        updateEditorSetting({ layoutPreset: "custom", fontSize: Number(event.target.value) })
+                      }
+                      value={editorSettings.fontSize}
+                    >
                       {fontSizeOptions.map((option) => (
-                        <button
-                          className={`global-style-option ${isActive(editorSettings.fontSize, option.value)}`}
-                          data-editor-style="fontSize"
-                          data-editor-style-value={option.value}
-                          key={option.value}
-                          onClick={() => updateEditorSetting({ layoutPreset: "custom", fontSize: option.value })}
-                          type="button"
-                        >
+                        <option key={option.value} value={option.value}>
                           {option.label}
-                        </button>
+                        </option>
                       ))}
-                    </div>
+                    </select>
                   </div>
                   <div className="global-style-group">
                     <span className="global-style-label">行距</span>
-                    <div className="global-style-options">
+                    <div className="global-style-options five">
                       {lineHeightOptions.map((option) => (
                         <button
                           className={`global-style-option ${isActive(editorSettings.lineHeight, option.value)}`}
@@ -344,43 +392,90 @@ export function TopBar({
                     </div>
                   </div>
                 </div>
-                <div className="global-style-row">
-                  <div className="global-style-group">
-                    <span className="global-style-label">段间距</span>
-                    <div className="global-style-options">
-                      {paragraphSpacingOptions.map((option) => (
-                        <button
-                          className={`global-style-option ${isActive(editorSettings.paragraphSpacing, option.value)}`}
-                          data-editor-style="paragraphSpacing"
-                          data-editor-style-value={option.value}
-                          key={option.value}
-                          onClick={() => updateEditorSetting({ layoutPreset: "custom", paragraphSpacing: option.value })}
-                          type="button"
-                        >
-                          {option.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="global-style-group">
-                    <span className="global-style-label">首行缩进</span>
-                    <div className="global-style-options">
-                      {firstLineIndentOptions.map((option) => (
-                        <button
-                          className={`global-style-option ${isActive(editorSettings.firstLineIndent, option.value)}`}
-                          data-editor-style="firstLineIndent"
-                          data-editor-style-value={option.value}
-                          key={option.value}
-                          onClick={() => updateEditorSetting({ layoutPreset: "custom", firstLineIndent: option.value })}
-                          type="button"
-                        >
-                          {option.label}
-                        </button>
-                      ))}
-                    </div>
+                <div className="global-style-group">
+                  <span className="global-style-label">正文边距</span>
+                  <div className="global-style-options">
+                    {editorPaddingOptions.map((option) => (
+                      <button
+                        className={`global-style-option ${isActive(editorSettings.editorPadding, option.value)}`}
+                        data-editor-style="editorPadding"
+                        data-editor-style-value={option.value}
+                        key={option.value}
+                        onClick={() => updateEditorSetting({ layoutPreset: "custom", editorPadding: option.value })}
+                        type="button"
+                      >
+                        {option.label}
+                      </button>
+                    ))}
                   </div>
                 </div>
-                <div className="global-style-note">这些设置只影响当前写作环境的显示，不改写正文内容。</div>
+                {!focusMode ? (
+                  <div className="global-style-row">
+                    <div className="global-style-group">
+                      <span className="global-style-label">段间距</span>
+                      <div className="global-style-options">
+                        {paragraphSpacingOptions.map((option) => (
+                          <button
+                            className={`global-style-option ${isActive(editorSettings.paragraphSpacing, option.value)}`}
+                            data-editor-style="paragraphSpacing"
+                            data-editor-style-value={option.value}
+                            key={option.value}
+                            onClick={() => updateEditorSetting({ layoutPreset: "custom", paragraphSpacing: option.value })}
+                            type="button"
+                          >
+                            {option.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="global-style-group">
+                      <span className="global-style-label">首行缩进</span>
+                      <div className="global-style-options">
+                        {firstLineIndentOptions.map((option) => (
+                          <button
+                            className={`global-style-option ${isActive(editorSettings.firstLineIndent, option.value)}`}
+                            data-editor-style="firstLineIndent"
+                            data-editor-style-value={option.value}
+                            key={option.value}
+                            onClick={() => updateEditorSetting({ layoutPreset: "custom", firstLineIndent: option.value })}
+                            type="button"
+                          >
+                            {option.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+                <div className="global-style-group">
+                  <span className="global-style-label">稿纸横格</span>
+                  <div className="global-style-options four">
+                    {ruledPaperIntensityOptions.map((option) => {
+                      const activeIntensity = editorSettings.ruledPaper ? editorSettings.ruledPaperIntensity : "off";
+                      return (
+                        <button
+                          className={`global-style-option ${isActive(activeIntensity, option.value)}`}
+                          data-editor-style="ruledPaperIntensity"
+                          data-editor-style-value={option.value}
+                          key={option.value}
+                          onClick={() =>
+                            updateEditorSetting({
+                              layoutPreset: "custom",
+                              ruledPaper: option.ruledPaper,
+                              ruledPaperIntensity: option.value
+                            })
+                          }
+                          type="button"
+                        >
+                          {option.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+                <div className="global-style-note">
+                  {focusMode ? "专注模式下正文区域自动铺满，页面宽度设置退出专注后生效。" : "这些设置只影响当前写作环境的显示，不改写正文内容。"}
+                </div>
               </aside>
             ) : null}
           </div>

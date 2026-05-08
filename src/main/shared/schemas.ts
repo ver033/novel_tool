@@ -141,15 +141,18 @@ export const chapterCreateSnapshotInputSchema = z
 
 export const editorSettingsSchema = z
   .object({
-    fontSize: z.number().int().min(12).max(28).optional(),
+    fontSize: z.number().int().min(12).max(36).optional(),
     lineHeight: z.number().min(1.4).max(2.6).optional(),
     autosaveMs: z.number().int().min(800).max(5000).optional(),
     layoutPreset: z.enum(["immersive", "review", "reading", "custom"]).optional(),
-    pageWidth: z.enum(["narrow", "medium", "wide"]).optional(),
-    fontFamily: z.enum(["system", "song", "hei", "fangsong"]).optional(),
+    pageWidth: z.enum(["narrow", "medium", "wide", "screen"]).optional(),
+    fontFamily: z.enum(["system", "song", "hei", "fangsong", "kai"]).optional(),
+    editorPadding: z.enum(["compact", "standard", "relaxed"]).optional(),
     paragraphSpacing: z.enum(["compact", "standard", "loose"]).optional(),
     firstLineIndent: z.enum(["none", "two", "four"]).optional(),
-    theme: z.enum(["light", "eye", "night"]).optional()
+    theme: z.enum(["light", "eye", "night"]).optional(),
+    ruledPaper: z.boolean().optional(),
+    ruledPaperIntensity: z.enum(["off", "soft", "standard", "strong"]).optional()
   })
   .strict();
 
@@ -321,6 +324,15 @@ export const aiSendChatMessageStreamInputSchema = z
     currentChapterTitle: z.string().trim().min(1).max(160).optional(),
     selectionText: z.string().trim().min(1).max(20000).optional(),
     chapterExcerpt: z.string().trim().min(1).max(20000).optional()
+  })
+  .strict();
+
+export const aiRegenerateChatMessageStreamInputSchema = aiSendChatMessageStreamInputSchema
+  .omit({
+    message: true
+  })
+  .extend({
+    assistantMessageId: idSchema
   })
   .strict();
 

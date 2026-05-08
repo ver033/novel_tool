@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState, type CSSProperties, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type CSSProperties, type FormEvent, type MouseEvent as ReactMouseEvent } from "react";
 import type { Editor } from "@tiptap/react";
+import { CaretRight, SidebarSimple } from "@phosphor-icons/react";
 import { Group as PanelGroup, Panel, Separator as PanelResizeHandle, useDefaultLayout } from "react-resizable-panels";
 import { Button } from "../components/Button";
 import { DraftRecoveryPrompt } from "../components/DraftRecoveryPrompt";
@@ -7,24 +8,41 @@ import { Input } from "../components/Input";
 import { Modal } from "../components/Modal";
 import { FloatingAiButton } from "../editor/FloatingAiButton";
 import { NovelEditor } from "../editor/NovelEditor";
-import { LeftChapterTree } from "../layout/LeftChapterTree";
+import { createSelectionSnapshotFromEditor } from "../editor/tiptap/selection-utils";
+import { EditorContextMenu, type EditorContextMenuState } from "../layout/EditorContextMenu";
+import { FloatingWorkspaceLayer } from "../layout/FloatingWorkspaceLayer";
+import type { FloatingPanelGeometry, FloatingPanelKind, FloatingPanelState } from "../layout/floating-panel-state";
+import { LeftChapterTree, type ChapterAuxiliaryInfo } from "../layout/LeftChapterTree";
 import { RightUtilitySidebar, type SidebarTab, type TaskType } from "../layout/RightUtilitySidebar";
+import { outlineStorageKey } from "../sidebar/OutlinePanel";
 import type { AiChatDraftSeed } from "../sidebar/chat-draft";
 import { TopBar } from "../layout/TopBar";
 import { getNovelToolApi } from "../state/app-store";
+import { useChatStore } from "../state/chat-store";
 import { useEditorStore } from "../state/editor-store";
 import { formatIpcErrorMessage } from "../state/ipc-error";
 import type { SettingsCategory } from "./SettingsPage";
-import type { ChapterContent, ChapterSummary, ProjectRecord, SelectionSnapshot, TaskPromptPreset } from "../../main/shared/types";
+import type { ChapterContent, ChapterSummary, ProjectRecord, ScratchNoteRecord, SelectionSnapshot, TaskPromptPreset } from "../../main/shared/types";
 
 type EditorInnerStyle = CSSProperties & {
   readonly maxWidth: string;
 };
 
+type EditorScrollStyle = CSSProperties & {
+  readonly "--editor-shell-padding-x": string;
+};
+
 const pageWidthBySetting = {
-  narrow: "760px",
-  medium: "860px",
-  wide: "980px"
+  narrow: "860px",
+  medium: "1120px",
+  wide: "1320px",
+  screen: "none"
+} as const;
+
+const editorPaddingBySetting = {
+  compact: "6px",
+  standard: "14px",
+  relaxed: "40px"
 } as const;
 
 const themeClassBySetting = {
@@ -205,23 +223,39 @@ type WritingPageProps = {
   readonly activeChapterId: string | null;
   readonly chapters: readonly ChapterSummary[];
   readonly currentProject: ProjectRecord | null;
+  readonly floatingPanels: readonly FloatingPanelState[];
   readonly sidebarOpen: boolean;
   readonly sidebarTab: SidebarTab;
   readonly aiChatDraftSeed: AiChatDraftSeed | null;
+  readonly auxiliaryRefreshToken: number;
   readonly scratchpadRefreshToken: number;
   readonly selectionSnapshot: SelectionSnapshot | null;
   readonly taskPromptPreset: TaskPromptPreset | null;
   readonly taskType: TaskType;
   readonly onCreateChapter: (options?: { readonly afterChapterId?: string }) => void;
+  readonly onAuxiliaryChanged: () => void;
   readonly onDeleteChapter: (chapterId: string) => void;
   readonly onRenameChapter: (chapterId: string, currentTitle: string) => void;
   readonly onSelectChapter: (chapterId: string) => void;
   readonly onChapterSaved: (content: ChapterContent) => void;
   readonly onUpdateChapterTargetWordCount: (chapterId: string, targetWordCount: number | null) => Promise<void>;
   readonly onSidebarTabChange: (tab: SidebarTab) => void;
+  readonly onCloseFloatingPanel: (panelId: string) => void;
   readonly onCloseSidebar: () => void;
+  readonly onFloatingTask: (task: TaskType, snapshot?: SelectionSnapshot | null, preset?: TaskPromptPreset | null) => void;
+  readonly onMinimizeAllFloatingPanels: () => void;
+  readonly onMinimizeFloatingPanel: (panelId: string) => void;
+  readonly onMoveFloatingPanel: (panelId: string, geometry: Pick<FloatingPanelGeometry, "x" | "y">) => void;
   readonly onOpenAiChat: () => void;
+  readonly onOpenFloatingAiChat: () => void;
+  readonly onOpenFloatingPanel: (kind: FloatingPanelKind, chapterId?: string | null, scratchNoteId?: string | null) => void;
+  readonly onOpenFloatingScratchpad: (chapterId?: string | null, scratchNoteId?: string | null) => void;
   readonly onOpenScratchpad: () => void;
+  readonly onRaiseFloatingPanel: (panelId: string) => void;
+  readonly onResetAllFloatingPanels: () => void;
+  readonly onResetFloatingPanel: (panelId: string) => void;
+  readonly onResizeFloatingPanel: (panelId: string, geometry: Pick<FloatingPanelGeometry, "width" | "height">) => void;
+  readonly onFloatingScratchNoteSaved: (panelId: string, noteId: string) => void;
   readonly onSelectionToChat: (snapshot: SelectionSnapshot) => void;
   readonly onExport: () => void;
   readonly onImport: () => void;
@@ -235,23 +269,39 @@ export function WritingPage({
   activeChapterId,
   chapters,
   currentProject,
+  floatingPanels,
   sidebarOpen,
   sidebarTab,
   aiChatDraftSeed,
+  auxiliaryRefreshToken,
   scratchpadRefreshToken,
   selectionSnapshot,
   taskPromptPreset,
   taskType,
   onCreateChapter,
+  onAuxiliaryChanged,
   onDeleteChapter,
   onRenameChapter,
   onSelectChapter,
   onChapterSaved,
   onUpdateChapterTargetWordCount,
   onSidebarTabChange,
+  onCloseFloatingPanel,
   onCloseSidebar,
+  onFloatingTask,
+  onMinimizeAllFloatingPanels,
+  onMinimizeFloatingPanel,
+  onMoveFloatingPanel,
   onOpenAiChat,
+  onOpenFloatingAiChat,
+  onOpenFloatingPanel,
+  onOpenFloatingScratchpad,
   onOpenScratchpad,
+  onRaiseFloatingPanel,
+  onResetAllFloatingPanels,
+  onResetFloatingPanel,
+  onResizeFloatingPanel,
+  onFloatingScratchNoteSaved,
   onSelectionToChat,
   onExport,
   onImport,
@@ -275,11 +325,26 @@ export function WritingPage({
   const [inlineChapterRenameActive, setInlineChapterRenameActive] = useState(false);
   const [inlineChapterTitle, setInlineChapterTitle] = useState("");
   const [focusMode, setFocusMode] = useState(false);
+  const [chapterListHidden, setChapterListHidden] = useState(false);
+  const [chapterAuxiliaryInfoById, setChapterAuxiliaryInfoById] = useState<Record<string, ChapterAuxiliaryInfo>>({});
+  const [editorContextMenu, setEditorContextMenu] = useState<EditorContextMenuState | null>(null);
   const [searchValue, setSearchValue] = useState("");
   const [searchResults, setSearchResults] = useState<EditorSearchResult[]>([]);
   const [searchJumpTarget, setSearchJumpTarget] = useState<SearchJumpTarget | null>(null);
   const [searchBusy, setSearchBusy] = useState(false);
   const [undoRedoState, setUndoRedoState] = useState({ canRedo: false, canUndo: false });
+  const activeChapterAuxiliaryInfo = activeChapterId ? chapterAuxiliaryInfoById[activeChapterId] : null;
+  const activeChapterScratchNoteIds = activeChapterAuxiliaryInfo?.scratchNoteIds ?? [];
+  const activeChapterHasScratchNotes = (activeChapterAuxiliaryInfo?.scratchCount ?? 0) > 0;
+  const canOpenAllAssist = Boolean(activeChapterAuxiliaryInfo?.hasOutline || activeChapterHasScratchNotes);
+  const chatPanelVisible = (!focusMode && sidebarOpen && sidebarTab === "chat") || floatingPanels.some((panel) => panel.kind === "chat");
+  const chatStore = useChatStore({
+    projectId: chatPanelVisible ? currentProject?.id ?? null : null,
+    currentChapterId: activeChapter?.id ?? null,
+    currentChapterTitle: activeChapter?.title ?? null,
+    flushPendingSave: editorStore.flushPendingSave,
+    selectionSnapshot
+  });
   const targetWordCount = activeChapter?.targetWordCount ?? null;
   const targetProgressLabel = useMemo(() => {
     if (!targetWordCount) {
@@ -296,10 +361,19 @@ export function WritingPage({
     }
     return "已达成本章目标 · 100%";
   }, [editorStore.wordCount, targetWordCount]);
+  const editorUsesFullWidth = focusMode || chapterListHidden || !sidebarOpen;
   const editorInnerStyle: EditorInnerStyle = {
-    maxWidth: pageWidthBySetting[editorStore.editorSettings.pageWidth] ?? pageWidthBySetting.medium
+    maxWidth: editorUsesFullWidth ? "none" : pageWidthBySetting[editorStore.editorSettings.pageWidth] ?? pageWidthBySetting.medium
+  };
+  const editorScrollStyle: EditorScrollStyle = {
+    "--editor-shell-padding-x": editorPaddingBySetting[editorStore.editorSettings.editorPadding] ?? editorPaddingBySetting.compact
   };
   const editorThemeClass = themeClassBySetting[editorStore.editorSettings.theme] ?? themeClassBySetting.light;
+  const chapterLayoutPanelIds = useMemo(
+    () => (!focusMode ? [chapterListHidden ? "chapter-rail" : "chapter-tree", "chapter-workspace"] : ["chapter-workspace"]),
+    [chapterListHidden, focusMode]
+  );
+  const chapterLayout = useDefaultLayout({ id: "moshu-writing-chapters-v1", panelIds: chapterLayoutPanelIds });
   const sidebarLayoutPanelIds = useMemo(() => (!focusMode && sidebarOpen ? ["editor", "right-sidebar"] : ["editor"]), [focusMode, sidebarOpen]);
   const sidebarLayout = useDefaultLayout({ id: "moshu-writing-sidebar-v2", panelIds: sidebarLayoutPanelIds });
   const flushBeforeNavigation = useCallback(
@@ -336,6 +410,67 @@ export function WritingPage({
     };
   }, [api]);
   useEffect(() => {
+    if (!currentProject) {
+      setChapterAuxiliaryInfoById({});
+      return undefined;
+    }
+
+    const outlineInfoByChapterId = chapters.reduce<Record<string, ChapterAuxiliaryInfo>>((next, chapter) => {
+      let hasOutline = false;
+      try {
+        hasOutline = Boolean(window.localStorage.getItem(outlineStorageKey(currentProject.id, chapter.id))?.trim());
+      } catch {
+        hasOutline = false;
+      }
+      next[chapter.id] = {
+        hasOutline,
+        scratchCount: 0,
+        scratchNoteIds: []
+      };
+      return next;
+    }, {});
+
+    let cancelled = false;
+    setChapterAuxiliaryInfoById(outlineInfoByChapterId);
+    void api.scratch
+      .list({ projectId: currentProject.id })
+      .then((result) => {
+        if (cancelled) {
+          return;
+        }
+        const notes = result as ScratchNoteRecord[];
+        const scratchCountByChapterId = new Map<string, number>();
+        const scratchNoteIdsByChapterId = new Map<string, string[]>();
+        notes.forEach((note) => {
+          if (!note.chapterId) {
+            return;
+          }
+          scratchCountByChapterId.set(note.chapterId, (scratchCountByChapterId.get(note.chapterId) ?? 0) + 1);
+          scratchNoteIdsByChapterId.set(note.chapterId, [...(scratchNoteIdsByChapterId.get(note.chapterId) ?? []), note.id]);
+        });
+        setChapterAuxiliaryInfoById(
+          chapters.reduce<Record<string, ChapterAuxiliaryInfo>>((next, chapter) => {
+            const scratchNoteIds = scratchNoteIdsByChapterId.get(chapter.id) ?? [];
+            next[chapter.id] = {
+              hasOutline: outlineInfoByChapterId[chapter.id]?.hasOutline ?? false,
+              scratchCount: scratchCountByChapterId.get(chapter.id) ?? 0,
+              scratchNoteIds
+            };
+            return next;
+          }, {})
+        );
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setChapterAuxiliaryInfoById(outlineInfoByChapterId);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [api, auxiliaryRefreshToken, chapters, currentProject, scratchpadRefreshToken]);
+  useEffect(() => {
     if (!editor) {
       setUndoRedoState({ canRedo: false, canUndo: false });
       return undefined;
@@ -354,6 +489,32 @@ export function WritingPage({
       editor.off("transaction", updateUndoRedoState);
     };
   }, [editor]);
+  useEffect(() => {
+    if (!editorContextMenu) {
+      return undefined;
+    }
+
+    function handlePointerDown(event: PointerEvent): void {
+      const target = event.target;
+      if (target instanceof HTMLElement && target.closest(".editor-context-menu")) {
+        return;
+      }
+      setEditorContextMenu(null);
+    }
+
+    function handleKeyDown(event: KeyboardEvent): void {
+      if (event.key === "Escape") {
+        setEditorContextMenu(null);
+      }
+    }
+
+    window.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [editorContextMenu]);
   useEffect(() => {
     const query = searchValue.trim();
     if (!currentProject || !query) {
@@ -441,6 +602,99 @@ export function WritingPage({
   const handleRedo = useCallback(() => {
     editor?.chain().focus().redo().run();
   }, [editor]);
+  const closeEditorContextMenu = useCallback(() => {
+    setEditorContextMenu(null);
+  }, []);
+  const openFloatingAssistForActiveChapter = useCallback(() => {
+    if (!activeChapterId || !canOpenAllAssist) {
+      return;
+    }
+    if (activeChapterAuxiliaryInfo?.hasOutline) {
+      onOpenFloatingPanel("outline", activeChapterId);
+    }
+    for (const scratchNoteId of activeChapterScratchNoteIds) {
+      onOpenFloatingScratchpad(activeChapterId, scratchNoteId);
+    }
+  }, [activeChapterAuxiliaryInfo, activeChapterId, activeChapterScratchNoteIds, canOpenAllAssist, onOpenFloatingPanel, onOpenFloatingScratchpad]);
+  const handleEditorContextMenu = useCallback(
+    (event: ReactMouseEvent<HTMLElement>) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) {
+        return;
+      }
+      if (target.closest("button, input, textarea, select, a, [role='menu'], .floating-panel, [data-preserve-native-context-menu='true']")) {
+        return;
+      }
+      event.preventDefault();
+      const hasSelection = Boolean(window.getSelection()?.toString().trim());
+      setEditorContextMenu({
+        mode: hasSelection ? "selection" : "surface",
+        x: Math.max(12, Math.min(event.clientX, window.innerWidth - 260)),
+        y: Math.max(12, Math.min(event.clientY, window.innerHeight - 420))
+      });
+    },
+    []
+  );
+  const selectionSnapshotFromEditor = useCallback(() => {
+    if (!editor || !activeChapterId) {
+      return null;
+    }
+    return createSelectionSnapshotFromEditor(editor, activeChapterId);
+  }, [activeChapterId, editor]);
+  const runFloatingSelectionTask = useCallback(
+    (task: TaskType) => {
+      const snapshot = selectionSnapshotFromEditor();
+      if (!snapshot) {
+        return;
+      }
+      onFloatingTask(task, snapshot, null);
+      closeEditorContextMenu();
+    },
+    [closeEditorContextMenu, onFloatingTask, selectionSnapshotFromEditor]
+  );
+  const handleSelectionToFloatingScratchpad = useCallback(() => {
+    const snapshot = selectionSnapshotFromEditor();
+    if (!snapshot || !currentProject) {
+      closeEditorContextMenu();
+      return;
+    }
+    void api.scratch
+      .create({
+        projectId: currentProject.id,
+        chapterId: snapshot.chapterId,
+        content: snapshot.text,
+        pinned: false
+      })
+      .then((created) => {
+        onAuxiliaryChanged();
+        onOpenFloatingScratchpad(snapshot.chapterId, (created as ScratchNoteRecord).id);
+      })
+      .catch((reason: unknown) => {
+        setNavigationError(formatIpcErrorMessage(reason, "加入草稿纸失败。"));
+      });
+    closeEditorContextMenu();
+  }, [api, closeEditorContextMenu, currentProject, onAuxiliaryChanged, onOpenFloatingScratchpad, selectionSnapshotFromEditor]);
+  const handleContextCopy = useCallback(() => {
+    document.execCommand("copy");
+    closeEditorContextMenu();
+  }, [closeEditorContextMenu]);
+  const handleContextPaste = useCallback(() => {
+    if (!navigator.clipboard) {
+      closeEditorContextMenu();
+      return;
+    }
+    void navigator.clipboard
+      .readText()
+      .then((text) => {
+        if (text && editor) {
+          editor.chain().focus().insertContent(text).run();
+        }
+      })
+      .catch((reason: unknown) => {
+        setNavigationError(formatIpcErrorMessage(reason, "读取剪贴板失败。"));
+      });
+    closeEditorContextMenu();
+  }, [closeEditorContextMenu, editor]);
   const handleSearchResultSelect = useCallback(
     (result: EditorSearchResult) => {
       const query = searchValue;
@@ -472,9 +726,10 @@ export function WritingPage({
         content: snapshot.text,
         pinned: false
       });
+      onAuxiliaryChanged();
       onOpenScratchpad();
     },
-    [api, currentProject, onOpenScratchpad]
+    [api, currentProject, onAuxiliaryChanged, onOpenScratchpad]
   );
   const startChapterRename = useCallback((chapterId: string, currentTitle: string) => {
     setRenameChapterDraft({ id: chapterId, title: currentTitle });
@@ -618,29 +873,58 @@ export function WritingPage({
         </div>
       ) : null}
 
-      <main className={`workspace ${focusMode ? "focus-mode no-sidebar" : sidebarOpen ? "" : "no-sidebar"} ${editorThemeClass}`}>
-        {!focusMode ? (
-          <LeftChapterTree
-            activeChapterId={activeChapterId}
-            chapters={chapters}
-            onCreateChapter={handleCreateChapter}
-            onCreateChapterAfter={handleCreateChapterAfter}
-            onDeleteChapter={handleDeleteChapter}
-            onRenameChapter={startChapterRename}
-            onSelectChapter={handleSelectChapter}
-          />
-        ) : null}
-
+      <main
+        className={`workspace ${focusMode ? "focus-mode no-sidebar" : sidebarOpen ? "" : "no-sidebar"} ${
+          chapterListHidden && !focusMode ? "chapter-hidden" : ""
+        } ${editorUsesFullWidth ? "full-width-editor" : ""} ${editorThemeClass}`}
+      >
         <PanelGroup
-          className="workspace-main-panels"
-          defaultLayout={sidebarLayout.defaultLayout}
-          id="moshu-writing-sidebar-v2"
-          onLayoutChanged={sidebarLayout.onLayoutChanged}
+          className="workspace-shell-panels"
+          defaultLayout={chapterLayout.defaultLayout}
+          id="moshu-writing-chapters-v1"
+          onLayoutChanged={chapterLayout.onLayoutChanged}
           orientation="horizontal"
         >
+          {!focusMode && chapterListHidden ? (
+            <Panel className="chapter-rail-panel" defaultSize="58px" groupResizeBehavior="preserve-pixel-size" id="chapter-rail" maxSize="58px" minSize="58px">
+              <aside className="chapter-rail" aria-label="章节列表已隐藏">
+                <button className="chapter-rail-button" onClick={() => setChapterListHidden(false)} title="展开章节列表" type="button">
+                  <SidebarSimple size={20} />
+                  <CaretRight className="chapter-collapse-caret" size={13} />
+                </button>
+                <span className="rail-meta">{activeChapter?.title ?? "未选章节"}</span>
+              </aside>
+            </Panel>
+          ) : !focusMode ? (
+            <>
+              <Panel className="chapter-tree-panel" defaultSize="322px" groupResizeBehavior="preserve-pixel-size" id="chapter-tree" maxSize="520px" minSize="220px">
+                <LeftChapterTree
+                  activeChapterId={activeChapterId}
+                  auxiliaryInfoByChapterId={chapterAuxiliaryInfoById}
+                  chapters={chapters}
+                  onCreateChapter={handleCreateChapter}
+                  onCreateChapterAfter={handleCreateChapterAfter}
+                  onDeleteChapter={handleDeleteChapter}
+                  onHideChapters={() => setChapterListHidden(true)}
+                  onRenameChapter={startChapterRename}
+                  onSelectChapter={handleSelectChapter}
+                />
+              </Panel>
+              <PanelResizeHandle className="chapter-resize-handle" />
+            </>
+          ) : null}
+
+          <Panel className="chapter-workspace-panel" defaultSize="100%" id="chapter-workspace" minSize={focusMode ? "100%" : "420px"}>
+            <PanelGroup
+              className="workspace-main-panels"
+              defaultLayout={sidebarLayout.defaultLayout}
+              id="moshu-writing-sidebar-v2"
+              onLayoutChanged={sidebarLayout.onLayoutChanged}
+              orientation="horizontal"
+            >
           <Panel className="editor-panel" defaultSize="100%" id="editor" minSize={!focusMode && sidebarOpen ? "360px" : "100%"}>
-            <section className="editor-wrap">
-              <div className="editor-scroll">
+            <section className="editor-wrap" onContextMenu={handleEditorContextMenu}>
+              <div className="editor-scroll" style={editorScrollStyle}>
                 <div className="editor-inner" style={editorInnerStyle}>
                   {taskPromptPresetError ? (
                     <div className="inline-error-banner" role="alert">
@@ -710,6 +994,78 @@ export function WritingPage({
 
               {!focusMode && !sidebarOpen && activeChapter ? <FloatingAiButton onClick={onOpenAiChat} /> : null}
 
+              <FloatingWorkspaceLayer
+                activeChapterId={activeChapterId}
+                aiChatDraftSeed={aiChatDraftSeed}
+                chapters={chapters}
+                currentProjectId={currentProject?.id ?? null}
+                chatStore={chatStore}
+                editor={editor}
+                flushPendingSave={editorStore.flushPendingSave}
+                onClosePanel={onCloseFloatingPanel}
+                onAuxiliaryChanged={onAuxiliaryChanged}
+                onContentSaved={editorStore.markContentSaved}
+                onMinimizePanel={onMinimizeFloatingPanel}
+                onMovePanel={onMoveFloatingPanel}
+                onOpenSettings={handleSettings}
+                onRaisePanel={onRaiseFloatingPanel}
+                onResetPanel={onResetFloatingPanel}
+                onResizePanel={onResizeFloatingPanel}
+                onScratchNoteSaved={onFloatingScratchNoteSaved}
+                panels={floatingPanels}
+                selectionSnapshot={selectionSnapshot}
+                taskPromptPreset={taskPromptPreset}
+                taskType={taskType}
+              />
+
+              {editorContextMenu ? (
+                <EditorContextMenu
+                  canOpenAllAssist={canOpenAllAssist}
+                  mode={editorContextMenu.mode}
+                  x={editorContextMenu.x}
+                  y={editorContextMenu.y}
+                  onClose={closeEditorContextMenu}
+                  onCopy={handleContextCopy}
+                  onExpandSelection={() => runFloatingSelectionTask("expand")}
+                  onMinimizeAllPanels={() => {
+                    onMinimizeAllFloatingPanels();
+                    closeEditorContextMenu();
+                  }}
+                  onOpenAllAssist={() => {
+                    openFloatingAssistForActiveChapter();
+                    closeEditorContextMenu();
+                  }}
+                  onOpenChat={() => {
+                    onOpenFloatingAiChat();
+                    closeEditorContextMenu();
+                  }}
+                  onOpenOutline={() => {
+                    onOpenFloatingPanel("outline", activeChapterId);
+                    closeEditorContextMenu();
+                  }}
+                  onOpenScratchpad={() => {
+                    onOpenFloatingScratchpad(activeChapterId, null);
+                    closeEditorContextMenu();
+                  }}
+                  onPaste={handleContextPaste}
+                  onPolishSelection={() => runFloatingSelectionTask("polish")}
+                  onProofreadSelection={() => runFloatingSelectionTask("proofread")}
+                  onRedo={() => {
+                    handleRedo();
+                    closeEditorContextMenu();
+                  }}
+                  onResetPanelLayout={() => {
+                    onResetAllFloatingPanels();
+                    closeEditorContextMenu();
+                  }}
+                  onSelectionToScratchpad={handleSelectionToFloatingScratchpad}
+                  onUndo={() => {
+                    handleUndo();
+                    closeEditorContextMenu();
+                  }}
+                />
+              ) : null}
+
               <footer className="bottom-metrics">
                 <div className="metrics-inner">
                   <div className="metric-left">
@@ -739,12 +1095,14 @@ export function WritingPage({
                   currentChapterId={activeChapter?.id ?? null}
                   currentChapterTitle={activeChapter?.title ?? null}
                   currentProjectId={currentProject?.id ?? null}
+                  chatStore={chatStore}
                   scratchpadRefreshToken={scratchpadRefreshToken}
                   selectionSnapshot={selectionSnapshot}
                   taskPromptPreset={taskPromptPreset}
                   taskType={taskType}
                   editor={editor}
                   flushPendingSave={editorStore.flushPendingSave}
+                  onAuxiliaryChanged={onAuxiliaryChanged}
                   onContentSaved={editorStore.markContentSaved}
                   onTabChange={onSidebarTabChange}
                   onClose={onCloseSidebar}
@@ -753,6 +1111,8 @@ export function WritingPage({
               </Panel>
             </>
           ) : null}
+            </PanelGroup>
+          </Panel>
         </PanelGroup>
       </main>
 

@@ -58,20 +58,46 @@ describe("AI chat author interaction regressions", () => {
     expect(app).toContain("setAiChatDraftSeed");
     expect(sidebar).toContain("draftSeed={aiChatDraftSeed}");
     expect(chat).toContain("draftSeed");
-    expect(chat).toContain("setDraft((current)");
+    expect(chat).toContain("consumeDraftSeed(draftSeed)");
     expect(css).toContain(".send-to-chat-option");
+  });
+
+  it("shares the AI chat input draft across sidebar and floating chat surfaces", () => {
+    const chatStore = readSource("src/renderer/state/chat-store.ts");
+    const chat = readSource("src/renderer/sidebar/AiChatTab.tsx");
+
+    expect(chatStore).toContain("const [draft, setDraftState]");
+    expect(chatStore).toContain("draftRef");
+    expect(chatStore).toContain("consumedDraftSeedId");
+    expect(chatStore).toContain("consumeDraftSeed");
+    expect(chatStore).toContain("draft,");
+    expect(chatStore).toContain("setDraft,");
+    expect(chat).toContain("const draft = chatStore.draft");
+    expect(chat).toContain("const setDraft = chatStore.setDraft");
+    expect(chat).not.toContain('const [draft, setDraft] = useState("")');
+  });
+
+  it("guards AI chat streams synchronously when two chat surfaces are open", () => {
+    const chatStore = readSource("src/renderer/state/chat-store.ts");
+
+    expect(chatStore).toContain("busyRef");
+    expect(chatStore).toContain("activeRequestId.current");
+    expect(chatStore).toContain("setBusyState");
+    expect(chatStore).toContain("busyRef.current = nextBusy");
+    expect(chatStore).toContain("busyRef.current || activeRequestId.current");
   });
 
   it("flushes pending editor saves before AI chat reads the current chapter", () => {
     const chatStore = readSource("src/renderer/state/chat-store.ts");
-    const chat = readSource("src/renderer/sidebar/AiChatTab.tsx");
+    const writing = readSource("src/renderer/routes/WritingPage.tsx");
     const sidebar = readSource("src/renderer/layout/RightUtilitySidebar.tsx");
 
     expect(chatStore).toContain("readonly flushPendingSave");
     expect(chatStore).toContain("await flushPendingSave()");
     expect(chatStore.indexOf("await flushPendingSave()")).toBeLessThan(chatStore.indexOf("api.chapter.getContent"));
-    expect(chat).toContain("flushPendingSave");
-    expect(sidebar).toContain("flushPendingSave={flushPendingSave}");
+    expect(writing).toContain("flushPendingSave: editorStore.flushPendingSave");
+    expect(writing).toContain("chatStore={chatStore}");
+    expect(sidebar).toContain("chatStore={chatStore}");
   });
 
   it("keeps the AI chat message list pinned to the newest output", () => {

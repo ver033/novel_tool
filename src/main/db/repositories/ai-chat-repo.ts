@@ -55,6 +55,15 @@ type ClearSessionInput = {
   readonly sessionId: string;
 };
 
+type MessageInput = ClearSessionInput & {
+  readonly messageId: string;
+};
+
+type UpdateAssistantMessageInput = MessageInput & {
+  readonly content: string;
+  readonly action: AiChatAction | null;
+};
+
 type RenameSessionInput = {
   readonly projectId: string;
   readonly sessionId: string;
@@ -255,6 +264,17 @@ export class AiChatRepository {
     return rows.map(mapMessage);
   }
 
+  getMessage(input: MessageInput): AiChatMessageRecord {
+    const row = this.db
+      .prepare("SELECT * FROM ai_chat_messages WHERE project_id = ? AND session_id = ? AND id = ?")
+      .get(input.projectId, input.sessionId, input.messageId) as AiChatMessageRow | undefined;
+    if (!row) {
+      throw new Error("AI 对话消息不存在。");
+    }
+
+    return mapMessage(row);
+  }
+
   createMessage(input: CreateMessageInput): AiChatMessageRecord {
     const createdAt = nowIso();
     const message = {
@@ -273,6 +293,22 @@ export class AiChatRepository {
     this.db.prepare("UPDATE ai_chat_sessions SET updated_at = ? WHERE id = ? AND project_id = ?").run(createdAt, message.sessionId, message.projectId);
 
     return message;
+  }
+
+  updateAssistantMessage(input: UpdateAssistantMessageInput): AiChatMessageRecord {
+    const updatedAt = nowIso();
+    const result = this.db
+      .prepare(
+        `UPDATE ai_chat_messages
+         SET content = ?, action_json = ?
+         WHERE project_id = ? AND session_id = ? AND id = ? AND role = 'assistant'`
+      )
+      .run(input.content, stringifyAction(input.action), input.projectId, input.sessionId, input.messageId);
+    if (result.changes !== 1) {
+      throw new Error("AI 回复不存在，无法重新生成。");
+    }
+    this.db.prepare("UPDATE ai_chat_sessions SET updated_at = ? WHERE id = ? AND project_id = ?").run(updatedAt, input.sessionId, input.projectId);
+    return this.getMessage(input);
   }
 
   updateSessionContextUsage(input: UpdateSessionContextUsageInput): void {

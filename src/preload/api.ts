@@ -10,6 +10,7 @@ import type {
   AiGetChatSessionInput,
   AiListChatSessionsInput,
   AiListChatMessagesInput,
+  AiRegenerateChatMessageStreamInput,
   AiRenameChatSessionInput,
   AiRejectCandidateInput,
   AiSaveCandidateToScratchpadInput,
@@ -123,6 +124,7 @@ export type NovelToolApi = {
     readonly listChatMessages: (input: AiListChatMessagesInput) => Promise<unknown>;
     readonly clearChat: (input: AiClearChatInput) => Promise<unknown>;
     readonly sendChatMessageStream: (input: AiSendChatMessageStreamInput) => Promise<unknown>;
+    readonly regenerateChatMessageStream: (input: AiRegenerateChatMessageStreamInput) => Promise<unknown>;
     readonly cancelStream: (input: AiCancelStreamInput) => Promise<unknown>;
     readonly subscribeAiStream: (requestId: string, handlers: AiStreamHandlers) => () => void;
     readonly rejectCandidate: (input: AiRejectCandidateInput) => Promise<unknown>;
@@ -204,6 +206,7 @@ export const novelToolApi: NovelToolApi = Object.freeze({
     listChatMessages: (input: AiListChatMessagesInput) => ipcRenderer.invoke(ipcChannels.ai.listChatMessages, input),
     clearChat: (input: AiClearChatInput) => ipcRenderer.invoke(ipcChannels.ai.clearChat, input),
     sendChatMessageStream: (input: AiSendChatMessageStreamInput) => ipcRenderer.invoke(ipcChannels.ai.sendChatMessageStream, input),
+    regenerateChatMessageStream: (input: AiRegenerateChatMessageStreamInput) => ipcRenderer.invoke(ipcChannels.ai.regenerateChatMessageStream, input),
     cancelStream: (input: AiCancelStreamInput) => ipcRenderer.invoke(ipcChannels.ai.cancelStream, input),
     subscribeAiStream: (requestId: string, handlers: AiStreamHandlers) => {
       const onChunk = (_event: IpcRendererEvent, payload: AiStreamChunkEvent) => {

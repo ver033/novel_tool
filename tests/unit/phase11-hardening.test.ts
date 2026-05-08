@@ -77,8 +77,10 @@ describe("phase 11 V1 hardening", () => {
     const chat = readSource("src/renderer/sidebar/AiChatTab.tsx");
     const chatStore = readSource("src/renderer/state/chat-store.ts");
     const rightSidebar = readSource("src/renderer/layout/RightUtilitySidebar.tsx");
+    const writing = readSource("src/renderer/routes/WritingPage.tsx");
 
-    expect(chat).toContain("useChatStore");
+    expect(writing).toContain("useChatStore");
+    expect(rightSidebar).toContain("chatStore={chatStore}");
     expect(chat).toContain("deleteCurrentSession");
     expect(chat).toContain("chatStore.loading || !chatStore.session");
     expect(chatStore).toContain("getChatSession");

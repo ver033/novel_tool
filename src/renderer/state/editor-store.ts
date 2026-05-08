@@ -17,11 +17,14 @@ const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
   lineHeight: 2.08,
   autosaveMs: AUTOSAVE_DEBOUNCE_MS,
   layoutPreset: "immersive",
-  pageWidth: "medium",
+  pageWidth: "screen",
   fontFamily: "system",
+  editorPadding: "compact",
   paragraphSpacing: "standard",
-  firstLineIndent: "two",
-  theme: "light"
+  firstLineIndent: "none",
+  theme: "light",
+  ruledPaper: true,
+  ruledPaperIntensity: "standard"
 };
 
 export type SaveStatus = "saved" | "dirty" | "saving" | "failed";

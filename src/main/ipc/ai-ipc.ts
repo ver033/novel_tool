@@ -11,6 +11,7 @@ import {
   aiGetChatSessionInputSchema,
   aiListChatSessionsInputSchema,
   aiListChatMessagesInputSchema,
+  aiRegenerateChatMessageStreamInputSchema,
   aiRenameChatSessionInputSchema,
   aiRejectCandidateInputSchema,
   aiSaveCandidateToScratchpadInputSchema,
@@ -84,6 +85,28 @@ export function registerAiIpc(aiTaskService: AiTaskService): void {
     ipcChannels.ai.sendChatMessageStream,
     createValidatedIpcHandler(aiSendChatMessageStreamInputSchema, (input, event) =>
       aiTaskService.sendChatMessageStream(input, {
+        onChunk(payload) {
+          sendToLiveSender(event, ipcChannels.ai.streamChunk, payload);
+        },
+        onReasoning(payload) {
+          sendToLiveSender(event, ipcChannels.ai.streamReasoning, payload);
+        },
+        onContext(payload) {
+          sendToLiveSender(event, ipcChannels.ai.streamContext, payload);
+        },
+        onDone(payload) {
+          sendToLiveSender(event, ipcChannels.ai.streamDone, payload);
+        },
+        onError(payload) {
+          sendToLiveSender(event, ipcChannels.ai.streamError, payload);
+        }
+      })
+    )
+  );
+  ipcMain.handle(
+    ipcChannels.ai.regenerateChatMessageStream,
+    createValidatedIpcHandler(aiRegenerateChatMessageStreamInputSchema, (input, event) =>
+      aiTaskService.regenerateChatMessageStream(input, {
         onChunk(payload) {
           sendToLiveSender(event, ipcChannels.ai.streamChunk, payload);
         },

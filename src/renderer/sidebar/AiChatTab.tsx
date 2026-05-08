@@ -1,23 +1,21 @@
-import { Check, CopySimple, PaperPlaneRight, Plus, Stop, Trash } from "@phosphor-icons/react";
+import { ArrowClockwise, Check, CopySimple, PaperPlaneRight, Plus, Stop, Trash } from "@phosphor-icons/react";
 import { type CSSProperties, type KeyboardEvent, type ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { AiChatMessageRecord, ChapterSummary, SelectionSnapshot, SummaryIndexStatus } from "../../main/shared/types";
 import { Button } from "../components/Button";
 import { IconButton } from "../components/IconButton";
 import { Modal } from "../components/Modal";
 import type { SettingsCategory } from "../routes/SettingsPage";
-import { useChatStore } from "../state/chat-store";
-import type { SavedChapterVersion } from "../state/editor-store";
+import type { ChatStore } from "../state/chat-store";
 import { ChatMessageContent } from "./ChatMessageContent";
 import { buildChatContextUsageDisplay } from "./chat-context-display";
 import type { AiChatDraftSeed } from "./chat-draft";
 
 type AiChatTabProps = {
   readonly chapters: readonly ChapterSummary[];
-  readonly currentChapterId: string | null;
+  readonly chatStore: ChatStore;
   readonly currentChapterTitle: string | null;
   readonly currentProjectId: string | null;
   readonly draftSeed: AiChatDraftSeed | null;
-  readonly flushPendingSave: () => Promise<SavedChapterVersion | null>;
   readonly selectionSnapshot: SelectionSnapshot | null;
   readonly onOpenSettings: (category?: SettingsCategory) => void;
 };
@@ -258,6 +256,10 @@ function getLastUserMessage(messages: readonly AiChatMessageRecord[]): AiChatMes
   return null;
 }
 
+function canRegenerateMessage(messages: readonly AiChatMessageRecord[], message: AiChatMessageRecord, index: number): boolean {
+  return message.role === "assistant" && message.content.trim().length > 0 && index === messages.length - 1;
+}
+
 function getActiveCommand(value: string, cursorIndex: number): ActiveCommand | null {
   const beforeCursor = value.slice(0, cursorIndex);
   const match = /(^|\s)([@/][^\s@/]*)$/.exec(beforeCursor);
@@ -288,15 +290,13 @@ function filterCommandSuggestions(suggestions: readonly ChatCommandSuggestion[],
 
 export function AiChatTab({
   chapters,
-  currentChapterId,
+  chatStore,
   currentChapterTitle,
   currentProjectId,
   draftSeed,
-  flushPendingSave,
   selectionSnapshot,
   onOpenSettings
 }: AiChatTabProps) {
-  const [draft, setDraft] = useState("");
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [copiedStreaming, setCopiedStreaming] = useState(false);
   const [copyError, setCopyError] = useState<string | null>(null);
@@ -304,13 +304,9 @@ export function AiChatTab({
   const [cursorIndex, setCursorIndex] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
-  const chatStore = useChatStore({
-    projectId: currentProjectId,
-    currentChapterId,
-    currentChapterTitle,
-    flushPendingSave,
-    selectionSnapshot
-  });
+  const draft = chatStore.draft;
+  const setDraft = chatStore.setDraft;
+  const consumeDraftSeed = chatStore.consumeDraftSeed;
 
   useEffect(() => {
     const animationFrame = requestAnimationFrame(() => {
@@ -321,22 +317,17 @@ export function AiChatTab({
   }, [chatStore.busy, chatStore.error, chatStore.loading, chatStore.messages, chatStore.streamingReasoning, chatStore.streamingText]);
 
   useEffect(() => {
-    const selectedText = draftSeed?.text.trim();
-    if (!selectedText) {
+    const nextCursorIndex = consumeDraftSeed(draftSeed);
+    if (nextCursorIndex === null) {
       return;
     }
 
-    setDraft((current) => {
-      const nextDraft = current.trim() ? `${current.trimEnd()}\n\n${selectedText}\n` : `${selectedText}\n`;
-      const nextCursorIndex = nextDraft.length;
-      setCursorIndex(nextCursorIndex);
-      requestAnimationFrame(() => {
-        inputRef.current?.focus();
-        inputRef.current?.setSelectionRange(nextCursorIndex, nextCursorIndex);
-      });
-      return nextDraft;
+    setCursorIndex(nextCursorIndex);
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.setSelectionRange(nextCursorIndex, nextCursorIndex);
     });
-  }, [draftSeed?.id]);
+  }, [consumeDraftSeed, draftSeed]);
   const chatMentionSuggestions = useMemo(() => {
     const suggestions: ChatCommandSuggestion[] = [];
     if (selectionSnapshot?.text) {
@@ -415,7 +406,7 @@ export function AiChatTab({
     }
   }
 
-  async function retryLastMessage(): Promise<void> {
+  async function resendLastUserMessageAfterError(): Promise<void> {
     const lastUserMessage = getLastUserMessage(chatStore.messages);
     if (!lastUserMessage || chatStore.busy || chatStore.loading || !chatStore.session) {
       return;
@@ -574,22 +565,54 @@ export function AiChatTab({
               <div className="message-content">暂无对话记录。</div>
             </div>
           ) : null}
-          {chatStore.messages.map((message) => (
-            <div className={messageClassName(message)} key={message.id}>
-              {message.role === "assistant" && message.content.trim() ? (
-                <IconButton
-                  className={`message-copy-button ${copiedMessageId === message.id ? "copied" : ""}`}
-                  label="复制 AI 回复"
-                  onClick={() => void copyChatMessage(message)}
-                >
-                  {copiedMessageId === message.id ? <Check size={16} weight="bold" /> : <CopySimple size={16} />}
-                </IconButton>
-              ) : null}
-              <ChatMessageContent content={message.content} rich={message.role === "assistant"} />
-              <div className="message-time">{new Date(message.createdAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}</div>
-            </div>
-          ))}
-          {chatStore.busy ? (
+          {chatStore.messages.map((message, index) => {
+            const isRegeneratingMessage = chatStore.regeneratingMessageId === message.id;
+            const visibleMessageContent = isRegeneratingMessage
+              ? chatStore.streamingText
+                ? chatStore.streamingText
+                : chatStore.contextUsagePending
+                  ? "正在分析上下文..."
+                  : "正在重新生成..."
+              : message.content;
+            const showAssistantActions = message.role === "assistant" && message.content.trim() && !isRegeneratingMessage;
+            return (
+              <div className={`${messageClassName(message)}${isRegeneratingMessage ? " regenerating" : ""}`} key={message.id}>
+                {showAssistantActions ? (
+                  <div className="message-action-stack">
+                    <IconButton
+                      className={`message-copy-button ${copiedMessageId === message.id ? "copied" : ""}`}
+                      label="复制 AI 回复"
+                      onClick={() => void copyChatMessage(message)}
+                    >
+                      {copiedMessageId === message.id ? <Check size={16} weight="bold" /> : <CopySimple size={16} />}
+                    </IconButton>
+                    {canRegenerateMessage(chatStore.messages, message, index) ? (
+                      <IconButton
+                        className="message-regenerate-button"
+                        disabled={chatStore.busy || chatStore.loading || !chatStore.session}
+                        label="重新生成 AI 回复"
+                        onClick={() => void chatStore.regenerateAssistantMessage(message.id)}
+                      >
+                        <ArrowClockwise size={16} />
+                      </IconButton>
+                    ) : null}
+                  </div>
+                ) : null}
+                {isRegeneratingMessage && chatStore.streamingReasoning ? (
+                  <details className="chat-reasoning" open>
+                    <summary>思考</summary>
+                    <div>{chatStore.streamingReasoning}</div>
+                  </details>
+                ) : null}
+                <ChatMessageContent
+                  content={visibleMessageContent}
+                  rich={message.role === "assistant" && (!isRegeneratingMessage || Boolean(chatStore.streamingText))}
+                />
+                <div className="message-time">{new Date(message.createdAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}</div>
+              </div>
+            );
+          })}
+          {chatStore.busy && !chatStore.regeneratingMessageId ? (
             <div className="message pending" role="status">
               {chatStore.streamingText.trim() ? (
                 <IconButton
@@ -626,7 +649,7 @@ export function AiChatTab({
                 <button
                   className="small-button blue"
                   disabled={!lastUserMessage || chatStore.busy || chatStore.loading || !chatStore.session}
-                  onClick={() => void retryLastMessage()}
+                  onClick={() => void resendLastUserMessageAfterError()}
                   type="button"
                 >
                   重试上一条

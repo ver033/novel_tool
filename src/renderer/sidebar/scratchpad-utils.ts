@@ -1,4 +1,4 @@
-import type { ScratchNoteRecord } from "../../main/shared/types";
+import type { ChapterSummary, ScratchNoteRecord } from "../../main/shared/types";
 
 export const scratchpadFilters = ["全部", "灵感", "AI 输出", "置顶"] as const;
 
@@ -6,6 +6,14 @@ export type ScratchpadFilter = (typeof scratchpadFilters)[number];
 
 export function getScratchNoteSourceLabel(note: ScratchNoteRecord): "灵感" | "AI 输出" {
   return note.sourceTaskId ? "AI 输出" : "灵感";
+}
+
+export function getScratchNoteChapterLabel(note: ScratchNoteRecord, chapters: readonly ChapterSummary[]): string {
+  if (!note.chapterId) {
+    return "未绑定章节";
+  }
+
+  return chapters.find((chapter) => chapter.id === note.chapterId)?.title ?? "章节已删除";
 }
 
 export function sortScratchNotes(notes: readonly ScratchNoteRecord[]): ScratchNoteRecord[] {
