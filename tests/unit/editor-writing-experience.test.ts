@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { findChapterSearchMatch, findChapterSearchMatches, getHighlightedSearchParts } from "../../src/renderer/routes/WritingPage";
 import { createTiptapDocumentFromPlainText } from "../../src/renderer/editor/tiptap/converters";
+import { clampFloatingPanelGeometry, openOrRaiseFloatingPanel } from "../../src/renderer/layout/floating-panel-state";
 
 const rootDir = process.cwd();
 
@@ -122,6 +123,198 @@ describe("editor writing experience optimizations", () => {
     expect(writingPage).toContain("focusMode");
     expect(bubbleMenu).toContain("Code");
     expect(bubbleMenu).toContain("TextUnderline");
+  });
+
+  it("lets authors hide the chapter list without entering focus mode", () => {
+    const writingPage = readSource("src/renderer/routes/WritingPage.tsx");
+    const leftChapterTree = readSource("src/renderer/layout/LeftChapterTree.tsx");
+    const css = readSource("src/renderer/styles/globals.css");
+
+    expect(leftChapterTree).toContain("onHideChapters");
+    expect(leftChapterTree).toContain("IconButton");
+    expect(leftChapterTree).toContain("SidebarSimple");
+    expect(leftChapterTree).toContain("CaretLeft");
+    expect(leftChapterTree).toContain("折叠章节列表");
+    expect(leftChapterTree).not.toContain(">隐藏章节<");
+    expect(writingPage).toContain("chapterListHidden");
+    expect(writingPage).toContain("chapterLayoutPanelIds");
+    expect(writingPage).toContain("workspace-shell-panels");
+    expect(writingPage).toContain('className="chapter-resize-handle"');
+    expect(writingPage).toContain('className="chapter-tree-panel"');
+    expect(writingPage).toContain('className="chapter-workspace-panel"');
+    expect(writingPage).toContain("chapter-rail");
+    expect(writingPage).toContain("chapter-rail-button");
+    expect(writingPage).toContain("CaretRight");
+    expect(writingPage).toContain("setChapterListHidden(false)");
+    expect(css).toContain(".workspace.chapter-hidden");
+    expect(css).toContain(".workspace-shell-panels");
+    expect(css).toContain(".chapter-resize-handle");
+    expect(css).toContain(".chapter-rail");
+  });
+
+  it("shows chapter-bound auxiliary material status in the chapter list", () => {
+    const app = readSource("src/renderer/App.tsx");
+    const writingPage = readSource("src/renderer/routes/WritingPage.tsx");
+    const leftChapterTree = readSource("src/renderer/layout/LeftChapterTree.tsx");
+    const utilityPanel = readSource("src/renderer/layout/UtilityPanelContent.tsx");
+    const outlinePanel = readSource("src/renderer/sidebar/OutlinePanel.tsx");
+    const scratchpad = readSource("src/renderer/sidebar/ScratchpadTab.tsx");
+    const css = readSource("src/renderer/styles/globals.css");
+
+    expect(app).toContain("auxiliaryRefreshToken");
+    expect(app).toContain("handleAuxiliaryChanged");
+    expect(writingPage).toContain("chapterAuxiliaryInfoById");
+    expect(writingPage).toContain("outlineStorageKey");
+    expect(writingPage).toContain("scratchCountByChapterId");
+    expect(writingPage).toContain("scratchNoteIdsByChapterId");
+    expect(writingPage).toContain("scratchNoteIds");
+    expect(writingPage).toContain("auxiliaryInfoByChapterId={chapterAuxiliaryInfoById}");
+    expect(leftChapterTree).toContain("auxiliaryInfoByChapterId");
+    expect(leftChapterTree).toContain("chapter-aux-meta");
+    expect(leftChapterTree).toContain("细纲");
+    expect(leftChapterTree).toContain("草稿");
+    expect(utilityPanel).toContain("onAuxiliaryChanged");
+    expect(outlinePanel).toContain("onAuxiliaryChanged?.()");
+    expect(scratchpad).toContain("onNotesChanged?.()");
+    expect(css).toContain(".chapter-aux-meta");
+    expect(css).toContain(".chapter-aux-chip");
+  });
+
+  it("lets the editor canvas expand when either side panel is hidden", () => {
+    const writingPage = readSource("src/renderer/routes/WritingPage.tsx");
+    const css = readSource("src/renderer/styles/globals.css");
+
+    expect(writingPage).toContain("editorUsesFullWidth");
+    expect(writingPage).toContain("chapterListHidden || !sidebarOpen");
+    expect(writingPage).toContain('maxWidth: editorUsesFullWidth ? "none"');
+    expect(writingPage).toContain("full-width-editor");
+    expect(css).toContain(".workspace.full-width-editor .editor-scroll");
+    expect(css).toContain(".workspace.full-width-editor .editor-inner");
+  });
+
+  it("adds all-mode editor right click floating windows without replacing the sidebar workflow", () => {
+    const app = readSource("src/renderer/App.tsx");
+    const writingPage = readSource("src/renderer/routes/WritingPage.tsx");
+    const utilityPanel = readSource("src/renderer/layout/UtilityPanelContent.tsx");
+    const floatingLayer = readSource("src/renderer/layout/FloatingWorkspaceLayer.tsx");
+    const floatingFrame = readSource("src/renderer/layout/FloatingPanelFrame.tsx");
+    const editorContextMenu = readSource("src/renderer/layout/EditorContextMenu.tsx");
+    const css = readSource("src/renderer/styles/globals.css");
+
+    expect(app).toContain('setSidebarTab("chat")');
+    expect(app).toContain('setSidebarTab("scratch")');
+    expect(app).toContain('setSidebarTab("task")');
+    expect(app).toContain("openFloatingAiChat");
+    expect(app).toContain("openFloatingScratchpad");
+    expect(app).not.toContain("openFloatingTask");
+    expect(writingPage).not.toContain("onOpenFloatingTask(activeChapterId);");
+    expect(writingPage).toContain("activeChapterAuxiliaryInfo");
+    expect(writingPage).toContain("canOpenAllAssist");
+    expect(writingPage).toContain("activeChapterAuxiliaryInfo?.hasOutline");
+    expect(writingPage).toContain("(activeChapterAuxiliaryInfo?.scratchCount ?? 0) > 0");
+    expect(writingPage).toContain("activeChapterAuxiliaryInfo?.scratchNoteIds ?? []");
+    expect(writingPage).toContain("onOpenFloatingScratchpad(activeChapterId, scratchNoteId)");
+    expect(writingPage).toContain("onContextMenu={handleEditorContextMenu}");
+    expect(writingPage).not.toContain("if (!focusMode) {\n      return;");
+    expect(writingPage).toContain("FloatingWorkspaceLayer");
+    expect(writingPage).toContain("EditorContextMenu");
+    expect(floatingLayer).toContain("activeEditorChapterId={activeChapterId}");
+    expect(utilityPanel).toContain("readonly activeEditorChapterId");
+    expect(utilityPanel).toContain("activeEditorChapterId={activeEditorChapterId}");
+    expect(utilityPanel).toContain("AiChatTab");
+    expect(utilityPanel).toContain("CurrentTaskTab");
+    expect(utilityPanel).toContain("ScratchpadEditorPanel");
+    expect(floatingLayer).toContain("UtilityPanelContent");
+    expect(floatingFrame).toContain("floating-panel-resize-handle");
+    expect(floatingFrame).toContain("setPointerCapture");
+    expect(editorContextMenu).toContain("打开当前章节细纲");
+    expect(editorContextMenu).toContain("创建当前章节草稿纸");
+    expect(editorContextMenu).not.toContain("打开当前章节草稿纸");
+    expect(editorContextMenu).toContain("打开 AI 对话");
+    expect(editorContextMenu).toContain("canOpenAllAssist");
+    expect(editorContextMenu).toContain("canOpenAllAssist ?");
+    expect(editorContextMenu).not.toContain("打开当前章节任务");
+    expect(editorContextMenu).not.toContain("onOpenTask");
+    expect(editorContextMenu).toContain("复制");
+    expect(css).toContain(".floating-workspace-layer");
+    expect(css).toContain(".editor-context-menu");
+  });
+
+  it("keeps floating panels in viewport coordinates and below the top bar when side panels are present or resized", () => {
+    const app = readSource("src/renderer/App.tsx");
+    const css = readSource("src/renderer/styles/globals.css");
+    const floatingLayerRule = css.match(/\.floating-workspace-layer\s*{[^}]*}/)?.[0] ?? "";
+    const clamped = clampFloatingPanelGeometry(
+      { height: 900, width: 900, x: -40, y: -40 },
+      { height: 600, width: 800 }
+    );
+
+    expect(floatingLayerRule).toContain("position: fixed");
+    expect(floatingLayerRule).toContain("inset: 0");
+    expect(clamped).toEqual({
+      height: 500,
+      width: 776,
+      x: 12,
+      y: 88
+    });
+    expect(app).toContain('window.addEventListener("resize", handleFloatingViewportResize)');
+    expect(app).toContain("clampFloatingPanelGeometry(panel, floatingViewport())");
+  });
+
+  it("uses editor-like ruled pages for floating scratchpad and chapter outline", () => {
+    const utilityPanel = readSource("src/renderer/layout/UtilityPanelContent.tsx");
+    const rightSidebar = readSource("src/renderer/layout/RightUtilitySidebar.tsx");
+    const scratchpadEditor = readSource("src/renderer/sidebar/ScratchpadEditorPanel.tsx");
+    const scratchpadSummary = readSource("src/renderer/sidebar/ScratchpadTab.tsx");
+    const outlinePanel = readSource("src/renderer/sidebar/OutlinePanel.tsx");
+    const floatingState = readSource("src/renderer/layout/floating-panel-state.ts");
+    const css = readSource("src/renderer/styles/globals.css");
+
+    expect(utilityPanel).toContain("ScratchpadEditorPanel");
+    expect(utilityPanel).toContain("<ScratchpadEditorPanel");
+    expect(rightSidebar).toContain("ScratchpadTab");
+    expect(scratchpadSummary).toContain("草稿纸汇总");
+    expect(scratchpadEditor).toContain("scratchpad-editor-page");
+    expect(scratchpadEditor).toContain("scratchNoteId");
+    expect(scratchpadEditor).toContain("api.scratch.list");
+    expect(scratchpadEditor).toContain("ruled-aux-editor");
+    expect(scratchpadEditor).toContain("api.scratch.create");
+    expect(scratchpadEditor).toContain("api.scratch.update");
+    expect(outlinePanel).toContain("outline-editor-page");
+    expect(outlinePanel).toContain("ruled-aux-editor");
+    expect(floatingState).toContain("scratchNoteId");
+    expect(floatingState).toContain("scratchNoteId ??");
+    expect(css).toContain(".aux-editor-page");
+    expect(css).toContain(".ruled-aux-editor");
+    expect(css).toContain("background-size: 100% var(--aux-line-step");
+  });
+
+  it("creates a fresh floating scratchpad draft each time until a note exists", () => {
+    const viewport = { height: 720, width: 1180 };
+    const firstOpen = openOrRaiseFloatingPanel([], "scratch", "chapter_1", viewport, null);
+    const secondOpen = openOrRaiseFloatingPanel(firstOpen, "scratch", "chapter_1", viewport, null);
+    const savedOpen = openOrRaiseFloatingPanel(secondOpen, "scratch", "chapter_1", viewport, "scratch_saved_1");
+    const savedRaised = openOrRaiseFloatingPanel(savedOpen, "scratch", "chapter_1", viewport, "scratch_saved_1");
+
+    expect(secondOpen).toHaveLength(2);
+    expect(new Set(secondOpen.map((panel) => panel.id)).size).toBe(2);
+    expect(secondOpen.every((panel) => panel.kind === "scratch" && panel.scratchNoteId === null)).toBe(true);
+    expect(savedOpen).toHaveLength(3);
+    expect(savedRaised).toHaveLength(3);
+    expect(savedRaised.filter((panel) => panel.scratchNoteId === "scratch_saved_1")).toHaveLength(1);
+  });
+
+  it("keeps auxiliary editor actions outside ruled text areas when floating panels are resized", () => {
+    const css = readSource("src/renderer/styles/globals.css");
+
+    expect(css).toMatch(/\.aux-editor-page,\s*\.outline-panel\s*{[\s\S]*overflow:\s*hidden/);
+    expect(css).toMatch(
+      /\.aux-editor-page \.outline-editor,[\s\S]*\.aux-editor-page \.scratchpad-page-editor,[\s\S]*\.outline-panel \.outline-editor\s*{[\s\S]*min-height:\s*0;[\s\S]*height:\s*100%;/
+    );
+    expect(css).toMatch(/\.aux-editor-footer,\s*\.outline-footer\s*{[\s\S]*flex:\s*0 0 auto/);
+    expect(css).toMatch(
+      /\.aux-editor-footer \.secondary-button,[\s\S]*\.outline-footer \.secondary-button\s*{[\s\S]*height:\s*40px;/
+    );
   });
 
   it("shows lightweight target progress in bottom metrics", () => {

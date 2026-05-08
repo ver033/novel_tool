@@ -34,6 +34,7 @@ describe("phase 6 sidebar data wiring", () => {
     const scratchpad = readSource("src/renderer/sidebar/ScratchpadTab.tsx");
     const chat = readSource("src/renderer/sidebar/AiChatTab.tsx");
     const chatStore = readSource("src/renderer/state/chat-store.ts");
+    const writing = readSource("src/renderer/routes/WritingPage.tsx");
 
     expect(taskStore).toContain("api.ai");
     expect(taskStore).toContain(".createTask");
@@ -42,7 +43,8 @@ describe("phase 6 sidebar data wiring", () => {
     expect(taskStore).toContain("applyAiCandidateToEditor");
     expect(taskStore).toContain(".saveCandidateToScratchpad");
     expect(aiApply).toContain(".applyCandidate");
-    expect(chat).toContain("useChatStore");
+    expect(writing).toContain("useChatStore");
+    expect(chat).toContain("chatStore");
     expect(chatStore).toContain(".sendChatMessageStream");
     expect(currentTask).toContain("useTaskStore");
     expect(currentTask).toContain("selectionSnapshot");
@@ -50,5 +52,17 @@ describe("phase 6 sidebar data wiring", () => {
     expect(scratchpad).toContain("api.scratch.create");
     expect(scratchpad).toContain("api.scratch.update");
     expect(scratchpad).toContain("api.scratch.delete");
+  });
+
+  it("wires chapter titles into the scratchpad summary list", () => {
+    const sidebar = readSource("src/renderer/layout/RightUtilitySidebar.tsx");
+    const scratchpad = readSource("src/renderer/sidebar/ScratchpadTab.tsx");
+    const utils = readSource("src/renderer/sidebar/scratchpad-utils.ts");
+
+    expect(sidebar).toContain("chapters={chapters}");
+    expect(scratchpad).toContain("readonly chapters");
+    expect(scratchpad).toContain("getScratchNoteChapterLabel(note, chapters)");
+    expect(scratchpad).toContain("note-chapter-tag");
+    expect(utils).toContain("getScratchNoteChapterLabel");
   });
 });

@@ -56,6 +56,7 @@ function getSessionContextUsage(session: AiChatSessionRecord | null): AiStreamCo
 
 export function useChatStore({ projectId, currentChapterId, currentChapterTitle, flushPendingSave, selectionSnapshot }: UseChatStoreOptions) {
   const api = useMemo(getNovelToolApi, []);
+  const [draft, setDraftState] = useState("");
   const [session, setSession] = useState<AiChatSessionRecord | null>(null);
   const [sessions, setSessions] = useState<readonly AiChatSessionRecord[]>([]);
   const [messages, setMessages] = useState<readonly AiChatMessageRecord[]>([]);
@@ -68,11 +69,41 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
   const [summaryIndexLoading, setSummaryIndexLoading] = useState(false);
   const [summaryIndexError, setSummaryIndexError] = useState<string | null>(null);
   const [summaryIndexNotice, setSummaryIndexNotice] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusyState] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [regeneratingMessageId, setRegeneratingMessageId] = useState<string | null>(null);
   const activeRequestId = useRef<string | null>(null);
   const canceledRequestIds = useRef<Set<string>>(new Set());
+  const busyRef = useRef(false);
+  const draftRef = useRef("");
+  const consumedDraftSeedId = useRef<number | null>(null);
+
+  const setBusy = useCallback((nextBusy: boolean) => {
+    busyRef.current = nextBusy;
+    setBusyState(nextBusy);
+  }, []);
+
+  const setDraft = useCallback((nextDraft: string) => {
+    draftRef.current = nextDraft;
+    setDraftState(nextDraft);
+  }, []);
+
+  const consumeDraftSeed = useCallback(
+    (seed: { readonly id: number; readonly text: string } | null): number | null => {
+      const selectedText = seed?.text.trim();
+      if (!seed || !selectedText || consumedDraftSeedId.current === seed.id) {
+        return null;
+      }
+
+      consumedDraftSeedId.current = seed.id;
+      const currentDraft = draftRef.current;
+      const nextDraft = currentDraft.trim() ? `${currentDraft.trimEnd()}\n\n${selectedText}\n` : `${selectedText}\n`;
+      setDraft(nextDraft);
+      return nextDraft.length;
+    },
+    [setDraft]
+  );
 
   const cancelActiveStream = useCallback((options: { readonly detach?: boolean } = {}) => {
     const requestId = activeRequestId.current;
@@ -88,7 +119,8 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
     setStreamingText("");
     setStreamingReasoning("");
     setContextUsagePending(false);
-  }, [api]);
+    setRegeneratingMessageId(null);
+  }, [api, setBusy]);
 
   const loadMessages = useCallback(
     async (nextSession: AiChatSessionRecord) => {
@@ -182,6 +214,7 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
     cancelActiveStream({ detach: true });
 
     if (!projectId) {
+      setDraft("");
       setSession(null);
       setSessions([]);
       setMessages([]);
@@ -195,6 +228,7 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
       setSummaryIndexError(null);
       setSummaryIndexNotice(null);
       setError(null);
+      setRegeneratingMessageId(null);
       return () => {
         disposed = true;
       };
@@ -287,6 +321,7 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
       setStreamingReasoning("");
       setContextUsage(idleContextUsage);
       setContextUsagePending(false);
+      setRegeneratingMessageId(null);
     } catch (reason) {
       setError(formatIpcErrorMessage(reason, "清空 AI 对话失败"));
     } finally {
@@ -311,6 +346,7 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
       setStreamingReasoning("");
       setContextUsage(getSessionContextUsage(selectedSession) ?? idleContextUsage);
       setContextUsagePending(false);
+      setRegeneratingMessageId(null);
       try {
         setSession(selectedSession);
         await loadMessages(selectedSession);
@@ -333,6 +369,7 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
     setStreamingText("");
     setStreamingReasoning("");
     setContextUsagePending(false);
+    setRegeneratingMessageId(null);
     try {
       const createdSession = (await api.ai.createChatSession({ projectId })) as AiChatSessionRecord;
       const loadedSessions = (await api.ai.listChatSessions({ projectId })) as AiChatSessionRecord[];
@@ -357,6 +394,7 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
     setStreamingText("");
     setStreamingReasoning("");
     setContextUsagePending(false);
+    setRegeneratingMessageId(null);
     try {
       await api.ai.deleteChatSession({
         projectId,
@@ -379,7 +417,7 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
   const sendMessage = useCallback(
     async (rawMessage: string) => {
       const message = rawMessage.trim();
-      if (!message || !projectId || !session || busy) {
+      if (!message || !projectId || !session || busyRef.current || activeRequestId.current) {
         return;
       }
 
@@ -547,7 +585,191 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
         }
       }
     },
-    [api, busy, cancelActiveStream, currentChapterId, currentChapterTitle, flushPendingSave, loadMessages, projectId, refreshSessions, selectionSnapshot, session]
+    [api, cancelActiveStream, currentChapterId, currentChapterTitle, flushPendingSave, loadMessages, projectId, refreshSessions, selectionSnapshot, session, setBusy]
+  );
+
+  const regenerateAssistantMessage = useCallback(
+    async (assistantMessageId: string) => {
+      if (!projectId || !session || busyRef.current || activeRequestId.current || loading) {
+        return;
+      }
+
+      const requestId = createRequestId("chat_regenerate");
+      cancelActiveStream({ detach: true });
+      activeRequestId.current = requestId;
+      let unsubscribe: (() => void) | null = null;
+      let streamTextBuffer = "";
+      let streamReasoningBuffer = "";
+      let streamFlushFrame: number | null = null;
+      let applied = false;
+      const isRequestActive = () => activeRequestId.current === requestId && !canceledRequestIds.current.has(requestId);
+      const flushStreamBuffers = () => {
+        if (streamFlushFrame !== null) {
+          window.cancelAnimationFrame(streamFlushFrame);
+          streamFlushFrame = null;
+        }
+        if (!isRequestActive()) {
+          streamTextBuffer = "";
+          streamReasoningBuffer = "";
+          return;
+        }
+        const nextText = streamTextBuffer;
+        const nextReasoning = streamReasoningBuffer;
+        streamTextBuffer = "";
+        streamReasoningBuffer = "";
+        if (nextText) {
+          setStreamingText((current) => `${current}${nextText}`);
+        }
+        if (nextReasoning) {
+          setStreamingReasoning((current) => `${current}${nextReasoning}`);
+        }
+      };
+      const scheduleStreamFlush = () => {
+        if (streamFlushFrame !== null) {
+          return;
+        }
+        streamFlushFrame = window.requestAnimationFrame(() => {
+          streamFlushFrame = null;
+          flushStreamBuffers();
+        });
+      };
+      const applyResult = (result: ChatStreamPayload) => {
+        if (applied) {
+          return;
+        }
+        const replacement = result.messages.find((message) => message.id === assistantMessageId) ?? result.messages.find((message) => message.role === "assistant");
+        if (!replacement) {
+          return;
+        }
+        applied = true;
+        setMessages((current) => current.map((message) => (message.id === assistantMessageId ? replacement : message)));
+        setStreamingText("");
+        setStreamingReasoning("");
+      };
+
+      setBusy(true);
+      setError(null);
+      setRegeneratingMessageId(assistantMessageId);
+      setStreamingText("");
+      setStreamingReasoning("");
+      setContextUsagePending(true);
+
+      try {
+        await flushPendingSave();
+        const content =
+          currentChapterId && projectId
+            ? ((await api.chapter.getContent({ projectId, chapterId: currentChapterId })) as ChapterContent | undefined)
+            : undefined;
+        unsubscribe = api.ai.subscribeAiStream(requestId, {
+          onChunk(event) {
+            if (!isRequestActive()) {
+              return;
+            }
+            streamTextBuffer += event.content;
+            scheduleStreamFlush();
+          },
+          onReasoning(event) {
+            if (!isRequestActive()) {
+              return;
+            }
+            streamReasoningBuffer += event.content;
+            scheduleStreamFlush();
+          },
+          onContext(event) {
+            if (!isRequestActive()) {
+              return;
+            }
+            setContextUsage(event);
+            setContextUsagePending(false);
+          },
+          onDone(event) {
+            if (!isRequestActive()) {
+              return;
+            }
+            flushStreamBuffers();
+            applyResult(event.payload as ChatStreamPayload);
+          },
+          onError(event) {
+            if (!isRequestActive()) {
+              return;
+            }
+            flushStreamBuffers();
+            setError(event.error);
+          }
+        });
+        const result = (await api.ai.regenerateChatMessageStream({
+          requestId,
+          projectId,
+          sessionId: session.id,
+          assistantMessageId,
+          ...(currentChapterId ? { chapterId: currentChapterId } : {}),
+          ...(currentChapterTitle ? { currentChapterTitle } : {}),
+          ...(selectionSnapshot?.text ? { selectionText: selectionSnapshot.text } : {}),
+          ...(content?.plainText ? { chapterExcerpt: content.plainText.slice(0, 6000) } : {})
+        })) as ChatStreamPayload;
+        if (activeRequestId.current !== requestId) {
+          return;
+        }
+        if (canceledRequestIds.current.has(requestId)) {
+          if (activeRequestId.current === requestId) {
+            flushStreamBuffers();
+            setContextUsagePending(false);
+            await loadMessages(session).catch(() => undefined);
+          }
+          return;
+        }
+        flushStreamBuffers();
+        applyResult(result);
+        await refreshSessions(session.id);
+      } catch (reason) {
+        if (isCanceledIpcError(reason) || canceledRequestIds.current.has(requestId)) {
+          if (activeRequestId.current === requestId) {
+            flushStreamBuffers();
+            setContextUsagePending(false);
+            setStreamingText("");
+            setStreamingReasoning("");
+            await loadMessages(session).catch(() => undefined);
+          }
+          return;
+        }
+        flushStreamBuffers();
+        setContextUsagePending(false);
+        setError(formatIpcErrorMessage(reason, "AI 重新生成失败"));
+        await loadMessages(session).catch(() => undefined);
+      } finally {
+        const isCurrentRequest = activeRequestId.current === requestId;
+        if (isCurrentRequest) {
+          activeRequestId.current = null;
+        }
+        unsubscribe?.();
+        if (streamFlushFrame !== null) {
+          window.cancelAnimationFrame(streamFlushFrame);
+          streamFlushFrame = null;
+        }
+        canceledRequestIds.current.delete(requestId);
+        if (isCurrentRequest) {
+          setBusy(false);
+          setRegeneratingMessageId(null);
+          setStreamingText("");
+          setStreamingReasoning("");
+          setContextUsagePending(false);
+        }
+      }
+    },
+    [
+      api,
+      cancelActiveStream,
+      currentChapterId,
+      currentChapterTitle,
+      flushPendingSave,
+      loadMessages,
+      loading,
+      projectId,
+      refreshSessions,
+      selectionSnapshot,
+      session,
+      setBusy
+    ]
   );
 
   return {
@@ -559,12 +781,17 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
     cancelSummaryIndexJob,
     createSession,
     deleteCurrentSession,
+    consumeDraftSeed,
+    draft,
     error,
     loading,
     messages,
     rebuildSummaryIndex,
+    regenerateAssistantMessage,
+    regeneratingMessageId,
     refreshSummaryIndexStatus,
     selectSession,
+    setDraft,
     sendMessage,
     session,
     sessions,
@@ -576,3 +803,5 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
     streamingText
   };
 }
+
+export type ChatStore = ReturnType<typeof useChatStore>;

@@ -7,6 +7,7 @@ import type { AiChatDraftSeed } from "../sidebar/chat-draft";
 import { CurrentTaskTab } from "../sidebar/CurrentTaskTab";
 import { ScratchpadTab } from "../sidebar/ScratchpadTab";
 import type { SettingsCategory } from "../routes/SettingsPage";
+import type { ChatStore } from "../state/chat-store";
 import type { SavedChapterVersion } from "../state/editor-store";
 
 export type SidebarTab = "chat" | "task" | "scratch";
@@ -15,6 +16,7 @@ export type TaskType = "polish" | "expand" | "proofread" | "continue";
 type RightUtilitySidebarProps = {
   readonly activeTab: SidebarTab;
   readonly aiChatDraftSeed: AiChatDraftSeed | null;
+  readonly chatStore: ChatStore;
   readonly chapters: readonly ChapterSummary[];
   readonly currentChapterId: string | null;
   readonly currentChapterTitle: string | null;
@@ -25,6 +27,7 @@ type RightUtilitySidebarProps = {
   readonly taskType: TaskType;
   readonly editor: Editor | null;
   readonly flushPendingSave: () => Promise<SavedChapterVersion | null>;
+  readonly onAuxiliaryChanged: () => void;
   readonly onContentSaved: (content: ChapterContent) => void;
   readonly onTabChange: (tab: SidebarTab) => void;
   readonly onClose: () => void;
@@ -40,12 +43,14 @@ const tabLabels: Array<[SidebarTab, string]> = [
 export function RightUtilitySidebar({
   activeTab,
   aiChatDraftSeed,
+  chatStore,
   chapters,
   currentChapterId,
   currentChapterTitle,
   currentProjectId,
   editor,
   flushPendingSave,
+  onAuxiliaryChanged,
   onContentSaved,
   scratchpadRefreshToken,
   selectionSnapshot,
@@ -71,17 +76,17 @@ export function RightUtilitySidebar({
         {activeTab === "chat" ? (
           <AiChatTab
             chapters={chapters}
-            currentChapterId={currentChapterId}
             currentChapterTitle={currentChapterTitle}
             currentProjectId={currentProjectId}
+            chatStore={chatStore}
             draftSeed={aiChatDraftSeed}
-            flushPendingSave={flushPendingSave}
             selectionSnapshot={selectionSnapshot}
             onOpenSettings={onOpenSettings}
           />
         ) : null}
         {activeTab === "task" ? (
           <CurrentTaskTab
+            activeEditorChapterId={currentChapterId}
             chapterId={currentChapterId}
             currentChapterTitle={currentChapterTitle}
             projectId={currentProjectId}
@@ -94,7 +99,15 @@ export function RightUtilitySidebar({
             onOpenSettings={onOpenSettings}
           />
         ) : null}
-        {activeTab === "scratch" ? <ScratchpadTab chapterId={currentChapterId} projectId={currentProjectId} refreshToken={scratchpadRefreshToken} /> : null}
+        {activeTab === "scratch" ? (
+          <ScratchpadTab
+            chapterId={currentChapterId}
+            chapters={chapters}
+            onNotesChanged={onAuxiliaryChanged}
+            projectId={currentProjectId}
+            refreshToken={scratchpadRefreshToken}
+          />
+        ) : null}
       </div>
     </aside>
   );

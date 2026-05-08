@@ -19,6 +19,7 @@ type PreviewResult = {
 };
 
 type UseTaskStoreOptions = {
+  readonly activeEditorChapterId: string | null;
   readonly projectId: string | null;
   readonly chapterId: string | null;
   readonly taskType: TaskType;
@@ -36,6 +37,7 @@ function isCanceledIpcError(reason: unknown): boolean {
 }
 
 export function useTaskStore({
+  activeEditorChapterId,
   projectId,
   chapterId,
   taskType,
@@ -354,7 +356,7 @@ export function useTaskStore({
           task,
           candidate,
           applyMode,
-          currentChapterId: chapterId,
+          currentChapterId: activeEditorChapterId,
           flushPendingSave,
           onContentSaved
         });
@@ -366,7 +368,7 @@ export function useTaskStore({
         setBusy(false);
       }
     },
-    [api, candidate, chapterId, editor, flushPendingSave, onContentSaved, task]
+    [activeEditorChapterId, api, candidate, editor, flushPendingSave, onContentSaved, task]
   );
 
   return {

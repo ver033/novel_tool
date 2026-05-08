@@ -1,16 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ScratchNoteRecord } from "../../main/shared/types";
+import type { ChapterSummary, ScratchNoteRecord } from "../../main/shared/types";
 import { Button } from "../components/Button";
 import { getNovelToolApi } from "../state/app-store";
-import { filterScratchNotes, getScratchNoteSourceLabel, scratchpadFilters, sortScratchNotes } from "./scratchpad-utils";
+import { filterScratchNotes, getScratchNoteChapterLabel, getScratchNoteSourceLabel, scratchpadFilters, sortScratchNotes } from "./scratchpad-utils";
 
 type ScratchpadTabProps = {
   readonly chapterId: string | null;
+  readonly chapters: readonly ChapterSummary[];
+  readonly onNotesChanged?: () => void;
   readonly projectId: string | null;
   readonly refreshToken: number;
 };
 
-export function ScratchpadTab({ chapterId, projectId, refreshToken }: ScratchpadTabProps) {
+export function ScratchpadTab({ chapterId, chapters, onNotesChanged, projectId, refreshToken }: ScratchpadTabProps) {
   const api = useMemo(getNovelToolApi, []);
   const [activeFilter, setActiveFilter] = useState<(typeof scratchpadFilters)[number]>("全部");
   const [draft, setDraft] = useState("");
@@ -70,6 +72,7 @@ export function ScratchpadTab({ chapterId, projectId, refreshToken }: Scratchpad
       setNotes((current) => sortScratchNotes([created, ...current]));
       setDraft("");
       setError(null);
+      onNotesChanged?.();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "创建草稿失败");
     }
@@ -93,6 +96,7 @@ export function ScratchpadTab({ chapterId, projectId, refreshToken }: Scratchpad
       }
       setNotes((current) => sortScratchNotes(current.map((item) => (item.id === updated.id ? updated : item))));
       setError(null);
+      onNotesChanged?.();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "更新草稿失败");
     }
@@ -114,6 +118,7 @@ export function ScratchpadTab({ chapterId, projectId, refreshToken }: Scratchpad
       }
       setNotes((current) => current.filter((item) => item.id !== note.id));
       setError(null);
+      onNotesChanged?.();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "删除草稿失败");
     }
@@ -125,8 +130,8 @@ export function ScratchpadTab({ chapterId, projectId, refreshToken }: Scratchpad
     <section className="scratch">
       <div className="scratch-head">
         <div>
-          <h2 className="task-title">草稿纸</h2>
-          <p className="muted">临时存放灵感、AI 输出、扩写要求和场景备注，不会自动写入正文。</p>
+          <h2 className="task-title">草稿纸汇总</h2>
+          <p className="muted">汇总所有灵感、AI 输出、浮窗草稿和场景备注，不会自动写入正文。</p>
         </div>
         <span className="count-pill">{visibleNotes.length} 条</span>
       </div>
@@ -157,6 +162,9 @@ export function ScratchpadTab({ chapterId, projectId, refreshToken }: Scratchpad
             <div className="note-head">
               <span className="note-tags">
                 <span className={`mini-tag ${getScratchNoteSourceLabel(note) === "AI 输出" ? "green" : ""}`}>{getScratchNoteSourceLabel(note)}</span>
+                <span className="mini-tag subtle note-chapter-tag" title={getScratchNoteChapterLabel(note, chapters)}>
+                  {getScratchNoteChapterLabel(note, chapters)}
+                </span>
                 {note.pinned ? <span className="mini-tag orange">置顶</span> : null}
               </span>
               <span className="note-time">{new Date(note.updatedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}</span>

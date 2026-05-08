@@ -12,6 +12,7 @@ import { useTaskStore } from "../state/task-store";
 import type { SavedChapterVersion } from "../state/editor-store";
 
 type CurrentTaskTabProps = {
+  readonly activeEditorChapterId: string | null;
   readonly chapterId: string | null;
   readonly currentChapterTitle: string | null;
   readonly projectId: string | null;
@@ -128,6 +129,7 @@ function formatAllProofreadIssues(issues: readonly ProofreadIssue[]): string {
 }
 
 export function CurrentTaskTab({
+  activeEditorChapterId,
   chapterId,
   currentChapterTitle,
   projectId,
@@ -161,6 +163,7 @@ export function CurrentTaskTab({
     presetId: taskPromptPreset?.id ?? null,
     selectionSnapshot,
     instruction,
+    activeEditorChapterId,
     editor,
     flushPendingSave,
     onContentSaved

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { ScratchNoteRecord } from "../../src/main/shared/types";
-import { filterScratchNotes, getScratchNoteSourceLabel, sortScratchNotes } from "../../src/renderer/sidebar/scratchpad-utils";
+import type { ChapterSummary, ScratchNoteRecord } from "../../src/main/shared/types";
+import { filterScratchNotes, getScratchNoteChapterLabel, getScratchNoteSourceLabel, sortScratchNotes } from "../../src/renderer/sidebar/scratchpad-utils";
 
 function note(input: Partial<ScratchNoteRecord> & Pick<ScratchNoteRecord, "id">): ScratchNoteRecord {
   return {
@@ -9,6 +9,22 @@ function note(input: Partial<ScratchNoteRecord> & Pick<ScratchNoteRecord, "id">)
     content: "便签",
     pinned: false,
     sourceTaskId: null,
+    createdAt: "2026-04-28T00:00:00.000Z",
+    updatedAt: "2026-04-28T00:00:00.000Z",
+    ...input
+  };
+}
+
+function chapter(input: Partial<ChapterSummary> & Pick<ChapterSummary, "id" | "title">): ChapterSummary {
+  return {
+    projectId: "project_1",
+    volumeTitle: null,
+    sortOrder: 1,
+    wordCount: 0,
+    dailyWordCount: 0,
+    dailyWordCountDate: null,
+    targetWordCount: null,
+    status: "draft",
     createdAt: "2026-04-28T00:00:00.000Z",
     updatedAt: "2026-04-28T00:00:00.000Z",
     ...input
@@ -42,5 +58,13 @@ describe("scratchpad note presentation", () => {
     expect(filterScratchNotes(notes, "灵感").map((item) => item.id)).toEqual(["pinned", "manual"]);
     expect(filterScratchNotes(notes, "AI 输出").map((item) => item.id)).toEqual(["ai"]);
     expect(filterScratchNotes(notes, "置顶").map((item) => item.id)).toEqual(["pinned"]);
+  });
+
+  it("shows the owning chapter for each scratch note in summaries", () => {
+    const chapters = [chapter({ id: "chapter_1", title: "第一章 雨夜" })];
+
+    expect(getScratchNoteChapterLabel(note({ id: "bound", chapterId: "chapter_1" }), chapters)).toBe("第一章 雨夜");
+    expect(getScratchNoteChapterLabel(note({ id: "global", chapterId: null }), chapters)).toBe("未绑定章节");
+    expect(getScratchNoteChapterLabel(note({ id: "missing", chapterId: "chapter_deleted" }), chapters)).toBe("章节已删除");
   });
 });

@@ -1,6 +1,8 @@
 import "./styles/globals.css";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { AppShell } from "./layout/AppShell";
+import type { FloatingPanelGeometry, FloatingPanelKind, FloatingPanelState } from "./layout/floating-panel-state";
+import { clampFloatingPanelGeometry, createFloatingPanelId, getDefaultFloatingPanelGeometry, openOrRaiseFloatingPanel } from "./layout/floating-panel-state";
 import type { SidebarTab, TaskType } from "./layout/RightUtilitySidebar";
 import { ExportPage } from "./routes/ExportPage";
 import { ImportWizardPage } from "./routes/ImportWizardPage";
@@ -32,7 +34,34 @@ export function App() {
   const [importStep, setImportStep] = useState(1);
   const [welcomeNotice, setWelcomeNotice] = useState<string | null>(null);
   const [scratchpadRefreshToken, setScratchpadRefreshToken] = useState(0);
+  const [auxiliaryRefreshToken, setAuxiliaryRefreshToken] = useState(0);
+  const [floatingPanels, setFloatingPanels] = useState<FloatingPanelState[]>([]);
   const appStore = useAppStore();
+
+  const floatingViewport = useCallback(
+    () => ({
+      width: Math.max(360, window.innerWidth - (sidebarOpen ? 420 : 0)),
+      height: Math.max(420, window.innerHeight - 70)
+    }),
+    [sidebarOpen]
+  );
+
+  useEffect(() => {
+    function handleFloatingViewportResize(): void {
+      setFloatingPanels((current) =>
+        current.length === 0
+          ? current
+          : current.map((panel) => ({
+              ...panel,
+              ...clampFloatingPanelGeometry(panel, floatingViewport())
+            }))
+      );
+    }
+
+    handleFloatingViewportResize();
+    window.addEventListener("resize", handleFloatingViewportResize);
+    return () => window.removeEventListener("resize", handleFloatingViewportResize);
+  }, [floatingViewport]);
 
   const openWriting = useCallback(() => {
     setSidebarOpen(false);
@@ -136,6 +165,10 @@ export function App() {
     setSidebarTab("scratch");
     setScratchpadRefreshToken((current) => current + 1);
   }, []);
+  const handleAuxiliaryChanged = useCallback(() => {
+    setAuxiliaryRefreshToken((current) => current + 1);
+    setScratchpadRefreshToken((current) => current + 1);
+  }, []);
   const runTask = useCallback((task: TaskType, snapshot?: SelectionSnapshot | null, preset?: TaskPromptPreset | null) => {
     setTaskType(task);
     setTaskPromptPreset(preset ?? null);
@@ -143,6 +176,115 @@ export function App() {
     setSidebarOpen(true);
     setSidebarTab("task");
   }, []);
+  const openFloatingPanel = useCallback(
+    (kind: FloatingPanelKind, chapterId: string | null = appStore.activeChapterId, scratchNoteId: string | null = null) => {
+      setFloatingPanels((current) => openOrRaiseFloatingPanel(current, kind, chapterId, floatingViewport(), scratchNoteId));
+    },
+    [appStore.activeChapterId, floatingViewport]
+  );
+  const openFloatingAiChat = useCallback(() => {
+    openFloatingPanel("chat", null);
+  }, [openFloatingPanel]);
+  const openFloatingScratchpad = useCallback(
+    (chapterId: string | null = appStore.activeChapterId, scratchNoteId: string | null = null) => {
+      openFloatingPanel("scratch", chapterId, scratchNoteId);
+      setScratchpadRefreshToken((current) => current + 1);
+    },
+    [appStore.activeChapterId, openFloatingPanel]
+  );
+  const runFloatingTask = useCallback(
+    (task: TaskType, snapshot?: SelectionSnapshot | null, preset?: TaskPromptPreset | null) => {
+      setTaskType(task);
+      setTaskPromptPreset(preset ?? null);
+      setSelectionSnapshot(snapshot ?? null);
+      openFloatingPanel("task", snapshot?.chapterId ?? appStore.activeChapterId);
+    },
+    [appStore.activeChapterId, openFloatingPanel]
+  );
+  const closeFloatingPanel = useCallback((panelId: string) => {
+    setFloatingPanels((current) => current.filter((panel) => panel.id !== panelId));
+  }, []);
+  const handleFloatingScratchNoteSaved = useCallback((panelId: string, noteId: string) => {
+    setFloatingPanels((current) =>
+      current.map((panel) =>
+        panel.id === panelId && panel.kind === "scratch"
+          ? {
+              ...panel,
+              id: createFloatingPanelId("scratch", panel.chapterId, noteId),
+              scratchDraftId: null,
+              scratchNoteId: noteId
+            }
+          : panel
+      )
+    );
+  }, []);
+  const minimizeFloatingPanel = useCallback((panelId: string) => {
+    setFloatingPanels((current) => current.map((panel) => (panel.id === panelId ? { ...panel, minimized: !panel.minimized } : panel)));
+  }, []);
+  const raiseFloatingPanel = useCallback((panelId: string) => {
+    setFloatingPanels((current) => {
+      const maxZIndex = current.reduce((max, panel) => Math.max(max, panel.zIndex), 100);
+      return current.map((panel) => (panel.id === panelId ? { ...panel, zIndex: maxZIndex + 1 } : panel));
+    });
+  }, []);
+  const moveFloatingPanel = useCallback(
+    (panelId: string, geometry: Pick<FloatingPanelGeometry, "x" | "y">) => {
+      setFloatingPanels((current) =>
+        current.map((panel) =>
+          panel.id === panelId
+            ? {
+                ...panel,
+                ...clampFloatingPanelGeometry({ ...panel, ...geometry }, floatingViewport())
+              }
+            : panel
+        )
+      );
+    },
+    [floatingViewport]
+  );
+  const resizeFloatingPanel = useCallback(
+    (panelId: string, geometry: Pick<FloatingPanelGeometry, "width" | "height">) => {
+      setFloatingPanels((current) =>
+        current.map((panel) =>
+          panel.id === panelId
+            ? {
+                ...panel,
+                ...clampFloatingPanelGeometry({ ...panel, ...geometry }, floatingViewport())
+              }
+            : panel
+        )
+      );
+    },
+    [floatingViewport]
+  );
+  const resetFloatingPanel = useCallback(
+    (panelId: string) => {
+      setFloatingPanels((current) =>
+        current.map((panel, index) =>
+          panel.id === panelId
+            ? {
+                ...panel,
+                ...getDefaultFloatingPanelGeometry(panel.kind, floatingViewport(), index * 26),
+                minimized: false
+              }
+            : panel
+        )
+      );
+    },
+    [floatingViewport]
+  );
+  const minimizeAllFloatingPanels = useCallback(() => {
+    setFloatingPanels((current) => current.map((panel) => ({ ...panel, minimized: true })));
+  }, []);
+  const resetAllFloatingPanels = useCallback(() => {
+    setFloatingPanels((current) =>
+      current.map((panel, index) => ({
+        ...panel,
+        ...getDefaultFloatingPanelGeometry(panel.kind, floatingViewport(), index * 26),
+        minimized: false
+      }))
+    );
+  }, [floatingViewport]);
   const nextImportStep = useCallback(() => setImportStep((current) => Math.min(current + 1, 4)), []);
   const previousImportStep = useCallback(() => setImportStep((current) => Math.max(current - 1, 1)), []);
   const finishImport = useCallback(
@@ -222,20 +364,36 @@ export function App() {
           activeChapterId={appStore.activeChapterId}
           chapters={appStore.chapters}
           currentProject={appStore.currentProject}
+          floatingPanels={floatingPanels}
           sidebarOpen={sidebarOpen}
           sidebarTab={sidebarTab}
           aiChatDraftSeed={aiChatDraftSeed}
+          auxiliaryRefreshToken={auxiliaryRefreshToken}
           scratchpadRefreshToken={scratchpadRefreshToken}
           selectionSnapshot={selectionSnapshot}
           taskPromptPreset={taskPromptPreset}
           taskType={taskType}
           onCreateChapter={createChapter}
           onDeleteChapter={deleteChapter}
+          onAuxiliaryChanged={handleAuxiliaryChanged}
           onCloseSidebar={() => setSidebarOpen(false)}
           onExport={openExport}
           onImport={openImport}
+          onCloseFloatingPanel={closeFloatingPanel}
+          onMinimizeAllFloatingPanels={minimizeAllFloatingPanels}
+          onMinimizeFloatingPanel={minimizeFloatingPanel}
+          onMoveFloatingPanel={moveFloatingPanel}
           onOpenAiChat={openAiChat}
+          onOpenFloatingAiChat={openFloatingAiChat}
+          onOpenFloatingPanel={openFloatingPanel}
+          onOpenFloatingScratchpad={openFloatingScratchpad}
           onOpenScratchpad={openScratchpad}
+          onRaiseFloatingPanel={raiseFloatingPanel}
+          onResetAllFloatingPanels={resetAllFloatingPanels}
+          onResetFloatingPanel={resetFloatingPanel}
+          onResizeFloatingPanel={resizeFloatingPanel}
+          onFloatingScratchNoteSaved={handleFloatingScratchNoteSaved}
+          onFloatingTask={runFloatingTask}
           onSelectionToChat={sendSelectionToChat}
           onChapterSaved={appStore.updateChapterFromSavedContent}
           onRenameChapter={renameChapter}

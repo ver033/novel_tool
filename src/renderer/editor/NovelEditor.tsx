@@ -43,6 +43,7 @@ type EditorContentStyle = CSSProperties & {
   readonly "--editor-font-family": string;
   readonly "--editor-font-size": string;
   readonly "--editor-line-height": string;
+  readonly "--editor-line-step": string;
   readonly "--editor-paragraph-spacing": string;
   readonly "--editor-first-line-indent": string;
 };
@@ -51,13 +52,14 @@ const fontFamilyBySetting = {
   system: "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif",
   song: "'Songti SC', 'STSong', 'SimSun', serif",
   hei: "-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif",
-  fangsong: "'FangSong', 'STFangsong', 'FangSong_GB2312', serif"
+  fangsong: "'FangSong', 'STFangsong', 'FangSong_GB2312', serif",
+  kai: "'Kaiti SC', 'STKaiti', 'KaiTi', serif"
 } as const;
 
 const paragraphSpacingBySetting = {
-  compact: "18px",
-  standard: "25px",
-  loose: "34px"
+  compact: "0px",
+  standard: "var(--editor-line-step)",
+  loose: "calc(var(--editor-line-step) * 2)"
 } as const;
 
 const firstLineIndentBySetting = {
@@ -186,9 +188,13 @@ export const NovelEditor = memo(function NovelEditor({
     "--editor-font-family": fontFamilyBySetting[editorSettings.fontFamily] ?? fontFamilyBySetting.system,
     "--editor-font-size": `${editorSettings.fontSize}px`,
     "--editor-line-height": String(editorSettings.lineHeight),
+    "--editor-line-step": `${editorSettings.fontSize * editorSettings.lineHeight}px`,
     "--editor-paragraph-spacing": paragraphSpacingBySetting[editorSettings.paragraphSpacing] ?? paragraphSpacingBySetting.standard,
     "--editor-first-line-indent": firstLineIndentBySetting[editorSettings.firstLineIndent] ?? firstLineIndentBySetting.two
   };
+  const ruledPaperClass = editorSettings.ruledPaper && editorSettings.ruledPaperIntensity !== "off"
+    ? `ruled-paper ruled-paper-${editorSettings.ruledPaperIntensity}`
+    : "";
   const editor = useEditor({
     immediatelyRender: false,
     extensions: [
@@ -285,7 +291,7 @@ export const NovelEditor = memo(function NovelEditor({
           onTask={handleTask}
         />
       ) : null}
-      <EditorContent editor={editor} className="novel-editor-content" style={editorContentStyle} />
+      <EditorContent editor={editor} className={`novel-editor-content ${ruledPaperClass}`} style={editorContentStyle} />
     </>
   );
 });

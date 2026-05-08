@@ -11,6 +11,7 @@ import type {
   aiGetChatSessionInputSchema,
   aiListChatSessionsInputSchema,
   aiListChatMessagesInputSchema,
+  aiRegenerateChatMessageStreamInputSchema,
   aiRenameChatSessionInputSchema,
   aiRejectCandidateInputSchema,
   aiSaveCandidateToScratchpadInputSchema,
@@ -310,6 +311,7 @@ export type AiDeleteChatSessionInput = z.input<typeof aiDeleteChatSessionInputSc
 export type AiListChatMessagesInput = z.input<typeof aiListChatMessagesInputSchema>;
 export type AiClearChatInput = z.input<typeof aiClearChatInputSchema>;
 export type AiSendChatMessageStreamInput = z.input<typeof aiSendChatMessageStreamInputSchema>;
+export type AiRegenerateChatMessageStreamInput = z.input<typeof aiRegenerateChatMessageStreamInputSchema>;
 export type AiRejectCandidateInput = z.input<typeof aiRejectCandidateInputSchema>;
 export type ScratchListInput = z.input<typeof scratchListInputSchema>;
 export type ScratchCreateInput = z.input<typeof scratchCreateInputSchema>;
@@ -450,6 +452,7 @@ export const ipcChannels = {
     listChatMessages: "novelTool:ai:listChatMessages",
     clearChat: "novelTool:ai:clearChat",
     sendChatMessageStream: "novelTool:ai:sendChatMessageStream",
+    regenerateChatMessageStream: "novelTool:ai:regenerateChatMessageStream",
     cancelStream: "novelTool:ai:cancelStream",
     streamChunk: "novelTool:ai:streamChunk",
     streamReasoning: "novelTool:ai:streamReasoning",
