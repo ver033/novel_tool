@@ -1777,6 +1777,11 @@ select:focus-visible {
   z-index: 120;
 }
 
+.bubble-menu[data-dropdown-side="top"] .bubble-dropdown {
+  top: auto;
+  bottom: calc(100% + 8px);
+}
+
 .bubble-dropdown.block {
   min-width: 278px;
   grid-template-columns: minmax(132px, 1fr) 96px;
@@ -1907,6 +1912,11 @@ select:focus-visible {
   box-shadow: 0 14px 34px rgba(15, 23, 42, 0.16);
   color: #344054;
   z-index: 130;
+}
+
+.bubble-menu[data-dropdown-side="top"] .link-editor-popover {
+  top: auto;
+  bottom: calc(100% + 8px);
 }
 
 .link-editor-popover label {

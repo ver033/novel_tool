@@ -47,7 +47,7 @@ function createChapter(
     readonly plainText: string;
   }
 ): ChapterSummary {
-  const createdAt = new Date().toISOString();
+  const createdAt = "2026-05-01T00:00:00.000Z";
   return repo.create({
     id: createId("chapter"),
     projectId: input.projectId,
@@ -519,6 +519,94 @@ describe("chat agent tools", () => {
     expect(result.contextText).toContain("第1章短摘要。");
     expect(result.contextText).toContain("第2章长摘要。");
     expect(result.contextText).not.toContain("不应读取原文");
+
+    db.close();
+  });
+
+  it("treats ready summary caches as stale when chapter content changed after indexing", async () => {
+    const { chapterRepo, db, scratchRepo, summaryRepo } = createRepos();
+    const projectId = "project_read_stale_ready_summary";
+    createProject(new ProjectRepository(db), projectId);
+    const first = createChapter(chapterRepo, {
+      projectId,
+      title: "第1章 起点",
+      sortOrder: 0,
+      plainText: "第一章旧正文。"
+    });
+    const second = createChapter(chapterRepo, {
+      projectId,
+      title: "第2章 暗潮",
+      sortOrder: 1,
+      plainText: "第二章旧正文。"
+    });
+    [first, second].forEach((chapter, index) => {
+      const ordinal = index + 1;
+      summaryRepo.upsertChapterSummary({
+        id: `summary_stale_ready_${ordinal}`,
+        projectId,
+        chapterId: chapter.id,
+        chapterTitle: chapter.title,
+        chapterOrder: ordinal,
+        contentHash: computeChapterContentHash(chapter.id),
+        summaryShort: `第${ordinal}章旧短摘要。`,
+        summaryLong: `第${ordinal}章旧长摘要。`,
+        structured: createSummaryPayload({
+          oneLine: `第${ordinal}章旧短摘要。`,
+          synopsis: `第${ordinal}章旧长摘要。`
+        }),
+        tokenCount: 30,
+        status: "ready",
+        error: null,
+        createdAt: "2026-05-01T00:00:00.000Z",
+        updatedAt: "2026-05-01T00:00:00.000Z"
+      });
+    });
+    chapterRepo.saveContent(
+      first.id,
+      emptyChapterContent,
+      "第一章最新正文。",
+      "第一章最新正文。".length,
+      0,
+      "2026-05-01",
+      "2026-05-01T00:10:00.000Z",
+      first.contentUpdatedAt
+    );
+    chapterRepo.saveContent(
+      second.id,
+      emptyChapterContent,
+      "第二章最新正文。",
+      "第二章最新正文。".length,
+      0,
+      "2026-05-01",
+      "2026-05-01T00:10:00.000Z",
+      second.contentUpdatedAt
+    );
+
+    const result = parseToolJson(
+      await executeChatAgentTool({
+        name: "read_chapters",
+        argumentsJson: JSON.stringify({
+          scope: "chapter_range",
+          from: 1,
+          to: 2
+        }),
+        runtime: {
+          projectId,
+          currentChapterId: first.id,
+          userMessage: "帮我总结前两章的内容",
+          chapterRepo,
+          summaryRepo,
+          scratchRepo,
+          tokenBudget: getTokenBudget("chat")
+        }
+      })
+    );
+
+    expect(result.scopeLabel).toBe("第1-2章");
+    expect(result.mode).toBe("direct");
+    expect(result.contextText).toContain("第一章最新正文。");
+    expect(result.contextText).toContain("第二章最新正文。");
+    expect(result.contextText).not.toContain("旧短摘要");
 
     db.close();
   });

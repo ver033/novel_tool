@@ -1,5 +1,6 @@
 import type { ChapterRepository } from "../db/repositories/chapter-repo";
 import type { SummaryRepository } from "../db/repositories/summary-repo";
+import { isFreshReadyChapterSummary } from "./chapter-summary-freshness";
 import {
   getChapterSummaryCharacterKnowledge,
   getChapterSummaryCharacterStates,
@@ -81,7 +82,8 @@ function pushContextItem(items: WritingSupportingContextItem[], item: WritingSup
 
 function formatChapterSummaryCacheContext(input: PlanWritingOperationContextInput, chapterId: string): WritingSupportingContextItem | null {
   const summary = input.summaryRepo?.getChapterSummary(input.projectId, chapterId);
-  if (!summary || summary.status !== "ready") {
+  const chapter = input.chapterRepo.getContent(chapterId);
+  if (!chapter || chapter.projectId !== input.projectId || !isFreshReadyChapterSummary(summary, chapter)) {
     return null;
   }
   const structured = summary.structured;

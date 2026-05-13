@@ -608,7 +608,7 @@ export class SummaryRepository {
       )
       .get(input.projectId, input.jobType, ...target.params) as SummaryJobRow | undefined;
 
-    if (existing?.status === "running") {
+    if (existing?.status === "running" && existing.source_hash === input.sourceHash) {
       return mapSummaryJob(existing);
     }
 

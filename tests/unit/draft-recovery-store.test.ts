@@ -233,7 +233,8 @@ describe("draft recovery store helpers", () => {
       status: "dirty"
     });
 
-    await draftRecoveryStore.pruneSavedDrafts("2026-05-20T00:00:00.000Z", 7);
+    const pruneNow = new Date(Date.now() + 8 * 24 * 60 * 60 * 1000).toISOString();
+    await draftRecoveryStore.pruneSavedDrafts(pruneNow, 7);
 
     await expect(draftRecoveryStore.getDraft("project_1", "chapter_saved")).resolves.toBeNull();
     await expect(draftRecoveryStore.getDraft("project_1", "chapter_dirty")).resolves.toMatchObject({ plainText: "未保存草稿" });

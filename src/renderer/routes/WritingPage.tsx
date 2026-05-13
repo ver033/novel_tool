@@ -626,14 +626,15 @@ export function WritingPage({
         return;
       }
       event.preventDefault();
-      const hasSelection = Boolean(window.getSelection()?.toString().trim());
+      const selection = editor?.state.selection;
+      const hasSelection = Boolean(selection && !selection.empty && editor?.state.doc.textBetween(selection.from, selection.to).trim());
       setEditorContextMenu({
         mode: hasSelection ? "selection" : "surface",
-        x: Math.max(12, Math.min(event.clientX, window.innerWidth - 260)),
-        y: Math.max(12, Math.min(event.clientY, window.innerHeight - 420))
+        x: event.clientX,
+        y: event.clientY
       });
     },
-    []
+    [editor]
   );
   const selectionSnapshotFromEditor = useCallback(() => {
     if (!editor || !activeChapterId) {

@@ -34,14 +34,16 @@ import type {
   SummaryIndexPausedReason,
   SummaryIndexStatus
 } from "../shared/types";
+import { getChapterSummaryCacheState, isFreshReadyChapterSummary, isFreshSkippedTooShortChapterSummary } from "./chapter-summary-freshness";
 import { estimateTextTokens } from "./token-estimator";
 import type { ArcIndexSummaryInput, BookIndexSummaryInput, ChapterChunkIndexSummaryInput, ChapterChunkMergeSummaryInput, ChapterIndexSummaryInput } from "./summary-prompts";
 
-export const MIN_AUTO_SUMMARY_UNITS = 500;
+export const MIN_AUTO_SUMMARY_UNITS = 200;
 export const MIN_MANUAL_SUMMARY_UNITS = 80;
-export const ACTIVE_CHAPTER_IDLE_MS = 15 * 60 * 1000;
+export const ACTIVE_CHAPTER_IDLE_MS = 5 * 60 * 1000;
 export const LATEST_CHAPTER_AUTO_PRIORITY = 11;
-export const LATEST_CHAPTER_IMMEDIATE_CACHE_MILESTONES = [500, 1500, 3000, 5000, 8000] as const;
+export const FIRST_LATEST_CHAPTER_IMMEDIATE_CACHE_MILESTONE_UNITS = 200;
+export const LATEST_CHAPTER_IMMEDIATE_CACHE_MILESTONE_STEP_UNITS = 500;
 export const MIN_HIGH_PRIORITY_DELTA_UNITS = 500;
 export const MIN_NORMAL_PRIORITY_DELTA_UNITS = 100;
 export const AUTO_ARC_CHAPTER_COUNT = 20;
@@ -115,6 +117,7 @@ type SummarySetBackgroundIndexOptions = SummaryIndexStatusOptions & {
 type SummaryJobRelevanceCache = {
   readonly arcSummaries: ReadonlyMap<string, ArcAiSummaryRecord>;
   readonly bookSummary: BookAiSummaryRecord | null;
+  readonly chapterById: ReadonlyMap<string, ChapterSummary>;
   readonly chapterIds: ReadonlySet<string>;
   readonly chapterSummaries: ReadonlyMap<string, ChapterAiSummaryRecord>;
   readonly chapters: readonly ChapterSummary[];
@@ -327,7 +330,18 @@ function priorityFor(trigger: ChapterSummaryQueueTrigger, changedWritingUnits: n
 }
 
 function crossesImmediateLatestChapterCacheMilestone(previousWordCount: number, nextWordCount: number): boolean {
-  return LATEST_CHAPTER_IMMEDIATE_CACHE_MILESTONES.some((milestone) => previousWordCount < milestone && nextWordCount >= milestone);
+  if (nextWordCount <= previousWordCount || nextWordCount < FIRST_LATEST_CHAPTER_IMMEDIATE_CACHE_MILESTONE_UNITS) {
+    return false;
+  }
+  if (previousWordCount < FIRST_LATEST_CHAPTER_IMMEDIATE_CACHE_MILESTONE_UNITS) {
+    return true;
+  }
+
+  const nextMilestone =
+    Math.floor(previousWordCount / LATEST_CHAPTER_IMMEDIATE_CACHE_MILESTONE_STEP_UNITS) *
+      LATEST_CHAPTER_IMMEDIATE_CACHE_MILESTONE_STEP_UNITS +
+    LATEST_CHAPTER_IMMEDIATE_CACHE_MILESTONE_STEP_UNITS;
+  return nextWordCount >= nextMilestone;
 }
 
 function isManualSummaryTrigger(trigger: ChapterSummaryQueueTrigger): boolean {
@@ -812,8 +826,15 @@ export class SummaryService implements SummaryIndexInvalidator {
     this.recordActiveChapterEdit(input.projectId, input.chapterId, input.updatedAt);
     this.changedWritingUnits.set(keyFor(input.projectId, input.chapterId), Math.abs(input.nextWordCount - input.previousWordCount));
     const chapterKey = keyFor(input.projectId, input.chapterId);
-    if (crossesImmediateLatestChapterCacheMilestone(input.previousWordCount, input.nextWordCount)) {
+    const content = this.chapterRepo.getContent(input.chapterId);
+    if (content && this.isLatestChapter(input.projectId, content) && crossesImmediateLatestChapterCacheMilestone(input.previousWordCount, input.nextWordCount)) {
       this.immediateCacheMilestoneChapterHashes.set(chapterKey, nextHash);
+      this.maybeEnqueueChapterSummary({
+        projectId: input.projectId,
+        chapterId: input.chapterId,
+        trigger: "auto_idle",
+        now: input.updatedAt
+      });
     } else {
       this.immediateCacheMilestoneChapterHashes.delete(chapterKey);
     }
@@ -937,11 +958,12 @@ export class SummaryService implements SummaryIndexInvalidator {
         missingChapterCount += 1;
         continue;
       }
-      if (summary.status === "ready") {
+      const cacheState = getChapterSummaryCacheState(summary, chapter);
+      if (cacheState === "ready") {
         readyChapterCount += 1;
         continue;
       }
-      if (summary.status === "skipped_too_short") {
+      if (cacheState === "skipped_too_short") {
         skippedTooShortChapterCount += 1;
         continue;
       }
@@ -950,6 +972,7 @@ export class SummaryService implements SummaryIndexInvalidator {
 
     const jobResolutionCache = {
       chapters,
+      chapterById: new Map(chapters.map((chapter) => [chapter.id, chapter])),
       chapterIds: new Set(chapters.map((chapter) => chapter.id)),
       chapterSummaries: summaries,
       arcSummaries: new Map(this.summaryRepo.listArcSummaries(projectId).map((summary) => [summary.arcKey, summary])),
@@ -1003,14 +1026,14 @@ export class SummaryService implements SummaryIndexInvalidator {
     return this.chapterRepo.listByProject(projectId).map((chapter) => {
       const summary = summaries.get(chapter.id) ?? null;
       const rawJob = jobs.get(chapter.id) ?? null;
-      const job = this.isChapterJobResolvedByReadySummary(summary, rawJob) ? null : rawJob;
+      const job = this.isChapterJobResolvedByReadySummary(summary, rawJob, chapter) ? null : rawJob;
       const failure = classifySummaryJobError(job?.error ?? null);
       return {
         chapterId: chapter.id,
         chapterTitle: chapter.title,
         chapterOrder: chapter.sortOrder + 1,
         wordCount: chapter.wordCount,
-        cacheState: this.deriveChapterCacheState(summary, job),
+        cacheState: this.deriveChapterCacheState(summary, job, chapter),
         summaryShort: summary?.summaryShort ?? null,
         summaryUpdatedAt: summary?.updatedAt ?? null,
         contentHash: summary?.contentHash ?? null,
@@ -1119,17 +1142,22 @@ export class SummaryService implements SummaryIndexInvalidator {
     return jobs;
   }
 
-  private deriveChapterCacheState(summary: ChapterAiSummaryRecord | null, job: SummaryJobRecord | null): SummaryChapterCacheEntry["cacheState"] {
+  private deriveChapterCacheState(
+    summary: ChapterAiSummaryRecord | null,
+    job: SummaryJobRecord | null,
+    chapter: ChapterSummary
+  ): SummaryChapterCacheEntry["cacheState"] {
+    const cacheState = getChapterSummaryCacheState(summary, chapter);
     if (job?.status === "running" || job?.status === "queued") {
       return job.status;
     }
-    if (job?.status === "failed" && summary?.status !== "ready") {
+    if (job?.status === "failed" && cacheState !== "ready") {
       return "failed";
     }
-    if (job?.status === "cancelled" && !summary) {
+    if (job?.status === "cancelled" && cacheState === "missing") {
       return "cancelled";
     }
-    return summary?.status ?? "missing";
+    return cacheState;
   }
 
   private assertCanClearAndRetryChapterCache(projectId: string, chapterId: string): void {
@@ -1144,8 +1172,15 @@ export class SummaryService implements SummaryIndexInvalidator {
     throw new Error("阶段或全书索引正在整理。请等待完成，或先停止后台索引后再重试章节缓存。");
   }
 
-  private isChapterJobResolvedByReadySummary(summary: ChapterAiSummaryRecord | null, job: SummaryJobRecord | null): boolean {
+  private isChapterJobResolvedByReadySummary(
+    summary: ChapterAiSummaryRecord | null,
+    job: SummaryJobRecord | null,
+    chapter?: ChapterSummary
+  ): boolean {
     if (!summary || !job || job.jobType !== "chapter_summary" || job.status !== "failed" || job.targetId !== summary.chapterId) {
+      return false;
+    }
+    if (chapter && !isFreshReadyChapterSummary(summary, chapter)) {
       return false;
     }
     return summary.status === "ready" && (summary.contentHash === job.sourceHash || summary.updatedAt >= job.updatedAt);
@@ -1163,7 +1198,11 @@ export class SummaryService implements SummaryIndexInvalidator {
       return true;
     }
     if (job.jobType === "chapter_summary") {
-      return this.isChapterJobResolvedByReadySummary(cache.chapterSummaries.get(job.targetId ?? "") ?? null, job);
+      return this.isChapterJobResolvedByReadySummary(
+        cache.chapterSummaries.get(job.targetId ?? "") ?? null,
+        job,
+        cache.chapterById.get(job.targetId ?? "")
+      );
     }
     if (job.jobType === "arc_summary" && job.targetId) {
       const summary = cache.arcSummaries.get(job.targetId);
@@ -1207,10 +1246,10 @@ export class SummaryService implements SummaryIndexInvalidator {
     const readySummaries: ChapterAiSummaryRecord[] = [];
     for (const chapter of chapters) {
       const summary = cache.chapterSummaries.get(chapter.id);
-      if (!summary || (summary.status !== "ready" && summary.status !== "skipped_too_short")) {
+      if (!summary || (!isFreshReadyChapterSummary(summary, chapter) && !isFreshSkippedTooShortChapterSummary(summary, chapter))) {
         return false;
       }
-      if (summary.status === "ready") {
+      if (isFreshReadyChapterSummary(summary, chapter)) {
         readySummaries.push(summary);
       }
     }
@@ -1604,14 +1643,14 @@ export class SummaryService implements SummaryIndexInvalidator {
     const summaries = new Map(this.summaryRepo.listChapterSummaries(projectId).map((summary) => [summary.chapterId, summary]));
     const blocking = chapters.filter((chapter) => {
       const summary = summaries.get(chapter.id);
-      return !summary || (summary.status !== "skipped_too_short" && summary.status !== "ready");
+      return !summary || (!isFreshSkippedTooShortChapterSummary(summary, chapter) && !isFreshReadyChapterSummary(summary, chapter));
     });
     if (blocking.length > 0) {
       throw new Error("阶段摘要等待章节摘要完成。");
     }
     const readySummaries = chapters
       .map((chapter) => summaries.get(chapter.id))
-      .filter((summary): summary is ChapterAiSummaryRecord => summary !== undefined && summary.status === "ready");
+      .filter((summary, index): summary is ChapterAiSummaryRecord => summary !== undefined && isFreshReadyChapterSummary(summary, chapters[index]));
     if (readySummaries.length === 0) {
       throw new Error("阶段摘要缺少可用章节摘要。");
     }
@@ -1699,11 +1738,11 @@ export class SummaryService implements SummaryIndexInvalidator {
         missingChapterIds.push(formatChapterCoverageLabel(chapter.sortOrder + 1, chapter.title));
         continue;
       }
-      if (summary.status === "ready") {
+      if (isFreshReadyChapterSummary(summary, chapter)) {
         indexedChapterCount += 1;
         continue;
       }
-      if (summary.status === "skipped_too_short") {
+      if (isFreshSkippedTooShortChapterSummary(summary, chapter)) {
         skippedTooShortChapterIds.push(formatChapterCoverageLabel(chapter.sortOrder + 1, chapter.title));
         continue;
       }

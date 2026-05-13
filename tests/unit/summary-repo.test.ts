@@ -190,6 +190,41 @@ describe("summary index migrations and repository", () => {
     db.close();
   });
 
+  it("queues a newer source for the same target while an older source is running", () => {
+    const db = createDb();
+    seedProjectAndChapter(db);
+    const repo = new SummaryRepository(db);
+
+    const older = repo.enqueueSummaryJob({
+      projectId: "project_1",
+      jobType: "chapter_summary",
+      targetId: "chapter_1",
+      sourceHash: "hash_old",
+      priority: 1,
+      now: createdAt
+    });
+    repo.claimNextSummaryJob("project_1", "2026-05-01T00:01:00.000Z");
+
+    const newer = repo.enqueueSummaryJob({
+      projectId: "project_1",
+      jobType: "chapter_summary",
+      targetId: "chapter_1",
+      sourceHash: "hash_new",
+      priority: 11,
+      now: "2026-05-01T00:02:00.000Z"
+    });
+
+    expect(newer.id).not.toBe(older.id);
+    expect(newer).toMatchObject({ status: "queued", sourceHash: "hash_new", priority: 11 });
+    expect(
+      db.prepare("SELECT status, source_hash FROM summary_jobs WHERE target_id = ? ORDER BY status, source_hash").all("chapter_1")
+    ).toEqual([
+      { status: "queued", source_hash: "hash_new" },
+      { status: "running", source_hash: "hash_old" }
+    ]);
+    db.close();
+  });
+
   it("claims, completes, fails, requeues, and resets summary jobs", () => {
     const db = createDb();
     seedProjectAndChapter(db);

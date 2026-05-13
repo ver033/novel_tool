@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent, type MouseEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent, type ReactNode } from "react";
 import {
   CaretDown,
   ChatCircleText,
@@ -23,6 +23,7 @@ import {
 import type { useEditor } from "@tiptap/react";
 import { BubbleMenu } from "@tiptap/react/menus";
 import type { SelectionSnapshot, TaskPromptPreset, TaskType } from "../../main/shared/types";
+import { createSelectionFloatingAnchor, EDITOR_BOTTOM_CHROME_SAFE_AREA, FLOATING_MENU_EDGE_PADDING, shouldOpenDropdownAbove } from "../layout/floating-menu-position";
 import { createSelectionSnapshotFromEditor } from "./tiptap/selection-utils";
 import type { TextAlignValue } from "./tiptap/text-align";
 
@@ -38,6 +39,7 @@ type SelectionBubbleMenuProps = {
 };
 
 type ActiveMenu = "ai" | "block" | "align" | "highlight" | "more" | null;
+type DropdownSide = "bottom" | "top";
 
 const aiTasks: readonly [TaskType, string][] = [
   ["polish", "润色"],
@@ -89,11 +91,48 @@ function isTextAlignActive(editor: EditorInstance, value: TextAlignValue): boole
 }
 
 export function SelectionBubbleMenu({ chapterId, editor, taskPromptPresets, onSelectionToChat, onSelectionToScratchpad, onTask }: SelectionBubbleMenuProps) {
+  const menuRef = useRef<HTMLDivElement | null>(null);
   const [activeMenu, setActiveMenu] = useState<ActiveMenu>(null);
+  const [dropdownSide, setDropdownSide] = useState<DropdownSide>("bottom");
   const [linkOpen, setLinkOpen] = useState(false);
   const [linkDraft, setLinkDraft] = useState("");
   const [scratchStatus, setScratchStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [scratchError, setScratchError] = useState("");
+  const dropdownOpen = activeMenu !== null || linkOpen || scratchStatus !== "idle";
+
+  const updateDropdownSide = useCallback(() => {
+    const menuElement = menuRef.current;
+    const dropdownElement = menuElement?.querySelector<HTMLElement>(".bubble-dropdown, .link-editor-popover");
+    if (!menuElement || !dropdownElement) {
+      setDropdownSide("bottom");
+      return;
+    }
+
+    setDropdownSide(shouldOpenDropdownAbove(menuElement.getBoundingClientRect(), dropdownElement.getBoundingClientRect().height) ? "top" : "bottom");
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!dropdownOpen) {
+      setDropdownSide("bottom");
+      return undefined;
+    }
+
+    const frame = window.requestAnimationFrame(updateDropdownSide);
+    return () => window.cancelAnimationFrame(frame);
+  }, [dropdownOpen, updateDropdownSide]);
+
+  useEffect(() => {
+    if (!dropdownOpen) {
+      return undefined;
+    }
+
+    window.addEventListener("resize", updateDropdownSide);
+    window.addEventListener("scroll", updateDropdownSide, true);
+    return () => {
+      window.removeEventListener("resize", updateDropdownSide);
+      window.removeEventListener("scroll", updateDropdownSide, true);
+    };
+  }, [dropdownOpen, updateDropdownSide]);
 
   useEffect(() => {
     const resetMenus = () => {
@@ -214,9 +253,21 @@ export function SelectionBubbleMenu({ chapterId, editor, taskPromptPresets, onSe
 
   return (
     <BubbleMenu
+      ref={menuRef}
       className="bubble-menu tiptap-bubble-menu selection-bubble-menu"
+      data-dropdown-side={dropdownSide}
       editor={editor}
-      options={{ placement: "top", offset: 12 }}
+      appendTo={() => document.body}
+      getReferencedVirtualElement={() => createSelectionFloatingAnchor(editor)}
+      options={{
+        strategy: "fixed",
+        placement: "top",
+        offset: 12,
+        flip: { padding: { bottom: EDITOR_BOTTOM_CHROME_SAFE_AREA, left: FLOATING_MENU_EDGE_PADDING, right: FLOATING_MENU_EDGE_PADDING, top: FLOATING_MENU_EDGE_PADDING } },
+        shift: { padding: { bottom: EDITOR_BOTTOM_CHROME_SAFE_AREA, left: FLOATING_MENU_EDGE_PADDING, right: FLOATING_MENU_EDGE_PADDING, top: FLOATING_MENU_EDGE_PADDING } },
+        inline: true,
+        scrollTarget: (editor.view.dom.closest(".editor-scroll") as HTMLElement | null) ?? window
+      }}
       shouldShow={({ editor: currentEditor, from, to }) => currentEditor.isEditable && to > from}
     >
       <span className="bubble-segment">
