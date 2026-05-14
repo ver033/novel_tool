@@ -12,7 +12,7 @@ import {
   relationshipEvidenceSourceSchema,
   relationshipExtractionSourceSchema,
   normalizeRelationshipCharacterName,
-  relationshipEntityKey,
+  relationshipEntityLookupKeys,
   type RelationshipDimension,
   type RelationshipEntityImportance,
   type RelationshipEntityKind,
@@ -296,6 +296,64 @@ function uniqueStrings(values: readonly string[]): string[] {
     result.push(text);
   }
   return result;
+}
+
+function addEntityLookupKeys(entityIdByKey: Map<string, string | null>, name: string, entityId: string): void {
+  for (const key of relationshipEntityLookupKeys(name)) {
+    const existing = entityIdByKey.get(key);
+    if (existing === undefined || existing === entityId) {
+      entityIdByKey.set(key, entityId);
+      continue;
+    }
+    entityIdByKey.set(key, null);
+  }
+}
+
+function resolveEntityIdByName(entityIdByKey: ReadonlyMap<string, string | null>, name: string): string | null {
+  const candidates = new Set<string>();
+  for (const key of relationshipEntityLookupKeys(name)) {
+    const entityId = entityIdByKey.get(key);
+    if (entityId === null) {
+      return null;
+    }
+    if (entityId) {
+      candidates.add(entityId);
+    }
+  }
+  return candidates.size === 1 ? [...candidates][0] : null;
+}
+
+function addEntityResolutionCandidateKeys(candidateKeys: Set<string>, name: string, options: { readonly allowAddressKeys: boolean }): void {
+  for (const key of relationshipEntityLookupKeys(name)) {
+    if (!options.allowAddressKeys && key.startsWith("address:")) {
+      continue;
+    }
+    candidateKeys.add(key);
+  }
+}
+
+function isAddressLookupKey(key: string): boolean {
+  return key.startsWith("address:");
+}
+
+function isRelationshipAddressTerm(name: string): boolean {
+  return relationshipEntityLookupKeys(name).some(isAddressLookupKey);
+}
+
+function isAddressOnlyEntity(entity: RelationshipEntityRecord): boolean {
+  return isRelationshipAddressTerm(entity.canonicalName) && entity.aliases.every(isRelationshipAddressTerm);
+}
+
+function relationshipAddressLookupKeys(names: readonly string[]): Set<string> {
+  const keys = new Set<string>();
+  for (const name of names) {
+    for (const key of relationshipEntityLookupKeys(name)) {
+      if (isAddressLookupKey(key)) {
+        keys.add(key);
+      }
+    }
+  }
+  return keys;
 }
 
 function mapChapter(row: RelationshipIndexChapterRow): RelationshipIndexChapterRecord {
@@ -734,12 +792,12 @@ export class RelationshipIndexRepository {
     const transaction = this.db.transaction(() => {
       const extractionSource = input.extractionSource ?? "summary_payload";
       const evidenceSource = input.evidenceSource ?? "summary_payload";
-      const entityIdByKey = new Map<string, string>();
+      const entityIdByKey = new Map<string, string | null>();
       for (const character of input.payload.characters) {
         const entity = this.upsertEntityFromCharacter(input, character);
-        entityIdByKey.set(relationshipEntityKey(entity.canonicalName), entity.id);
+        addEntityLookupKeys(entityIdByKey, entity.canonicalName, entity.id);
         for (const alias of entity.aliases) {
-          entityIdByKey.set(relationshipEntityKey(alias), entity.id);
+          addEntityLookupKeys(entityIdByKey, alias, entity.id);
         }
       }
 
@@ -767,8 +825,8 @@ export class RelationshipIndexRepository {
             input.sourceHash,
             sourceName,
             targetName,
-            entityIdByKey.get(relationshipEntityKey(sourceName)) ?? null,
-            entityIdByKey.get(relationshipEntityKey(targetName)) ?? null,
+            resolveEntityIdByName(entityIdByKey, sourceName),
+            resolveEntityIdByName(entityIdByKey, targetName),
             mention.baseRelationLabel,
             mention.baseRelationSummary,
             mention.plotRelationLabel,
@@ -954,16 +1012,21 @@ export class RelationshipIndexRepository {
 
   private upsertEntityFromCharacter(input: ReplaceRelationshipChapterExtractionInput, character: RelationshipExtractionCharacter): RelationshipEntityRecord {
     const canonicalName = normalizeRelationshipCharacterName(character.name);
-    const existingRow = this.db
-      .prepare("SELECT * FROM relationship_entities WHERE project_id = ? AND canonical_name = ?")
-      .get(input.projectId, canonicalName) as RelationshipEntityRow | undefined;
+    const existing = this.resolveExistingEntityForCharacter(input.projectId, canonicalName, character.aliases);
 
-    if (existingRow) {
-      const existing = mapEntity(existingRow);
+    if (existing) {
+      const shouldPromoteAddressPlaceholder = isAddressOnlyEntity(existing) && !isRelationshipAddressTerm(canonicalName);
+      const nextCanonicalName = shouldPromoteAddressPlaceholder ? canonicalName : existing.canonicalName;
+      const aliases = shouldPromoteAddressPlaceholder
+        ? [existing.canonicalName, ...existing.aliases, ...character.aliases]
+        : canonicalName === existing.canonicalName
+          ? character.aliases
+          : [canonicalName, ...character.aliases];
       this.db
         .prepare(
           `UPDATE relationship_entities
-           SET aliases_json = ?,
+           SET canonical_name = ?,
+               aliases_json = ?,
                entity_kind = ?,
                importance = ?,
                role_summary = ?,
@@ -976,7 +1039,8 @@ export class RelationshipIndexRepository {
            WHERE id = ?`
         )
         .run(
-          JSON.stringify(uniqueStrings([...existing.aliases, ...character.aliases])),
+          nextCanonicalName,
+          JSON.stringify(uniqueStrings([...existing.aliases, ...aliases])),
           character.entityKind,
           character.importance,
           character.roleSummary || null,
@@ -1037,6 +1101,62 @@ export class RelationshipIndexRepository {
       );
 
     return entity;
+  }
+
+  private resolveExistingEntityForCharacter(projectId: string, canonicalName: string, aliases: readonly string[]): RelationshipEntityRecord | null {
+    const canonicalRow = this.db
+      .prepare("SELECT * FROM relationship_entities WHERE project_id = ? AND canonical_name = ?")
+      .get(projectId, canonicalName) as RelationshipEntityRow | undefined;
+    if (canonicalRow) {
+      return mapEntity(canonicalRow);
+    }
+
+    const candidateKeys = new Set<string>();
+    addEntityResolutionCandidateKeys(candidateKeys, canonicalName, { allowAddressKeys: true });
+    for (const alias of aliases) {
+      addEntityResolutionCandidateKeys(candidateKeys, alias, { allowAddressKeys: false });
+    }
+    if (candidateKeys.size === 0) {
+      return null;
+    }
+
+    const matches = new Map<string, RelationshipEntityRecord>();
+    for (const entity of this.listEntities(projectId)) {
+      const entityKeys = new Set<string>();
+      for (const name of [entity.canonicalName, ...entity.aliases]) {
+        for (const key of relationshipEntityLookupKeys(name)) {
+          entityKeys.add(key);
+        }
+      }
+      if ([...candidateKeys].some((key) => entityKeys.has(key))) {
+        matches.set(entity.id, entity);
+      }
+    }
+
+    if (matches.size === 1) {
+      return [...matches.values()][0];
+    }
+    if (matches.size > 1 || isRelationshipAddressTerm(canonicalName)) {
+      return null;
+    }
+
+    const addressKeys = relationshipAddressLookupKeys(aliases);
+    if (addressKeys.size === 0) {
+      return null;
+    }
+
+    const addressOnlyMatches = new Map<string, RelationshipEntityRecord>();
+    for (const entity of this.listEntities(projectId)) {
+      if (!isAddressOnlyEntity(entity)) {
+        continue;
+      }
+      const entityAddressKeys = relationshipAddressLookupKeys([entity.canonicalName, ...entity.aliases]);
+      if ([...addressKeys].some((key) => entityAddressKeys.has(key))) {
+        addressOnlyMatches.set(entity.id, entity);
+      }
+    }
+
+    return addressOnlyMatches.size === 1 ? [...addressOnlyMatches.values()][0] : null;
   }
 
   private getEntityById(entityId: string): RelationshipEntityRecord | null {

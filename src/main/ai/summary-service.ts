@@ -18,11 +18,13 @@ import {
   getBookSummaryShortText,
   getChapterSummaryLongText,
   getChapterSummaryShortText,
+  isChapterAiSummaryPayloadV3Lite,
   type ArcAiSummaryPayload,
   type BookAiSummaryPayload,
   type BookSummaryCoverage,
   type ChapterAiSummaryChunkPayload,
   type ChapterAiSummaryPayload,
+  type ChapterAiSummaryPayloadV3Lite,
   type SummaryJobType
 } from "../shared/summary-index";
 import { parseRelationshipExtractionPayload, type RelationshipIndexExtractionPayload } from "../shared/relationship-index";
@@ -616,6 +618,14 @@ type RawRelationshipIndexPayload = {
   readonly 不确定项: readonly string[];
 };
 
+type RawIndexMaterialPayload = {
+  readonly 场景节点: readonly Record<string, unknown>[];
+  readonly 时间线事件: readonly Record<string, unknown>[];
+  readonly 通用实体: readonly Record<string, unknown>[];
+  readonly 原子事实: readonly Record<string, unknown>[];
+  readonly 结构标记?: Record<string, unknown>;
+};
+
 function relationshipIndexFromSummaryPayload(structured: ChapterAiSummaryPayload | ChapterAiSummaryChunkPayload): RawRelationshipIndexPayload | null {
   const relationshipIndex = (structured as { readonly 人物关系索引?: unknown }).人物关系索引;
   if (!isPlainObject(relationshipIndex)) {
@@ -630,6 +640,20 @@ function relationshipIndexFromSummaryPayload(structured: ChapterAiSummaryPayload
     人物: characters,
     关系事件: mentions,
     不确定项: uncertainties
+  };
+}
+
+function indexMaterialFromSummaryPayload(structured: ChapterAiSummaryPayload | ChapterAiSummaryChunkPayload): RawIndexMaterialPayload | null {
+  const indexMaterial = (structured as { readonly 索引原料?: unknown }).索引原料;
+  if (!isPlainObject(indexMaterial)) {
+    return null;
+  }
+  return {
+    场景节点: Array.isArray(indexMaterial.场景节点) ? indexMaterial.场景节点.filter(isPlainObject) : [],
+    时间线事件: Array.isArray(indexMaterial.时间线事件) ? indexMaterial.时间线事件.filter(isPlainObject) : [],
+    通用实体: Array.isArray(indexMaterial.通用实体) ? indexMaterial.通用实体.filter(isPlainObject) : [],
+    原子事实: Array.isArray(indexMaterial.原子事实) ? indexMaterial.原子事实.filter(isPlainObject) : [],
+    结构标记: isPlainObject(indexMaterial.结构标记) ? indexMaterial.结构标记 : undefined
   };
 }
 
@@ -648,6 +672,137 @@ function relationshipMentionKey(item: Record<string, unknown>): string {
   ]
     .join("|")
     .trim();
+}
+
+function indexMaterialRecordKey(item: Record<string, unknown>, keys: readonly string[]): string {
+  return keys.map((key) => stringifyForSummary(item[key])).join("|").trim() || stringifyForSummary(item).trim();
+}
+
+function indexMaterialStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    const text = stringifyForSummary(value).trim();
+    return text ? [text] : [];
+  }
+  return value.map((item) => stringifyForSummary(item).trim()).filter(Boolean);
+}
+
+function mergeIndexMaterialStructureMarkers(materials: readonly RawIndexMaterialPayload[]): Record<string, unknown> | undefined {
+  const markers = materials.map((material) => material.结构标记).filter(isPlainObject);
+  if (markers.length === 0) {
+    return undefined;
+  }
+  const result: Record<string, unknown> = {};
+  for (const key of ["章节位置", "节奏", "情绪走向", "视角", "备注"] as const) {
+    const value = firstDefined(markers.map((marker) => stringifyForSummary(marker[key])), "");
+    if (value) {
+      result[key] = value;
+    }
+  }
+  const functions = uniqueStrings(markers.flatMap((marker) => indexMaterialStringList(marker.叙事功能)), 8);
+  if (functions.length > 0) {
+    result.叙事功能 = functions;
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
+function firstNonEmptyRecordList(existing: unknown, fallback: readonly Record<string, unknown>[]): Record<string, unknown>[] {
+  return Array.isArray(existing) && existing.some(isPlainObject) ? existing.filter(isPlainObject) : [...fallback];
+}
+
+function firstNonEmptyRecord(existing: unknown, fallback: Record<string, unknown>): Record<string, unknown> {
+  return isPlainObject(existing) && Object.keys(existing).length > 0 ? existing : fallback;
+}
+
+function deriveIndexMaterialFromV3Summary(payload: ChapterAiSummaryPayloadV3Lite): RawIndexMaterialPayload {
+  const timePlace = payload.时间地点;
+  const primaryPlace = firstDefined(timePlace.主要地点, "未明确");
+  const chapterFunction = payload.章节作用;
+  const narrativeFunctions = uniqueStrings([chapterFunction.剧情作用, chapterFunction.人物作用, chapterFunction.后文作用], 6);
+  const sceneNodes = payload.场景推进.slice(0, 5).map((scene, index) => ({
+    序号: index + 1,
+    标题: limitText(scene, 42),
+    类型: "场景推进",
+    出场人物: uniqueStrings(payload.人物状态.map((item) => item.人物), 8),
+    地点: primaryPlace,
+    场景目标: "未明确",
+    核心冲突: "未明确",
+    结果: scene,
+    情绪变化: firstDefined(payload.文风要点, "未明确"),
+    功能: firstDefined(narrativeFunctions, "未明确"),
+    证据短句: []
+  }));
+  const timelineEvents = payload.关键事件.slice(0, 8).map((event, index) => ({
+    事件: event.事件,
+    叙事顺序: index + 1,
+    故事内时间: timePlace.本章时间,
+    相对时间锚点: firstDefined([event.时间地点, ...timePlace.时间线索], "未明确"),
+    参与人物: event.涉及人物,
+    地点: firstDefined([event.时间地点, primaryPlace], "未明确"),
+    因果前置: [],
+    结果影响: uniqueStrings([event.结果, event.后续影响], 4),
+    置信度: 0.75,
+    证据短句: event.证据短句
+  }));
+  const characterEntities = payload.人物状态.slice(0, 10).map((character) => ({
+    名称: character.人物,
+    别名: [],
+    类型: "人物",
+    本章状态: character.本章变化,
+    新增信息: uniqueStrings([...character.新获得信息, ...character.关系变化], 8),
+    关联人物: [],
+    证据短句: character.证据短句
+  }));
+  const placeEntities = timePlace.主要地点.slice(0, Math.max(0, 10 - characterEntities.length)).map((place) => ({
+    名称: place,
+    别名: [],
+    类型: "地点",
+    本章状态: "本章出现地点",
+    新增信息: uniqueStrings([...timePlace.时间线索, ...timePlace.地点移动], 6),
+    关联人物: uniqueStrings(payload.人物状态.map((item) => item.人物), 8),
+    证据短句: []
+  }));
+  const entities = uniqueRecords([...characterEntities, ...placeEntities], (item) => indexMaterialRecordKey(item, ["名称", "类型"]), 10);
+  const facts = payload.可核对事实.slice(0, 12).map((fact) => ({
+    主体: "未明确",
+    类型: "可核对事实",
+    属性: "事实",
+    值: fact,
+    生效范围: payload.章节信息.章节标题,
+    确定性: "确定",
+    证据短句: []
+  }));
+  return {
+    场景节点: sceneNodes,
+    时间线事件: timelineEvents,
+    通用实体: entities,
+    原子事实: facts,
+    结构标记: {
+      章节位置: "未明确",
+      叙事功能: narrativeFunctions,
+      节奏: firstDefined(payload.文风要点, "未明确"),
+      情绪走向: firstDefined(payload.文风要点, "未明确"),
+      视角: firstDefined(payload.文风要点, "未明确"),
+      备注: "由章节缓存字段本地派生"
+    }
+  };
+}
+
+function ensureChapterIndexMaterial(structured: ChapterAiSummaryPayload): ChapterAiSummaryPayload {
+  if (!isChapterAiSummaryPayloadV3Lite(structured)) {
+    return structured;
+  }
+  const existing = structured.索引原料 as RawIndexMaterialPayload | undefined;
+  const derived = deriveIndexMaterialFromV3Summary(structured);
+  return {
+    ...structured,
+    索引原料: {
+      场景节点: firstNonEmptyRecordList(existing?.场景节点, derived.场景节点),
+      时间线事件: firstNonEmptyRecordList(existing?.时间线事件, derived.时间线事件),
+      通用实体: firstNonEmptyRecordList(existing?.通用实体, derived.通用实体),
+      原子事实: firstNonEmptyRecordList(existing?.原子事实, derived.原子事实),
+      结构标记: firstNonEmptyRecord(existing?.结构标记, derived.结构标记 ?? {})
+    }
+  };
 }
 
 function relationshipIndexExtractionFromSummary(content: ChapterContent, structured: ChapterAiSummaryPayload): RelationshipIndexExtractionPayload | null {
@@ -731,6 +886,93 @@ function mergeLongChapterChunks(content: ChapterContent, chunks: readonly Chapte
     orderedChunks.flatMap((chunk) => relationshipIndexFromSummaryPayload(chunk.structured)?.不确定项 ?? []),
     12
   );
+  const indexMaterials = orderedChunks.map((chunk) => indexMaterialFromSummaryPayload(chunk.structured)).filter((material): material is RawIndexMaterialPayload => Boolean(material));
+  const indexMaterialScenes = uniqueRecords(
+    indexMaterials.flatMap((material) => material.场景节点),
+    (item) => indexMaterialRecordKey(item, ["标题", "地点", "结果", "证据短句"]),
+    12
+  );
+  const indexMaterialTimelineEvents = uniqueRecords(
+    indexMaterials.flatMap((material) => material.时间线事件),
+    (item) => indexMaterialRecordKey(item, ["事件", "叙事顺序", "故事内时间", "相对时间锚点", "证据短句"]),
+    16
+  );
+  const indexMaterialEntities = uniqueRecords(
+    indexMaterials.flatMap((material) => material.通用实体),
+    (item) => indexMaterialRecordKey(item, ["名称", "类型", "本章状态"]),
+    20
+  );
+  const indexMaterialFacts = uniqueRecords(
+    indexMaterials.flatMap((material) => material.原子事实),
+    (item) => indexMaterialRecordKey(item, ["主体", "类型", "属性", "值", "生效范围"]),
+    24
+  );
+  const fallbackSceneNodes = chunkSummaries.slice(0, 6).map((summary, index) => ({
+    序号: index + 1,
+    标题: limitText(summary, 42),
+    类型: "片段场景",
+    出场人物: [],
+    地点: "未明确",
+    场景目标: "未明确",
+    核心冲突: "未明确",
+    结果: summary,
+    情绪变化: "未明确",
+    功能: "长章节片段推进",
+    证据短句: []
+  }));
+  const fallbackTimelineEvents = keyEvents.slice(0, 12).map((event, index) => ({
+    事件: event.事件,
+    叙事顺序: index + 1,
+    故事内时间: "未明确",
+    相对时间锚点: event.时间地点,
+    参与人物: event.涉及人物,
+    地点: event.时间地点,
+    因果前置: [],
+    结果影响: [event.结果, event.后续影响].filter((value) => value && value !== "未明确"),
+    置信度: 0.7,
+    证据短句: event.证据短句
+  }));
+  const fallbackEntities = uniqueRecords(
+    [
+      ...relationshipCharacters.map((character) => ({
+        名称: stringifyForSummary(character.姓名 ?? character.名称 ?? character.人物),
+        别名: Array.isArray(character.别名) ? character.别名 : [],
+        类型: stringifyForSummary(character.实体类型 ?? "人物"),
+        本章状态: stringifyForSummary(character.身份摘要 ?? "未明确"),
+        新增信息: [],
+        关联人物: [],
+        证据短句: Array.isArray(character.证据短句) ? character.证据短句 : []
+      })),
+      ...places.map((place) => ({
+        名称: place,
+        别名: [],
+        类型: "地点",
+        本章状态: "本章出现地点",
+        新增信息: [],
+        关联人物: [],
+        证据短句: []
+      }))
+    ],
+    (item) => indexMaterialRecordKey(item, ["名称", "类型"]),
+    20
+  );
+  const fallbackAtomicFacts = facts.slice(0, 16).map((fact) => ({
+    主体: "未明确",
+    类型: "可核对事实",
+    属性: "事实",
+    值: fact,
+    生效范围: `第${content.sortOrder + 1}章`,
+    确定性: "确定",
+    证据短句: []
+  }));
+  const indexMaterialStructureMarker = mergeIndexMaterialStructureMarkers(indexMaterials) ?? {
+    章节位置: "未明确",
+    叙事功能: ["长章节片段聚合"],
+    节奏: "未明确",
+    情绪走向: "未明确",
+    视角: "未明确",
+    备注: "由片段缓存本地合并生成"
+  };
 
   return {
     章节信息: {
@@ -793,6 +1035,13 @@ function mergeLongChapterChunks(content: ChapterContent, chunks: readonly Chapte
       人物: relationshipCharacters,
       关系事件: relationshipMentions,
       不确定项: relationshipUncertainties
+    },
+    索引原料: {
+      场景节点: indexMaterialScenes.length > 0 ? indexMaterialScenes : fallbackSceneNodes,
+      时间线事件: indexMaterialTimelineEvents.length > 0 ? indexMaterialTimelineEvents : fallbackTimelineEvents,
+      通用实体: indexMaterialEntities.length > 0 ? indexMaterialEntities : fallbackEntities,
+      原子事实: indexMaterialFacts.length > 0 ? indexMaterialFacts : fallbackAtomicFacts,
+      结构标记: indexMaterialStructureMarker
     },
     时间地点: {
       本章时间: firstDefined(timePlaces.map((item) => item.time), "未明确"),
@@ -1239,7 +1488,32 @@ export class SummaryService implements SummaryIndexInvalidator {
   rebuildProjectIndex(projectId: string, now: string, options: SummaryRebuildProjectIndexOptions = {}): SummaryIndexStatus {
     this.summaryRepo.setBackgroundIndexEnabled(projectId, true, now);
     const trigger: ChapterSummaryQueueTrigger = options.force ? "manual_rebuild" : "manual_continue";
-    for (const chapter of this.chapterRepo.listByProject(projectId)) {
+    const chapters = this.chapterRepo.listByProject(projectId);
+    if (options.force) {
+      this.summaryRepo.deleteDerivedSummaries(projectId);
+      for (const chapter of chapters) {
+        const content = this.chapterRepo.getContent(chapter.id);
+        if (!content || content.projectId !== projectId) {
+          continue;
+        }
+        const sourceHash = computeChapterContentHash(content.plainText);
+        if (this.summaryRepo.getChapterSummary(projectId, chapter.id)) {
+          this.summaryRepo.markChapterStale(projectId, chapter.id, sourceHash, now);
+        }
+        if (this.options.relationshipIndexRepo?.getChapterIndexState(projectId, chapter.id)) {
+          this.options.relationshipIndexRepo.markChapterStale({
+            projectId,
+            chapterId: chapter.id,
+            chapterTitle: chapter.title,
+            chapterOrder: chapter.sortOrder + 1,
+            contentHash: sourceHash,
+            extractorVersion: CHAPTER_SUMMARY_RELATIONSHIP_INDEX_VERSION,
+            now
+          });
+        }
+      }
+    }
+    for (const chapter of chapters) {
       this.maybeEnqueueChapterSummary({
         projectId,
         chapterId: chapter.id,
@@ -1445,6 +1719,7 @@ export class SummaryService implements SummaryIndexInvalidator {
       throw new SummarySourceChangedError("章节内容已变化，已重新排队最新摘要任务。");
     }
 
+    const structuredForStorage = ensureChapterIndexMaterial(structured);
     const summary = this.summaryRepo.upsertChapterSummary({
       id: createId("summary"),
       projectId,
@@ -1452,16 +1727,16 @@ export class SummaryService implements SummaryIndexInvalidator {
       chapterTitle: latestContent.title,
       chapterOrder: latestContent.sortOrder + 1,
       contentHash: sourceHash,
-      summaryShort: getChapterSummaryShortText(structured),
-      summaryLong: getChapterSummaryLongText(structured),
-      structured,
-      tokenCount: estimateTextTokens(JSON.stringify(structured)),
+      summaryShort: getChapterSummaryShortText(structuredForStorage),
+      summaryLong: getChapterSummaryLongText(structuredForStorage),
+      structured: structuredForStorage,
+      tokenCount: estimateTextTokens(JSON.stringify(structuredForStorage)),
       status: "ready",
       error: null,
       createdAt: now,
       updatedAt: now
     });
-    this.persistRelationshipIndexFromChapterSummary(latestContent, sourceHash, structured, now);
+    this.persistRelationshipIndexFromChapterSummary(latestContent, sourceHash, structuredForStorage, now);
     this.enqueueArcForChapterIfReady(projectId, summary.chapterOrder, now);
     return summary;
   }
@@ -1566,6 +1841,7 @@ export class SummaryService implements SummaryIndexInvalidator {
       throw new SummarySourceChangedError("章节内容已变化，已重新排队最新摘要任务。");
     }
 
+    const structuredForStorage = ensureChapterIndexMaterial(structured);
     const summary = this.summaryRepo.upsertChapterSummary({
       id: createId("summary"),
       projectId,
@@ -1573,16 +1849,16 @@ export class SummaryService implements SummaryIndexInvalidator {
       chapterTitle: latestContent.title,
       chapterOrder: latestContent.sortOrder + 1,
       contentHash: sourceHash,
-      summaryShort: getChapterSummaryShortText(structured),
-      summaryLong: getChapterSummaryLongText(structured),
-      structured,
-      tokenCount: estimateTextTokens(JSON.stringify(structured)),
+      summaryShort: getChapterSummaryShortText(structuredForStorage),
+      summaryLong: getChapterSummaryLongText(structuredForStorage),
+      structured: structuredForStorage,
+      tokenCount: estimateTextTokens(JSON.stringify(structuredForStorage)),
       status: "ready",
       error: null,
       createdAt: now,
       updatedAt: now
     });
-    this.persistRelationshipIndexFromChapterSummary(latestContent, sourceHash, structured, now);
+    this.persistRelationshipIndexFromChapterSummary(latestContent, sourceHash, structuredForStorage, now);
     this.enqueueArcForChapterIfReady(projectId, summary.chapterOrder, now);
     return summary;
   }
@@ -1717,10 +1993,13 @@ export class SummaryService implements SummaryIndexInvalidator {
     const chapterEntries = this.listChapterCacheEntries(projectId, now);
     const jobs = this.summaryRepo.listSummaryJobs(projectId);
     const relationshipUpgradeJobs = jobs.filter((job) => job.jobType === "relationship_original_text_upgrade");
+    const total = chapterEntries.length;
     const ready = chapterEntries.filter((entry) => entry.cacheState === "ready").length;
     const queuedOrRunning = chapterEntries.filter((entry) => entry.cacheState === "queued" || entry.cacheState === "running").length;
     const stale = chapterEntries.filter((entry) => entry.cacheState === "stale").length;
     const failed = chapterEntries.filter((entry) => entry.cacheState === "failed").length;
+    const missing = chapterEntries.filter((entry) => entry.cacheState === "missing" || entry.cacheState === "cancelled").length;
+    const skippedTooShort = chapterEntries.filter((entry) => entry.cacheState === "skipped_too_short").length;
 
     const relationshipIndexRepo = this.options.relationshipIndexRepo;
     const baseRelationshipStatus = relationshipIndexRepo?.getIndexStatus(projectId) ?? {
@@ -1740,10 +2019,13 @@ export class SummaryService implements SummaryIndexInvalidator {
 
     return {
       chapterCache: {
+        total,
         ready,
         queuedOrRunning,
         stale,
-        failed
+        failed,
+        missing,
+        skippedTooShort
       },
       relationshipCache: {
         ...baseRelationshipStatus,

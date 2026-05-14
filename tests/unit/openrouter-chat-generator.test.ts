@@ -404,6 +404,9 @@ describe("OpenRouter persistent summary index generation", () => {
     expect(joined).toContain("“二-Lite”只允许用于章节片段缓存");
     expect(joined).toContain("场景推进最多 5 项");
     expect(joined).toContain("8000 字章节");
+    expect(joined).not.toContain("索引原料");
+    expect(joined).not.toContain("时间线事件");
+    expect(joined).not.toContain("未来大纲");
     expect(joined).not.toContain("空间与行动逻辑");
     expect(joined).not.toContain("限制与否定事实");
     expect(joined).not.toContain("适合回答的问题");
@@ -554,6 +557,8 @@ describe("OpenRouter persistent summary index generation", () => {
     expect(chunkPrompt).toContain("只能记录当前片段中出现的信息");
     expect(chunkPrompt).toContain("不得根据其他片段、常识或猜测补全");
     expect(mergePrompt).toContain("不得遗漏片段缓存中明确出现的重要内容");
+    expect(chunkPrompt).not.toContain("索引原料");
+    expect(mergePrompt).not.toContain("索引原料");
     expect(chunkPrompt).toContain('"缓存版本": "二-Lite"');
     expect(mergePrompt).toContain('"缓存版本": "三-Lite"');
     expect(mergePrompt).toContain("不得沿用片段缓存的“二-Lite”");

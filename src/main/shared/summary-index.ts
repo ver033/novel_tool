@@ -814,6 +814,110 @@ const relationshipGraphIndexInSummarySchema = z
   })
   .strip();
 
+const indexMaterialConfidenceSchema = z
+  .preprocess((value) => {
+    if (value === null || value === undefined) {
+      return undefined;
+    }
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value > 1 && value <= 100 ? value / 100 : value;
+    }
+    const text = normalizeTextValue(value);
+    if (!text) {
+      return undefined;
+    }
+    if (text === "高") {
+      return 0.9;
+    }
+    if (text === "中") {
+      return 0.7;
+    }
+    if (text === "低") {
+      return 0.4;
+    }
+    const parsed = Number.parseFloat(text.replace("%", ""));
+    if (Number.isFinite(parsed)) {
+      return text.includes("%") || parsed > 1 ? parsed / 100 : parsed;
+    }
+    return value;
+  }, z.number().min(0).max(1).optional());
+
+const indexMaterialSceneNodeSchema = z
+  .object({
+    序号: positiveIntegerSchema.optional(),
+    标题: nonEmptyStringSchema.optional(),
+    类型: nonEmptyStringSchema.optional(),
+    出场人物: arrayOf(nonEmptyStringSchema).optional(),
+    地点: nonEmptyStringSchema.optional(),
+    场景目标: nonEmptyStringSchema.optional(),
+    核心冲突: nonEmptyStringSchema.optional(),
+    结果: nonEmptyStringSchema.optional(),
+    情绪变化: nonEmptyStringSchema.optional(),
+    功能: nonEmptyStringSchema.optional(),
+    证据短句: evidenceQuotesSchema.optional()
+  })
+  .passthrough();
+
+const indexMaterialTimelineEventSchema = z
+  .object({
+    事件: nonEmptyStringSchema.optional(),
+    叙事顺序: positiveIntegerSchema.optional(),
+    故事内时间: nonEmptyStringSchema.optional(),
+    相对时间锚点: nonEmptyStringSchema.optional(),
+    参与人物: arrayOf(nonEmptyStringSchema).optional(),
+    地点: nonEmptyStringSchema.optional(),
+    因果前置: arrayOf(nonEmptyStringSchema).optional(),
+    结果影响: arrayOf(nonEmptyStringSchema).optional(),
+    置信度: indexMaterialConfidenceSchema,
+    证据短句: evidenceQuotesSchema.optional()
+  })
+  .passthrough();
+
+const indexMaterialEntitySchema = z
+  .object({
+    名称: nonEmptyStringSchema.optional(),
+    别名: arrayOf(nonEmptyStringSchema).optional(),
+    类型: nonEmptyStringSchema.optional(),
+    本章状态: nonEmptyStringSchema.optional(),
+    新增信息: arrayOf(nonEmptyStringSchema).optional(),
+    关联人物: arrayOf(nonEmptyStringSchema).optional(),
+    证据短句: evidenceQuotesSchema.optional()
+  })
+  .passthrough();
+
+const indexMaterialAtomicFactSchema = z
+  .object({
+    主体: nonEmptyStringSchema.optional(),
+    类型: nonEmptyStringSchema.optional(),
+    属性: nonEmptyStringSchema.optional(),
+    值: nonEmptyStringSchema.optional(),
+    生效范围: nonEmptyStringSchema.optional(),
+    确定性: nonEmptyStringSchema.optional(),
+    证据短句: evidenceQuotesSchema.optional()
+  })
+  .passthrough();
+
+const indexMaterialStructureMarkerSchema = z
+  .object({
+    章节位置: nonEmptyStringSchema.optional(),
+    叙事功能: arrayOf(nonEmptyStringSchema).optional(),
+    节奏: nonEmptyStringSchema.optional(),
+    情绪走向: nonEmptyStringSchema.optional(),
+    视角: nonEmptyStringSchema.optional(),
+    备注: nonEmptyStringSchema.optional()
+  })
+  .passthrough();
+
+export const chapterIndexMaterialSchema = z
+  .object({
+    场景节点: arrayOf(indexMaterialSceneNodeSchema).optional(),
+    时间线事件: arrayOf(indexMaterialTimelineEventSchema).optional(),
+    通用实体: arrayOf(indexMaterialEntitySchema).optional(),
+    原子事实: arrayOf(indexMaterialAtomicFactSchema).optional(),
+    结构标记: indexMaterialStructureMarkerSchema.optional()
+  })
+  .passthrough();
+
 export const chapterAiSummaryPayloadV3LiteSchema = z
   .object({
     章节信息: z
@@ -844,6 +948,7 @@ export const chapterAiSummaryPayloadV3LiteSchema = z
     人物认知边界: arrayOf(characterKnowledgeLiteSchema),
     关系变化: arrayOf(nonEmptyStringSchema),
     人物关系索引: relationshipGraphIndexInSummarySchema.optional(),
+    索引原料: chapterIndexMaterialSchema.optional(),
     时间地点: timePlaceLiteSchema,
     道具设定变化: arrayOf(nonEmptyStringSchema),
     伏笔与线索: arrayOf(foreshadowingLiteSchema),
@@ -938,6 +1043,7 @@ const chapterAiSummaryChunkPayloadV2LiteSchema = z
     人物认知边界: arrayOf(characterKnowledgeLiteSchema),
     关系变化: arrayOf(nonEmptyStringSchema),
     人物关系索引: relationshipGraphIndexInSummarySchema.optional(),
+    索引原料: chapterIndexMaterialSchema.optional(),
     时间地点: timePlaceLiteSchema,
     道具设定变化: arrayOf(nonEmptyStringSchema),
     伏笔与线索: arrayOf(foreshadowingLiteSchema),

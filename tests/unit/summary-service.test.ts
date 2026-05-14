@@ -15,6 +15,7 @@ import {
   arcIndexPayloadV2,
   bookIndexPayloadV2,
   chapterChunkIndexPayload,
+  chapterChunkIndexPayloadV2Lite,
   chapterIndexPayloadV2,
   chapterIndexPayloadV3Lite,
   chapterIndexPayloadV3LiteWithRelationship
@@ -1171,6 +1172,22 @@ describe("summary service generation", () => {
       status: "failed",
       contentHash: computeChapterContentHash(content)
     });
+    expect(service.getRelationshipCacheSettingsStatus("project_1", "2026-05-01T00:11:00.000Z")).toMatchObject({
+      chapterCache: {
+        total: 1,
+        ready: 1,
+        queuedOrRunning: 0,
+        stale: 0,
+        failed: 0,
+        missing: 0,
+        skippedTooShort: 0
+      },
+      relationshipCache: {
+        ready: 0,
+        failed: 1,
+        total: 1
+      }
+    });
     expect(relationshipIndexRepo.listMentions("project_1")).toEqual([]);
     db.close();
   });
@@ -1226,6 +1243,37 @@ describe("summary service generation", () => {
     expect(summary.status).toBe("ready");
     expect(calls).toEqual([`direct:${content.length}`]);
     expect(summaryRepo.listChapterSummaryChunks("project_1", "chapter_1", computeChapterContentHash(content))).toEqual([]);
+    db.close();
+  });
+
+  it("derives future index material locally from a direct V3 chapter cache when the model omits it", async () => {
+    const db = createDb();
+    const { chapterRepo, summaryRepo } = seedProject(db);
+    const content = "春".repeat(900);
+    createChapter(chapterRepo, "chapter_1", content);
+    const payload = chapterIndexPayloadV3Lite();
+    const service = new SummaryService(summaryRepo, chapterRepo, {
+      generator: {
+        summarizeChapterForIndex: async () => payload
+      }
+    });
+
+    const summary = await service.summarizeChapter("project_1", "chapter_1", computeChapterContentHash(content), "2026-05-01T00:10:00.000Z");
+    const indexMaterial = (summary.structured as Record<string, unknown>).索引原料 as
+      | {
+          readonly 场景节点?: readonly unknown[];
+          readonly 时间线事件?: readonly unknown[];
+          readonly 通用实体?: readonly unknown[];
+          readonly 原子事实?: readonly unknown[];
+          readonly 结构标记?: Record<string, unknown>;
+        }
+      | undefined;
+
+    expect(indexMaterial?.场景节点?.[0]).toMatchObject({ 标题: "萧炎完成测试" });
+    expect(indexMaterial?.时间线事件?.[0]).toMatchObject({ 事件: "萧炎斗气测试结果为斗之力三段" });
+    expect(indexMaterial?.通用实体?.some((item) => JSON.stringify(item).includes("萧炎"))).toBe(true);
+    expect(indexMaterial?.原子事实?.some((item) => JSON.stringify(item).includes("斗之力三段"))).toBe(true);
+    expect(indexMaterial?.结构标记?.叙事功能).toContain("确立主角当前困境");
     db.close();
   });
 
@@ -1339,6 +1387,49 @@ describe("summary service generation", () => {
       缺失说明: []
     });
     expect(summaryRepo.listChapterSummaryChunks("project_1", "chapter_1", computeChapterContentHash(content))).toHaveLength(expectedChunks.length);
+    db.close();
+  });
+
+  it("preserves future index material when locally aggregating long chapter chunks", async () => {
+    const db = createDb();
+    const { chapterRepo, summaryRepo } = seedProject(db);
+    const content = Array.from({ length: 14 }, (_, index) => `第${index + 1}段。${"春".repeat(650)}`).join("\n\n");
+    createChapter(chapterRepo, "chapter_1", content);
+    const expectedChunks = splitChapterForSummaryIndex(content);
+    const service = new SummaryService(summaryRepo, chapterRepo, {
+      generator: {
+        summarizeChapterForIndex: async () => {
+          throw new Error("long chapters must use chunk indexing");
+        },
+        summarizeChapterChunkForIndex: async (input) =>
+          chapterChunkIndexPayloadV2Lite({
+            chunkIndex: input.chunkIndex,
+            chunkCount: input.chunkCount,
+            summary: `第${input.chunkIndex + 1}个片段缓存摘要`
+          }),
+        mergeChapterChunksForIndex: async () => {
+          throw new Error("long chapter chunk merge should be deterministic and local");
+        }
+      }
+    });
+
+    const summary = await service.summarizeChapter("project_1", "chapter_1", computeChapterContentHash(content), "2026-05-01T00:10:00.000Z");
+    const indexMaterial = (summary.structured as Record<string, unknown>).索引原料 as
+      | {
+          readonly 场景节点?: readonly unknown[];
+          readonly 时间线事件?: readonly unknown[];
+          readonly 通用实体?: readonly unknown[];
+          readonly 原子事实?: readonly unknown[];
+          readonly 结构标记?: Record<string, unknown>;
+        }
+      | undefined;
+
+    expect(indexMaterial?.场景节点?.length).toBeGreaterThan(0);
+    expect(indexMaterial?.场景节点?.length).toBeLessThanOrEqual(expectedChunks.length);
+    expect(indexMaterial?.时间线事件?.[0]).toMatchObject({ 叙事顺序: 1 });
+    expect(indexMaterial?.通用实体?.[0]).toMatchObject({ 名称: "测验魔石碑" });
+    expect(indexMaterial?.原子事实?.some((item) => JSON.stringify(item).includes("斗之力三段"))).toBe(true);
+    expect(indexMaterial?.结构标记).toMatchObject({ 章节位置: "开局" });
     db.close();
   });
 
@@ -1915,10 +2006,41 @@ describe("summary index status and rebuild controls", () => {
     const service = new SummaryService(summaryRepo, chapterRepo, { relationshipIndexRepo });
 
     expect(service.getRelationshipCacheSettingsStatus("project_1", "2026-05-01T00:16:00.000Z").chapterCache).toEqual({
+      total: 2,
       ready: 1,
       queuedOrRunning: 0,
       stale: 0,
-      failed: 1
+      failed: 1,
+      missing: 0,
+      skippedTooShort: 0
+    });
+
+    db.close();
+  });
+
+  it("reports chapter totals for a fresh project before relationship index rows exist", () => {
+    const db = createDb();
+    const { chapterRepo, summaryRepo } = seedProject(db);
+    createChapterAtOrder(chapterRepo, "chapter_1", "第1章", 0, "春".repeat(620));
+    createChapterAtOrder(chapterRepo, "chapter_2", "第2章", 1, "夏".repeat(620));
+    const relationshipIndexRepo = new RelationshipIndexRepository(db);
+    const service = new SummaryService(summaryRepo, chapterRepo, { relationshipIndexRepo });
+
+    expect(service.getRelationshipCacheSettingsStatus("project_1", "2026-05-01T00:16:00.000Z")).toMatchObject({
+      chapterCache: {
+        total: 2,
+        ready: 0,
+        queuedOrRunning: 0,
+        stale: 0,
+        failed: 0,
+        missing: 2,
+        skippedTooShort: 0
+      },
+      relationshipCache: {
+        ready: 0,
+        failed: 0,
+        total: 0
+      }
     });
 
     db.close();
@@ -2550,21 +2672,43 @@ describe("summary index status and rebuild controls", () => {
   it("can force a full project index rebuild when explicitly requested", () => {
     const db = createDb();
     const { chapterRepo, summaryRepo } = seedProject(db);
-    createChapter(chapterRepo, "chapter_1", "春".repeat(620));
+    const firstContent = "春".repeat(620);
+    createChapter(chapterRepo, "chapter_1", firstContent);
     createChapter(chapterRepo, "chapter_2", "夏".repeat(620));
     upsertReadyChapterSummary(summaryRepo, {
       chapterId: "chapter_1",
       title: "第1章",
       order: 1,
-      content: "春".repeat(620)
+      content: firstContent
     });
-    const service = new SummaryService(summaryRepo, chapterRepo);
+    const relationshipIndexRepo = new RelationshipIndexRepository(db);
+    relationshipIndexRepo.replaceChapterExtraction({
+      projectId: "project_1",
+      chapterId: "chapter_1",
+      chapterTitle: "第1章",
+      chapterOrder: 1,
+      sourceHash: computeChapterContentHash(firstContent),
+      payload: validRelationshipPayloadFromOriginalText(),
+      tokenCount: 0,
+      stableAfterMs: 0,
+      extractorVersion: "chapter-summary-v3-lite-relationship-index",
+      indexedAt: "2026-05-01T00:20:00.000Z",
+      now: "2026-05-01T00:20:00.000Z"
+    });
+    const service = new SummaryService(summaryRepo, chapterRepo, { relationshipIndexRepo });
 
     const status = service.rebuildProjectIndex("project_1", "2026-05-01T00:30:00.000Z", { force: true });
 
     expect(status).toMatchObject({
-      readyChapterCount: 1,
+      readyChapterCount: 0,
+      staleChapterCount: 1,
+      missingChapterCount: 1,
       queuedJobCount: 2
+    });
+    expect(relationshipIndexRepo.getIndexStatus("project_1")).toMatchObject({
+      ready: 0,
+      stale: 1,
+      total: 1
     });
     db.close();
   });

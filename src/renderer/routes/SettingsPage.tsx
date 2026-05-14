@@ -275,6 +275,81 @@ function canRunChapterCacheAction(entry: SummaryChapterCacheEntry | null): boole
   return entry.cacheState === "ready" || entry.cacheState === "stale" || entry.cacheState === "missing" || entry.cacheState === "failed" || entry.cacheState === "cancelled";
 }
 
+export function formatRelationshipOverviewMetric(
+  indexStatus: SummaryIndexStatus | null,
+  cacheSettingsStatus: RelationshipCacheSettingsStatus | null
+): { readonly value: string; readonly detail: string } {
+  if (!indexStatus || !cacheSettingsStatus) {
+    return { value: "--", detail: "正在读取状态" };
+  }
+  if (indexStatus.totalChapterCount === 0) {
+    return { value: "未开始", detail: "还没有章节" };
+  }
+
+  const relationshipCache = cacheSettingsStatus.relationshipCache;
+  const value = `${relationshipCache.ready}/${indexStatus.totalChapterCount}`;
+  if (relationshipCache.failed > 0) {
+    return { value, detail: `失败 ${relationshipCache.failed} 章，需重试` };
+  }
+  if (relationshipCache.waitingForChapterCache) {
+    return { value, detail: "等待章节缓存完成" };
+  }
+  if (relationshipCache.legacyMissingRelationships > 0) {
+    return { value, detail: `旧缓存待补齐 ${relationshipCache.legacyMissingRelationships} 章` };
+  }
+  if (cacheSettingsStatus.chapterCache.ready === 0 && relationshipCache.ready === 0) {
+    return { value, detail: "等待章节缓存完成" };
+  }
+  if (cacheSettingsStatus.chapterCache.ready > 0 && relationshipCache.ready === 0) {
+    return { value, detail: "章节缓存已完成，人物关系缓存尚未生成" };
+  }
+  return { value, detail: "可用于图谱 / 总章节" };
+}
+
+export function getRelationshipCacheStatusText(cacheSettingsStatus: RelationshipCacheSettingsStatus | null): string {
+  if (!cacheSettingsStatus) {
+    return "正在读取人物关系缓存状态。";
+  }
+
+  const { chapterCache, relationshipCache } = cacheSettingsStatus;
+  if (chapterCache.total === 0) {
+    return "还没有章节，写作并建立章节缓存后会生成人物关系图谱。";
+  }
+  if (relationshipCache.waitingForChapterCache) {
+    return "等待章节缓存完成后处理人物关系。";
+  }
+  if (relationshipCache.failed > 0) {
+    return "部分人物关系缓存失败，可以手动加入原文补齐队列重试。";
+  }
+  if (relationshipCache.legacyMissingRelationships > 0) {
+    return "旧章节缓存缺少人物关系索引，将在章节缓存空闲后自动读取原文补齐。";
+  }
+  if (relationshipCache.ready > 0) {
+    return "人物关系缓存可用于图谱显示。";
+  }
+  if (chapterCache.ready > 0) {
+    return "章节缓存已完成，人物关系缓存尚未生成，后台会继续处理。";
+  }
+  if (chapterCache.queuedOrRunning > 0) {
+    return "章节缓存正在生成，人物关系缓存会随后生成。";
+  }
+  return "章节缓存尚未完成，人物关系缓存会在章节缓存完成后生成。";
+}
+
+export function getRelationshipUpgradeActionLabel(cacheSettingsStatus: RelationshipCacheSettingsStatus | null): string {
+  const relationshipCache = cacheSettingsStatus?.relationshipCache;
+  if (!relationshipCache) {
+    return "立即加入原文补齐队列";
+  }
+  if (relationshipCache.failed > 0 && relationshipCache.legacyMissingRelationships > 0) {
+    return "重试失败并补齐旧缓存";
+  }
+  if (relationshipCache.failed > 0) {
+    return "重试失败关系缓存";
+  }
+  return "立即加入原文补齐队列";
+}
+
 function findExactModel(models: readonly OpenRouterModelSummary[], modelName: string): OpenRouterModelSummary | null {
   const normalized = modelName.trim().toLocaleLowerCase("zh-CN");
   return models.find((model) => model.id.toLocaleLowerCase("zh-CN") === normalized) ?? null;
@@ -795,15 +870,7 @@ function RelationshipGraphCacheSettingsBlock({ currentProject, onCacheSettingsSt
             <section className="cache-status-card relationship-cache-detail-card">
               <div>
                 <h4>当前状态</h4>
-                <p>
-                  {relationshipCache?.waitingForChapterCache
-                    ? "等待章节缓存完成后处理人物关系。"
-                    : relationshipCache && relationshipCache.failed > 0
-                      ? "部分人物关系缓存失败，可以手动加入原文补齐队列重试。"
-                    : relationshipCache && relationshipCache.legacyMissingRelationships > 0
-                      ? "旧章节缓存缺少人物关系索引，将在章节缓存空闲后自动读取原文补齐。"
-                      : "人物关系缓存可用于图谱显示。"}
-                </p>
+                <p>{getRelationshipCacheStatusText(cacheSettingsStatus)}</p>
               </div>
               <div className="cache-status-metrics">
                 <span>
@@ -811,12 +878,16 @@ function RelationshipGraphCacheSettingsBlock({ currentProject, onCacheSettingsSt
                   可用于图谱
                 </span>
                 <span>
+                  <b>{chapterCache?.total ?? 0}</b>
+                  总章节
+                </span>
+                <span>
                   <b>{relationshipCache?.legacyMissingRelationships ?? 0}</b>
                   旧缓存待原文生成
                 </span>
                 <span>
-                  <b>{relationshipCache?.waitingForChapterCache ? relationshipCache.queuedOriginalTextUpgrades : 0}</b>
-                  等待章节缓存
+                  <b>{relationshipCache?.queuedOriginalTextUpgrades ?? 0}</b>
+                  原文补齐队列
                 </span>
                 <span>
                   <b>{relationshipCache?.failed ?? 0}</b>
@@ -824,7 +895,8 @@ function RelationshipGraphCacheSettingsBlock({ currentProject, onCacheSettingsSt
                 </span>
               </div>
               <p className="summary-cache-hint">
-                章节缓存：已完成 {chapterCache?.ready ?? 0}，进行中/排队 {chapterCache?.queuedOrRunning ?? 0}，过期 {chapterCache?.stale ?? 0}，失败 {chapterCache?.failed ?? 0}。
+                章节缓存：总计 {chapterCache?.total ?? 0}，已完成 {chapterCache?.ready ?? 0}，缺失 {chapterCache?.missing ?? 0}，进行中/排队{" "}
+                {chapterCache?.queuedOrRunning ?? 0}，过期 {chapterCache?.stale ?? 0}，失败 {chapterCache?.failed ?? 0}，过短跳过 {chapterCache?.skippedTooShort ?? 0}。
               </p>
               <div className="relationship-cache-source-row">
                 <span>章节缓存派生 {relationshipCache?.sourceSummaryEmbedded ?? 0}</span>
@@ -833,7 +905,7 @@ function RelationshipGraphCacheSettingsBlock({ currentProject, onCacheSettingsSt
               </div>
               <div className="summary-cache-actions">
                 <Button variant="secondary" disabled={!canUpgradeMissing || loading || actionBusy} onClick={() => void upgradeMissingRelationships()}>
-                  立即加入原文补齐队列
+                  {getRelationshipUpgradeActionLabel(cacheSettingsStatus)}
                 </Button>
                 <Button variant="ghost" disabled title="后续阶段支持按章节范围精读原文">
                   原文精读补强
@@ -895,17 +967,24 @@ function SummaryCacheSettingsPane({ currentProject }: SummaryCacheSettingsPanePr
       if (!currentProject) {
         setEntries([]);
         setIndexStatus(null);
+        setRelationshipOverviewStatus(null);
         setSelectedChapterId(null);
         setDetail(null);
         return;
       }
 
-      const [status, cacheEntries] = await Promise.all([
+      const relationshipCacheStatusPromise = api.relationshipGraph
+        .refreshCacheStatus({ projectId: currentProject.id })
+        .then(() => api.relationshipGraph.getCacheSettingsStatus({ projectId: currentProject.id }) as Promise<RelationshipCacheSettingsStatus>)
+        .catch(() => null);
+      const [status, cacheEntries, relationshipCacheStatus] = await Promise.all([
         api.summary.getIndexStatus({ projectId: currentProject.id }) as Promise<SummaryIndexStatus>,
-        api.summary.listCacheEntries({ projectId: currentProject.id }) as Promise<SummaryChapterCacheEntry[]>
+        api.summary.listCacheEntries({ projectId: currentProject.id }) as Promise<SummaryChapterCacheEntry[]>,
+        relationshipCacheStatusPromise
       ]);
       setIndexStatus(status);
       setEntries([...cacheEntries]);
+      setRelationshipOverviewStatus(relationshipCacheStatus);
       const fallbackChapterId = cacheEntries[0]?.chapterId ?? null;
       const chapterId = nextSelectedChapterId && cacheEntries.some((entry) => entry.chapterId === nextSelectedChapterId) ? nextSelectedChapterId : fallbackChapterId;
       setSelectedChapterId(chapterId);
@@ -959,6 +1038,7 @@ function SummaryCacheSettingsPane({ currentProject }: SummaryCacheSettingsPanePr
 
   const selectedCanRunCacheAction = Boolean(project && canRunChapterCacheAction(selectedEntry));
   const relationshipOverviewCache = relationshipOverviewStatus?.relationshipCache ?? null;
+  const relationshipOverviewMetric = formatRelationshipOverviewMetric(indexStatus, relationshipOverviewStatus);
   const relationshipQueuedOrRunning = (relationshipOverviewCache?.queued ?? 0) + (relationshipOverviewCache?.running ?? 0);
   const relationshipNeedsAttention =
     (relationshipOverviewCache?.legacyMissingRelationships ?? 0) +
@@ -984,9 +1064,9 @@ function SummaryCacheSettingsPane({ currentProject }: SummaryCacheSettingsPanePr
               <small>已缓存 / 总章节</small>
             </span>
             <span>
-              <b>{relationshipOverviewCache ? `${relationshipOverviewCache.ready}/${relationshipOverviewCache.total}` : "--"}</b>
+              <b>{relationshipOverviewMetric.value}</b>
               人物关系缓存
-              <small>可用于图谱 / 已登记章节</small>
+              <small>{relationshipOverviewMetric.detail}</small>
             </span>
             <span>
               <b>{(indexStatus?.queuedJobCount ?? 0) + relationshipQueuedOrRunning}</b>

@@ -147,6 +147,67 @@ function extractionPayloadForNames(sourceName: string, targetName: string, label
   });
 }
 
+function extractionPayloadForCharacters(input: {
+  readonly sourceName: string;
+  readonly sourceAliases?: readonly string[];
+  readonly targetName: string;
+  readonly targetAliases?: readonly string[];
+  readonly label?: string;
+}) {
+  return parseRelationshipExtractionPayload({
+    索引信息: {
+      缓存版本: "关系索引一",
+      章节序号: 1,
+      章节标题: "第1章 雾起",
+      语言: "简体中文"
+    },
+    人物: [
+      {
+        姓名: input.sourceName,
+        别名: input.sourceAliases ?? [],
+        实体类型: "person",
+        重要程度: "supporting",
+        身份摘要: `${input.sourceName}的测试身份`,
+        阵营: "测试阵营",
+        置信度: 0.9,
+        证据短句: [`${input.sourceName}出场`]
+      },
+      {
+        姓名: input.targetName,
+        别名: input.targetAliases ?? [],
+        实体类型: "person",
+        重要程度: "main",
+        身份摘要: `${input.targetName}的测试身份`,
+        阵营: "测试阵营",
+        置信度: 0.9,
+        证据短句: [`${input.targetName}出场`]
+      }
+    ],
+    关系事件: [
+      {
+        主体: input.sourceName,
+        客体: input.targetName,
+        关系维度: [{ 名称: input.label ?? "亲属称谓", 说明: "测试关系", 置信度: 0.8 }],
+        主维度: input.label ?? "亲属称谓",
+        基础关系: { 名称: input.label ?? "亲属称谓", 说明: "稳定关系" },
+        剧情关系: { 名称: "照料", 说明: "本章互动" },
+        语义标记: [],
+        方向: "undirected",
+        极性: "positive",
+        强度: 0.5,
+        本章变化: "确认称谓",
+        开始状态: null,
+        结束状态: null,
+        变化原因: null,
+        证据短句: "二人同场",
+        置信度: 0.8,
+        不确定说明: ""
+      }
+    ],
+    不确定项: []
+  });
+}
+
 describe("RelationshipIndexRepository", () => {
   it("accepts relationship cache status and source values for derived and legacy paths", () => {
     expect(relationshipIndexChapterStatusSchema.parse("legacy_missing_relationships")).toBe("legacy_missing_relationships");
@@ -474,6 +535,168 @@ describe("RelationshipIndexRepository", () => {
       latestChapterOrder: 1,
       sourceChapterIds: ["chapter_1"]
     });
+
+    db.close();
+  });
+
+  it("merges cross-chapter entities by aliases and equivalent kinship address terms", () => {
+    const db = createTestDb();
+    const repo = new RelationshipIndexRepository(db);
+
+    repo.replaceChapterExtraction({
+      projectId: "project_1",
+      chapterId: "chapter_1",
+      chapterTitle: "第1章 雾起",
+      chapterOrder: 1,
+      sourceHash: "hash_1",
+      payload: extractionPayloadForCharacters({
+        sourceName: "李春",
+        sourceAliases: ["母亲"],
+        targetName: "林远",
+        label: "母子"
+      }),
+      tokenCount: 0,
+      stableAfterMs: 0,
+      extractorVersion: "chapter-summary-v3-lite-relationship-index",
+      indexedAt: now,
+      now
+    });
+    repo.replaceChapterExtraction({
+      projectId: "project_1",
+      chapterId: "chapter_2",
+      chapterTitle: "第2章 归来",
+      chapterOrder: 2,
+      sourceHash: "hash_2",
+      payload: extractionPayloadForCharacters({
+        sourceName: "妈妈",
+        targetName: "林远",
+        label: "母子"
+      }),
+      tokenCount: 0,
+      stableAfterMs: 0,
+      extractorVersion: "chapter-summary-v3-lite-relationship-index",
+      indexedAt: later,
+      now: later
+    });
+
+    const entities = repo.listEntities("project_1");
+    const mother = entities.find((entity) => entity.canonicalName === "李春");
+    const mentions = repo.listMentions("project_1").filter((mention) => mention.sourceName === "妈妈");
+
+    expect(entities.find((entity) => entity.canonicalName === "妈妈")).toBeUndefined();
+    expect(mother).toMatchObject({
+      aliases: expect.arrayContaining(["母亲", "妈妈"]),
+      firstChapterOrder: 1,
+      latestChapterOrder: 2,
+      sourceChapterIds: ["chapter_1", "chapter_2"]
+    });
+    expect(mentions[0]?.sourceEntityId).toBe(mother?.id);
+
+    db.close();
+  });
+
+  it("merges address-only placeholder entities when a later cached earlier chapter reveals the real name", () => {
+    const db = createTestDb();
+    const repo = new RelationshipIndexRepository(db);
+
+    repo.replaceChapterExtraction({
+      projectId: "project_1",
+      chapterId: "chapter_2",
+      chapterTitle: "第2章 归来",
+      chapterOrder: 2,
+      sourceHash: "hash_2",
+      payload: extractionPayloadForCharacters({
+        sourceName: "妈妈",
+        targetName: "林远",
+        label: "母子"
+      }),
+      tokenCount: 0,
+      stableAfterMs: 0,
+      extractorVersion: "chapter-summary-v3-lite-relationship-index",
+      indexedAt: now,
+      now
+    });
+    repo.replaceChapterExtraction({
+      projectId: "project_1",
+      chapterId: "chapter_1",
+      chapterTitle: "第1章 雾起",
+      chapterOrder: 1,
+      sourceHash: "hash_1",
+      payload: extractionPayloadForCharacters({
+        sourceName: "李春",
+        sourceAliases: ["母亲"],
+        targetName: "林远",
+        label: "母子"
+      }),
+      tokenCount: 0,
+      stableAfterMs: 0,
+      extractorVersion: "chapter-summary-v3-lite-relationship-index",
+      indexedAt: later,
+      now: later
+    });
+
+    const entities = repo.listEntities("project_1");
+    const mother = entities.find((entity) => entity.canonicalName === "李春");
+    const mentions = repo.listMentions("project_1").filter((mention) => mention.sourceName === "妈妈");
+
+    expect(entities.find((entity) => entity.canonicalName === "妈妈")).toBeUndefined();
+    expect(mother).toMatchObject({
+      aliases: expect.arrayContaining(["母亲", "妈妈"]),
+      firstChapterOrder: 1,
+      latestChapterOrder: 2,
+      sourceChapterIds: ["chapter_1", "chapter_2"]
+    });
+    expect(mentions[0]?.sourceEntityId).toBe(mother?.id);
+
+    db.close();
+  });
+
+  it("does not merge two named characters only because they share generic kinship aliases", () => {
+    const db = createTestDb();
+    const repo = new RelationshipIndexRepository(db);
+
+    repo.replaceChapterExtraction({
+      projectId: "project_1",
+      chapterId: "chapter_1",
+      chapterTitle: "第1章 雾起",
+      chapterOrder: 1,
+      sourceHash: "hash_1",
+      payload: extractionPayloadForCharacters({
+        sourceName: "李春",
+        sourceAliases: ["母亲"],
+        targetName: "林远",
+        label: "母子"
+      }),
+      tokenCount: 0,
+      stableAfterMs: 0,
+      extractorVersion: "chapter-summary-v3-lite-relationship-index",
+      indexedAt: now,
+      now
+    });
+    repo.replaceChapterExtraction({
+      projectId: "project_1",
+      chapterId: "chapter_2",
+      chapterTitle: "第2章 归来",
+      chapterOrder: 2,
+      sourceHash: "hash_2",
+      payload: extractionPayloadForCharacters({
+        sourceName: "王梅",
+        sourceAliases: ["妈妈"],
+        targetName: "赵安",
+        label: "母子"
+      }),
+      tokenCount: 0,
+      stableAfterMs: 0,
+      extractorVersion: "chapter-summary-v3-lite-relationship-index",
+      indexedAt: later,
+      now: later
+    });
+
+    const entities = repo.listEntities("project_1");
+
+    expect(entities.find((entity) => entity.canonicalName === "李春")).toBeDefined();
+    expect(entities.find((entity) => entity.canonicalName === "王梅")).toBeDefined();
+    expect(entities.filter((entity) => entity.aliases.some((alias) => alias === "母亲" || alias === "妈妈"))).toHaveLength(2);
 
     db.close();
   });

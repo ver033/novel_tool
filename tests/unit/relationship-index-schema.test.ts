@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   parseRelationshipExtractionPayload,
   relationshipEntityKey,
+  relationshipEntityLookupKeys,
   normalizeRelationshipCharacterName
 } from "../../src/main/shared/relationship-index";
 
@@ -74,6 +75,9 @@ describe("relationship index extraction schema", () => {
   it("normalizes names without deriving relationship semantics", () => {
     expect(normalizeRelationshipCharacterName("  林   砚\n")).toBe("林 砚");
     expect(relationshipEntityKey("  林   砚\n")).toBe("林 砚");
+    expect(relationshipEntityLookupKeys("妈妈")).toEqual(["address:母亲"]);
+    expect(relationshipEntityLookupKeys("母亲")).toEqual(["address:母亲"]);
+    expect(relationshipEntityLookupKeys("林砚")).toEqual(["林砚"]);
   });
 
   it("parses arbitrary LLM-generated dimensions and dual-layer relationship labels", () => {

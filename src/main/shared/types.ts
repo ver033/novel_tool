@@ -352,10 +352,13 @@ export type RelationshipOriginalTextUpgradeQueueResult = {
 };
 export type RelationshipCacheSettingsStatus = {
   readonly chapterCache: {
+    readonly total: number;
     readonly ready: number;
     readonly queuedOrRunning: number;
     readonly stale: number;
     readonly failed: number;
+    readonly missing: number;
+    readonly skippedTooShort: number;
   };
   readonly relationshipCache: RelationshipGraphIndexStatus & {
     readonly sourceSummaryEmbedded: number;

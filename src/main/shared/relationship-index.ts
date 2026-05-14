@@ -38,6 +38,31 @@ export function relationshipEntityKey(name: string): string {
   return normalizeRelationshipCharacterName(name).toLocaleLowerCase("zh-CN");
 }
 
+const relationshipAddressGroups: readonly (readonly string[])[] = [
+  ["母亲", "妈妈", "妈", "娘", "阿娘", "娘亲", "母后", "额娘", "妈咪"],
+  ["父亲", "爸爸", "爸", "爹", "阿爹", "爹爹", "父王", "父皇"],
+  ["大姨", "大姨母"],
+  ["二姨", "二姨母"],
+  ["小姨", "小姨母"],
+  ["姨母", "姨妈"],
+  ["师父", "师傅", "师尊"]
+];
+
+const relationshipAddressKeyByName = new Map<string, string>(
+  relationshipAddressGroups.flatMap((group) => {
+    const canonical = relationshipEntityKey(group[0]);
+    return group.map((name) => [relationshipEntityKey(name), `address:${canonical}`] as const);
+  })
+);
+
+export function relationshipEntityLookupKeys(name: string): string[] {
+  const key = relationshipEntityKey(name);
+  if (!key) {
+    return [];
+  }
+  return [relationshipAddressKeyByName.get(key) ?? key];
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
