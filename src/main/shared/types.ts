@@ -38,6 +38,9 @@ import type {
   projectRenameInputSchema,
   projectSelectSavePathInputSchema,
   projectSuggestFilePathInputSchema,
+  relationshipGraphGetInputSchema,
+  relationshipGraphRebuildInputSchema,
+  relationshipGraphStatusInputSchema,
   scratchCreateInputSchema,
   scratchDeleteInputSchema,
   scratchListInputSchema,
@@ -54,6 +57,7 @@ import type {
   taskPromptPresetSchema
 } from "./schemas";
 import type { ProofreadIssue } from "./proofread";
+import type { RelationshipGraphIndexStatus, RelationshipGraphResult } from "./relationship-index";
 import type { WritingContextPlanMetadata } from "./ai-candidate-metadata";
 import type { ChapterAiSummaryChunkPayload, ChapterAiSummaryPayload, SummaryJobStatus, SummaryJobType, SummaryStatus } from "./summary-index";
 
@@ -334,6 +338,10 @@ export type SummaryCancelCurrentJobInput = z.input<typeof summaryCancelCurrentJo
 export type SummaryListCacheEntriesInput = z.input<typeof summaryListCacheEntriesInputSchema>;
 export type SummaryGetChapterCacheInput = z.input<typeof summaryGetChapterCacheInputSchema>;
 export type SummaryClearAndRetryChapterCacheInput = z.input<typeof summaryClearAndRetryChapterCacheInputSchema>;
+export type RelationshipGraphGetInput = z.input<typeof relationshipGraphGetInputSchema>;
+export type RelationshipGraphStatusInput = z.input<typeof relationshipGraphStatusInputSchema>;
+export type RelationshipGraphRebuildInput = z.input<typeof relationshipGraphRebuildInputSchema>;
+export type { RelationshipGraphIndexStatus, RelationshipGraphResult };
 export type SummaryIndexPausedReason = "ai_not_configured" | "foreground_ai_active" | "background_disabled" | null;
 export type SummaryChapterCacheState = SummaryStatus | "missing" | "queued" | "running" | "cancelled";
 export type SummaryChapterCacheEntry = {
@@ -468,6 +476,11 @@ export const ipcChannels = {
     listCacheEntries: "novelTool:summary:listCacheEntries",
     getChapterCache: "novelTool:summary:getChapterCache",
     clearAndRetryChapterCache: "novelTool:summary:clearAndRetryChapterCache"
+  },
+  relationshipGraph: {
+    getGraph: "novelTool:relationshipGraph:getGraph",
+    getStatus: "novelTool:relationshipGraph:getStatus",
+    rebuild: "novelTool:relationshipGraph:rebuild"
   },
   scratch: {
     list: "novelTool:scratch:list",

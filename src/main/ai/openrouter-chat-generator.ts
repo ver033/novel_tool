@@ -21,6 +21,10 @@ import {
   type ChapterIndexSummaryInput,
   type ContinuityCheckInput
 } from "./summary-prompts";
+import {
+  buildRelationshipIndexMessages,
+  type RelationshipIndexSummaryInput
+} from "../relationships/relationship-index-prompts";
 import { runChatAgentLoop, type ChatAgentModel } from "./chat-agent-harness";
 import { buildChatAgentMemoryText } from "./chat-agent-memory";
 import type {
@@ -48,6 +52,10 @@ import {
   type ChapterAiSummaryPayload,
   type ContinuityCheckResult
 } from "../shared/summary-index";
+import {
+  parseRelationshipExtractionPayload,
+  type RelationshipIndexExtractionPayload
+} from "../shared/relationship-index";
 import { getTokenBudget, type TokenBudget } from "./token-budget";
 import { estimateMessagesTokens, estimateTextTokens, truncateTextToTokenBudget } from "./token-estimator";
 import type { SettingsService } from "../settings/settings-service";
@@ -63,6 +71,7 @@ const CONTEXT_BATCH_SUMMARY_MAX_TOKENS = 3200;
 const CONTEXT_SUMMARY_MERGE_MAX_TOKENS = 3200;
 const CHAT_MEMORY_SUMMARY_MAX_TOKENS = 2200;
 const SUMMARY_INDEX_MAX_TOKENS = 12_000;
+const RELATIONSHIP_INDEX_MAX_TOKENS = 8000;
 const CHAT_MEMORY_SUMMARY_PROMPT_RATIO = 0.75;
 const CHAT_MEMORY_SUMMARY_RECOMPRESS_MAX_ROUNDS = 2;
 
@@ -207,6 +216,25 @@ function parseSummaryIndexJson<T>(label: string, content: string, schema: z.ZodT
     throw new Error(formatSummarySchemaError(label, result.error.issues as readonly SummarySchemaIssue[]));
   }
   return result.data;
+}
+
+function parseRelationshipIndexJson(label: string, content: string): RelationshipIndexExtractionPayload {
+  if (!content.trim()) {
+    throw new Error(`${label}为空。`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stripJsonCodeFence(content));
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`${label}无效：模型没有返回合法 JSON（${reason}）。这通常是模型输出被截断或混入了非 JSON 文本，不是章节正文内容问题。`);
+  }
+  try {
+    return parseRelationshipExtractionPayload(parsed);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`${label}无效：模型返回的 JSON 结构不符合人物关系索引契约（${reason}）。`);
+  }
 }
 
 export function buildChatCompletionMessages(input: AiChatGenerationInput, chatBudget: TokenBudget = getTokenBudget("chat")): OpenRouterMessage[] {
@@ -662,6 +690,42 @@ export class OpenRouterChatGenerator implements AiChatGenerator {
       throw new Error("章节索引摘要被截断，请换用输出额度更高的模型后重试。");
     }
     return parseSummaryIndexJson("章节索引摘要", result.content, chapterAiSummaryPayloadSchema);
+  }
+
+  async extractChapterRelationshipsForIndex(
+    input: RelationshipIndexSummaryInput,
+    options: AiGenerationOptions = {}
+  ): Promise<RelationshipIndexExtractionPayload> {
+    const { chatBudget, client, modelName } = await this.createClient();
+    const maxCompletionTokens = capInternalMaxCompletionTokens(RELATIONSHIP_INDEX_MAX_TOKENS, chatBudget);
+    const messages = buildRelationshipIndexMessages(input);
+    logDevLlmPrompt({
+      kind: "relationship-index:chapter",
+      modelName,
+      messages,
+      meta: {
+        chapterId: input.chapterId,
+        chapterTitle: input.title,
+        knownEntityCount: input.knownEntities.length,
+        ordinal: input.ordinal,
+        projectId: input.projectId
+      },
+      params: {
+        maxCompletionTokens,
+        temperature: 0.1
+      }
+    });
+    const result = await this.runInternalStreamingCompletion(client, {
+      messages,
+      maxCompletionTokens,
+      temperature: 0.1,
+      responseFormat: { type: "json_object" },
+      signal: options.signal
+    });
+    if (result.truncated) {
+      throw new Error("章节人物关系索引被截断，请换用输出额度更高的模型后重试。");
+    }
+    return parseRelationshipIndexJson("章节人物关系索引", result.content);
   }
 
   async summarizeChapterChunkForIndex(input: ChapterChunkIndexSummaryInput, options: AiGenerationOptions = {}): Promise<ChapterAiSummaryChunkPayload> {

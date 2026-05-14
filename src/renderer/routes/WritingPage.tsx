@@ -13,6 +13,7 @@ import { EditorContextMenu, type EditorContextMenuState } from "../layout/Editor
 import { FloatingWorkspaceLayer } from "../layout/FloatingWorkspaceLayer";
 import type { FloatingPanelGeometry, FloatingPanelKind, FloatingPanelState } from "../layout/floating-panel-state";
 import { LeftChapterTree, type ChapterAuxiliaryInfo } from "../layout/LeftChapterTree";
+import { ProjectModuleRail, type ProjectModule } from "../layout/ProjectModuleRail";
 import { RightUtilitySidebar, type SidebarTab, type TaskType } from "../layout/RightUtilitySidebar";
 import { outlineStorageKey } from "../sidebar/OutlinePanel";
 import type { AiChatDraftSeed } from "../sidebar/chat-draft";
@@ -250,6 +251,7 @@ type WritingPageProps = {
   readonly onOpenFloatingAiChat: () => void;
   readonly onOpenFloatingPanel: (kind: FloatingPanelKind, chapterId?: string | null, scratchNoteId?: string | null) => void;
   readonly onOpenFloatingScratchpad: (chapterId?: string | null, scratchNoteId?: string | null) => void;
+  readonly onOpenRelationshipGraph: () => void;
   readonly onOpenScratchpad: () => void;
   readonly onRaiseFloatingPanel: (panelId: string) => void;
   readonly onResetAllFloatingPanels: () => void;
@@ -296,6 +298,7 @@ export function WritingPage({
   onOpenFloatingAiChat,
   onOpenFloatingPanel,
   onOpenFloatingScratchpad,
+  onOpenRelationshipGraph,
   onOpenScratchpad,
   onRaiseFloatingPanel,
   onResetAllFloatingPanels,
@@ -581,6 +584,10 @@ export function WritingPage({
   );
   const handleExport = useCallback(() => flushBeforeNavigation(onExport), [flushBeforeNavigation, onExport]);
   const handleImport = useCallback(() => flushBeforeNavigation(onImport), [flushBeforeNavigation, onImport]);
+  const handleOpenRelationshipGraph = useCallback(
+    () => flushBeforeNavigation(onOpenRelationshipGraph),
+    [flushBeforeNavigation, onOpenRelationshipGraph]
+  );
   const handleWelcome = useCallback(() => {
     setConfirmWelcomeOpen(true);
   }, []);
@@ -592,6 +599,18 @@ export function WritingPage({
     flushBeforeNavigation(onWelcome);
   }, [flushBeforeNavigation, onWelcome]);
   const handleSettings = useCallback((category?: SettingsCategory) => flushBeforeNavigation(() => onSettings(category)), [flushBeforeNavigation, onSettings]);
+  const handleModuleNavigate = useCallback(
+    (module: ProjectModule) => {
+      if (module === "relationshipGraph") {
+        handleOpenRelationshipGraph();
+        return;
+      }
+      if (module === "settings") {
+        handleSettings();
+      }
+    },
+    [handleOpenRelationshipGraph, handleSettings]
+  );
   const handleFocusModeToggle = useCallback(() => {
     setFocusMode((current) => !current);
     setSearchValue("");
@@ -879,6 +898,7 @@ export function WritingPage({
           chapterListHidden && !focusMode ? "chapter-hidden" : ""
         } ${editorUsesFullWidth ? "full-width-editor" : ""} ${editorThemeClass}`}
       >
+        {!focusMode ? <ProjectModuleRail activeModule="writing" onNavigate={handleModuleNavigate} /> : null}
         <PanelGroup
           className="workspace-shell-panels"
           defaultLayout={chapterLayout.defaultLayout}

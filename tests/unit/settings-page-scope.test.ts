@@ -45,6 +45,10 @@ describe("settings page scope", () => {
 
     expect(settings).toContain("章节索引缓存");
     expect(settings).toContain("完整缓存信息");
+    expect(settings).toContain("人物关系缓存结果");
+    expect(settings).toContain("RelationshipGraphCachePanel");
+    expect(settings).toContain("api.relationshipGraph.getStatus");
+    expect(settings).toContain("api.relationshipGraph.getGraph");
     expect(settings).toContain("点击查看完整缓存");
     expect(settings).toContain("getChapterCacheActionLabel");
     expect(settings).toContain("生成本章缓存");
@@ -59,7 +63,8 @@ describe("settings page scope", () => {
     expect(settings).not.toContain("api.project.getCurrentProject");
     expect(settings).toContain("currentProject: ProjectRecord | null");
     expect(settings).toContain("<SummaryCacheSettingsPane currentProject={currentProject} />");
-    expect(app).toContain('currentProject={settingsReturnPage === "writing" ? appStore.currentProject : null}');
+    expect(app).toContain('type SettingsReturnPage = "welcome" | "writing" | "relationshipGraph"');
+    expect(app).toContain('currentProject={settingsReturnPage === "welcome" ? null : appStore.currentProject}');
     expect(settings).not.toContain("pendingChapterId");
     expect(settings).not.toContain("选择章节缓存");
     expect(settings).not.toContain("保存缓存编辑");

@@ -41,6 +41,9 @@ import type {
   ProjectRenameInput,
   ProjectSelectSavePathInput,
   ProjectSuggestFilePathInput,
+  RelationshipGraphGetInput,
+  RelationshipGraphRebuildInput,
+  RelationshipGraphStatusInput,
   ScratchCreateInput,
   ScratchDeleteInput,
   ScratchListInput,
@@ -108,6 +111,11 @@ export type NovelToolApi = {
     readonly listCacheEntries: (input: SummaryListCacheEntriesInput) => Promise<unknown>;
     readonly getChapterCache: (input: SummaryGetChapterCacheInput) => Promise<unknown>;
     readonly clearAndRetryChapterCache: (input: SummaryClearAndRetryChapterCacheInput) => Promise<unknown>;
+  };
+  readonly relationshipGraph: {
+    readonly getGraph: (input: RelationshipGraphGetInput) => Promise<unknown>;
+    readonly getStatus: (input: RelationshipGraphStatusInput) => Promise<unknown>;
+    readonly rebuild: (input: RelationshipGraphRebuildInput) => Promise<unknown>;
   };
   readonly ai: {
     readonly createTask: (input: AiCreateTaskInput) => Promise<unknown>;
@@ -190,6 +198,11 @@ export const novelToolApi: NovelToolApi = Object.freeze({
     listCacheEntries: (input: SummaryListCacheEntriesInput) => ipcRenderer.invoke(ipcChannels.summary.listCacheEntries, input),
     getChapterCache: (input: SummaryGetChapterCacheInput) => ipcRenderer.invoke(ipcChannels.summary.getChapterCache, input),
     clearAndRetryChapterCache: (input: SummaryClearAndRetryChapterCacheInput) => ipcRenderer.invoke(ipcChannels.summary.clearAndRetryChapterCache, input)
+  }),
+  relationshipGraph: Object.freeze({
+    getGraph: (input: RelationshipGraphGetInput) => ipcRenderer.invoke(ipcChannels.relationshipGraph.getGraph, input),
+    getStatus: (input: RelationshipGraphStatusInput) => ipcRenderer.invoke(ipcChannels.relationshipGraph.getStatus, input),
+    rebuild: (input: RelationshipGraphRebuildInput) => ipcRenderer.invoke(ipcChannels.relationshipGraph.rebuild, input)
   }),
   ai: Object.freeze({
     createTask: (input: AiCreateTaskInput) => ipcRenderer.invoke(ipcChannels.ai.createTask, input),

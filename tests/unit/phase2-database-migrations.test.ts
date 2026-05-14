@@ -44,6 +44,10 @@ describe("phase 2 database migrations", () => {
       "import_jobs",
       "projects",
       "prompt_presets",
+      "relationship_entities",
+      "relationship_index_chapters",
+      "relationship_index_jobs",
+      "relationship_mentions",
       "schema_migrations",
       "scratch_notes",
       "settings",
@@ -61,7 +65,8 @@ describe("phase 2 database migrations", () => {
       { version: 9 },
       { version: 10 },
       { version: 11 },
-      { version: 12 }
+      { version: 12 },
+      { version: 13 }
     ]);
     expect(db.prepare("PRAGMA table_info(import_jobs)").all().find((row) => row.name === "project_id")).toMatchObject({ notnull: 0 });
     expect(db.prepare("PRAGMA table_info(ai_task_candidates)").all().find((row) => row.name === "metadata_json")).toMatchObject({
@@ -95,7 +100,7 @@ describe("phase 2 database migrations", () => {
     runMigrations(db);
     runMigrations(db);
 
-    expect(db.prepare("SELECT COUNT(*) AS count FROM schema_migrations").get()).toEqual({ count: 12 });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM schema_migrations").get()).toEqual({ count: 13 });
 
     db.close();
   });
@@ -181,7 +186,7 @@ describe("phase 2 database migrations", () => {
     expect(db.prepare("SELECT COUNT(*) AS count FROM arc_ai_summaries").get()).toEqual({ count: 0 });
     expect(db.prepare("SELECT COUNT(*) AS count FROM book_ai_summaries").get()).toEqual({ count: 0 });
     expect(db.prepare("SELECT COUNT(*) AS count FROM summary_jobs").get()).toEqual({ count: 0 });
-    expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").get()).toEqual({ version: 12 });
+    expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").get()).toEqual({ version: 13 });
 
     db.close();
   });
@@ -239,7 +244,7 @@ describe("phase 2 database migrations", () => {
       change_summary: "旧版校对结果已失效，请重新生成。",
       metadata_json: null
     });
-    expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").get()).toEqual({ version: 12 });
+    expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").get()).toEqual({ version: 13 });
 
     db.close();
   });

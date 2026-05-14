@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { relationshipGraphGetInputSchema as relationshipGraphGetInputBaseSchema } from "./relationship-index";
 
 const nonEmptyString = z.string().trim().min(1);
 const idSchema = nonEmptyString.max(128);
@@ -468,6 +469,26 @@ export const summaryGetChapterCacheInputSchema = summaryIndexStatusInputSchema
   })
   .strict();
 export const summaryClearAndRetryChapterCacheInputSchema = summaryGetChapterCacheInputSchema;
+
+export const relationshipGraphGetInputSchema = z
+  .object(relationshipGraphGetInputBaseSchema.shape)
+  .strict()
+  .refine((value) => !value.chapterFrom || !value.chapterTo || value.chapterFrom <= value.chapterTo, {
+    message: "chapterFrom must be less than or equal to chapterTo",
+    path: ["chapterFrom"]
+  });
+
+export const relationshipGraphStatusInputSchema = z
+  .object({
+    projectId: idSchema
+  })
+  .strict();
+
+export const relationshipGraphRebuildInputSchema = relationshipGraphStatusInputSchema
+  .extend({
+    force: z.boolean().optional()
+  })
+  .strict();
 
 export class IpcPayloadValidationError extends Error {
   constructor(readonly issues: z.ZodIssue[]) {

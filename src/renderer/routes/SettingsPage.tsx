@@ -6,6 +6,7 @@ import {
   X
 } from "@phosphor-icons/react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import type { RelationshipGraphIndexStatus, RelationshipGraphResult } from "../../main/shared/relationship-index";
 import type {
   AiProviderSettingsState,
   EditorSettings,
@@ -23,6 +24,7 @@ import { Button } from "../components/Button";
 import { IconButton } from "../components/IconButton";
 import { Input } from "../components/Input";
 import { Textarea } from "../components/Textarea";
+import { RelationshipGraphCachePanel } from "../relationship-graph/RelationshipGraphCachePanel";
 import { getNovelToolApi } from "../state/app-store";
 
 export type SettingsCategory = "通用" | "编辑器" | "AI 服务" | "提示词预设" | "章节索引缓存" | "导入导出" | "备份与数据" | "快捷键";
@@ -690,6 +692,73 @@ type SummaryCacheSettingsPaneProps = {
   readonly currentProject: ProjectRecord | null;
 };
 
+type RelationshipGraphCacheSettingsBlockProps = {
+  readonly currentProject: ProjectRecord | null;
+};
+
+function RelationshipGraphCacheSettingsBlock({ currentProject }: RelationshipGraphCacheSettingsBlockProps) {
+  const api = useMemo(getNovelToolApi, []);
+  const [graph, setGraph] = useState<RelationshipGraphResult | null>(null);
+  const [relationshipStatus, setRelationshipStatus] = useState<RelationshipGraphIndexStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  async function loadRelationshipCache(): Promise<void> {
+    setLoading(true);
+    setError(null);
+    try {
+      if (!currentProject) {
+        setGraph(null);
+        setRelationshipStatus(null);
+        return;
+      }
+
+      const [status, result] = await Promise.all([
+        api.relationshipGraph.getStatus({ projectId: currentProject.id }) as Promise<RelationshipGraphIndexStatus>,
+        api.relationshipGraph.getGraph({
+          projectId: currentProject.id,
+          chapterCursor: "all",
+          roleScope: "all",
+          mode: "global",
+          hopDepth: 1,
+          minConfidence: 0,
+          includeUncertain: true
+        }) as Promise<RelationshipGraphResult>
+      ]);
+      setRelationshipStatus(status);
+      setGraph(result);
+    } catch (reason) {
+      setError(formatError(reason));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void loadRelationshipCache();
+  }, [currentProject?.id]);
+
+  return (
+    <div className="settings-card wide relationship-cache-settings-card">
+      <div className="settings-card-head">
+        <div>
+          <h3>人物关系缓存结果</h3>
+          <p className="muted">随章节索引同次生成，用来检查关系图当前能读到多少人物、关系和章节。</p>
+        </div>
+        <Button variant="ghost" disabled={loading} onClick={() => void loadRelationshipCache()}>
+          刷新
+        </Button>
+      </div>
+      {!currentProject ? (
+        <div className="empty-inline">请先打开项目，再查看人物关系缓存。</div>
+      ) : (
+        <RelationshipGraphCachePanel graph={graph} loading={loading} status={relationshipStatus} />
+      )}
+      {error ? <p className="settings-message error">{error}</p> : null}
+    </div>
+  );
+}
+
 function SummaryCacheSettingsPane({ currentProject }: SummaryCacheSettingsPaneProps) {
   const api = useMemo(getNovelToolApi, []);
   const [project, setProject] = useState<ProjectRecord | null>(null);
@@ -904,6 +973,8 @@ function SummaryCacheSettingsPane({ currentProject }: SummaryCacheSettingsPanePr
         {message ? <p className="settings-message saved">{message}</p> : null}
         {error ? <p className="settings-message error">{error}</p> : null}
       </div>
+
+      <RelationshipGraphCacheSettingsBlock currentProject={currentProject} />
 
       {project ? (
         <div className="settings-card wide summary-cache-browser">

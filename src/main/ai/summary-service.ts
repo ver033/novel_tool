@@ -1,5 +1,6 @@
 import type { SummaryIndexInvalidationInput, SummaryIndexInvalidator } from "../chapter/chapter-service";
 import type { ChapterRepository } from "../db/repositories/chapter-repo";
+import type { RelationshipIndexRepository } from "../db/repositories/relationship-index-repo";
 import {
   SummaryRepository,
   type ArcAiSummaryRecord,
@@ -24,6 +25,7 @@ import {
   type ChapterAiSummaryPayload,
   type SummaryJobType
 } from "../shared/summary-index";
+import { parseRelationshipExtractionPayload, type RelationshipIndexExtractionPayload } from "../shared/relationship-index";
 import { countWritingUnits } from "../shared/text";
 import type {
   ChapterContent,
@@ -56,6 +58,8 @@ export const CHAPTER_INDEX_HUGE_CONTEXT_DIRECT_MAX_UNITS = 30_000;
 export const CHAPTER_INDEX_MEDIUM_CONTEXT_CHUNK_TARGET_UNITS = 8_000;
 export const CHAPTER_INDEX_LARGE_CONTEXT_CHUNK_TARGET_UNITS = 10_000;
 export const CHAPTER_INDEX_HUGE_CONTEXT_CHUNK_TARGET_UNITS = 12_000;
+export const CHAPTER_SUMMARY_RELATIONSHIP_INDEX_VERSION = "chapter-summary-v3-lite-relationship-index";
+export const CHAPTER_SUMMARY_RELATIONSHIP_STABLE_IDLE_MS = 60 * 60 * 1000;
 
 export class SummarySourceChangedError extends Error {
   constructor(message: string) {
@@ -93,6 +97,7 @@ type ChapterIndexSizing = {
 
 type SummaryServiceOptions = {
   readonly generator?: SummaryIndexGenerator;
+  readonly relationshipIndexRepo?: RelationshipIndexRepository;
 };
 
 export type MaybeEnqueueChapterSummaryInput = {
@@ -558,6 +563,77 @@ function stringifyForSummary(value: unknown): string {
   return String(value);
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+type RawRelationshipIndexPayload = {
+  readonly 人物: readonly Record<string, unknown>[];
+  readonly 关系事件: readonly Record<string, unknown>[];
+  readonly 不确定项: readonly string[];
+};
+
+function relationshipIndexFromSummaryPayload(structured: ChapterAiSummaryPayload | ChapterAiSummaryChunkPayload): RawRelationshipIndexPayload | null {
+  const relationshipIndex = (structured as { readonly 人物关系索引?: unknown }).人物关系索引;
+  if (!isPlainObject(relationshipIndex)) {
+    return null;
+  }
+  const characters = Array.isArray(relationshipIndex.人物) ? relationshipIndex.人物.filter(isPlainObject) : [];
+  const mentions = Array.isArray(relationshipIndex.关系事件) ? relationshipIndex.关系事件.filter(isPlainObject) : [];
+  const uncertainties = Array.isArray(relationshipIndex.不确定项)
+    ? relationshipIndex.不确定项.map((item) => String(item).trim()).filter(Boolean)
+    : [];
+  return {
+    人物: characters,
+    关系事件: mentions,
+    不确定项: uncertainties
+  };
+}
+
+function relationshipCharacterKey(item: Record<string, unknown>): string {
+  return stringifyForSummary(item.姓名 ?? item.name ?? item.人物 ?? item).trim();
+}
+
+function relationshipMentionKey(item: Record<string, unknown>): string {
+  return [
+    stringifyForSummary(item.主体 ?? item.source ?? item.sourceName),
+    stringifyForSummary(item.客体 ?? item.target ?? item.targetName),
+    stringifyForSummary(item.主维度 ?? item.primaryDimensionName),
+    stringifyForSummary(item.基础关系 ?? item.baseRelation),
+    stringifyForSummary(item.剧情关系 ?? item.plotRelation),
+    stringifyForSummary(item.证据短句 ?? item.evidenceQuote)
+  ]
+    .join("|")
+    .trim();
+}
+
+function relationshipIndexExtractionFromSummary(content: ChapterContent, structured: ChapterAiSummaryPayload): RelationshipIndexExtractionPayload | null {
+  const relationshipIndex = relationshipIndexFromSummaryPayload(structured);
+  if (!relationshipIndex) {
+    return null;
+  }
+  return parseRelationshipExtractionPayload({
+    索引信息: {
+      缓存版本: CHAPTER_SUMMARY_RELATIONSHIP_INDEX_VERSION,
+      章节序号: content.sortOrder + 1,
+      章节标题: content.title,
+      语言: "简体中文"
+    },
+    人物: relationshipIndex.人物,
+    关系事件: relationshipIndex.关系事件,
+    不确定项: relationshipIndex.不确定项
+  });
+}
+
+function relationshipStableEligibleAt(content: ChapterContent): string {
+  const editedAt = content.contentUpdatedAt ?? content.updatedAt;
+  return new Date(parseTime(editedAt) + CHAPTER_SUMMARY_RELATIONSHIP_STABLE_IDLE_MS).toISOString();
+}
+
+function hasReachedRelationshipStableWindow(content: ChapterContent, now: string): boolean {
+  return parseTime(now) >= parseTime(relationshipStableEligibleAt(content));
+}
+
 function mergeLongChapterChunks(content: ChapterContent, chunks: readonly ChapterAiSummaryChunkRecord[]): ChapterAiSummaryPayload {
   const orderedChunks = [...chunks].sort((left, right) => left.chunkIndex - right.chunkIndex);
   const chunkSummaries = orderedChunks
@@ -600,6 +676,20 @@ function mergeLongChapterChunks(content: ChapterContent, chunks: readonly Chapte
   );
   const risks = uniqueStrings(orderedChunks.flatMap((chunk) => chunkRisks(chunk)), 8);
   const unresolvedQuestions = uniqueStrings(orderedChunks.flatMap((chunk) => chunkUnresolvedQuestions(chunk)), 8);
+  const relationshipCharacters = uniqueRecords(
+    orderedChunks.flatMap((chunk) => relationshipIndexFromSummaryPayload(chunk.structured)?.人物 ?? []),
+    relationshipCharacterKey,
+    24
+  );
+  const relationshipMentions = uniqueRecords(
+    orderedChunks.flatMap((chunk) => relationshipIndexFromSummaryPayload(chunk.structured)?.关系事件 ?? []),
+    relationshipMentionKey,
+    40
+  );
+  const relationshipUncertainties = uniqueStrings(
+    orderedChunks.flatMap((chunk) => relationshipIndexFromSummaryPayload(chunk.structured)?.不确定项 ?? []),
+    12
+  );
 
   return {
     章节信息: {
@@ -658,6 +748,11 @@ function mergeLongChapterChunks(content: ChapterContent, chunks: readonly Chapte
           ],
     人物认知边界: characterKnowledge,
     关系变化: uniqueStrings(characterStates.flatMap((item) => item.关系变化), 10),
+    人物关系索引: {
+      人物: relationshipCharacters,
+      关系事件: relationshipMentions,
+      不确定项: relationshipUncertainties
+    },
     时间地点: {
       本章时间: firstDefined(timePlaces.map((item) => item.time), "未明确"),
       主要地点: places,
@@ -1325,6 +1420,7 @@ export class SummaryService implements SummaryIndexInvalidator {
       createdAt: now,
       updatedAt: now
     });
+    this.persistRelationshipIndexFromChapterSummary(latestContent, sourceHash, structured, now);
     this.enqueueArcForChapterIfReady(projectId, summary.chapterOrder, now);
     return summary;
   }
@@ -1445,8 +1541,76 @@ export class SummaryService implements SummaryIndexInvalidator {
       createdAt: now,
       updatedAt: now
     });
+    this.persistRelationshipIndexFromChapterSummary(latestContent, sourceHash, structured, now);
     this.enqueueArcForChapterIfReady(projectId, summary.chapterOrder, now);
     return summary;
+  }
+
+  materializeEligibleRelationshipIndexes(projectId: string, now: string): void {
+    if (!this.options.relationshipIndexRepo) {
+      return;
+    }
+    for (const summary of this.summaryRepo.listChapterSummaries(projectId)) {
+      if (summary.status !== "ready") {
+        continue;
+      }
+      const content = this.chapterRepo.getContent(summary.chapterId);
+      if (!content || content.projectId !== projectId || computeChapterContentHash(content.plainText) !== summary.contentHash) {
+        continue;
+      }
+      this.persistRelationshipIndexFromChapterSummary(content, summary.contentHash, summary.structured, now);
+    }
+  }
+
+  private persistRelationshipIndexFromChapterSummary(
+    content: ChapterContent,
+    sourceHash: string,
+    structured: ChapterAiSummaryPayload,
+    now: string
+  ): void {
+    const relationshipIndexRepo = this.options.relationshipIndexRepo;
+    if (!relationshipIndexRepo) {
+      return;
+    }
+    try {
+      const payload = relationshipIndexExtractionFromSummary(content, structured);
+      if (!payload) {
+        return;
+      }
+      if (!hasReachedRelationshipStableWindow(content, now)) {
+        const existing = relationshipIndexRepo.getChapterIndexState(content.projectId, content.id);
+        if (existing?.status === "ready" && existing.contentHash === sourceHash) {
+          return;
+        }
+        relationshipIndexRepo.markChapterWaitingStable({
+          projectId: content.projectId,
+          chapterId: content.id,
+          chapterTitle: content.title,
+          chapterOrder: content.sortOrder + 1,
+          contentHash: sourceHash,
+          stableAfterMs: CHAPTER_SUMMARY_RELATIONSHIP_STABLE_IDLE_MS,
+          extractorVersion: CHAPTER_SUMMARY_RELATIONSHIP_INDEX_VERSION,
+          eligibleAt: relationshipStableEligibleAt(content),
+          now
+        });
+        return;
+      }
+      relationshipIndexRepo.replaceChapterExtraction({
+        projectId: content.projectId,
+        chapterId: content.id,
+        chapterTitle: content.title,
+        chapterOrder: content.sortOrder + 1,
+        sourceHash,
+        payload,
+        tokenCount: 0,
+        stableAfterMs: CHAPTER_SUMMARY_RELATIONSHIP_STABLE_IDLE_MS,
+        extractorVersion: CHAPTER_SUMMARY_RELATIONSHIP_INDEX_VERSION,
+        indexedAt: now,
+        now
+      });
+    } catch (reason) {
+      console.warn("Failed to persist relationship graph index from chapter summary cache", reason);
+    }
   }
 
   async summarizeArc(

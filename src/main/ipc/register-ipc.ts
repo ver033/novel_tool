@@ -9,6 +9,7 @@ import { SummaryService } from "../ai/summary-service";
 import { SummaryWorker } from "../ai/summary-worker";
 import { getTokenBudget } from "../ai/token-budget";
 import { WritingOperationRunner } from "../ai/writing-operation-runner";
+import { createChapterContentInvalidator } from "../chapter/chapter-content-invalidator";
 import { ChapterService } from "../chapter/chapter-service";
 import { createDatabase, resolveDatabasePath, type SqliteDatabase } from "../db/database";
 import { runMigrations } from "../db/migrations";
@@ -17,12 +18,15 @@ import { AiTaskRepository } from "../db/repositories/ai-task-repo";
 import { ChapterRepository } from "../db/repositories/chapter-repo";
 import { ImportJobRepository } from "../db/repositories/import-job-repo";
 import { ProjectRepository } from "../db/repositories/project-repo";
+import { RelationshipIndexRepository } from "../db/repositories/relationship-index-repo";
 import { ScratchNoteRepository } from "../db/repositories/scratch-note-repo";
 import { SettingsRepository } from "../db/repositories/settings-repo";
 import { SummaryRepository } from "../db/repositories/summary-repo";
 import { TxtExporter } from "../export/txt-exporter";
 import { TxtImporter } from "../import/txt-importer";
 import { ProjectService } from "../project/project-service";
+import { RelationshipGraphAggregator } from "../relationships/relationship-graph-aggregator";
+import { RelationshipIndexService } from "../relationships/relationship-index-service";
 import { createElectronSecretStore } from "../settings/electron-secret-store";
 import { SettingsService } from "../settings/settings-service";
 import { ipcChannels } from "../shared/types";
@@ -43,6 +47,7 @@ import { registerChapterIpc } from "./chapter-ipc";
 import { registerExportIpc } from "./export-ipc";
 import { registerImportIpc } from "./import-ipc";
 import { registerProjectIpc } from "./project-ipc";
+import { registerRelationshipGraphIpc } from "./relationship-graph-ipc";
 import { registerScratchIpc } from "./scratch-ipc";
 import { registerSettingsIpc } from "./settings-ipc";
 
@@ -184,27 +189,47 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
       projectId ? projectService.getProjectDatabaseForProject(projectId) : projectService.getActiveProjectDatabase();
     const resolveChapterRepo = (projectId: string): ChapterRepository => new ChapterRepository(resolveProjectDb(projectId));
     const resolveSummaryRepo = (projectId: string): SummaryRepository => new SummaryRepository(resolveProjectDb(projectId));
+    const resolveRelationshipIndexRepo = (projectId: string): RelationshipIndexRepository =>
+      new RelationshipIndexRepository(resolveProjectDb(projectId));
     const writingOperationRunner = useE2eAiGenerators()
       ? undefined
       : WritingOperationRunner.fromSettings(settingsService, resolveChapterRepo, resolveSummaryRepo);
     const summaryServices = new Map<string, SummaryService>();
+    const relationshipIndexServices = new Map<string, RelationshipIndexService>();
     const createSummaryService = (projectId: string): SummaryService => {
       const existing = summaryServices.get(projectId);
       if (existing) {
         return existing;
       }
       const service = new SummaryService(resolveSummaryRepo(projectId), resolveChapterRepo(projectId), {
-        generator: new OpenRouterChatGenerator(settingsService)
+        generator: new OpenRouterChatGenerator(settingsService),
+        relationshipIndexRepo: resolveRelationshipIndexRepo(projectId)
       });
       summaryServices.set(projectId, service);
       return service;
     };
-    const chapterService = new ChapterService((projectId) => new ChapterRepository(resolveProjectDb(projectId)), {
-      summaryIndexInvalidator: {
-        markChapterContentChanged(input) {
-          createSummaryService(input.projectId).markChapterContentChanged(input);
-        }
+    const createRelationshipIndexService = (projectId: string): RelationshipIndexService => {
+      const existing = relationshipIndexServices.get(projectId);
+      if (existing) {
+        return existing;
       }
+      const service = new RelationshipIndexService(resolveRelationshipIndexRepo(projectId), resolveChapterRepo(projectId));
+      relationshipIndexServices.set(projectId, service);
+      return service;
+    };
+    const chapterService = new ChapterService((projectId) => new ChapterRepository(resolveProjectDb(projectId)), {
+      summaryIndexInvalidator: createChapterContentInvalidator({
+        summaryIndexInvalidator: {
+          markChapterContentChanged(input) {
+            createSummaryService(input.projectId).markChapterContentChanged(input);
+          }
+        },
+        relationshipIndexInvalidator: {
+          markChapterContentChanged(input) {
+            createRelationshipIndexService(input.projectId).markChapterContentChanged(input);
+          }
+        }
+      })
     });
     const aiTaskService = new AiTaskService(
       (projectId) => new AiTaskRepository(resolveProjectDb(projectId)),
@@ -252,7 +277,8 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
         return;
       }
       const now = new Date().toISOString();
-      const summaryRepo = new SummaryRepository(resolveProjectDb(currentProject.id));
+      const projectDb = resolveProjectDb(currentProject.id);
+      const summaryRepo = new SummaryRepository(projectDb);
       if (!summaryRepo.getBackgroundIndexEnabled(currentProject.id)) {
         return;
       }
@@ -262,29 +288,35 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
       }
       const summaryService = createSummaryService(currentProject.id);
       summaryService.enqueueEligibleStaleChapterSummaries(currentProject.id, now);
-      const worker = new SummaryWorker({
-        summaryRepo,
-        summaryService,
-        isForegroundAiActive: () => aiTaskService.hasActiveStreams(),
-        ensureAiConfigured: async () => {
-          await settingsService.getOpenRouterConfigWithModelMetadata();
-        }
-      });
-      const controller = new AbortController();
-      activeSummaryWorker = {
-        projectId: currentProject.id,
-        controller
-      };
-      worker
-        .runOnce(currentProject.id, now, { signal: controller.signal })
-        .catch((error: unknown) => {
-          console.error("Summary worker failed", error);
-        })
-        .finally(() => {
-          if (activeSummaryWorker?.controller === controller) {
-            activeSummaryWorker = null;
+      const hasRunnableSummaryJob = Boolean(summaryRepo.peekNextSummaryJob(currentProject.id, now));
+      if (hasRunnableSummaryJob) {
+        const worker = new SummaryWorker({
+          summaryRepo,
+          summaryService,
+          isForegroundAiActive: () => aiTaskService.hasActiveStreams(),
+          ensureAiConfigured: async () => {
+            await settingsService.getOpenRouterConfigWithModelMetadata();
           }
         });
+        const controller = new AbortController();
+        activeSummaryWorker = {
+          projectId: currentProject.id,
+          controller
+        };
+        worker
+          .runOnce(currentProject.id, now, { signal: controller.signal })
+          .catch((error: unknown) => {
+            console.error("Summary worker failed", error);
+          })
+          .finally(() => {
+            if (activeSummaryWorker?.controller === controller) {
+              activeSummaryWorker = null;
+            }
+        });
+        return;
+      }
+      summaryService.materializeEligibleRelationshipIndexes(currentProject.id, now);
+
     }, SUMMARY_WORKER_INTERVAL_MS);
     summaryWorkerInterval.unref?.();
 
@@ -297,6 +329,23 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
     registerProjectIpc(projectService);
     registerChapterIpc(chapterService);
     registerAiIpc(aiTaskService);
+    registerRelationshipGraphIpc((projectId) => ({
+      getGraph(input) {
+        return new RelationshipGraphAggregator(resolveRelationshipIndexRepo(projectId)).getGraph(input);
+      },
+      getStatus(input) {
+        return createRelationshipIndexService(projectId).getRelationshipIndexStatus(input.projectId, new Date().toISOString());
+      },
+      rebuild(input) {
+        const now = new Date().toISOString();
+        createSummaryService(projectId).rebuildProjectIndex(input.projectId, now, {
+          force: input.force,
+          pausedReason: getSummaryIndexPausedReason()
+        });
+        createSummaryService(projectId).materializeEligibleRelationshipIndexes(input.projectId, now);
+        return createRelationshipIndexService(projectId).getRelationshipIndexStatus(input.projectId, now);
+      }
+    }));
     ipcMain.handle(
       ipcChannels.summary.getIndexStatus,
       createValidatedIpcHandler(summaryIndexStatusInputSchema, (input) =>

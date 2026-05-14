@@ -9,7 +9,6 @@ import { createId } from "../shared/ids";
 import { countWritingUnits } from "../shared/text";
 import type {
   ChapterContent,
-  ChapterSummary,
   ImportConfirmResult,
   ImportConfirmTxtInput,
   ImportPreview,

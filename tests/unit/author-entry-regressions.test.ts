@@ -60,7 +60,9 @@ describe("author entry flow regressions", () => {
     const preloadApi = readSource("src/preload/api.ts");
     const projectIpc = readSource("src/main/ipc/project-ipc.ts");
 
-    expect(app).toContain('type Page = "welcome" | "writing" | "settings" | "import" | "export" | "newProject"');
+    expect(app).toContain(
+      'type Page = "welcome" | "writing" | "relationshipGraph" | "settings" | "import" | "export" | "newProject"',
+    );
     expect(app).toContain("<NewProjectPage");
     expect(welcome).toContain("onNewProject");
     expect(welcome).not.toContain("newProjectDraft");

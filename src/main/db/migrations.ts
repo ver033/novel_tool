@@ -405,6 +405,130 @@ const migrations: readonly Migration[] = [
       }
       db.exec("UPDATE chapters SET content_updated_at = updated_at WHERE content_updated_at IS NULL;");
     }
+  },
+  {
+    version: 13,
+    name: "relationship_index_v2",
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS relationship_index_chapters (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          chapter_id TEXT NOT NULL,
+          chapter_title TEXT NOT NULL,
+          chapter_order INTEGER NOT NULL,
+          content_hash TEXT NOT NULL,
+          status TEXT NOT NULL CHECK(status IN ('waiting_stable','queued','running','ready','stale','failed','skipped_too_short')),
+          eligible_at TEXT,
+          indexed_at TEXT,
+          stable_after_ms INTEGER NOT NULL,
+          extractor_version TEXT NOT NULL,
+          token_count INTEGER NOT NULL DEFAULT 0,
+          error TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(project_id, chapter_id),
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+          FOREIGN KEY (chapter_id) REFERENCES chapters(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_relationship_index_chapters_status
+          ON relationship_index_chapters(project_id, status, eligible_at);
+        CREATE INDEX IF NOT EXISTS idx_relationship_index_chapters_order
+          ON relationship_index_chapters(project_id, chapter_order);
+
+        CREATE TABLE IF NOT EXISTS relationship_index_jobs (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          chapter_id TEXT NOT NULL,
+          source_hash TEXT NOT NULL,
+          status TEXT NOT NULL CHECK(status IN ('queued','running','completed','failed','cancelled','skipped')),
+          priority INTEGER NOT NULL DEFAULT 0,
+          attempt_count INTEGER NOT NULL DEFAULT 0,
+          eligible_at TEXT,
+          next_run_at TEXT,
+          error TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          started_at TEXT,
+          finished_at TEXT,
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+          FOREIGN KEY (chapter_id) REFERENCES chapters(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_relationship_index_jobs_runnable
+          ON relationship_index_jobs(project_id, status, priority, eligible_at, next_run_at, created_at);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_relationship_index_jobs_active_unique
+          ON relationship_index_jobs(project_id, chapter_id, source_hash)
+          WHERE status IN ('queued','running');
+
+        CREATE TABLE IF NOT EXISTS relationship_entities (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          canonical_name TEXT NOT NULL,
+          aliases_json TEXT NOT NULL,
+          entity_kind TEXT NOT NULL CHECK(entity_kind IN ('person','nonhuman','group','identity','unknown')),
+          importance TEXT NOT NULL CHECK(importance IN ('main','supporting','minor','unknown')),
+          role_summary TEXT,
+          faction TEXT,
+          first_chapter_order INTEGER,
+          latest_chapter_order INTEGER,
+          source_chapter_ids_json TEXT NOT NULL,
+          confidence REAL NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(project_id, canonical_name),
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_relationship_entities_project_importance
+          ON relationship_entities(project_id, importance);
+
+        CREATE TABLE IF NOT EXISTS relationship_mentions (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          chapter_id TEXT NOT NULL,
+          chapter_title TEXT NOT NULL,
+          chapter_order INTEGER NOT NULL,
+          source_hash TEXT NOT NULL,
+          source_name TEXT NOT NULL,
+          target_name TEXT NOT NULL,
+          source_entity_id TEXT,
+          target_entity_id TEXT,
+          base_relation_label TEXT NOT NULL,
+          base_relation_summary TEXT,
+          plot_relation_label TEXT NOT NULL,
+          plot_relation_summary TEXT NOT NULL,
+          primary_dimension_name TEXT NOT NULL,
+          relationship_dimensions_json TEXT NOT NULL,
+          semantic_markers_json TEXT NOT NULL,
+          direction TEXT NOT NULL CHECK(direction IN ('undirected','source_to_target','target_to_source','unclear')),
+          polarity TEXT NOT NULL CHECK(polarity IN ('positive','negative','mixed','neutral','unknown')),
+          intensity REAL NOT NULL,
+          change_summary TEXT NOT NULL,
+          start_state TEXT,
+          end_state TEXT,
+          reason TEXT,
+          evidence_quote TEXT NOT NULL,
+          confidence REAL NOT NULL,
+          uncertainty TEXT,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+          FOREIGN KEY (chapter_id) REFERENCES chapters(id) ON DELETE CASCADE,
+          FOREIGN KEY (source_entity_id) REFERENCES relationship_entities(id) ON DELETE SET NULL,
+          FOREIGN KEY (target_entity_id) REFERENCES relationship_entities(id) ON DELETE SET NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_relationship_mentions_project_order
+          ON relationship_mentions(project_id, chapter_order);
+        CREATE INDEX IF NOT EXISTS idx_relationship_mentions_source_entity
+          ON relationship_mentions(project_id, source_entity_id);
+        CREATE INDEX IF NOT EXISTS idx_relationship_mentions_target_entity
+          ON relationship_mentions(project_id, target_entity_id);
+        CREATE INDEX IF NOT EXISTS idx_relationship_mentions_chapter_hash
+          ON relationship_mentions(project_id, chapter_id, source_hash);
+      `);
+    }
   }
 ];
 

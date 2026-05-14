@@ -329,6 +329,45 @@ describe("summary index schemas", () => {
     expect(JSON.stringify(parsed).length).toBeLessThan(JSON.stringify(validChapterIndexPayloadV2).length / 2);
   });
 
+  it("keeps the LLM-produced relationship graph index inside the chapter cache payload", () => {
+    const payload = JSON.parse(JSON.stringify(validChapterIndexPayloadV3Lite));
+    payload.人物关系索引 = {
+      人物: [
+        {
+          姓名: "萧炎",
+          别名: [],
+          实体类型: "person",
+          重要程度: "main",
+          身份摘要: "低谷中的主角",
+          阵营: "萧家",
+          置信度: 0.95,
+          证据短句: ["斗之力，三段"]
+        }
+      ],
+      关系事件: [
+        {
+          主体: "萧薰儿",
+          客体: "萧炎",
+          关系维度: [{ 名称: "情感支持", 说明: "本章由模型按正文识别的关系维度", 置信度: 0.88 }],
+          主维度: "情感支持",
+          基础关系: { 名称: "同族", 说明: "同属萧家" },
+          剧情关系: { 名称: "维护", 说明: "萧薰儿没有随众人轻视萧炎" },
+          方向: "source_to_target",
+          极性: "positive",
+          强度: 0.72,
+          本章变化: "萧薰儿的支持关系被明确保留",
+          证据短句: "萧薰儿没有随众人轻视萧炎",
+          置信度: 0.9
+        }
+      ],
+      不确定项: []
+    };
+
+    const parsed = chapterAiSummaryPayloadSchema.parse(payload);
+
+    expect((parsed as typeof payload).人物关系索引).toEqual(payload.人物关系索引);
+  });
+
   it("normalizes V3 Lite chapter indexes when the model keeps the previous version label", () => {
     const payload = JSON.parse(JSON.stringify(validChapterIndexPayloadV3Lite));
     payload.章节信息.缓存版本 = "二";

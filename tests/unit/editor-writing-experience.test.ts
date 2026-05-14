@@ -352,4 +352,18 @@ describe("editor writing experience optimizations", () => {
     expect(css).toContain(".tiptap-manuscript p.is-editor-empty:first-child::before");
     expect(css).not.toContain(".tiptap-manuscript p.is-empty::before");
   });
+
+  it("keeps writing workflow intact after adding the relationship graph module", () => {
+    const writingPage = readSource("src/renderer/routes/WritingPage.tsx");
+    const app = readSource("src/renderer/App.tsx");
+
+    expect(writingPage).toContain("flushBeforeNavigation");
+    expect(writingPage).toContain("onOpenAiChat");
+    expect(writingPage).toContain("onOpenFloatingAiChat");
+    expect(writingPage).toContain("RightUtilitySidebar");
+    expect(writingPage).toContain("FloatingWorkspaceLayer");
+    expect(writingPage).toContain("EditorContextMenu");
+    expect(app).toContain("setSidebarOpen(true)");
+    expect(app).toContain('setSidebarTab("chat")');
+  });
 });

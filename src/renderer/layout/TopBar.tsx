@@ -32,6 +32,9 @@ type TopBarProps = {
   readonly onWelcome: () => void;
   readonly onSettings: () => void;
   readonly searchValue?: string;
+  readonly searchPlaceholder?: string;
+  readonly showEditorHistoryControls?: boolean;
+  readonly showSaveStatus?: boolean;
 };
 
 function saveStatusLabel(status: NonNullable<TopBarProps["saveStatus"]>): string {
@@ -176,11 +179,15 @@ export function TopBar({
   onSearchChange,
   onWelcome,
   onSettings,
-  searchValue = ""
+  searchValue = "",
+  searchPlaceholder,
+  showEditorHistoryControls = true,
+  showSaveStatus = true
 }: TopBarProps) {
   const [layoutPanelOpen, setLayoutPanelOpen] = useState(false);
   const canShowLayoutPanel = mode === "writing" && editorSettings && onEditorSettingsChange;
   const layoutPanelMode = focusMode ? "focus" : "normal";
+  const resolvedSearchPlaceholder = searchPlaceholder ?? (mode === "welcome" ? "搜索作品或章节" : "搜索章节或内容");
   const updateEditorSetting = (patch: Partial<EditorSettings>) => {
     if (!onEditorSettingsChange) {
       return;
@@ -200,7 +207,7 @@ export function TopBar({
         </span>
       </button>
       <div className="topbar-center">
-        {mode === "writing" && !focusMode ? (
+        {mode === "writing" && !focusMode && showEditorHistoryControls ? (
           <div className="undo-redo-group" aria-label="撤销和重做">
             <IconButton className="undo-redo-button" disabled={!onUndo || !canUndo} label="撤销" onClick={() => onUndo?.()}>
               <ArrowCounterClockwise size={22} weight="regular" />
@@ -216,10 +223,10 @@ export function TopBar({
           <label className="search">
             <MagnifyingGlass size={21} />
             <input
-              aria-label={mode === "welcome" ? "搜索作品或章节" : "搜索章节或内容"}
+              aria-label={resolvedSearchPlaceholder}
               disabled={!onSearchChange}
               onChange={(event) => onSearchChange?.(event.target.value)}
-              placeholder={mode === "welcome" ? "搜索作品或章节" : "搜索章节或内容"}
+              placeholder={resolvedSearchPlaceholder}
               value={searchValue}
             />
           </label>
@@ -485,7 +492,7 @@ export function TopBar({
             <GearSix size={24} weight="regular" />
           </IconButton>
         ) : null}
-        {mode === "writing" ? (
+        {mode === "writing" && showSaveStatus ? (
           <span className={`status-pill ${saveStatus}`}>
             <span className="dot" />
             {saveStatusLabel(saveStatus)}

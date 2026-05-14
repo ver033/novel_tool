@@ -5,11 +5,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import { SummaryService, splitChapterForSummaryIndex, type SummaryIndexGenerator } from "../../src/main/ai/summary-service";
 import { ChapterRepository } from "../../src/main/db/repositories/chapter-repo";
 import { ProjectRepository } from "../../src/main/db/repositories/project-repo";
+import { RelationshipIndexRepository } from "../../src/main/db/repositories/relationship-index-repo";
 import { SummaryRepository } from "../../src/main/db/repositories/summary-repo";
 import { createDatabase, type SqliteDatabase } from "../../src/main/db/database";
 import { runMigrations } from "../../src/main/db/migrations";
 import { computeChapterContentHash, computeSourceHash, type ChapterAiSummaryPayload } from "../../src/main/shared/summary-index";
-import { arcIndexPayloadV2, bookIndexPayloadV2, chapterChunkIndexPayload, chapterIndexPayloadV2 } from "../helpers/summary-index-fixtures";
+import { arcIndexPayloadV2, bookIndexPayloadV2, chapterChunkIndexPayload, chapterIndexPayloadV2, chapterIndexPayloadV3Lite } from "../helpers/summary-index-fixtures";
 
 const tempDirs: string[] = [];
 const createdAt = "2026-05-01T00:00:00.000Z";
@@ -558,6 +559,169 @@ describe("summary service generation", () => {
       status: "ready"
     });
     expect(summary.structured).toEqual(summaryPayloadV2());
+    db.close();
+  });
+
+  it("persists relationship graph data from the same chapter summary payload without queuing a standalone relationship job", async () => {
+    const db = createDb();
+    const { chapterRepo, summaryRepo } = seedProject(db);
+    const content = "春".repeat(620);
+    createChapter(chapterRepo, "chapter_1", content);
+    const relationshipIndexRepo = new RelationshipIndexRepository(db);
+    const payload = {
+      ...chapterIndexPayloadV3Lite({
+        title: "第1章",
+        oneLine: "白嘉轩管束白孝文。",
+        synopsis: "白嘉轩与白孝文的父子管束关系在本章被明确。",
+        detail: "本章通过白嘉轩对白孝文的管束，记录父子基础关系与情节中的压制关系。"
+      }),
+      人物关系索引: {
+        人物: [
+          {
+            姓名: "白嘉轩",
+            别名: [],
+            实体类型: "person",
+            重要程度: "main",
+            身份摘要: "白孝文的父亲",
+            阵营: "白鹿原",
+            置信度: 0.96,
+            证据短句: ["白嘉轩看着白孝文"]
+          },
+          {
+            姓名: "白孝文",
+            别名: [],
+            实体类型: "person",
+            重要程度: "supporting",
+            身份摘要: "白嘉轩的儿子",
+            阵营: "白鹿原",
+            置信度: 0.94,
+            证据短句: ["白孝文低下头"]
+          }
+        ],
+        关系事件: [
+          {
+            主体: "白嘉轩",
+            客体: "白孝文",
+            关系维度: [{ 名称: "血缘家庭", 说明: "父子基础关系", 置信度: 0.95 }],
+            主维度: "血缘家庭",
+            基础关系: { 名称: "父子", 说明: "白嘉轩是白孝文的父亲" },
+            剧情关系: { 名称: "管束", 说明: "本章白嘉轩以父亲身份管束白孝文" },
+            方向: "source_to_target",
+            极性: "mixed",
+            强度: 0.74,
+            本章变化: "父子关系中的管束压力被明确",
+            证据短句: "白嘉轩看着白孝文",
+            置信度: 0.91
+          }
+        ],
+        不确定项: []
+      }
+    } satisfies ChapterAiSummaryPayload;
+    const service = new SummaryService(summaryRepo, chapterRepo, {
+      generator: {
+        summarizeChapterForIndex: async () => payload
+      },
+      relationshipIndexRepo
+    });
+
+    await service.summarizeChapter("project_1", "chapter_1", computeChapterContentHash(content), "2026-05-01T01:10:00.000Z");
+
+    expect(relationshipIndexRepo.getIndexStatus("project_1")).toMatchObject({
+      ready: 1,
+      queued: 0,
+      running: 0
+    });
+    expect(relationshipIndexRepo.getChapterIndexState("project_1", "chapter_1")).toMatchObject({
+      status: "ready",
+      tokenCount: 0,
+      extractorVersion: "chapter-summary-v3-lite-relationship-index",
+      stableAfterMs: 3_600_000
+    });
+    expect(relationshipIndexRepo.peekNextRelationshipJob("project_1", "2099-01-01T00:00:00.000Z")).toBeNull();
+    expect(relationshipIndexRepo.listMentions("project_1")).toMatchObject([
+      {
+        sourceName: "白嘉轩",
+        targetName: "白孝文",
+        baseRelationLabel: "父子",
+        plotRelationLabel: "管束",
+        primaryDimensionName: "血缘家庭"
+      }
+    ]);
+    db.close();
+  });
+
+  it("waits for the one-hour stable window and then materializes relationship data from the existing chapter cache without another LLM call", async () => {
+    const db = createDb();
+    const { chapterRepo, summaryRepo } = seedProject(db);
+    const content = "春".repeat(620);
+    createChapter(chapterRepo, "chapter_1", content);
+    const relationshipIndexRepo = new RelationshipIndexRepository(db);
+    let generatorCalls = 0;
+    const payload = {
+      ...chapterIndexPayloadV3Lite({
+        title: "第1章",
+        oneLine: "师徒达成约定。",
+        synopsis: "师父要求弟子守住秘密。",
+        detail: "本章记录师父与弟子之间的师承基础关系，以及守密约定带来的剧情压力。"
+      }),
+      人物关系索引: {
+        人物: [
+          { 姓名: "师父", 别名: [], 实体类型: "person", 重要程度: "main", 身份摘要: "授业者", 阵营: null, 置信度: 0.9, 证据短句: ["师父低声叮嘱"] },
+          { 姓名: "弟子", 别名: [], 实体类型: "person", 重要程度: "supporting", 身份摘要: "受教者", 阵营: null, 置信度: 0.9, 证据短句: ["弟子点头"] }
+        ],
+        关系事件: [
+          {
+            主体: "师父",
+            客体: "弟子",
+            关系维度: [{ 名称: "师承", 说明: "师生基础关系", 置信度: 0.93 }],
+            主维度: "师承",
+            基础关系: { 名称: "师徒", 说明: "师父与弟子" },
+            剧情关系: { 名称: "约束守密", 说明: "师父要求弟子保守秘密" },
+            方向: "source_to_target",
+            极性: "neutral",
+            强度: 0.6,
+            本章变化: "师徒关系增加守密约束",
+            证据短句: "师父低声叮嘱",
+            置信度: 0.9
+          }
+        ],
+        不确定项: []
+      }
+    } satisfies ChapterAiSummaryPayload;
+    const service = new SummaryService(summaryRepo, chapterRepo, {
+      generator: {
+        summarizeChapterForIndex: async () => {
+          generatorCalls += 1;
+          return payload;
+        }
+      },
+      relationshipIndexRepo
+    });
+
+    await service.summarizeChapter("project_1", "chapter_1", computeChapterContentHash(content), "2026-05-01T00:10:00.000Z");
+
+    expect(generatorCalls).toBe(1);
+    expect(relationshipIndexRepo.getChapterIndexState("project_1", "chapter_1")).toMatchObject({
+      status: "waiting_stable",
+      eligibleAt: "2026-05-01T01:00:00.000Z"
+    });
+    expect(relationshipIndexRepo.listMentions("project_1")).toEqual([]);
+
+    service.materializeEligibleRelationshipIndexes("project_1", "2026-05-01T01:10:00.000Z");
+
+    expect(generatorCalls).toBe(1);
+    expect(relationshipIndexRepo.getChapterIndexState("project_1", "chapter_1")).toMatchObject({
+      status: "ready",
+      tokenCount: 0
+    });
+    expect(relationshipIndexRepo.listMentions("project_1")).toMatchObject([
+      {
+        sourceName: "师父",
+        targetName: "弟子",
+        baseRelationLabel: "师徒",
+        plotRelationLabel: "约束守密"
+      }
+    ]);
     db.close();
   });
 

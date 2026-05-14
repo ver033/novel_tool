@@ -798,6 +798,16 @@ const foreshadowingLiteSchema = z
   })
   .strip();
 
+const relationshipGraphIndexItemSchema = z.object({}).catchall(z.unknown());
+
+const relationshipGraphIndexInSummarySchema = z
+  .object({
+    人物: arrayOf(relationshipGraphIndexItemSchema),
+    关系事件: arrayOf(relationshipGraphIndexItemSchema),
+    不确定项: arrayOf(nonEmptyStringSchema).optional()
+  })
+  .strip();
+
 export const chapterAiSummaryPayloadV3LiteSchema = z
   .object({
     章节信息: z
@@ -827,6 +837,7 @@ export const chapterAiSummaryPayloadV3LiteSchema = z
     人物状态: arrayOf(characterStateLiteSchema),
     人物认知边界: arrayOf(characterKnowledgeLiteSchema),
     关系变化: arrayOf(nonEmptyStringSchema),
+    人物关系索引: relationshipGraphIndexInSummarySchema.optional(),
     时间地点: timePlaceLiteSchema,
     道具设定变化: arrayOf(nonEmptyStringSchema),
     伏笔与线索: arrayOf(foreshadowingLiteSchema),
@@ -920,6 +931,7 @@ const chapterAiSummaryChunkPayloadV2LiteSchema = z
     人物状态: arrayOf(characterStateLiteSchema),
     人物认知边界: arrayOf(characterKnowledgeLiteSchema),
     关系变化: arrayOf(nonEmptyStringSchema),
+    人物关系索引: relationshipGraphIndexInSummarySchema.optional(),
     时间地点: timePlaceLiteSchema,
     道具设定变化: arrayOf(nonEmptyStringSchema),
     伏笔与线索: arrayOf(foreshadowingLiteSchema),
