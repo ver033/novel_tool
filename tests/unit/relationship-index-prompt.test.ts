@@ -36,6 +36,8 @@ describe("relationship index prompt contract", () => {
     expect(prompt).toContain("一个关系事件可以有多个关系维度");
     expect(prompt).toContain("关系维度由模型根据当前作品动态生成");
     expect(prompt).toContain("不是产品固定枚举");
+    expect(prompt).toContain("人物最多 30 个");
+    expect(prompt).toContain("关系事件最多 45 条");
     expect(prompt).toContain("输出 JSON，且只能输出 JSON");
     expect(prompt).not.toMatch(/family\s*\|\s*ally\s*\|\s*enemy\s*\|\s*romance/i);
   });

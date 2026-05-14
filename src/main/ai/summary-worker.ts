@@ -4,6 +4,13 @@ import { SummarySourceChangedError } from "./summary-service";
 
 type SummaryWorkerService = {
   readonly summarizeChapter: (projectId: string, chapterId: string, sourceHash: string, now: string, options?: { readonly signal?: AbortSignal }) => Promise<unknown>;
+  readonly upgradeLegacyRelationshipIndexFromOriginalTextJob?: (
+    projectId: string,
+    chapterId: string,
+    sourceHash: string,
+    now: string,
+    options?: { readonly signal?: AbortSignal }
+  ) => Promise<unknown>;
   readonly summarizeArc?: (
     projectId: string,
     arcKey: string,
@@ -194,6 +201,16 @@ export class SummaryWorker {
         throw new Error("AI 全书摘要生成器未配置。");
       }
       await this.deps.summaryService.summarizeBook(job.projectId, job.sourceHash, now, options);
+      return;
+    }
+    if (job.jobType === "relationship_original_text_upgrade") {
+      if (!job.targetId) {
+        throw new Error("人物关系原文升级任务缺少章节 ID。");
+      }
+      if (!this.deps.summaryService.upgradeLegacyRelationshipIndexFromOriginalTextJob) {
+        throw new Error("人物关系原文升级生成器未配置。");
+      }
+      await this.deps.summaryService.upgradeLegacyRelationshipIndexFromOriginalTextJob(job.projectId, job.targetId, job.sourceHash, now, options);
       return;
     }
     if (job.jobType === "rebuild_project_index") {

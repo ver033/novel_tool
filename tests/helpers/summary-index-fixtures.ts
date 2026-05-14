@@ -321,6 +321,57 @@ export function chapterIndexPayloadV3Lite(input: ChapterIndexPayloadInput = {}):
   } as ChapterAiSummaryPayload;
 }
 
+export function chapterIndexPayloadV3LiteWithRelationship(input: ChapterIndexPayloadInput = {}): ChapterAiSummaryPayload {
+  const payload = chapterIndexPayloadV3Lite(input) as ChapterAiSummaryPayload & { 人物关系索引?: unknown };
+  payload.人物关系索引 = {
+    人物: [
+      {
+        姓名: "萧炎",
+        别名: [],
+        实体类型: "person",
+        重要程度: "main",
+        身份摘要: "低谷中的萧家少年",
+        阵营: "萧家",
+        置信度: 0.95,
+        证据短句: ["斗之力，三段"]
+      },
+      {
+        姓名: "萧薰儿",
+        别名: [],
+        实体类型: "person",
+        重要程度: "supporting",
+        身份摘要: "仍然支持萧炎的人",
+        阵营: "萧家",
+        置信度: 0.9,
+        证据短句: ["萧薰儿没有随众人轻视萧炎"]
+      }
+    ],
+    关系事件: [
+      {
+        主体: "萧炎",
+        客体: "萧薰儿",
+        关系维度: [{ 名称: "情感支持", 说明: "一方在低谷时仍提供支持", 置信度: 0.86 }],
+        主维度: "情感支持",
+        基础关系: { 名称: "同族旧识", 说明: "二人同处萧家社交圈" },
+        剧情关系: { 名称: "低谷支持", 说明: "萧薰儿没有随众人嘲笑萧炎" },
+        语义标记: ["支持", "信任"],
+        方向: "target_to_source",
+        极性: "positive",
+        强度: 0.72,
+        本章变化: "萧炎低谷被公开后，萧薰儿仍维持支持",
+        开始状态: "旧识",
+        结束状态: "支持仍在",
+        变化原因: "萧薰儿未被测试结果影响",
+        证据短句: "萧薰儿仍然维护他",
+        置信度: 0.88,
+        不确定说明: ""
+      }
+    ],
+    不确定项: []
+  };
+  return payload;
+}
+
 type ChapterChunkIndexPayloadInput = {
   readonly title?: string;
   readonly chunkIndex?: number;

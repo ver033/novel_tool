@@ -7,6 +7,8 @@ import { handleWindowsSquirrelStartupEvent } from "./windows-squirrel-startup";
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
 declare const MAIN_WINDOW_VITE_NAME: string;
 
+let mainWindowRef: BrowserWindow | null = null;
+
 function createRendererContentSecurityPolicy(isDev: boolean): string {
   return [
     "default-src 'self'",
@@ -67,6 +69,12 @@ function createMainWindow(): void {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true
+    }
+  });
+  mainWindowRef = mainWindow;
+  mainWindow.on("closed", () => {
+    if (mainWindowRef === mainWindow) {
+      mainWindowRef = null;
     }
   });
   installMainWindowSecurity(mainWindow);

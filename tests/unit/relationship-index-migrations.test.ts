@@ -65,15 +65,119 @@ describe("relationship index database migration", () => {
         "primary_dimension_name",
         "relationship_dimensions_json",
         "semantic_markers_json",
-        "evidence_quote"
+        "evidence_quote",
+        "evidence_source"
       ])
     );
+
+    const chapterColumns = db
+      .prepare("PRAGMA table_info(relationship_index_chapters)")
+      .all()
+      .map((row) => row.name);
+    expect(chapterColumns).toEqual(expect.arrayContaining(["extraction_source"]));
 
     const entityColumns = db
       .prepare("PRAGMA table_info(relationship_entities)")
       .all()
       .map((row) => row.name);
     expect(entityColumns).toEqual(expect.arrayContaining(["entity_kind", "importance", "source_chapter_ids_json"]));
+
+    db.close();
+  });
+
+  it("preserves existing relationship cache rows when adding source metadata", () => {
+    const db = createDatabase(createTempDbPath());
+
+    runMigrations(db);
+    db.prepare("INSERT INTO projects (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)").run(
+      "project_relationship_source_migration",
+      "关系来源迁移测试",
+      "2026-05-13T00:00:00.000Z",
+      "2026-05-13T00:00:00.000Z"
+    );
+    db.prepare(
+      `INSERT INTO chapters
+       (id, project_id, title, sort_order, content_json, plain_text, word_count, daily_word_count, created_at, updated_at, content_updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      "chapter_relationship_source_migration",
+      "project_relationship_source_migration",
+      "第1章",
+      1,
+      JSON.stringify({ type: "doc", content: [] }),
+      "正文",
+      2,
+      0,
+      "2026-05-13T00:00:00.000Z",
+      "2026-05-13T00:01:00.000Z",
+      "2026-05-13T00:01:00.000Z"
+    );
+    db.prepare(
+      `INSERT INTO relationship_index_chapters
+       (id, project_id, chapter_id, chapter_title, chapter_order, content_hash, status, eligible_at, indexed_at,
+        stable_after_ms, extractor_version, extraction_source, token_count, error, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      "relationship_chapter_source_migration",
+      "project_relationship_source_migration",
+      "chapter_relationship_source_migration",
+      "第1章",
+      1,
+      "hash_1",
+      "ready",
+      null,
+      "2026-05-13T00:02:00.000Z",
+      0,
+      "relationship-index-v1",
+      "summary_payload",
+      123,
+      null,
+      "2026-05-13T00:00:00.000Z",
+      "2026-05-13T00:02:00.000Z"
+    );
+    db.prepare(
+      `INSERT INTO relationship_mentions
+       (id, project_id, chapter_id, chapter_title, chapter_order, source_hash, source_name, target_name,
+        base_relation_label, plot_relation_label, plot_relation_summary, primary_dimension_name,
+        relationship_dimensions_json, semantic_markers_json, direction, polarity, intensity,
+        change_summary, evidence_quote, confidence, evidence_source, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      "relationship_mention_source_migration",
+      "project_relationship_source_migration",
+      "chapter_relationship_source_migration",
+      "第1章",
+      1,
+      "hash_1",
+      "林砚",
+      "雾灵",
+      "契约",
+      "试探",
+      "互相试探",
+      "基础关系",
+      JSON.stringify([{ name: "基础关系", description: "稳定关系", confidence: 0.9 }]),
+      JSON.stringify([]),
+      "undirected",
+      "neutral",
+      0.5,
+      "关系稳定",
+      "林砚看见雾灵",
+      0.9,
+      "summary_payload",
+      "2026-05-13T00:02:00.000Z"
+    );
+
+    db.prepare("DELETE FROM schema_migrations WHERE version = ?").run(14);
+    runMigrations(db);
+
+    expect(db.prepare("SELECT status, extraction_source, token_count FROM relationship_index_chapters").get()).toEqual({
+      status: "ready",
+      extraction_source: "summary_payload",
+      token_count: 123
+    });
+    expect(db.prepare("SELECT evidence_source FROM relationship_mentions").get()).toEqual({
+      evidence_source: "summary_payload"
+    });
 
     db.close();
   });

@@ -27,8 +27,12 @@ import {
 } from "../shared/summary-index";
 import { parseRelationshipExtractionPayload, type RelationshipIndexExtractionPayload } from "../shared/relationship-index";
 import { countWritingUnits } from "../shared/text";
+import type { RelationshipIndexKnownEntity, RelationshipIndexSummaryInput } from "../relationships/relationship-index-prompts";
 import type {
   ChapterContent,
+  RelationshipCacheSettingsStatus,
+  RelationshipGraphUpgradeMissingFromOriginalTextInput,
+  RelationshipOriginalTextUpgradeQueueResult,
   ChapterSummary,
   SummaryChapterCacheDetail,
   SummaryChapterCacheEntry,
@@ -73,6 +77,10 @@ export type ChapterSummaryQueueTrigger = "auto_idle" | "chapter_inactive" | "imp
 export type SummaryIndexGenerator = {
   readonly getSummaryIndexBudget?: () => Promise<SummaryIndexBudgetInfo>;
   readonly summarizeChapterForIndex: (input: ChapterIndexSummaryInput, options?: { readonly signal?: AbortSignal }) => Promise<ChapterAiSummaryPayload>;
+  readonly extractChapterRelationshipsForIndex?: (
+    input: RelationshipIndexSummaryInput,
+    options?: { readonly signal?: AbortSignal }
+  ) => Promise<RelationshipIndexExtractionPayload>;
   readonly summarizeChapterChunkForIndex?: (
     input: ChapterChunkIndexSummaryInput,
     options?: { readonly signal?: AbortSignal }
@@ -145,7 +153,42 @@ function parseTime(value: string): number {
   return Number.isFinite(timestamp) ? timestamp : 0;
 }
 
-function classifySummaryJobError(error: string | null): { readonly failureCategory: string | null; readonly actionHint: string | null } {
+function getSummaryJobOutputLabel(jobType?: SummaryJobType): string {
+  if (jobType === "arc_summary") {
+    return "阶段摘要";
+  }
+  if (jobType === "book_summary") {
+    return "全书摘要";
+  }
+  if (jobType === "relationship_original_text_upgrade") {
+    return "人物关系缓存";
+  }
+  return "章节缓存";
+}
+
+function getTruncatedSummaryJobActionHint(jobType?: SummaryJobType): string {
+  const label = getSummaryJobOutputLabel(jobType);
+  if (jobType === "arc_summary") {
+    return `${label}输出超出模型额度。系统现在会使用压缩后的阶段聚合卡片降低输出被截断概率；如果仍反复失败，请换用输出上限更高的模型后重试。`;
+  }
+  if (jobType === "book_summary") {
+    return `${label}输出超出模型额度。请先确认阶段摘要已完成，必要时换用输出上限更高的模型后重试。`;
+  }
+  if (jobType === "relationship_original_text_upgrade") {
+    return `${label}输出超出模型额度。请换用输出上限更高的模型，或先按单章重试确认该模型能返回完整 JSON。`;
+  }
+  return `${label}输出超出模型额度。请换用输出上限更高的模型，或先按单章手动重试确认该模型能返回完整 JSON。`;
+}
+
+function getInvalidJsonSummaryJobActionHint(jobType?: SummaryJobType): string {
+  const label = getSummaryJobOutputLabel(jobType);
+  if (jobType === "arc_summary" || jobType === "book_summary") {
+    return `模型没有返回合法${label} JSON。这通常不是章节正文内容问题；建议继续建立索引让系统重新排队，或换用更稳定的模型。`;
+  }
+  return `模型没有返回合法${label} JSON。这通常不是章节正文内容问题；此类错误不会自动反复重试，建议换用更稳定的模型或手动重试单章。`;
+}
+
+function classifySummaryJobError(error: string | null, jobType?: SummaryJobType): { readonly failureCategory: string | null; readonly actionHint: string | null } {
   const normalizedError = error?.trim();
   if (!normalizedError) {
     return { failureCategory: null, actionHint: null };
@@ -170,7 +213,7 @@ function classifySummaryJobError(error: string | null): { readonly failureCatego
   if (normalizedError.includes("finish_reason: length") || normalizedError.includes("被截断") || /truncated/i.test(normalizedError)) {
     return {
       failureCategory: "输出被截断",
-      actionHint: "章节缓存输出超出模型额度。请换用输出上限更高的模型，或先按单章手动重试确认该模型能返回完整 JSON。"
+      actionHint: getTruncatedSummaryJobActionHint(jobType)
     };
   }
   if (
@@ -181,7 +224,7 @@ function classifySummaryJobError(error: string | null): { readonly failureCatego
   ) {
     return {
       failureCategory: "模型输出结构无效",
-      actionHint: "模型没有返回合法章节缓存 JSON。这通常不是章节正文内容问题；此类错误不会自动反复重试，建议换用更稳定的模型或手动重试单章。"
+      actionHint: getInvalidJsonSummaryJobActionHint(jobType)
     };
   }
   if (/timeout|timed?out|network|ECONN|ENOTFOUND|EAI_AGAIN/i.test(normalizedError) || normalizedError.includes("超时")) {
@@ -612,7 +655,7 @@ function relationshipIndexExtractionFromSummary(content: ChapterContent, structu
   if (!relationshipIndex) {
     return null;
   }
-  return parseRelationshipExtractionPayload({
+  const payload = parseRelationshipExtractionPayload({
     索引信息: {
       缓存版本: CHAPTER_SUMMARY_RELATIONSHIP_INDEX_VERSION,
       章节序号: content.sortOrder + 1,
@@ -623,15 +666,13 @@ function relationshipIndexExtractionFromSummary(content: ChapterContent, structu
     关系事件: relationshipIndex.关系事件,
     不确定项: relationshipIndex.不确定项
   });
-}
-
-function relationshipStableEligibleAt(content: ChapterContent): string {
-  const editedAt = content.contentUpdatedAt ?? content.updatedAt;
-  return new Date(parseTime(editedAt) + CHAPTER_SUMMARY_RELATIONSHIP_STABLE_IDLE_MS).toISOString();
-}
-
-function hasReachedRelationshipStableWindow(content: ChapterContent, now: string): boolean {
-  return parseTime(now) >= parseTime(relationshipStableEligibleAt(content));
+  if (relationshipIndex.人物.length > 0 && payload.characters.length === 0) {
+    throw new Error("人物关系索引包含人物条目，但没有可解析的人物。");
+  }
+  if (relationshipIndex.关系事件.length > 0 && payload.mentions.length === 0) {
+    throw new Error("人物关系索引包含关系事件，但没有可解析的关系。");
+  }
+  return payload;
 }
 
 function mergeLongChapterChunks(content: ChapterContent, chunks: readonly ChapterAiSummaryChunkRecord[]): ChapterAiSummaryPayload {
@@ -1122,7 +1163,7 @@ export class SummaryService implements SummaryIndexInvalidator {
       const summary = summaries.get(chapter.id) ?? null;
       const rawJob = jobs.get(chapter.id) ?? null;
       const job = this.isChapterJobResolvedByReadySummary(summary, rawJob, chapter) ? null : rawJob;
-      const failure = classifySummaryJobError(job?.error ?? null);
+      const failure = classifySummaryJobError(job?.error ?? null, job?.jobType);
       return {
         chapterId: chapter.id,
         chapterTitle: chapter.title,
@@ -1562,6 +1603,283 @@ export class SummaryService implements SummaryIndexInvalidator {
     }
   }
 
+  refreshRelationshipIndexStateFromSummaries(
+    projectId: string,
+    now: string
+  ): { readonly materialized: number; readonly legacyMissing: number; readonly failed: number; readonly skipped: number } {
+    const relationshipIndexRepo = this.options.relationshipIndexRepo;
+    if (!relationshipIndexRepo) {
+      return { materialized: 0, legacyMissing: 0, failed: 0, skipped: 0 };
+    }
+
+    let materialized = 0;
+    let legacyMissing = 0;
+    let failed = 0;
+    let skipped = 0;
+    for (const summary of this.summaryRepo.listChapterSummaries(projectId)) {
+      if (summary.status !== "ready") {
+        skipped += 1;
+        continue;
+      }
+      const content = this.chapterRepo.getContent(summary.chapterId);
+      if (!content || content.projectId !== projectId || !isFreshReadyChapterSummary(summary, content)) {
+        skipped += 1;
+        continue;
+      }
+
+      this.persistRelationshipIndexFromChapterSummary(content, summary.contentHash, summary.structured, now);
+      const state = relationshipIndexRepo.getChapterIndexState(projectId, summary.chapterId);
+      if (state?.status === "ready") {
+        materialized += 1;
+      } else if (state?.status === "legacy_missing_relationships") {
+        legacyMissing += 1;
+      } else if (state?.status === "failed") {
+        failed += 1;
+      } else {
+        skipped += 1;
+      }
+    }
+    return { materialized, legacyMissing, failed, skipped };
+  }
+
+  enqueueLegacyRelationshipOriginalTextUpgrade(
+    input: RelationshipGraphUpgradeMissingFromOriginalTextInput,
+    now: string,
+    options: { readonly includeFailed?: boolean } = {}
+  ): RelationshipOriginalTextUpgradeQueueResult {
+    const relationshipIndexRepo = this.options.relationshipIndexRepo;
+    if (!relationshipIndexRepo) {
+      return { queued: 0, skippedReady: 0, skippedStale: 0, skippedMissingSummary: 0 };
+    }
+
+    this.refreshRelationshipIndexStateFromSummaries(input.projectId, now);
+    const chapterIds = input.chapterIds ? new Set(input.chapterIds) : null;
+    let queued = 0;
+    let skippedReady = 0;
+    let skippedStale = 0;
+    let skippedMissingSummary = 0;
+
+    for (const state of relationshipIndexRepo.listChapterIndexStates(input.projectId)) {
+      if (chapterIds && !chapterIds.has(state.chapterId)) {
+        continue;
+      }
+      if (input.chapterFrom !== undefined && state.chapterOrder < input.chapterFrom) {
+        continue;
+      }
+      if (input.chapterTo !== undefined && state.chapterOrder > input.chapterTo) {
+        continue;
+      }
+
+      const content = this.chapterRepo.getContent(state.chapterId);
+      const summary = this.summaryRepo.getChapterSummary(input.projectId, state.chapterId);
+      if (state.status === "ready") {
+        skippedReady += 1;
+        continue;
+      }
+      if (!content || content.projectId !== input.projectId || computeChapterContentHash(content.plainText) !== state.contentHash) {
+        skippedStale += 1;
+        continue;
+      }
+      const shouldQueueOriginalTextUpgrade = state.status === "legacy_missing_relationships" || (options.includeFailed !== false && state.status === "failed");
+      if (!shouldQueueOriginalTextUpgrade) {
+        if (state.status === "stale") {
+          skippedStale += 1;
+        }
+        continue;
+      }
+      if (!summary || !isFreshReadyChapterSummary(summary, content)) {
+        skippedMissingSummary += 1;
+        continue;
+      }
+
+      this.summaryRepo.enqueueSummaryJob({
+        projectId: input.projectId,
+        jobType: "relationship_original_text_upgrade",
+        targetId: state.chapterId,
+        sourceHash: state.contentHash,
+        priority: 40,
+        now
+      });
+      queued += 1;
+    }
+
+    return { queued, skippedReady, skippedStale, skippedMissingSummary };
+  }
+
+  enqueueLegacyRelationshipOriginalTextUpgradeIfSummaryIdle(projectId: string, now: string): RelationshipOriginalTextUpgradeQueueResult {
+    if (this.summaryRepo.hasPendingNormalSummaryJobs(projectId, now)) {
+      return { queued: 0, skippedReady: 0, skippedStale: 0, skippedMissingSummary: 0 };
+    }
+    return this.enqueueLegacyRelationshipOriginalTextUpgrade({ projectId }, now, { includeFailed: false });
+  }
+
+  getRelationshipCacheSettingsStatus(projectId: string, now: string): RelationshipCacheSettingsStatus {
+    const chapterEntries = this.listChapterCacheEntries(projectId, now);
+    const jobs = this.summaryRepo.listSummaryJobs(projectId);
+    const relationshipUpgradeJobs = jobs.filter((job) => job.jobType === "relationship_original_text_upgrade");
+    const ready = chapterEntries.filter((entry) => entry.cacheState === "ready").length;
+    const queuedOrRunning = chapterEntries.filter((entry) => entry.cacheState === "queued" || entry.cacheState === "running").length;
+    const stale = chapterEntries.filter((entry) => entry.cacheState === "stale").length;
+    const failed = chapterEntries.filter((entry) => entry.cacheState === "failed").length;
+
+    const relationshipIndexRepo = this.options.relationshipIndexRepo;
+    const baseRelationshipStatus = relationshipIndexRepo?.getIndexStatus(projectId) ?? {
+      ready: 0,
+      stale: 0,
+      legacyMissingRelationships: 0,
+      waitingStable: 0,
+      queued: 0,
+      running: 0,
+      failed: 0,
+      skippedTooShort: 0,
+      total: 0
+    };
+    const relationshipStates = relationshipIndexRepo?.listChapterIndexStates(projectId) ?? [];
+    const queuedOriginalTextUpgrades = relationshipUpgradeJobs.filter((job) => job.status === "queued" || job.status === "running").length;
+    const activeJob = jobs.find((job) => job.status === "running") ?? null;
+
+    return {
+      chapterCache: {
+        ready,
+        queuedOrRunning,
+        stale,
+        failed
+      },
+      relationshipCache: {
+        ...baseRelationshipStatus,
+        sourceSummaryEmbedded: relationshipStates.filter((state) => state.status === "ready" && state.extractionSource === "summary_payload").length,
+        sourceLegacyOriginalTextUpgrade: relationshipStates.filter(
+          (state) => state.status === "ready" && state.extractionSource === "legacy_original_text_upgrade"
+        ).length,
+        sourceOriginalTextEnhancement: relationshipStates.filter(
+          (state) => state.status === "ready" && state.extractionSource === "original_text_enhancement"
+        ).length,
+        sourceLegacySummaryDerived: baseRelationshipStatus.legacyMissingRelationships,
+        queuedOriginalTextUpgrades,
+        waitingForChapterCache: queuedOriginalTextUpgrades > 0 && this.summaryRepo.hasPendingNormalSummaryJobs(projectId, now)
+      },
+      activeJob: activeJob
+        ? {
+            jobType: activeJob.jobType,
+            targetId: activeJob.targetId
+          }
+        : null
+    };
+  }
+
+  async upgradeLegacyRelationshipIndexFromOriginalTextJob(
+    projectId: string,
+    chapterId: string,
+    sourceHash: string,
+    now: string,
+    options: { readonly signal?: AbortSignal } = {}
+  ): Promise<void> {
+    const relationshipIndexRepo = this.options.relationshipIndexRepo;
+    if (!relationshipIndexRepo) {
+      throw new Error("人物关系索引仓储未配置。");
+    }
+    const generator = this.options.generator;
+    if (!generator?.extractChapterRelationshipsForIndex) {
+      throw new Error("AI 人物关系原文升级生成器未配置。");
+    }
+
+    const content = this.requireChapterContent(projectId, chapterId);
+    const currentHash = computeChapterContentHash(content.plainText);
+    if (currentHash !== sourceHash) {
+      relationshipIndexRepo.markChapterStale({
+        projectId,
+        chapterId,
+        chapterTitle: content.title,
+        chapterOrder: content.sortOrder + 1,
+        contentHash: currentHash,
+        extractorVersion: CHAPTER_SUMMARY_RELATIONSHIP_INDEX_VERSION,
+        now
+      });
+      throw new SummarySourceChangedError("章节内容已变化，人物关系原文升级任务已跳过。");
+    }
+
+    const currentState = relationshipIndexRepo.getChapterIndexState(projectId, chapterId);
+    if (currentState?.status === "ready" && currentState.contentHash === sourceHash) {
+      return;
+    }
+
+    const summary = this.summaryRepo.getChapterSummary(projectId, chapterId);
+    if (!summary || !isFreshReadyChapterSummary(summary, content)) {
+      const error = "人物关系原文升级需要最新的 ready 章节缓存。";
+      relationshipIndexRepo.markChapterMaterializationFailed({
+        projectId,
+        chapterId,
+        chapterTitle: content.title,
+        chapterOrder: content.sortOrder + 1,
+        contentHash: sourceHash,
+        extractorVersion: CHAPTER_SUMMARY_RELATIONSHIP_INDEX_VERSION,
+        error,
+        now
+      });
+      throw new Error(error);
+    }
+
+    try {
+      const payload = await generator.extractChapterRelationshipsForIndex(
+        {
+          projectId,
+          chapterId,
+          title: content.title,
+          ordinal: content.sortOrder + 1,
+          plainText: content.plainText,
+          knownEntities: this.getKnownRelationshipEntities(projectId)
+        },
+        options
+      );
+
+      const latestContent = this.requireChapterContent(projectId, chapterId);
+      const latestHash = computeChapterContentHash(latestContent.plainText);
+      if (latestHash !== sourceHash) {
+        relationshipIndexRepo.markChapterStale({
+          projectId,
+          chapterId,
+          chapterTitle: latestContent.title,
+          chapterOrder: latestContent.sortOrder + 1,
+          contentHash: latestHash,
+          extractorVersion: CHAPTER_SUMMARY_RELATIONSHIP_INDEX_VERSION,
+          now
+        });
+        throw new SummarySourceChangedError("章节内容已变化，人物关系原文升级任务已跳过。");
+      }
+
+      relationshipIndexRepo.replaceChapterExtraction({
+        projectId,
+        chapterId,
+        chapterTitle: latestContent.title,
+        chapterOrder: latestContent.sortOrder + 1,
+        sourceHash,
+        payload,
+        tokenCount: estimateTextTokens(JSON.stringify(payload)),
+        stableAfterMs: CHAPTER_SUMMARY_RELATIONSHIP_STABLE_IDLE_MS,
+        extractorVersion: CHAPTER_SUMMARY_RELATIONSHIP_INDEX_VERSION,
+        extractionSource: "legacy_original_text_upgrade",
+        evidenceSource: "original_text",
+        indexedAt: now,
+        now
+      });
+    } catch (reason) {
+      if (reason instanceof SummarySourceChangedError) {
+        throw reason;
+      }
+      relationshipIndexRepo.markChapterMaterializationFailed({
+        projectId,
+        chapterId,
+        chapterTitle: content.title,
+        chapterOrder: content.sortOrder + 1,
+        contentHash: sourceHash,
+        extractorVersion: CHAPTER_SUMMARY_RELATIONSHIP_INDEX_VERSION,
+        error: reason instanceof Error ? reason.message : String(reason),
+        now
+      });
+      throw reason;
+    }
+  }
+
   private persistRelationshipIndexFromChapterSummary(
     content: ChapterContent,
     sourceHash: string,
@@ -1575,22 +1893,17 @@ export class SummaryService implements SummaryIndexInvalidator {
     try {
       const payload = relationshipIndexExtractionFromSummary(content, structured);
       if (!payload) {
-        return;
-      }
-      if (!hasReachedRelationshipStableWindow(content, now)) {
         const existing = relationshipIndexRepo.getChapterIndexState(content.projectId, content.id);
-        if (existing?.status === "ready" && existing.contentHash === sourceHash) {
+        if (existing?.status === "failed" && existing.contentHash === sourceHash) {
           return;
         }
-        relationshipIndexRepo.markChapterWaitingStable({
+        relationshipIndexRepo.markChapterLegacyMissingRelationships({
           projectId: content.projectId,
           chapterId: content.id,
           chapterTitle: content.title,
           chapterOrder: content.sortOrder + 1,
           contentHash: sourceHash,
-          stableAfterMs: CHAPTER_SUMMARY_RELATIONSHIP_STABLE_IDLE_MS,
           extractorVersion: CHAPTER_SUMMARY_RELATIONSHIP_INDEX_VERSION,
-          eligibleAt: relationshipStableEligibleAt(content),
           now
         });
         return;
@@ -1605,12 +1918,39 @@ export class SummaryService implements SummaryIndexInvalidator {
         tokenCount: 0,
         stableAfterMs: CHAPTER_SUMMARY_RELATIONSHIP_STABLE_IDLE_MS,
         extractorVersion: CHAPTER_SUMMARY_RELATIONSHIP_INDEX_VERSION,
+        extractionSource: "summary_payload",
+        evidenceSource: "summary_payload",
         indexedAt: now,
         now
       });
     } catch (reason) {
+      relationshipIndexRepo.markChapterMaterializationFailed({
+        projectId: content.projectId,
+        chapterId: content.id,
+        chapterTitle: content.title,
+        chapterOrder: content.sortOrder + 1,
+        contentHash: sourceHash,
+        extractorVersion: CHAPTER_SUMMARY_RELATIONSHIP_INDEX_VERSION,
+        error: reason instanceof Error ? reason.message : String(reason),
+        now
+      });
       console.warn("Failed to persist relationship graph index from chapter summary cache", reason);
     }
+  }
+
+  private getKnownRelationshipEntities(projectId: string): RelationshipIndexKnownEntity[] {
+    const relationshipIndexRepo = this.options.relationshipIndexRepo;
+    if (!relationshipIndexRepo) {
+      return [];
+    }
+    return relationshipIndexRepo.listEntities(projectId).map((entity) => ({
+      canonicalName: entity.canonicalName,
+      aliases: entity.aliases,
+      entityKind: entity.entityKind,
+      importance: entity.importance,
+      roleSummary: entity.roleSummary,
+      faction: entity.faction
+    }));
   }
 
   async summarizeArc(
@@ -2010,7 +2350,7 @@ export class SummaryService implements SummaryIndexInvalidator {
   }
 
   private formatSummaryJobDetail(projectId: string, job: SummaryJobRecord): SummaryIndexJobDetail {
-    const failure = classifySummaryJobError(job.error);
+    const failure = classifySummaryJobError(job.error, job.jobType);
     return {
       jobId: job.id,
       jobType: job.jobType,

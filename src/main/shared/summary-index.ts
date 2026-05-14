@@ -3,7 +3,13 @@ import { z } from "zod";
 
 export const summaryStatusSchema = z.enum(["ready", "stale", "building", "failed", "skipped_too_short"]);
 export const summaryJobStatusSchema = z.enum(["queued", "running", "completed", "failed", "cancelled", "skipped"]);
-export const summaryJobTypeSchema = z.enum(["chapter_summary", "arc_summary", "book_summary", "rebuild_project_index"]);
+export const summaryJobTypeSchema = z.enum([
+  "chapter_summary",
+  "arc_summary",
+  "book_summary",
+  "rebuild_project_index",
+  "relationship_original_text_upgrade"
+]);
 
 function stringifyStructuredValue(value: unknown): string {
   if (value === null || value === undefined) {

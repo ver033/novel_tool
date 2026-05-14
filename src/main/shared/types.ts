@@ -41,6 +41,7 @@ import type {
   relationshipGraphGetInputSchema,
   relationshipGraphRebuildInputSchema,
   relationshipGraphStatusInputSchema,
+  relationshipGraphUpgradeMissingFromOriginalTextInputSchema,
   scratchCreateInputSchema,
   scratchDeleteInputSchema,
   scratchListInputSchema,
@@ -341,7 +342,34 @@ export type SummaryClearAndRetryChapterCacheInput = z.input<typeof summaryClearA
 export type RelationshipGraphGetInput = z.input<typeof relationshipGraphGetInputSchema>;
 export type RelationshipGraphStatusInput = z.input<typeof relationshipGraphStatusInputSchema>;
 export type RelationshipGraphRebuildInput = z.input<typeof relationshipGraphRebuildInputSchema>;
+export type RelationshipGraphUpgradeMissingFromOriginalTextInput = z.input<typeof relationshipGraphUpgradeMissingFromOriginalTextInputSchema>;
 export type { RelationshipGraphIndexStatus, RelationshipGraphResult };
+export type RelationshipOriginalTextUpgradeQueueResult = {
+  readonly queued: number;
+  readonly skippedReady: number;
+  readonly skippedStale: number;
+  readonly skippedMissingSummary: number;
+};
+export type RelationshipCacheSettingsStatus = {
+  readonly chapterCache: {
+    readonly ready: number;
+    readonly queuedOrRunning: number;
+    readonly stale: number;
+    readonly failed: number;
+  };
+  readonly relationshipCache: RelationshipGraphIndexStatus & {
+    readonly sourceSummaryEmbedded: number;
+    readonly sourceLegacyOriginalTextUpgrade: number;
+    readonly sourceOriginalTextEnhancement: number;
+    readonly sourceLegacySummaryDerived: number;
+    readonly queuedOriginalTextUpgrades: number;
+    readonly waitingForChapterCache: boolean;
+  };
+  readonly activeJob: {
+    readonly jobType: SummaryJobType;
+    readonly targetId: string | null;
+  } | null;
+};
 export type SummaryIndexPausedReason = "ai_not_configured" | "foreground_ai_active" | "background_disabled" | null;
 export type SummaryChapterCacheState = SummaryStatus | "missing" | "queued" | "running" | "cancelled";
 export type SummaryChapterCacheEntry = {
@@ -480,7 +508,10 @@ export const ipcChannels = {
   relationshipGraph: {
     getGraph: "novelTool:relationshipGraph:getGraph",
     getStatus: "novelTool:relationshipGraph:getStatus",
-    rebuild: "novelTool:relationshipGraph:rebuild"
+    rebuild: "novelTool:relationshipGraph:rebuild",
+    refreshCacheStatus: "novelTool:relationshipGraph:refreshCacheStatus",
+    getCacheSettingsStatus: "novelTool:relationshipGraph:getCacheSettingsStatus",
+    upgradeMissingFromOriginalText: "novelTool:relationshipGraph:upgradeMissingFromOriginalText"
   },
   scratch: {
     list: "novelTool:scratch:list",

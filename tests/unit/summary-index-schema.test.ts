@@ -10,6 +10,7 @@ import {
   getChapterSummaryShortText,
   isChapterAiSummaryPayloadV3Lite,
   summaryJobStatusSchema,
+  summaryJobTypeSchema,
   summaryStatusSchema,
   type ChapterAiSummaryPayloadV2
 } from "../../src/main/shared/summary-index";
@@ -303,6 +304,11 @@ const validChapterIndexPayloadV3Lite = {
 };
 
 describe("summary index schemas", () => {
+  it("accepts relationship original text upgrade as a summary job and rejects unknown job types", () => {
+    expect(summaryJobTypeSchema.parse("relationship_original_text_upgrade")).toBe("relationship_original_text_upgrade");
+    expect(() => summaryJobTypeSchema.parse("relationship_index_job")).toThrow();
+  });
+
   it("rejects legacy V1 structured chapter summary payloads", () => {
     expect(() =>
       chapterAiSummaryPayloadSchema.parse({

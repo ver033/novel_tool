@@ -382,7 +382,11 @@ test.describe("relationship graph v2 cached project flow", () => {
 
       await page.getByRole("button", { name: "选择人物 林砚", includeHidden: true }).evaluate((button) => (button as HTMLButtonElement).click());
       await expect(page.getByRole("heading", { name: "林砚" })).toBeVisible();
-      await expect(page.getByText("旧契约牵连者 / 互相试探")).toBeVisible();
+      const linYanKeyRelation = page.locator(".relationship-key-relation-row", {
+        hasText: "雾灵"
+      });
+      await expect(linYanKeyRelation).toContainText("旧契约牵连者");
+      await expect(linYanKeyRelation).toContainText("互相试探");
       await page.getByRole("button", { name: "以此为中心" }).click();
       await expect(page.getByRole("button", { name: "返回全局图" })).toBeVisible();
       await page.getByRole("button", { name: "二跳" }).click();

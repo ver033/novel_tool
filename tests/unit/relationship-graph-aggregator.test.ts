@@ -328,4 +328,35 @@ describe("RelationshipGraphAggregator", () => {
 
     db.close();
   });
+
+  it("excludes relationship mentions whose source hash no longer matches a ready relationship chapter", () => {
+    const db = createTestDb();
+    const repo = new RelationshipIndexRepository(db);
+    seedChapter(repo, {
+      chapterOrder: 1,
+      characters: [
+        { name: "白嘉轩", importance: "main" },
+        { name: "白孝文", importance: "supporting" }
+      ],
+      mentions: [{ source: "白嘉轩", target: "白孝文", base: "父子", plot: "管束", dimensions: ["家庭结构"] }]
+    });
+    repo.markChapterStale({
+      projectId: "project_1",
+      chapterId: "chapter_1",
+      chapterTitle: "第1章",
+      chapterOrder: 1,
+      contentHash: "new_hash",
+      extractorVersion: "chapter-summary-v3-lite-relationship-index",
+      now
+    });
+
+    const graph = new RelationshipGraphAggregator(repo).getGraph({ projectId: "project_1", roleScope: "all" });
+
+    expect(graph.nodes).toEqual([]);
+    expect(graph.edges).toEqual([]);
+    expect(graph.graphStats.usedMentionCount).toBe(0);
+    expect(graph.indexStatus).toMatchObject({ stale: 1, total: 1 });
+
+    db.close();
+  });
 });

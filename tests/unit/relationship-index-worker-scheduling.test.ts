@@ -21,6 +21,8 @@ describe("relationship index worker scheduling", () => {
     expect(source).toContain("summaryService.materializeEligibleRelationshipIndexes(currentProject.id, now)");
     expect(source).not.toContain("relationshipService.enqueueEligibleStableChapters(currentProject.id, now)");
     expect(source).not.toContain("relationshipService.peekNextRelationshipJob(currentProject.id, now)");
+    expect(source).not.toContain("enqueueEligibleStableChapters(currentProject.id");
+    expect(source).not.toContain("rebuildProjectRelationshipIndex(input.projectId");
     expect(source).not.toContain("new RelationshipIndexWorker");
   });
 

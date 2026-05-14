@@ -5411,6 +5411,38 @@ select:focus-visible {
   gap: 16px;
 }
 
+.cache-system-overview {
+  display: grid;
+  gap: 14px;
+}
+
+.cache-system-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  padding-top: 4px;
+  border-top: 1px solid #eef2f7;
+}
+
+.cache-system-metrics span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  color: #42526b;
+  font-size: 13px;
+}
+
+.cache-system-metrics b {
+  color: #172033;
+  font-size: 22px;
+  line-height: 1.1;
+}
+
+.cache-system-metrics small {
+  color: #8290a3;
+  font-size: 12px;
+}
+
 .relationship-cache-settings-card {
   display: grid;
   gap: 14px;
@@ -5420,6 +5452,90 @@ select:focus-visible {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fbfcfe;
+}
+
+.cache-overview-cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.relationship-cache-detail-body {
+  display: grid;
+  gap: 12px;
+}
+
+.relationship-cache-detail-card {
+  background: #fff;
+}
+
+.cache-status-card {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfe;
+}
+
+.cache-status-card h4 {
+  margin: 0 0 4px;
+  color: #172033;
+  font-size: 15px;
+}
+
+.cache-status-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.cache-status-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.cache-status-metrics span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fff;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.cache-status-metrics b {
+  color: #172033;
+  font-size: 19px;
+  line-height: 1;
+}
+
+.relationship-cache-source-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.relationship-cache-source-row span {
+  padding: 4px 8px;
+  border: 1px solid #dbeafe;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.relationship-cache-result-heading {
+  color: #172033;
+  font-size: 14px;
+  font-weight: 760;
 }
 
 .summary-cache-status-grid {

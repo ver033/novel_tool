@@ -143,6 +143,165 @@ const ARC_JSON_CONTRACT = [
   "}"
 ].join("\n");
 
+const ARC_SUMMARY_LONG_LIMIT = 420;
+const ARC_STRUCTURED_TEXT_LIMIT = 120;
+const ARC_STRUCTURED_LIST_LIMIT = 4;
+const ARC_STRUCTURED_RECORD_LIMIT = 5;
+const EMPTY_ARC_TEXT_VALUES = new Set(["", "无", "暂无", "没有", "未明确", "不详", "未知", "null", "undefined"]);
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function stringifyArcPromptValue(value: unknown): string {
+  if (value === null || value === undefined) {
+    return "";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => stringifyArcPromptValue(item)).filter(Boolean).join("；");
+  }
+  if (isPlainRecord(value)) {
+    return Object.entries(value)
+      .map(([key, item]) => {
+        const text = stringifyArcPromptValue(item);
+        return text ? `${key}：${text}` : "";
+      })
+      .filter(Boolean)
+      .join("；");
+  }
+  return String(value);
+}
+
+function compactArcText(value: unknown, limit = ARC_STRUCTURED_TEXT_LIMIT): string {
+  const text = stringifyArcPromptValue(value).replace(/\s+/g, " ").trim();
+  if (!text || EMPTY_ARC_TEXT_VALUES.has(text)) {
+    return "";
+  }
+  return text.length > limit ? `${text.slice(0, Math.max(0, limit - 3))}...` : text;
+}
+
+function compactArcStringList(value: unknown, limit = ARC_STRUCTURED_LIST_LIMIT, textLimit = ARC_STRUCTURED_TEXT_LIMIT): string[] {
+  const values = Array.isArray(value) ? value : value === null || value === undefined ? [] : [value];
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const item of values) {
+    const text = compactArcText(item, textLimit);
+    if (!text || seen.has(text)) {
+      continue;
+    }
+    seen.add(text);
+    result.push(text);
+    if (result.length >= limit) {
+      break;
+    }
+  }
+  return result;
+}
+
+function compactArcRecord(value: unknown, keys: readonly string[], textLimit = ARC_STRUCTURED_TEXT_LIMIT): Record<string, unknown> | null {
+  if (!isPlainRecord(value)) {
+    return null;
+  }
+  const result: Record<string, unknown> = {};
+  for (const key of keys) {
+    const raw = value[key];
+    if (raw === undefined || raw === null) {
+      continue;
+    }
+    const compacted = Array.isArray(raw) ? compactArcStringList(raw, ARC_STRUCTURED_LIST_LIMIT, textLimit) : compactArcText(raw, textLimit);
+    if (Array.isArray(compacted) ? compacted.length > 0 : Boolean(compacted)) {
+      result[key] = compacted;
+    }
+  }
+  return Object.keys(result).length > 0 ? result : null;
+}
+
+function compactArcRecordList(value: unknown, keys: readonly string[], limit = ARC_STRUCTURED_RECORD_LIMIT, textLimit = ARC_STRUCTURED_TEXT_LIMIT): unknown[] {
+  if (!Array.isArray(value)) {
+    const record = compactArcRecord(value, keys, textLimit);
+    return record ? [record] : compactArcStringList(value, limit, textLimit);
+  }
+  const records: unknown[] = [];
+  for (const item of value) {
+    const compacted = compactArcRecord(item, keys, textLimit);
+    if (compacted) {
+      records.push(compacted);
+    } else {
+      const text = compactArcText(item, textLimit);
+      if (text) {
+        records.push(text);
+      }
+    }
+    if (records.length >= limit) {
+      break;
+    }
+  }
+  return records;
+}
+
+function setArcCardValue(target: Record<string, unknown>, key: string, value: unknown): void {
+  if (Array.isArray(value)) {
+    if (value.length > 0) {
+      target[key] = value;
+    }
+    return;
+  }
+  if (isPlainRecord(value)) {
+    if (Object.keys(value).length > 0) {
+      target[key] = value;
+    }
+    return;
+  }
+  if (typeof value === "string" && value) {
+    target[key] = value;
+  }
+}
+
+function compactArcRelationshipEvents(structured: Record<string, unknown>): unknown[] {
+  const relationshipIndex = isPlainRecord(structured.人物关系索引) ? structured.人物关系索引 : null;
+  const relationshipEvents = relationshipIndex ? relationshipIndex.关系事件 : null;
+  const source = relationshipEvents ?? structured.关系变化 ?? structured.关系动态;
+  return compactArcRecordList(
+    source,
+    ["主体", "客体", "主维度", "基础关系", "剧情关系", "关系双方", "关系类型", "本章变化", "变化原因", "是否需要后文承接"],
+    6,
+    100
+  );
+}
+
+function compactChapterForArcPrompt(chapter: ArcIndexSummaryChapter): Record<string, unknown> {
+  const structured = chapter.structured as unknown as Record<string, unknown>;
+  const purpose = isPlainRecord(structured.章节作用) ? structured.章节作用 : isPlainRecord(structured.本章功能) ? structured.本章功能 : null;
+  const card: Record<string, unknown> = {
+    章节: `第${chapter.ordinal}章 ${chapter.title}`,
+    摘要: {
+      短摘要: compactArcText(chapter.summaryShort || structured.短摘要 || structured.一句话摘要, 160),
+      长摘要: compactArcText(chapter.summaryLong || structured.详细梗概, ARC_SUMMARY_LONG_LIMIT)
+    }
+  };
+  setArcCardValue(card, "章节作用", compactArcRecord(purpose, ["剧情作用", "人物作用", "后文作用", "剧情功能", "情绪功能", "结构作用", "对后文的作用"], 100));
+  setArcCardValue(card, "关键事件", compactArcRecordList(structured.关键事件, ["事件", "涉及人物", "时间地点", "结果", "事件结果", "后续影响"], 4, 110));
+  setArcCardValue(card, "人物状态", compactArcRecordList(structured.人物状态, ["人物", "本章变化", "本章结束状态", "行动", "目标或动机", "动机", "目标", "新获得信息", "仍不知道的信息", "关系变化"], 5, 100));
+  setArcCardValue(card, "人物认知", compactArcRecordList(structured.人物认知边界, ["人物", "认知变化", "已经知道", "新得知", "仍不知道", "尚不知道", "误解或风险", "误以为"], 4, 100));
+  setArcCardValue(card, "关系变化", compactArcRelationshipEvents(structured));
+  setArcCardValue(card, "伏笔线索", compactArcRecordList(structured.伏笔与线索, ["线索", "类型", "状态", "本章状态", "指向或意义", "可能指向"], 4, 100));
+  setArcCardValue(card, "道具设定", compactArcRecordList(structured.道具设定变化 ?? structured.道具状态 ?? structured.设定与规则, ["道具", "设定项", "本章信息", "状态变化", "剧情作用", "是否影响后文"], 5, 100));
+  setArcCardValue(card, "时间地点", compactArcRecord(structured.时间地点 ?? structured.时间与地点, ["本章时间", "时间跨度", "主要地点", "时间线索", "地点移动", "可能风险", "可能的时间线风险"], 100));
+  setArcCardValue(card, "因果链", compactArcRecordList(structured.因果链, ["原因", "结果", "中间动作", "是否充分", "缺口说明"], 4, 100));
+  setArcCardValue(card, "连续性风险", compactArcStringList(structured.连续性风险, 5, 120));
+  setArcCardValue(card, "未解决问题", compactArcStringList(structured.未解决问题, 5, 120));
+  setArcCardValue(card, "可核对事实", compactArcStringList(structured.可核对事实, 6, 120));
+  setArcCardValue(card, "不可丢失信息", compactArcStringList(structured.不可丢失信息, 6, 120));
+  setArcCardValue(card, "不确定项", compactArcStringList(structured.不确定项, 4, 120));
+  return card;
+}
+
 const BOOK_JSON_CONTRACT = [
   "{",
   '  "全书信息": {"覆盖阶段": ["第1-10章"], "覆盖章节范围": "第1-10章", "总章节数": 10, "已索引章节数": 10, "过期章节": [], "缺失章节": [], "过短跳过章节": [], "覆盖限制": []},',
@@ -302,6 +461,8 @@ export function buildArcIndexSummaryMessages(input: ArcIndexSummaryInput): OpenR
         "任务是把连续章节的长期索引缓存聚合成中文阶段缓存。",
         "按时间和因果顺序整理；不加入原缓存没有的信息。",
         "必须保留主线推进、人物线变化、人物认知变化、关系线变化、伏笔线变化、道具线变化、设定变化、可核对事实、连续性风险和未解决问题。",
+        "输入会提供每章压缩后的阶段聚合卡片，不包含完整章节结构；输出必须做阶段级归纳，不要逐章机械复述。",
+        "阶段详细梗概控制在 800 字以内；每个数组优先保留 3-8 条高价值信息，避免把每章所有细节全部展开。",
         "所有 JSON 键名必须使用简体中文；非证据字符串不得使用英文说明，但可以保留原缓存中的英文/缩写/编号/常用混写词。",
         "输出 JSON，且只能输出 JSON。"
       ].join("\n")
@@ -313,14 +474,12 @@ export function buildArcIndexSummaryMessages(input: ArcIndexSummaryInput): OpenR
         `章节范围：第${input.chapterFrom}-${input.chapterTo}章`,
         "JSON 字段格式：",
         ARC_JSON_CONTRACT,
-        "章节摘要：",
+        "阶段聚合卡片：",
         input.chapters
           .map((chapter) =>
             [
               `[第${chapter.ordinal}章 ${chapter.title}]`,
-              `短摘要：${chapter.summaryShort}`,
-              `长摘要：${chapter.summaryLong}`,
-              `结构化索引：${JSON.stringify(chapter.structured)}`
+              JSON.stringify(compactChapterForArcPrompt(chapter))
             ].join("\n")
           )
           .join("\n\n")

@@ -67,7 +67,7 @@ export function RelationshipGraphFilters({
   onResetDisplaySettings
 }: RelationshipGraphFiltersProps) {
   const indexLabel = status
-    ? `图谱：${status.ready} 章可用，${status.waitingStable} 章等待稳定，${status.queued + status.running} 章生成中，${status.failed} 章失败`
+    ? `图谱：${status.ready} 章可用，${status.waitingStable} 章旧等待状态，${status.queued + status.running} 章生成中，${status.failed} 章失败`
     : "图谱：正在读取";
   const displaySettingsChanged = !isDefaultDisplaySettings(displaySettings);
 

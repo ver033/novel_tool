@@ -90,6 +90,7 @@ function stageFromMention(mention: RelationshipMentionRecord): RelationshipGraph
     endState: mention.endState,
     reason: mention.reason,
     evidenceQuote: mention.evidenceQuote,
+    evidenceSource: mention.evidenceSource,
     confidence: mention.confidence,
     uncertainty: mention.uncertainty
   };
@@ -199,8 +200,14 @@ export class RelationshipGraphAggregator {
   getGraph(input: RelationshipGraphGetInput, generatedAt = new Date().toISOString()): RelationshipGraphResult {
     const roleScope = input.roleScope ?? "main";
     const mode = input.mode ?? (input.focusEntityId || input.focusName ? "focus" : "global");
-    const allMentions = this.relationshipRepo.listMentions(input.projectId);
-    const availableChapters = this.relationshipRepo.listChapterIndexStates(input.projectId).map((chapter) => ({
+    const chapterStates = this.relationshipRepo.listChapterIndexStates(input.projectId);
+    const currentReadyByChapter = new Map(
+      chapterStates.filter((chapter) => chapter.status === "ready").map((chapter) => [chapter.chapterId, chapter.contentHash])
+    );
+    const allMentions = this.relationshipRepo
+      .listMentions(input.projectId)
+      .filter((mention) => currentReadyByChapter.get(mention.chapterId) === mention.sourceHash);
+    const availableChapters = chapterStates.map((chapter) => ({
       chapterId: chapter.chapterId,
       chapterTitle: chapter.chapterTitle,
       chapterOrder: chapter.chapterOrder,
@@ -519,6 +526,7 @@ export class RelationshipGraphAggregator {
       confidence: roundMetric(confidence),
       weight: roundMetric(edge.mentions.length * (0.5 + confidence) * (0.5 + intensity)),
       evidenceCount: edge.mentions.length,
+      evidenceSources: [...new Set(edge.mentions.map((mention) => mention.evidenceSource))],
       chapterIds: [...new Set(edge.mentions.map((mention) => mention.chapterId))],
       firstChapterOrder: edge.mentions[0].chapterOrder,
       latestChapterOrder: edge.mentions[edge.mentions.length - 1].chapterOrder,

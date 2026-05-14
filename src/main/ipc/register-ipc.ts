@@ -316,6 +316,7 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
         return;
       }
       summaryService.materializeEligibleRelationshipIndexes(currentProject.id, now);
+      summaryService.enqueueLegacyRelationshipOriginalTextUpgradeIfSummaryIdle(currentProject.id, now);
 
     }, SUMMARY_WORKER_INTERVAL_MS);
     summaryWorkerInterval.unref?.();
@@ -344,6 +345,18 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
         });
         createSummaryService(projectId).materializeEligibleRelationshipIndexes(input.projectId, now);
         return createRelationshipIndexService(projectId).getRelationshipIndexStatus(input.projectId, now);
+      },
+      refreshCacheStatus(input) {
+        const now = new Date().toISOString();
+        return createSummaryService(projectId).refreshRelationshipIndexStateFromSummaries(input.projectId, now);
+      },
+      getCacheSettingsStatus(input) {
+        const now = new Date().toISOString();
+        return createSummaryService(projectId).getRelationshipCacheSettingsStatus(input.projectId, now);
+      },
+      upgradeMissingFromOriginalText(input) {
+        const now = new Date().toISOString();
+        return createSummaryService(projectId).enqueueLegacyRelationshipOriginalTextUpgrade(input, now);
       }
     }));
     ipcMain.handle(

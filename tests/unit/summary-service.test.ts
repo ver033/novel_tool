@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SummaryService, splitChapterForSummaryIndex, type SummaryIndexGenerator } from "../../src/main/ai/summary-service";
 import { ChapterRepository } from "../../src/main/db/repositories/chapter-repo";
 import { ProjectRepository } from "../../src/main/db/repositories/project-repo";
@@ -9,8 +9,16 @@ import { RelationshipIndexRepository } from "../../src/main/db/repositories/rela
 import { SummaryRepository } from "../../src/main/db/repositories/summary-repo";
 import { createDatabase, type SqliteDatabase } from "../../src/main/db/database";
 import { runMigrations } from "../../src/main/db/migrations";
+import { parseRelationshipExtractionPayload } from "../../src/main/shared/relationship-index";
 import { computeChapterContentHash, computeSourceHash, type ChapterAiSummaryPayload } from "../../src/main/shared/summary-index";
-import { arcIndexPayloadV2, bookIndexPayloadV2, chapterChunkIndexPayload, chapterIndexPayloadV2, chapterIndexPayloadV3Lite } from "../helpers/summary-index-fixtures";
+import {
+  arcIndexPayloadV2,
+  bookIndexPayloadV2,
+  chapterChunkIndexPayload,
+  chapterIndexPayloadV2,
+  chapterIndexPayloadV3Lite,
+  chapterIndexPayloadV3LiteWithRelationship
+} from "../helpers/summary-index-fixtures";
 
 const tempDirs: string[] = [];
 const createdAt = "2026-05-01T00:00:00.000Z";
@@ -81,6 +89,56 @@ function summaryPayloadV2(): ChapterAiSummaryPayload {
     oneLine: "林远回到故乡。",
     synopsis: "林远在风雨中回到故乡，旧日关系重新浮出水面。",
     detail: "林远在风雨中回到故乡，旧日关系重新浮出水面。旧信和旧宅共同构成本章需要后续承接的核心线索，人物状态、关系悬念和调查动机都被建立。"
+  });
+}
+
+function validRelationshipPayloadFromOriginalText() {
+  return parseRelationshipExtractionPayload({
+    索引信息: { 缓存版本: "关系索引一", 章节序号: 1, 章节标题: "第1章", 语言: "简体中文" },
+    人物: [
+      {
+        姓名: "白嘉轩",
+        别名: [],
+        实体类型: "person",
+        重要程度: "main",
+        身份摘要: "白鹿村核心人物",
+        阵营: "白鹿村",
+        置信度: 0.92,
+        证据短句: ["白嘉轩与鹿三同处白鹿村"]
+      },
+      {
+        姓名: "鹿三",
+        别名: [],
+        实体类型: "person",
+        重要程度: "supporting",
+        身份摘要: "白嘉轩身边的重要人物",
+        阵营: "白鹿村",
+        置信度: 0.88,
+        证据短句: ["鹿三与白嘉轩发生互动"]
+      }
+    ],
+    关系事件: [
+      {
+        主体: "白嘉轩",
+        客体: "鹿三",
+        关系维度: [{ 名称: "主仆与乡邻", 说明: "社会身份和村庄共同体关系", 置信度: 0.82 }],
+        主维度: "主仆与乡邻",
+        基础关系: { 名称: "主家与长工", 说明: "长期稳定的身份关系" },
+        剧情关系: { 名称: "共同面对村事", 说明: "本章围绕村庄事务产生互动" },
+        语义标记: ["村庄", "身份"],
+        方向: "undirected",
+        极性: "neutral",
+        强度: 0.62,
+        本章变化: "旧有关系被再次确认",
+        开始状态: "熟识",
+        结束状态: "关系延续",
+        变化原因: "原文显示二人共同参与事件",
+        证据短句: "鹿三跟着白嘉轩进了祠堂",
+        置信度: 0.8,
+        不确定说明: ""
+      }
+    ],
+    不确定项: []
   });
 }
 
@@ -650,7 +708,7 @@ describe("summary service generation", () => {
     db.close();
   });
 
-  it("waits for the one-hour stable window and then materializes relationship data from the existing chapter cache without another LLM call", async () => {
+  it("materializes relationship data immediately from the existing chapter cache without another LLM call", async () => {
     const db = createDb();
     const { chapterRepo, summaryRepo } = seedProject(db);
     const content = "春".repeat(620);
@@ -702,10 +760,20 @@ describe("summary service generation", () => {
 
     expect(generatorCalls).toBe(1);
     expect(relationshipIndexRepo.getChapterIndexState("project_1", "chapter_1")).toMatchObject({
-      status: "waiting_stable",
-      eligibleAt: "2026-05-01T01:00:00.000Z"
+      status: "ready",
+      eligibleAt: null,
+      tokenCount: 0,
+      extractorVersion: "chapter-summary-v3-lite-relationship-index"
     });
-    expect(relationshipIndexRepo.listMentions("project_1")).toEqual([]);
+    expect(relationshipIndexRepo.listMentions("project_1")).toMatchObject([
+      {
+        sourceName: "师父",
+        targetName: "弟子",
+        baseRelationLabel: "师徒",
+        plotRelationLabel: "约束守密",
+        evidenceSource: "summary_payload"
+      }
+    ]);
 
     service.materializeEligibleRelationshipIndexes("project_1", "2026-05-01T01:10:00.000Z");
 
@@ -714,14 +782,396 @@ describe("summary service generation", () => {
       status: "ready",
       tokenCount: 0
     });
+    db.close();
+  });
+
+  it("marks ready summaries without embedded relationship fields as legacy missing", async () => {
+    const db = createDb();
+    const { chapterRepo, summaryRepo } = seedProject(db);
+    const content = "春".repeat(620);
+    createChapter(chapterRepo, "chapter_1", content);
+    const relationshipIndexRepo = new RelationshipIndexRepository(db);
+    const service = new SummaryService(summaryRepo, chapterRepo, {
+      generator: {
+        summarizeChapterForIndex: async () => chapterIndexPayloadV3Lite()
+      },
+      relationshipIndexRepo
+    });
+
+    await service.summarizeChapter("project_1", "chapter_1", computeChapterContentHash(content), "2026-05-01T00:10:00.000Z");
+
+    expect(summaryRepo.getChapterSummary("project_1", "chapter_1")).toMatchObject({ status: "ready" });
+    expect(relationshipIndexRepo.getChapterIndexState("project_1", "chapter_1")).toMatchObject({
+      status: "legacy_missing_relationships",
+      contentHash: computeChapterContentHash(content)
+    });
+    expect(relationshipIndexRepo.listMentions("project_1")).toEqual([]);
+    db.close();
+  });
+
+  it("upgrades one legacy ready summary by reading original text", async () => {
+    const db = createDb();
+    const { chapterRepo, summaryRepo } = seedProject(db);
+    const originalText = "白嘉轩站在祠堂门口，鹿三跟着白嘉轩进了祠堂，二人一起处理村中事务。";
+    const sourceHash = computeChapterContentHash(originalText);
+    createChapter(chapterRepo, "chapter_1", originalText);
+    summaryRepo.upsertChapterSummary({
+      id: "summary_chapter_1",
+      projectId: "project_1",
+      chapterId: "chapter_1",
+      chapterTitle: "第1章",
+      chapterOrder: 1,
+      contentHash: sourceHash,
+      summaryShort: "白嘉轩与鹿三共同处理村中事务。",
+      summaryLong: "旧章节缓存记录白嘉轩与鹿三的身份关系、村庄事务和本章互动。",
+      structured: chapterIndexPayloadV2(),
+      tokenCount: 120,
+      status: "ready",
+      error: null,
+      createdAt,
+      updatedAt: createdAt
+    });
+    const relationshipIndexRepo = new RelationshipIndexRepository(db);
+    relationshipIndexRepo.markChapterLegacyMissingRelationships({
+      projectId: "project_1",
+      chapterId: "chapter_1",
+      chapterTitle: "第1章",
+      chapterOrder: 1,
+      contentHash: sourceHash,
+      extractorVersion: "chapter-summary-v3-lite-relationship-index",
+      now: createdAt
+    });
+    const generator = {
+      summarizeChapterForIndex: async () => {
+        throw new Error("legacy relationship upgrade should not regenerate chapter summary");
+      },
+      extractChapterRelationshipsForIndex: vi.fn(async () => validRelationshipPayloadFromOriginalText())
+    };
+    const service = new SummaryService(summaryRepo, chapterRepo, { generator, relationshipIndexRepo });
+
+    await service.upgradeLegacyRelationshipIndexFromOriginalTextJob("project_1", "chapter_1", sourceHash, "2026-05-01T00:10:00.000Z");
+
+    expect(generator.extractChapterRelationshipsForIndex).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: "project_1",
+        chapterId: "chapter_1",
+        plainText: originalText,
+        knownEntities: expect.any(Array)
+      }),
+      expect.anything()
+    );
+    expect(relationshipIndexRepo.getChapterIndexState("project_1", "chapter_1")).toMatchObject({
+      status: "ready",
+      extractionSource: "legacy_original_text_upgrade",
+      tokenCount: expect.any(Number)
+    });
     expect(relationshipIndexRepo.listMentions("project_1")).toMatchObject([
       {
-        sourceName: "师父",
-        targetName: "弟子",
-        baseRelationLabel: "师徒",
-        plotRelationLabel: "约束守密"
+        sourceName: "白嘉轩",
+        targetName: "鹿三",
+        evidenceSource: "original_text"
       }
     ]);
+    db.close();
+  });
+
+  it("discovers legacy missing relationship cache locally and queues original-text upgrades without running LLM", () => {
+    const db = createDb();
+    const { chapterRepo, summaryRepo } = seedProject(db);
+    const content = "旧项目正文".repeat(80);
+    const sourceHash = computeChapterContentHash(content);
+    createChapter(chapterRepo, "chapter_1", content);
+    summaryRepo.upsertChapterSummary({
+      id: "summary_chapter_1",
+      projectId: "project_1",
+      chapterId: "chapter_1",
+      chapterTitle: "第1章",
+      chapterOrder: 1,
+      contentHash: sourceHash,
+      summaryShort: "旧项目已有章节缓存。",
+      summaryLong: "旧项目已有章节缓存，但结构里还没有人物关系索引字段。",
+      structured: chapterIndexPayloadV2(),
+      tokenCount: 120,
+      status: "ready",
+      error: null,
+      createdAt,
+      updatedAt: createdAt
+    });
+    const relationshipIndexRepo = new RelationshipIndexRepository(db);
+    const generator = {
+      summarizeChapterForIndex: async () => {
+        throw new Error("refreshing relationship state must not call the LLM");
+      },
+      extractChapterRelationshipsForIndex: vi.fn(async () => validRelationshipPayloadFromOriginalText())
+    };
+    const service = new SummaryService(summaryRepo, chapterRepo, { generator, relationshipIndexRepo });
+
+    expect(service.refreshRelationshipIndexStateFromSummaries("project_1", "2026-05-01T00:10:00.000Z")).toEqual({
+      materialized: 0,
+      legacyMissing: 1,
+      failed: 0,
+      skipped: 0
+    });
+    expect(generator.extractChapterRelationshipsForIndex).not.toHaveBeenCalled();
+
+    expect(
+      service.enqueueLegacyRelationshipOriginalTextUpgrade(
+        {
+          projectId: "project_1"
+        },
+        "2026-05-01T00:11:00.000Z"
+      )
+    ).toEqual({
+      queued: 1,
+      skippedReady: 0,
+      skippedStale: 0,
+      skippedMissingSummary: 0
+    });
+    expect(summaryRepo.claimNextSummaryJob("project_1", "2026-05-01T00:12:00.000Z")).toMatchObject({
+      jobType: "relationship_original_text_upgrade",
+      targetId: "chapter_1",
+      sourceHash
+    });
+
+    db.close();
+  });
+
+  it("auto-queues original text relationship upgrades only after normal summary jobs are idle", () => {
+    const db = createDb();
+    const { chapterRepo, summaryRepo } = seedProject(db);
+    const content = "旧项目正文".repeat(80);
+    const sourceHash = computeChapterContentHash(content);
+    createChapter(chapterRepo, "chapter_1", content);
+    summaryRepo.upsertChapterSummary({
+      id: "summary_chapter_1",
+      projectId: "project_1",
+      chapterId: "chapter_1",
+      chapterTitle: "第1章",
+      chapterOrder: 1,
+      contentHash: sourceHash,
+      summaryShort: "旧项目已有章节缓存。",
+      summaryLong: "旧项目已有章节缓存，但结构里还没有人物关系索引字段。",
+      structured: chapterIndexPayloadV2(),
+      tokenCount: 120,
+      status: "ready",
+      error: null,
+      createdAt,
+      updatedAt: createdAt
+    });
+    const relationshipIndexRepo = new RelationshipIndexRepository(db);
+    const service = new SummaryService(summaryRepo, chapterRepo, { relationshipIndexRepo });
+    service.refreshRelationshipIndexStateFromSummaries("project_1", "2026-05-01T00:10:00.000Z");
+    const blockingJob = summaryRepo.enqueueSummaryJob({
+      projectId: "project_1",
+      jobType: "chapter_summary",
+      targetId: "chapter_1",
+      sourceHash: "newer_chapter_hash",
+      priority: 5,
+      now: "2026-05-01T00:11:00.000Z"
+    });
+
+    expect(service.enqueueLegacyRelationshipOriginalTextUpgradeIfSummaryIdle("project_1", "2026-05-01T00:12:00.000Z")).toEqual({
+      queued: 0,
+      skippedReady: 0,
+      skippedStale: 0,
+      skippedMissingSummary: 0
+    });
+    expect(summaryRepo.listSummaryJobs("project_1").filter((job) => job.jobType === "relationship_original_text_upgrade")).toEqual([]);
+
+    summaryRepo.completeSummaryJob(blockingJob.id, "2026-05-01T00:13:00.000Z");
+
+    expect(service.enqueueLegacyRelationshipOriginalTextUpgradeIfSummaryIdle("project_1", "2026-05-01T00:14:00.000Z")).toEqual({
+      queued: 1,
+      skippedReady: 0,
+      skippedStale: 0,
+      skippedMissingSummary: 0
+    });
+    expect(summaryRepo.claimNextSummaryJob("project_1", "2026-05-01T00:15:00.000Z")).toMatchObject({
+      jobType: "relationship_original_text_upgrade",
+      targetId: "chapter_1",
+      sourceHash
+    });
+
+    db.close();
+  });
+
+  it("keeps failed relationship upgrades manual-only and lets the manual action retry them", () => {
+    const db = createDb();
+    const { chapterRepo, summaryRepo } = seedProject(db);
+    const content = "旧项目正文".repeat(80);
+    const sourceHash = computeChapterContentHash(content);
+    createChapter(chapterRepo, "chapter_1", content);
+    summaryRepo.upsertChapterSummary({
+      id: "summary_chapter_1",
+      projectId: "project_1",
+      chapterId: "chapter_1",
+      chapterTitle: "第1章",
+      chapterOrder: 1,
+      contentHash: sourceHash,
+      summaryShort: "旧项目已有章节缓存。",
+      summaryLong: "旧项目已有章节缓存，但结构里还没有人物关系索引字段。",
+      structured: chapterIndexPayloadV2(),
+      tokenCount: 120,
+      status: "ready",
+      error: null,
+      createdAt,
+      updatedAt: createdAt
+    });
+    const relationshipIndexRepo = new RelationshipIndexRepository(db);
+    relationshipIndexRepo.markChapterMaterializationFailed({
+      projectId: "project_1",
+      chapterId: "chapter_1",
+      chapterTitle: "第1章",
+      chapterOrder: 1,
+      contentHash: sourceHash,
+      extractorVersion: "chapter-summary-v3-lite-relationship-index",
+      error: "章节人物关系索引被截断",
+      now: "2026-05-01T00:10:00.000Z"
+    });
+    const service = new SummaryService(summaryRepo, chapterRepo, { relationshipIndexRepo });
+
+    expect(service.refreshRelationshipIndexStateFromSummaries("project_1", "2026-05-01T00:11:00.000Z")).toEqual({
+      materialized: 0,
+      legacyMissing: 0,
+      failed: 1,
+      skipped: 0
+    });
+    expect(service.enqueueLegacyRelationshipOriginalTextUpgradeIfSummaryIdle("project_1", "2026-05-01T00:12:00.000Z")).toEqual({
+      queued: 0,
+      skippedReady: 0,
+      skippedStale: 0,
+      skippedMissingSummary: 0
+    });
+    expect(service.enqueueLegacyRelationshipOriginalTextUpgrade({ projectId: "project_1" }, "2026-05-01T00:13:00.000Z")).toEqual({
+      queued: 1,
+      skippedReady: 0,
+      skippedStale: 0,
+      skippedMissingSummary: 0
+    });
+    expect(summaryRepo.claimNextSummaryJob("project_1", "2026-05-01T00:14:00.000Z")).toMatchObject({
+      jobType: "relationship_original_text_upgrade",
+      targetId: "chapter_1",
+      sourceHash
+    });
+
+    db.close();
+  });
+
+  it("refreshes mixed old-project relationship cache states without hiding stale or missing chapters", () => {
+    const db = createDb();
+    const { chapterRepo, summaryRepo } = seedProject(db);
+    createChapterAtOrder(chapterRepo, "chapter_a", "第1章", 0, "白嘉轩与仙草共同出场。");
+    createChapterAtOrder(chapterRepo, "chapter_b", "第2章", 1, "鹿三与白嘉轩进了祠堂。");
+    createChapterAtOrder(chapterRepo, "chapter_c", "第3章", 2, "已经修改的新正文。");
+    const hashA = computeChapterContentHash("白嘉轩与仙草共同出场。");
+    const hashB = computeChapterContentHash("鹿三与白嘉轩进了祠堂。");
+    summaryRepo.upsertChapterSummary({
+      id: "summary_a",
+      projectId: "project_1",
+      chapterId: "chapter_a",
+      chapterTitle: "第1章",
+      chapterOrder: 1,
+      contentHash: hashA,
+      summaryShort: "白嘉轩与仙草共同出场。",
+      summaryLong: "白嘉轩与仙草共同出场，关系可以从旧缓存直接派生。",
+      structured: chapterIndexPayloadV3LiteWithRelationship({ title: "第1章" }),
+      tokenCount: 120,
+      status: "ready",
+      error: null,
+      createdAt,
+      updatedAt: createdAt
+    });
+    summaryRepo.upsertChapterSummary({
+      id: "summary_b",
+      projectId: "project_1",
+      chapterId: "chapter_b",
+      chapterTitle: "第2章",
+      chapterOrder: 2,
+      contentHash: hashB,
+      summaryShort: "鹿三与白嘉轩进了祠堂。",
+      summaryLong: "旧缓存没有人物关系索引字段，需要显式读取原文升级。",
+      structured: chapterIndexPayloadV2(),
+      tokenCount: 120,
+      status: "ready",
+      error: null,
+      createdAt,
+      updatedAt: createdAt
+    });
+    summaryRepo.upsertChapterSummary({
+      id: "summary_c",
+      projectId: "project_1",
+      chapterId: "chapter_c",
+      chapterTitle: "第3章",
+      chapterOrder: 3,
+      contentHash: computeChapterContentHash("旧正文"),
+      summaryShort: "旧正文。",
+      summaryLong: "这一章正文已经变化，不能把旧缓存当成可用关系。",
+      structured: chapterIndexPayloadV3LiteWithRelationship({ title: "第3章" }),
+      tokenCount: 120,
+      status: "ready",
+      error: null,
+      createdAt,
+      updatedAt: createdAt
+    });
+    const relationshipIndexRepo = new RelationshipIndexRepository(db);
+    const service = new SummaryService(summaryRepo, chapterRepo, {
+      generator: {
+        summarizeChapterForIndex: async () => {
+          throw new Error("mixed old-project refresh must not regenerate summaries");
+        }
+      },
+      relationshipIndexRepo
+    });
+
+    expect(service.refreshRelationshipIndexStateFromSummaries("project_1", "2026-05-01T00:10:00.000Z")).toEqual({
+      materialized: 1,
+      legacyMissing: 1,
+      failed: 0,
+      skipped: 1
+    });
+    expect(relationshipIndexRepo.getChapterIndexState("project_1", "chapter_a")).toMatchObject({
+      status: "ready",
+      extractionSource: "summary_payload"
+    });
+    expect(relationshipIndexRepo.getChapterIndexState("project_1", "chapter_b")).toMatchObject({
+      status: "legacy_missing_relationships"
+    });
+    expect(relationshipIndexRepo.getChapterIndexState("project_1", "chapter_c")).toBeNull();
+    expect(service.enqueueLegacyRelationshipOriginalTextUpgrade({ projectId: "project_1" }, "2026-05-01T00:11:00.000Z")).toMatchObject({
+      queued: 1,
+      skippedReady: 1,
+      skippedStale: 0,
+      skippedMissingSummary: 0
+    });
+
+    db.close();
+  });
+
+  it("records relationship materialization failure without failing chapter summary save", async () => {
+    const db = createDb();
+    const { chapterRepo, summaryRepo } = seedProject(db);
+    const content = "春".repeat(620);
+    createChapter(chapterRepo, "chapter_1", content);
+    const relationshipIndexRepo = new RelationshipIndexRepository(db);
+    const payload = {
+      ...chapterIndexPayloadV3Lite(),
+      人物关系索引: { 人物: [{}], 关系事件: [{}], 不确定项: [] }
+    } satisfies ChapterAiSummaryPayload;
+    const service = new SummaryService(summaryRepo, chapterRepo, {
+      generator: {
+        summarizeChapterForIndex: async () => payload
+      },
+      relationshipIndexRepo
+    });
+
+    await service.summarizeChapter("project_1", "chapter_1", computeChapterContentHash(content), "2026-05-01T00:10:00.000Z");
+
+    expect(summaryRepo.getChapterSummary("project_1", "chapter_1")).toMatchObject({ status: "ready" });
+    expect(relationshipIndexRepo.getChapterIndexState("project_1", "chapter_1")).toMatchObject({
+      status: "failed",
+      contentHash: computeChapterContentHash(content)
+    });
+    expect(relationshipIndexRepo.listMentions("project_1")).toEqual([]);
     db.close();
   });
 
@@ -1426,6 +1876,54 @@ describe("summary index status and rebuild controls", () => {
     db.close();
   });
 
+  it("counts cache settings chapter failures from current chapter cache entries only", () => {
+    const db = createDb();
+    const { chapterRepo, summaryRepo } = seedProject(db);
+    const readyContent = "春".repeat(620);
+    const failedContent = "夏".repeat(620);
+    createChapterAtOrder(chapterRepo, "chapter_1", "第1章", 0, readyContent);
+    createChapterAtOrder(chapterRepo, "chapter_2", "第2章", 1, failedContent);
+    upsertReadyChapterSummary(summaryRepo, { chapterId: "chapter_1", title: "第1章", order: 1, content: readyContent });
+    const orphanChapterJob = summaryRepo.enqueueSummaryJob({
+      projectId: "project_1",
+      jobType: "chapter_summary",
+      targetId: "deleted_chapter",
+      sourceHash: "orphan_hash",
+      priority: 5,
+      now: "2026-05-01T00:10:00.000Z"
+    });
+    summaryRepo.failSummaryJob(orphanChapterJob.id, "找不到需要建立摘要的章节。", null, "2026-05-01T00:11:00.000Z");
+    const arcJob = summaryRepo.enqueueSummaryJob({
+      projectId: "project_1",
+      jobType: "arc_summary",
+      targetId: "auto:001-002",
+      sourceHash: "arc_hash",
+      priority: 4,
+      now: "2026-05-01T00:12:00.000Z"
+    });
+    summaryRepo.failSummaryJob(arcJob.id, "阶段索引摘要被截断。", null, "2026-05-01T00:13:00.000Z");
+    const failedChapterJob = summaryRepo.enqueueSummaryJob({
+      projectId: "project_1",
+      jobType: "chapter_summary",
+      targetId: "chapter_2",
+      sourceHash: computeChapterContentHash(failedContent),
+      priority: 5,
+      now: "2026-05-01T00:14:00.000Z"
+    });
+    summaryRepo.failSummaryJob(failedChapterJob.id, "模型输出不是合法 JSON。", null, "2026-05-01T00:15:00.000Z");
+    const relationshipIndexRepo = new RelationshipIndexRepository(db);
+    const service = new SummaryService(summaryRepo, chapterRepo, { relationshipIndexRepo });
+
+    expect(service.getRelationshipCacheSettingsStatus("project_1", "2026-05-01T00:16:00.000Z").chapterCache).toEqual({
+      ready: 1,
+      queuedOrRunning: 0,
+      stale: 0,
+      failed: 1
+    });
+
+    db.close();
+  });
+
   it("does not surface stale failed chapter jobs after the same source hash has cached successfully", () => {
     const db = createDb();
     const { chapterRepo, summaryRepo } = seedProject(db);
@@ -1894,6 +2392,50 @@ describe("summary index status and rebuild controls", () => {
       label: "第1章 风雪归人",
       error: "Provider disconnected"
     });
+    db.close();
+  });
+
+  it("describes truncated arc summary failures as stage summary output problems", () => {
+    const db = createDb();
+    const { chapterRepo, summaryRepo } = seedProject(db);
+    const firstContent = "春".repeat(620);
+    const secondContent = "夏".repeat(620);
+    createChapterAtOrder(chapterRepo, "chapter_1", "第1章", 0, firstContent);
+    createChapterAtOrder(chapterRepo, "chapter_2", "第2章", 1, secondContent);
+    const firstHash = computeChapterContentHash(firstContent);
+    const secondHash = computeChapterContentHash(secondContent);
+    upsertReadyChapterSummary(summaryRepo, {
+      chapterId: "chapter_1",
+      title: "第1章",
+      order: 1,
+      content: firstContent
+    });
+    upsertReadyChapterSummary(summaryRepo, {
+      chapterId: "chapter_2",
+      title: "第2章",
+      order: 2,
+      content: secondContent
+    });
+    const job = summaryRepo.enqueueSummaryJob({
+      projectId: "project_1",
+      jobType: "arc_summary",
+      targetId: "auto:001-002",
+      sourceHash: computeSourceHash([firstHash, secondHash]),
+      priority: 6,
+      now: "2026-05-01T00:10:00.000Z"
+    });
+    const running = summaryRepo.claimNextSummaryJob("project_1", "2026-05-01T00:11:00.000Z");
+    summaryRepo.failSummaryJob(running?.id ?? job.id, "阶段索引摘要被截断，请换用输出额度更高的模型后重试。", null, "2026-05-01T00:12:00.000Z");
+    const service = new SummaryService(summaryRepo, chapterRepo);
+
+    const status = service.getIndexStatus("project_1", "2026-05-01T00:13:00.000Z");
+
+    expect(status.recentFailedJobs[0]).toMatchObject({
+      label: "阶段摘要（第1-2章）",
+      failureCategory: "输出被截断",
+      actionHint: expect.stringContaining("阶段摘要输出超出模型额度")
+    });
+    expect(status.recentFailedJobs[0]?.actionHint).not.toContain("章节缓存输出");
     db.close();
   });
 

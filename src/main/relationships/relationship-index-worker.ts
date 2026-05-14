@@ -56,6 +56,9 @@ function isCancellationReason(reason: unknown): boolean {
   return String(reason) === "canceled";
 }
 
+/**
+ * Development fallback only. Production relationship cache is derived from SummaryService.
+ */
 export class RelationshipIndexWorker {
   constructor(private readonly deps: RelationshipWorkerDeps) {}
 

@@ -79,7 +79,7 @@ afterEach(() => {
 });
 
 describe("RelationshipIndexService", () => {
-  it("marks changed chapter content as waiting stable for one hour", () => {
+  it("marks changed chapter content as stale for summary-derived relationship cache", () => {
     const db = createTestDb();
     const { chapterRepo, repo, service } = createService(db);
     createChapter(chapterRepo, { id: "chapter_1", title: "第1章", text: textWithUnits(RELATIONSHIP_INDEX_MIN_AUTO_UNITS) });
@@ -96,16 +96,15 @@ describe("RelationshipIndexService", () => {
 
     const state = repo.getChapterIndexState("project_1", "chapter_1");
     expect(state).toMatchObject({
-      status: "waiting_stable",
-      stableAfterMs: RELATIONSHIP_INDEX_STABLE_IDLE_MS,
+      status: "stale",
       extractorVersion: RELATIONSHIP_INDEX_EXTRACTOR_VERSION,
-      eligibleAt: "2026-05-13T02:00:00.000Z"
+      eligibleAt: null
     });
 
     db.close();
   });
 
-  it("moves the stable time forward and cancels queued old-hash jobs when content changes again", () => {
+  it("updates stale source hash and cancels queued old-hash jobs when content changes again", () => {
     const db = createTestDb();
     const { chapterRepo, repo, service } = createService(db);
     createChapter(chapterRepo, { id: "chapter_1", title: "第1章", text: textWithUnits(RELATIONSHIP_INDEX_MIN_AUTO_UNITS + 10) });
@@ -140,8 +139,8 @@ describe("RelationshipIndexService", () => {
     });
 
     expect(repo.getChapterIndexState("project_1", "chapter_1")).toMatchObject({
-      status: "waiting_stable",
-      eligibleAt: "2026-05-13T02:30:00.000Z"
+      status: "stale",
+      eligibleAt: null
     });
     expect(repo.listRelationshipJobs("project_1").find((job) => job.id === oldJob.id)).toMatchObject({
       status: "cancelled",
@@ -224,7 +223,7 @@ describe("RelationshipIndexService", () => {
     db.close();
   });
 
-  it("tracks non-adjacent edited chapters with independent one-hour stable windows", () => {
+  it("tracks non-adjacent edited chapters with independent stale cache states", () => {
     const db = createTestDb();
     const { chapterRepo, repo, service } = createService(db);
     createChapter(chapterRepo, { id: "chapter_1", title: "第1章", text: textWithUnits(RELATIONSHIP_INDEX_MIN_AUTO_UNITS), sortOrder: 0 });
@@ -251,21 +250,21 @@ describe("RelationshipIndexService", () => {
 
     expect(repo.getChapterIndexState("project_1", "chapter_1")).toMatchObject({
       chapterOrder: 1,
-      status: "waiting_stable",
-      eligibleAt: "2026-05-13T02:00:00.000Z"
+      status: "stale",
+      eligibleAt: null
     });
     expect(repo.getChapterIndexState("project_1", "chapter_3")).toMatchObject({
       chapterOrder: 3,
-      status: "waiting_stable",
-      eligibleAt: "2026-05-13T02:30:00.000Z"
+      status: "stale",
+      eligibleAt: null
     });
 
     const firstBatch = service.enqueueEligibleStableChapters("project_1", "2026-05-13T02:05:00.000Z");
-    expect(firstBatch.map((job) => job.chapterId)).toEqual(["chapter_1"]);
-    expect(repo.getChapterIndexState("project_1", "chapter_3")).toMatchObject({ status: "waiting_stable" });
+    expect(firstBatch.map((job) => job.chapterId)).toEqual(["chapter_1", "chapter_3"]);
+    expect(repo.getChapterIndexState("project_1", "chapter_3")).toMatchObject({ status: "queued" });
 
     const secondBatch = service.enqueueEligibleStableChapters("project_1", "2026-05-13T02:35:00.000Z");
-    expect(secondBatch.map((job) => job.chapterId)).toEqual(["chapter_3"]);
+    expect(secondBatch).toEqual([]);
 
     db.close();
   });

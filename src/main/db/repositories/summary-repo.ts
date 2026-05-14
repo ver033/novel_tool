@@ -727,6 +727,20 @@ export class SummaryRepository {
     return Boolean(row);
   }
 
+  hasPendingNormalSummaryJobs(projectId: string, _now: string): boolean {
+    const row = this.db
+      .prepare(
+        `SELECT 1 AS found
+         FROM summary_jobs
+         WHERE project_id = ?
+           AND job_type != 'relationship_original_text_upgrade'
+           AND status IN ('queued', 'running')
+         LIMIT 1`
+      )
+      .get(projectId) as { readonly found: number } | undefined;
+    return Boolean(row);
+  }
+
   completeSummaryJob(jobId: string, now: string): void {
     this.db
       .prepare("UPDATE summary_jobs SET status = 'completed', finished_at = ?, updated_at = ? WHERE id = ?")
@@ -790,8 +804,21 @@ export class SummaryRepository {
          LEFT JOIN chapters ON summary_jobs.job_type = 'chapter_summary'
           AND summary_jobs.target_id = chapters.id
           AND summary_jobs.project_id = chapters.project_id
-         WHERE summary_jobs.project_id = ? AND summary_jobs.status = 'queued' AND (summary_jobs.next_run_at IS NULL OR summary_jobs.next_run_at <= ?)
+         WHERE summary_jobs.project_id = ?
+           AND summary_jobs.status = 'queued'
+           AND (summary_jobs.next_run_at IS NULL OR summary_jobs.next_run_at <= ?)
+           AND (
+             summary_jobs.job_type != 'relationship_original_text_upgrade'
+             OR NOT EXISTS (
+               SELECT 1
+               FROM summary_jobs AS blocking_jobs
+               WHERE blocking_jobs.project_id = summary_jobs.project_id
+                 AND blocking_jobs.job_type != 'relationship_original_text_upgrade'
+                 AND blocking_jobs.status IN ('queued', 'running')
+             )
+           )
          ORDER BY
+           CASE WHEN summary_jobs.job_type = 'relationship_original_text_upgrade' THEN 1 ELSE 0 END ASC,
            summary_jobs.priority DESC,
            CASE WHEN summary_jobs.job_type = 'chapter_summary' THEN COALESCE(chapters.sort_order, -1) ELSE -1 END DESC,
            summary_jobs.created_at ASC,

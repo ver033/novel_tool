@@ -42,6 +42,7 @@ function makeEdge(id: string, sourceId: string, targetId: string, sourceName: st
     confidence: 0.85,
     weight: 2,
     evidenceCount: 2,
+    evidenceSources: ["summary_payload"],
     chapterIds: ["chapter_1"],
     firstChapterOrder: 1,
     latestChapterOrder: 1,

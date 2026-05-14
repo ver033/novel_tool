@@ -142,7 +142,7 @@ describe("arc and book V2 cache reset migration", () => {
     expect(db.prepare("SELECT COUNT(*) AS count FROM arc_ai_summaries").get()).toEqual({ count: 0 });
     expect(db.prepare("SELECT COUNT(*) AS count FROM book_ai_summaries").get()).toEqual({ count: 0 });
     expect(db.prepare("SELECT id FROM summary_jobs ORDER BY id").all()).toEqual([{ id: "job_chapter" }]);
-    expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").get()).toEqual({ version: 13 });
+    expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").get()).toEqual({ version: 15 });
 
     db.close();
   });

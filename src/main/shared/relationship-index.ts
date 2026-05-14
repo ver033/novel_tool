@@ -10,10 +10,13 @@ export const relationshipIndexChapterStatusSchema = z.enum([
   "running",
   "ready",
   "stale",
+  "legacy_missing_relationships",
   "failed",
   "skipped_too_short"
 ]);
 export const relationshipIndexJobStatusSchema = z.enum(["queued", "running", "completed", "failed", "cancelled", "skipped"]);
+export const relationshipExtractionSourceSchema = z.enum(["summary_payload", "legacy_original_text_upgrade", "original_text_enhancement"]);
+export const relationshipEvidenceSourceSchema = z.enum(["summary_payload", "original_text"]);
 
 export const relationshipGraphRoleScopeSchema = z.enum(["main", "supporting", "all"]);
 export const relationshipGraphModeSchema = z.enum(["global", "focus"]);
@@ -24,6 +27,8 @@ export type RelationshipMentionDirection = z.infer<typeof relationshipMentionDir
 export type RelationshipMentionPolarity = z.infer<typeof relationshipMentionPolaritySchema>;
 export type RelationshipIndexChapterStatus = z.infer<typeof relationshipIndexChapterStatusSchema>;
 export type RelationshipIndexJobStatus = z.infer<typeof relationshipIndexJobStatusSchema>;
+export type RelationshipExtractionSource = z.infer<typeof relationshipExtractionSourceSchema>;
+export type RelationshipEvidenceSource = z.infer<typeof relationshipEvidenceSourceSchema>;
 
 export function normalizeRelationshipCharacterName(name: string): string {
   return name.normalize("NFKC").replace(/\s+/gu, " ").trim();
@@ -194,6 +199,7 @@ export type RelationshipGraphGetInput = z.infer<typeof relationshipGraphGetInput
 export type RelationshipGraphIndexStatus = {
   readonly ready: number;
   readonly stale: number;
+  readonly legacyMissingRelationships: number;
   readonly waitingStable: number;
   readonly queued: number;
   readonly running: number;
@@ -254,6 +260,7 @@ export type RelationshipGraphEdgeStage = {
   readonly endState: string | null;
   readonly reason: string | null;
   readonly evidenceQuote: string;
+  readonly evidenceSource: RelationshipEvidenceSource;
   readonly confidence: number;
   readonly uncertainty: string | null;
 };
@@ -277,6 +284,7 @@ export type RelationshipGraphEdge = {
   readonly confidence: number;
   readonly weight: number;
   readonly evidenceCount: number;
+  readonly evidenceSources: readonly RelationshipEvidenceSource[];
   readonly chapterIds: readonly string[];
   readonly firstChapterOrder: number;
   readonly latestChapterOrder: number;

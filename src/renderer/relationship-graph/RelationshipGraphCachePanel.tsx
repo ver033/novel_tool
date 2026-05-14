@@ -8,8 +8,9 @@ type RelationshipGraphCachePanelProps = {
 
 const chapterStatusLabels: Record<string, string> = {
   ready: "已完成",
-  stale: "已过期",
-  waiting_stable: "等待稳定",
+  stale: "内容已更新",
+  legacy_missing_relationships: "旧缓存待原文生成",
+  waiting_stable: "旧等待状态",
   queued: "队列中",
   running: "分析中",
   failed: "失败",
@@ -26,11 +27,17 @@ function cacheSummary(status: RelationshipGraphIndexStatus | null, loading: bool
   if (status.ready > 0) {
     return `已完成 ${status.ready} 章人物关系缓存`;
   }
+  if (status.legacyMissingRelationships > 0) {
+    return `有 ${status.legacyMissingRelationships} 章旧缓存需要读取原文生成关系`;
+  }
+  if (status.stale > 0) {
+    return `有 ${status.stale} 章关系来自旧章节快照`;
+  }
   if (status.running > 0) {
     return `正在分析 ${status.running} 章`;
   }
   if (status.queued > 0 || status.waitingStable > 0) {
-    return `等待稳定 ${status.waitingStable} 章，队列 ${status.queued} 章`;
+    return `队列 ${status.queued} 章，旧等待状态 ${status.waitingStable} 章`;
   }
   if (status.failed > 0) {
     return `有 ${status.failed} 章缓存失败`;
@@ -61,8 +68,8 @@ export function RelationshipGraphCachePanel({ graph, loading, status }: Relation
           已完成
         </span>
         <span>
-          <b>{status?.waitingStable ?? 0}</b>
-          等待稳定
+          <b>{status?.legacyMissingRelationships ?? 0}</b>
+          旧缓存待原文生成
         </span>
         <span>
           <b>{(status?.queued ?? 0) + (status?.running ?? 0)}</b>

@@ -53,6 +53,7 @@ type MentionRow = {
   readonly end_state: string | null;
   readonly reason: string | null;
   readonly evidence_quote: string;
+  readonly evidence_source?: RelationshipGraphEdgeStage["evidenceSource"];
   readonly confidence: number;
   readonly uncertainty: string | null;
 };
@@ -171,6 +172,7 @@ function stageFromMention(mention: MentionRow): RelationshipGraphEdgeStage {
     endState: mention.end_state,
     reason: mention.reason,
     evidenceQuote: mention.evidence_quote,
+    evidenceSource: mention.evidence_source ?? "summary_payload",
     confidence: mention.confidence,
     uncertainty: mention.uncertainty
   };
@@ -280,6 +282,7 @@ function loadBailuyuanRelationshipGraph(): { readonly nodes: RelationshipGraphNo
       confidence,
       weight: mentions.length * (0.5 + confidence) * (0.5 + intensity),
       evidenceCount: mentions.length,
+      evidenceSources: [...new Set(mentions.map((mention) => mention.evidence_source ?? "summary_payload"))],
       chapterIds: [...new Set(mentions.map((mention) => mention.chapter_id))],
       firstChapterOrder: mentions[0].chapter_order,
       latestChapterOrder: current.chapter_order,

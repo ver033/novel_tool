@@ -83,6 +83,7 @@ const edges: RelationshipGraphEdge[] = [
     confidence: 0.93,
     weight: 3,
     evidenceCount: 3,
+    evidenceSources: ["summary_payload"],
     chapterIds: ["chapter_1", "chapter_2"],
     firstChapterOrder: 1,
     latestChapterOrder: 2,
@@ -106,6 +107,7 @@ const edges: RelationshipGraphEdge[] = [
         endState: "互相防备",
         reason: "正文推进",
         evidenceQuote: "林砚看向雾灵",
+        evidenceSource: "summary_payload",
         confidence: 0.84,
         uncertainty: null
       }
@@ -130,6 +132,7 @@ const edges: RelationshipGraphEdge[] = [
     confidence: 0.55,
     weight: 1,
     evidenceCount: 1,
+    evidenceSources: ["summary_payload"],
     chapterIds: ["chapter_2"],
     firstChapterOrder: 2,
     latestChapterOrder: 2,
@@ -153,6 +156,7 @@ const edges: RelationshipGraphEdge[] = [
         endState: "疑似背离",
         reason: null,
         evidenceQuote: "雾灵避开沈照",
+        evidenceSource: "summary_payload",
         confidence: 0.55,
         uncertainty: "只出现暗示，没有明说"
       }

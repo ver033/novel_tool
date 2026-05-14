@@ -17,13 +17,16 @@ function statusText(status: RelationshipGraphIndexStatus | null, loading: boolea
     return "正在读取人物关系缓存";
   }
   if (!status || status.total === 0) {
-    return "等待稳定章节进入人物关系索引";
+    return "还没有可用人物关系缓存";
   }
   if (status.running > 0) {
     return "正在后台分析人物关系";
   }
+  if (status.legacyMissingRelationships > 0 || status.stale > 0) {
+    return "部分章节关系缓存未更新";
+  }
   if (status.queued > 0 || status.waitingStable > 0) {
-    return `等待稳定 ${status.waitingStable} 章，队列 ${status.queued} 章`;
+    return `关系缓存队列 ${status.queued} 章，旧等待状态 ${status.waitingStable} 章`;
   }
   if (status.failed > 0) {
     return `有 ${status.failed} 章关系索引失败`;

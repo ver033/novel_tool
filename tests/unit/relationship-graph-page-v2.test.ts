@@ -130,7 +130,8 @@ describe("relationship graph page v2 renderer wiring", () => {
     expect(inspector).toContain("返回全局图");
     expect(inspector).toContain("基础关系");
     expect(inspector).toContain("剧情关系");
-    expect(statusBar).toContain("等待稳定");
+    expect(statusBar).toContain("部分章节关系缓存未更新");
+    expect(statusBar).not.toContain("等待稳定");
     expect(statusBar).toContain("重建章节缓存并更新关系");
     expect(legend).toContain("基础关系默认显示");
     expect(legend).toContain("优先常驻关键关系");

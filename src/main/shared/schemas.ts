@@ -490,6 +490,18 @@ export const relationshipGraphRebuildInputSchema = relationshipGraphStatusInputS
   })
   .strict();
 
+export const relationshipGraphUpgradeMissingFromOriginalTextInputSchema = relationshipGraphStatusInputSchema
+  .extend({
+    chapterIds: z.array(idSchema).optional(),
+    chapterFrom: z.number().int().positive().optional(),
+    chapterTo: z.number().int().positive().optional()
+  })
+  .strict()
+  .refine((value) => value.chapterFrom === undefined || value.chapterTo === undefined || value.chapterFrom <= value.chapterTo, {
+    message: "chapterFrom must be less than or equal to chapterTo",
+    path: ["chapterTo"]
+  });
+
 export class IpcPayloadValidationError extends Error {
   constructor(readonly issues: z.ZodIssue[]) {
     super("IPC payload validation failed");

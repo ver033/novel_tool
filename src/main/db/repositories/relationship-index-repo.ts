@@ -9,12 +9,16 @@ import {
   relationshipIndexJobStatusSchema,
   relationshipMentionDirectionSchema,
   relationshipMentionPolaritySchema,
+  relationshipEvidenceSourceSchema,
+  relationshipExtractionSourceSchema,
   normalizeRelationshipCharacterName,
   relationshipEntityKey,
   type RelationshipDimension,
   type RelationshipEntityImportance,
   type RelationshipEntityKind,
+  type RelationshipEvidenceSource,
   type RelationshipExtractionCharacter,
+  type RelationshipExtractionSource,
   type RelationshipIndexChapterStatus,
   type RelationshipIndexExtractionPayload,
   type RelationshipIndexJobStatus,
@@ -35,6 +39,7 @@ type RelationshipIndexChapterRow = {
   readonly indexed_at: string | null;
   readonly stable_after_ms: number;
   readonly extractor_version: string;
+  readonly extraction_source: string;
   readonly token_count: number;
   readonly error: string | null;
   readonly created_at: string;
@@ -101,6 +106,7 @@ type RelationshipMentionRow = {
   readonly end_state: string | null;
   readonly reason: string | null;
   readonly evidence_quote: string;
+  readonly evidence_source: string;
   readonly confidence: number;
   readonly uncertainty: string | null;
   readonly created_at: string;
@@ -118,6 +124,7 @@ export type RelationshipIndexChapterRecord = {
   readonly indexedAt: string | null;
   readonly stableAfterMs: number;
   readonly extractorVersion: string;
+  readonly extractionSource: RelationshipExtractionSource;
   readonly tokenCount: number;
   readonly error: string | null;
   readonly createdAt: string;
@@ -184,6 +191,7 @@ export type RelationshipMentionRecord = {
   readonly endState: string | null;
   readonly reason: string | null;
   readonly evidenceQuote: string;
+  readonly evidenceSource: RelationshipEvidenceSource;
   readonly confidence: number;
   readonly uncertainty: string | null;
   readonly createdAt: string;
@@ -198,6 +206,37 @@ export type MarkRelationshipChapterWaitingStableInput = {
   readonly stableAfterMs: number;
   readonly extractorVersion: string;
   readonly eligibleAt: string | null;
+  readonly now: string;
+};
+
+export type MarkRelationshipChapterLegacyMissingInput = {
+  readonly projectId: string;
+  readonly chapterId: string;
+  readonly chapterTitle: string;
+  readonly chapterOrder: number;
+  readonly contentHash: string;
+  readonly extractorVersion: string;
+  readonly now: string;
+};
+
+export type MarkRelationshipChapterStaleInput = {
+  readonly projectId: string;
+  readonly chapterId: string;
+  readonly chapterTitle: string;
+  readonly chapterOrder: number;
+  readonly contentHash: string;
+  readonly extractorVersion: string;
+  readonly now: string;
+};
+
+export type MarkRelationshipChapterMaterializationFailedInput = {
+  readonly projectId: string;
+  readonly chapterId: string;
+  readonly chapterTitle: string;
+  readonly chapterOrder: number;
+  readonly contentHash: string;
+  readonly extractorVersion: string;
+  readonly error: string;
   readonly now: string;
 };
 
@@ -222,6 +261,8 @@ export type ReplaceRelationshipChapterExtractionInput = {
   readonly tokenCount: number;
   readonly stableAfterMs: number;
   readonly extractorVersion: string;
+  readonly extractionSource?: RelationshipExtractionSource;
+  readonly evidenceSource?: RelationshipEvidenceSource;
   readonly indexedAt: string;
   readonly now: string;
 };
@@ -270,6 +311,7 @@ function mapChapter(row: RelationshipIndexChapterRow): RelationshipIndexChapterR
     indexedAt: row.indexed_at,
     stableAfterMs: row.stable_after_ms,
     extractorVersion: row.extractor_version,
+    extractionSource: relationshipExtractionSourceSchema.parse(row.extraction_source),
     tokenCount: row.token_count,
     error: row.error,
     createdAt: row.created_at,
@@ -342,6 +384,7 @@ function mapMention(row: RelationshipMentionRow): RelationshipMentionRecord {
     endState: row.end_state,
     reason: row.reason,
     evidenceQuote: row.evidence_quote,
+    evidenceSource: relationshipEvidenceSourceSchema.parse(row.evidence_source),
     confidence: row.confidence,
     uncertainty: row.uncertainty,
     createdAt: row.created_at
@@ -389,6 +432,124 @@ export class RelationshipIndexRepository {
     const record = this.getChapterIndexState(input.projectId, input.chapterId);
     if (!record) {
       throw new Error("人物关系章节索引状态写入失败。");
+    }
+    return record;
+  }
+
+  markChapterLegacyMissingRelationships(input: MarkRelationshipChapterLegacyMissingInput): RelationshipIndexChapterRecord {
+    this.db
+      .prepare(
+        `INSERT INTO relationship_index_chapters
+         (id, project_id, chapter_id, chapter_title, chapter_order, content_hash, status, eligible_at, indexed_at,
+          stable_after_ms, extractor_version, extraction_source, token_count, error, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'legacy_missing_relationships', NULL, NULL, 0, ?, 'summary_payload', 0, NULL, ?, ?)
+         ON CONFLICT(project_id, chapter_id) DO UPDATE SET
+           chapter_title = excluded.chapter_title,
+           chapter_order = excluded.chapter_order,
+           content_hash = excluded.content_hash,
+           status = 'legacy_missing_relationships',
+           eligible_at = NULL,
+           indexed_at = NULL,
+           stable_after_ms = 0,
+           extractor_version = excluded.extractor_version,
+           extraction_source = 'summary_payload',
+           token_count = 0,
+           error = NULL,
+           updated_at = excluded.updated_at`
+      )
+      .run(
+        createId("relationship_chapter"),
+        input.projectId,
+        input.chapterId,
+        input.chapterTitle,
+        input.chapterOrder,
+        input.contentHash,
+        input.extractorVersion,
+        input.now,
+        input.now
+      );
+    const record = this.getChapterIndexState(input.projectId, input.chapterId);
+    if (!record) {
+      throw new Error("旧章节人物关系缺失状态写入失败。");
+    }
+    return record;
+  }
+
+  markChapterStale(input: MarkRelationshipChapterStaleInput): RelationshipIndexChapterRecord {
+    this.db
+      .prepare(
+        `INSERT INTO relationship_index_chapters
+         (id, project_id, chapter_id, chapter_title, chapter_order, content_hash, status, eligible_at, indexed_at,
+          stable_after_ms, extractor_version, extraction_source, token_count, error, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'stale', NULL, NULL, 0, ?, 'summary_payload', 0, NULL, ?, ?)
+         ON CONFLICT(project_id, chapter_id) DO UPDATE SET
+           chapter_title = excluded.chapter_title,
+           chapter_order = excluded.chapter_order,
+           content_hash = excluded.content_hash,
+           status = 'stale',
+           eligible_at = NULL,
+           indexed_at = NULL,
+           stable_after_ms = 0,
+           extractor_version = excluded.extractor_version,
+           extraction_source = 'summary_payload',
+           token_count = 0,
+           error = NULL,
+           updated_at = excluded.updated_at`
+      )
+      .run(
+        createId("relationship_chapter"),
+        input.projectId,
+        input.chapterId,
+        input.chapterTitle,
+        input.chapterOrder,
+        input.contentHash,
+        input.extractorVersion,
+        input.now,
+        input.now
+      );
+    const record = this.getChapterIndexState(input.projectId, input.chapterId);
+    if (!record) {
+      throw new Error("人物关系章节过期状态写入失败。");
+    }
+    return record;
+  }
+
+  markChapterMaterializationFailed(input: MarkRelationshipChapterMaterializationFailedInput): RelationshipIndexChapterRecord {
+    this.db
+      .prepare(
+        `INSERT INTO relationship_index_chapters
+         (id, project_id, chapter_id, chapter_title, chapter_order, content_hash, status, eligible_at, indexed_at,
+          stable_after_ms, extractor_version, extraction_source, token_count, error, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'failed', NULL, NULL, 0, ?, 'summary_payload', 0, ?, ?, ?)
+         ON CONFLICT(project_id, chapter_id) DO UPDATE SET
+           chapter_title = excluded.chapter_title,
+           chapter_order = excluded.chapter_order,
+           content_hash = excluded.content_hash,
+           status = 'failed',
+           eligible_at = NULL,
+           indexed_at = NULL,
+           stable_after_ms = 0,
+           extractor_version = excluded.extractor_version,
+           extraction_source = 'summary_payload',
+           token_count = 0,
+           error = excluded.error,
+           updated_at = excluded.updated_at`
+      )
+      .run(
+        createId("relationship_chapter"),
+        input.projectId,
+        input.chapterId,
+        input.chapterTitle,
+        input.chapterOrder,
+        input.contentHash,
+        input.extractorVersion,
+        input.error,
+        input.now,
+        input.now
+      );
+    const record = this.getChapterIndexState(input.projectId, input.chapterId);
+    if (!record) {
+      throw new Error("人物关系章节失败状态写入失败。");
     }
     return record;
   }
@@ -571,6 +732,8 @@ export class RelationshipIndexRepository {
 
   replaceChapterExtraction(input: ReplaceRelationshipChapterExtractionInput): void {
     const transaction = this.db.transaction(() => {
+      const extractionSource = input.extractionSource ?? "summary_payload";
+      const evidenceSource = input.evidenceSource ?? "summary_payload";
       const entityIdByKey = new Map<string, string>();
       for (const character of input.payload.characters) {
         const entity = this.upsertEntityFromCharacter(input, character);
@@ -592,8 +755,8 @@ export class RelationshipIndexRepository {
               source_entity_id, target_entity_id, base_relation_label, base_relation_summary, plot_relation_label,
               plot_relation_summary, primary_dimension_name, relationship_dimensions_json, semantic_markers_json,
               direction, polarity, intensity, change_summary, start_state, end_state, reason, evidence_quote,
-              confidence, uncertainty, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+              evidence_source, confidence, uncertainty, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
           )
           .run(
             createId("relationship_mention"),
@@ -621,6 +784,7 @@ export class RelationshipIndexRepository {
             mention.endState,
             mention.reason,
             mention.evidenceQuote,
+            evidenceSource,
             mention.confidence,
             mention.uncertainty,
             input.now
@@ -631,8 +795,8 @@ export class RelationshipIndexRepository {
         .prepare(
           `INSERT INTO relationship_index_chapters
            (id, project_id, chapter_id, chapter_title, chapter_order, content_hash, status, eligible_at, indexed_at,
-            stable_after_ms, extractor_version, token_count, error, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, 'ready', NULL, ?, ?, ?, ?, NULL, ?, ?)
+            stable_after_ms, extractor_version, extraction_source, token_count, error, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'ready', NULL, ?, ?, ?, ?, ?, NULL, ?, ?)
            ON CONFLICT(project_id, chapter_id) DO UPDATE SET
              chapter_title = excluded.chapter_title,
              chapter_order = excluded.chapter_order,
@@ -642,6 +806,7 @@ export class RelationshipIndexRepository {
              indexed_at = excluded.indexed_at,
              stable_after_ms = excluded.stable_after_ms,
              extractor_version = excluded.extractor_version,
+             extraction_source = excluded.extraction_source,
              token_count = excluded.token_count,
              error = NULL,
              updated_at = excluded.updated_at`
@@ -656,10 +821,12 @@ export class RelationshipIndexRepository {
           input.indexedAt,
           input.stableAfterMs,
           input.extractorVersion,
+          extractionSource,
           input.tokenCount,
           input.now,
           input.now
         );
+      this.rebuildProjectEntityReferences(input.projectId, input.now);
     });
 
     transaction();
@@ -766,6 +933,7 @@ export class RelationshipIndexRepository {
     }
     const ready = counts.get("ready") ?? 0;
     const stale = counts.get("stale") ?? 0;
+    const legacyMissingRelationships = counts.get("legacy_missing_relationships") ?? 0;
     const waitingStable = counts.get("waiting_stable") ?? 0;
     const queued = counts.get("queued") ?? 0;
     const running = counts.get("running") ?? 0;
@@ -774,12 +942,13 @@ export class RelationshipIndexRepository {
     return {
       ready,
       stale,
+      legacyMissingRelationships,
       waitingStable,
       queued,
       running,
       failed,
       skippedTooShort,
-      total: ready + stale + waitingStable + queued + running + failed + skippedTooShort
+      total: ready + stale + legacyMissingRelationships + waitingStable + queued + running + failed + skippedTooShort
     };
   }
 
@@ -878,6 +1047,69 @@ export class RelationshipIndexRepository {
   private getJobById(jobId: string): RelationshipIndexJobRecord | null {
     const row = this.db.prepare("SELECT * FROM relationship_index_jobs WHERE id = ?").get(jobId) as RelationshipIndexJobRow | undefined;
     return row ? mapJob(row) : null;
+  }
+
+  private rebuildProjectEntityReferences(projectId: string, now: string): void {
+    const references = this.db
+      .prepare(
+        `SELECT relationship_mentions.source_entity_id AS entity_id,
+                relationship_mentions.chapter_id AS chapter_id,
+                relationship_mentions.chapter_order AS chapter_order
+         FROM relationship_mentions
+         INNER JOIN relationship_index_chapters
+           ON relationship_index_chapters.project_id = relationship_mentions.project_id
+          AND relationship_index_chapters.chapter_id = relationship_mentions.chapter_id
+          AND relationship_index_chapters.content_hash = relationship_mentions.source_hash
+          AND relationship_index_chapters.status = 'ready'
+         WHERE relationship_mentions.project_id = ?
+           AND relationship_mentions.source_entity_id IS NOT NULL
+         UNION ALL
+         SELECT relationship_mentions.target_entity_id AS entity_id,
+                relationship_mentions.chapter_id AS chapter_id,
+                relationship_mentions.chapter_order AS chapter_order
+         FROM relationship_mentions
+         INNER JOIN relationship_index_chapters
+           ON relationship_index_chapters.project_id = relationship_mentions.project_id
+          AND relationship_index_chapters.chapter_id = relationship_mentions.chapter_id
+          AND relationship_index_chapters.content_hash = relationship_mentions.source_hash
+          AND relationship_index_chapters.status = 'ready'
+         WHERE relationship_mentions.project_id = ?
+           AND relationship_mentions.target_entity_id IS NOT NULL`
+      )
+      .all(projectId, projectId) as Array<{ readonly entity_id: string; readonly chapter_id: string; readonly chapter_order: number }>;
+
+    const refsByEntity = new Map<string, { readonly chapterIds: Set<string>; readonly chapterOrders: number[] }>();
+    for (const reference of references) {
+      const existing = refsByEntity.get(reference.entity_id);
+      if (existing) {
+        existing.chapterIds.add(reference.chapter_id);
+        existing.chapterOrders.push(reference.chapter_order);
+        continue;
+      }
+      refsByEntity.set(reference.entity_id, {
+        chapterIds: new Set([reference.chapter_id]),
+        chapterOrders: [reference.chapter_order]
+      });
+    }
+
+    const entities = this.db.prepare("SELECT id FROM relationship_entities WHERE project_id = ?").all(projectId) as Array<{ readonly id: string }>;
+    for (const entity of entities) {
+      const refs = refsByEntity.get(entity.id);
+      if (!refs) {
+        this.db.prepare("DELETE FROM relationship_entities WHERE id = ?").run(entity.id);
+        continue;
+      }
+      this.db
+        .prepare(
+          `UPDATE relationship_entities
+           SET source_chapter_ids_json = ?,
+               first_chapter_order = ?,
+               latest_chapter_order = ?,
+               updated_at = ?
+           WHERE id = ?`
+        )
+        .run(JSON.stringify([...refs.chapterIds].sort()), Math.min(...refs.chapterOrders), Math.max(...refs.chapterOrders), now, entity.id);
+    }
   }
 
   private findNextRunnableJobRow(projectId: string, now: string): RelationshipIndexJobRow | null {

@@ -5,7 +5,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createDatabase, type SqliteDatabase } from "../../src/main/db/database";
 import { runMigrations } from "../../src/main/db/migrations";
 import { RelationshipIndexRepository } from "../../src/main/db/repositories/relationship-index-repo";
-import { parseRelationshipExtractionPayload } from "../../src/main/shared/relationship-index";
+import {
+  parseRelationshipExtractionPayload,
+  relationshipEvidenceSourceSchema,
+  relationshipExtractionSourceSchema,
+  relationshipIndexChapterStatusSchema
+} from "../../src/main/shared/relationship-index";
 
 const tempDirs: string[] = [];
 const now = "2026-05-13T01:00:00.000Z";
@@ -99,7 +104,58 @@ function extractionPayload(label = "契约同行者") {
   });
 }
 
+function extractionPayloadForNames(sourceName: string, targetName: string, label = "同伴") {
+  return parseRelationshipExtractionPayload({
+    索引信息: {
+      缓存版本: "关系索引一",
+      章节序号: 1,
+      章节标题: "第1章 雾起",
+      语言: "简体中文"
+    },
+    人物: [sourceName, targetName].map((name, index) => ({
+      姓名: name,
+      别名: [],
+      实体类型: "person",
+      重要程度: index === 0 ? "main" : "supporting",
+      身份摘要: `${name}的测试身份`,
+      阵营: "测试阵营",
+      置信度: 0.9,
+      证据短句: [`${name}出场`]
+    })),
+    关系事件: [
+      {
+        主体: sourceName,
+        客体: targetName,
+        关系维度: [{ 名称: label, 说明: "测试关系", 置信度: 0.8 }],
+        主维度: label,
+        基础关系: { 名称: label, 说明: "稳定关系" },
+        剧情关系: { 名称: "互动", 说明: "本章互动" },
+        语义标记: [],
+        方向: "undirected",
+        极性: "neutral",
+        强度: 0.5,
+        本章变化: "建立测试关系",
+        开始状态: null,
+        结束状态: null,
+        变化原因: null,
+        证据短句: "二人同场",
+        置信度: 0.8,
+        不确定说明: ""
+      }
+    ],
+    不确定项: []
+  });
+}
+
 describe("RelationshipIndexRepository", () => {
+  it("accepts relationship cache status and source values for derived and legacy paths", () => {
+    expect(relationshipIndexChapterStatusSchema.parse("legacy_missing_relationships")).toBe("legacy_missing_relationships");
+    expect(relationshipExtractionSourceSchema.parse("summary_payload")).toBe("summary_payload");
+    expect(relationshipExtractionSourceSchema.parse("legacy_original_text_upgrade")).toBe("legacy_original_text_upgrade");
+    expect(relationshipEvidenceSourceSchema.parse("summary_payload")).toBe("summary_payload");
+    expect(relationshipEvidenceSourceSchema.parse("original_text")).toBe("original_text");
+  });
+
   it("upserts a chapter as waiting for stability", () => {
     const db = createTestDb();
     const repo = new RelationshipIndexRepository(db);
@@ -134,6 +190,91 @@ describe("RelationshipIndexRepository", () => {
       contentHash: "hash_2",
       eligibleAt: "2026-05-13T03:00:00.000Z",
       error: null
+    });
+
+    db.close();
+  });
+
+  it("marks a ready legacy chapter summary as missing embedded relationship fields", () => {
+    const db = createTestDb();
+    const repo = new RelationshipIndexRepository(db);
+
+    const record = repo.markChapterLegacyMissingRelationships({
+      projectId: "project_1",
+      chapterId: "chapter_1",
+      chapterTitle: "第1章 雾起",
+      chapterOrder: 1,
+      contentHash: "hash_legacy_missing",
+      extractorVersion: "chapter-summary-v3-lite-relationship-index",
+      now
+    });
+
+    expect(record).toMatchObject({
+      projectId: "project_1",
+      chapterId: "chapter_1",
+      contentHash: "hash_legacy_missing",
+      status: "legacy_missing_relationships",
+      eligibleAt: null,
+      indexedAt: null,
+      extractionSource: "summary_payload",
+      tokenCount: 0,
+      error: null
+    });
+    expect(repo.getIndexStatus("project_1")).toMatchObject({
+      legacyMissingRelationships: 1,
+      total: 1
+    });
+
+    db.close();
+  });
+
+  it("marks relationship cache stale for changed chapter content", () => {
+    const db = createTestDb();
+    const repo = new RelationshipIndexRepository(db);
+
+    const record = repo.markChapterStale({
+      projectId: "project_1",
+      chapterId: "chapter_1",
+      chapterTitle: "第1章 雾起",
+      chapterOrder: 1,
+      contentHash: "hash_changed",
+      extractorVersion: "chapter-summary-v3-lite-relationship-index",
+      now
+    });
+
+    expect(record).toMatchObject({
+      status: "stale",
+      contentHash: "hash_changed",
+      eligibleAt: null,
+      indexedAt: null,
+      tokenCount: 0,
+      error: null
+    });
+
+    db.close();
+  });
+
+  it("records relationship materialization failures on the chapter state", () => {
+    const db = createTestDb();
+    const repo = new RelationshipIndexRepository(db);
+
+    const record = repo.markChapterMaterializationFailed({
+      projectId: "project_1",
+      chapterId: "chapter_1",
+      chapterTitle: "第1章 雾起",
+      chapterOrder: 1,
+      contentHash: "hash_failed",
+      extractorVersion: "chapter-summary-v3-lite-relationship-index",
+      error: "人物关系索引格式无效",
+      now
+    });
+
+    expect(record).toMatchObject({
+      status: "failed",
+      contentHash: "hash_failed",
+      eligibleAt: null,
+      indexedAt: null,
+      error: "人物关系索引格式无效"
     });
 
     db.close();
@@ -268,6 +409,7 @@ describe("RelationshipIndexRepository", () => {
       ])
     );
     expect(mentions).toHaveLength(1);
+    expect(mentions[0]?.evidenceSource).toBe("summary_payload");
     expect(mentions[0]).toMatchObject({
       sourceHash: "hash_new",
       baseRelationLabel: "契约同行者",
@@ -286,8 +428,51 @@ describe("RelationshipIndexRepository", () => {
     expect(chapterState).toMatchObject({
       status: "ready",
       contentHash: "hash_new",
+      extractionSource: "summary_payload",
       tokenCount: 640,
       indexedAt: later
+    });
+
+    db.close();
+  });
+
+  it("does not keep stale source chapter ids after replacing a chapter extraction", () => {
+    const db = createTestDb();
+    const repo = new RelationshipIndexRepository(db);
+
+    repo.replaceChapterExtraction({
+      projectId: "project_1",
+      chapterId: "chapter_1",
+      chapterTitle: "第1章 雾起",
+      chapterOrder: 1,
+      sourceHash: "hash_1",
+      payload: extractionPayloadForNames("白嘉轩", "白孝文", "父子"),
+      tokenCount: 0,
+      stableAfterMs: 0,
+      extractorVersion: "chapter-summary-v3-lite-relationship-index",
+      indexedAt: now,
+      now
+    });
+    repo.replaceChapterExtraction({
+      projectId: "project_1",
+      chapterId: "chapter_1",
+      chapterTitle: "第1章 雾起",
+      chapterOrder: 1,
+      sourceHash: "hash_2",
+      payload: extractionPayloadForNames("白嘉轩", "仙草", "夫妻"),
+      tokenCount: 0,
+      stableAfterMs: 0,
+      extractorVersion: "chapter-summary-v3-lite-relationship-index",
+      indexedAt: later,
+      now: later
+    });
+
+    const entities = repo.listEntities("project_1");
+    expect(entities.find((entity) => entity.canonicalName === "白孝文")).toBeUndefined();
+    expect(entities.find((entity) => entity.canonicalName === "仙草")).toMatchObject({
+      firstChapterOrder: 1,
+      latestChapterOrder: 1,
+      sourceChapterIds: ["chapter_1"]
     });
 
     db.close();
@@ -319,6 +504,7 @@ describe("RelationshipIndexRepository", () => {
     expect(repo.getIndexStatus("project_1")).toEqual({
       ready: 1,
       stale: 0,
+      legacyMissingRelationships: 0,
       waitingStable: 0,
       queued: 1,
       running: 0,

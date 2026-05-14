@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SummaryWorker } from "../../src/main/ai/summary-worker";
 import { OpenRouterError } from "../../src/main/ai/openrouter-error";
 import { createDatabase, type SqliteDatabase } from "../../src/main/db/database";
@@ -124,6 +124,35 @@ describe("summary worker", () => {
     expect(result).toMatchObject({ status: "completed", jobId: job.id });
     expect(calls).toEqual(["chapter_1"]);
     expect(db.prepare("SELECT status FROM summary_jobs WHERE id = ?").get(job.id)).toEqual({ status: "completed" });
+    db.close();
+  });
+
+  it("runs relationship original text upgrade through SummaryWorker", async () => {
+    const db = createDb();
+    const repo = new SummaryRepository(db);
+    const job = repo.enqueueSummaryJob({
+      projectId: "project_1",
+      jobType: "relationship_original_text_upgrade",
+      targetId: "chapter_1",
+      sourceHash: "hash_1",
+      priority: 40,
+      now: createdAt
+    });
+    const upgradeLegacyRelationshipIndexFromOriginalTextJob = vi.fn(async () => undefined);
+    const worker = new SummaryWorker({
+      summaryRepo: repo,
+      summaryService: {
+        summarizeChapter: async () => undefined,
+        upgradeLegacyRelationshipIndexFromOriginalTextJob
+      },
+      isForegroundAiActive: () => false,
+      ensureAiConfigured: async () => undefined
+    });
+
+    await expect(worker.runOnce("project_1", runAt)).resolves.toMatchObject({ status: "completed", jobId: job.id });
+    expect(upgradeLegacyRelationshipIndexFromOriginalTextJob).toHaveBeenCalledWith("project_1", "chapter_1", "hash_1", runAt, expect.anything());
+    expect(db.prepare("SELECT status FROM summary_jobs WHERE id = ?").get(job.id)).toEqual({ status: "completed" });
+
     db.close();
   });
 

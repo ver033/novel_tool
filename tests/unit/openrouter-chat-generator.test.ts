@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildArcIndexSummaryMessages,
   buildChapterChunkIndexSummaryMessages,
   buildChapterChunkMergeSummaryMessages,
   buildChapterIndexSummaryMessages,
@@ -687,6 +688,36 @@ describe("OpenRouter persistent summary index generation", () => {
     expect(prompt).toContain("结构化索引");
     expect(prompt).toContain("第3章短摘要。");
     expect(prompt).not.toContain("章节正文");
+  });
+
+  it("builds compact arc prompts without embedding full chapter structured JSON", () => {
+    const oversizedDetail = "阶段摘要不应该携带完整章节结构。".repeat(260);
+    const structured = chapterIndexPayloadV2({
+      oneLine: "萧炎测试失利。",
+      synopsis: "萧炎在测试中失利，萧薰儿仍然维护他。",
+      detail: oversizedDetail
+    });
+    const messages = buildArcIndexSummaryMessages({
+      arcKey: "auto:001-019",
+      chapterFrom: 1,
+      chapterTo: 19,
+      chapters: Array.from({ length: 19 }, (_, index) => ({
+        chapterId: `chapter_${index + 1}`,
+        title: `第${index + 1}章`,
+        ordinal: index + 1,
+        summaryShort: `第${index + 1}章短摘要。`,
+        summaryLong: oversizedDetail,
+        structured
+      }))
+    });
+
+    const prompt = messages.map((message) => message.content).join("\n");
+
+    expect(prompt).toContain("阶段聚合卡片");
+    expect(prompt).not.toContain("结构化索引：");
+    expect(prompt).not.toContain("场景列表");
+    expect(prompt).not.toContain("空间与行动逻辑");
+    expect(prompt.length).toBeLessThan(45_000);
   });
 
   it("streams and parses continuity check JSON", async () => {

@@ -44,6 +44,7 @@ import type {
   RelationshipGraphGetInput,
   RelationshipGraphRebuildInput,
   RelationshipGraphStatusInput,
+  RelationshipGraphUpgradeMissingFromOriginalTextInput,
   ScratchCreateInput,
   ScratchDeleteInput,
   ScratchListInput,
@@ -116,6 +117,9 @@ export type NovelToolApi = {
     readonly getGraph: (input: RelationshipGraphGetInput) => Promise<unknown>;
     readonly getStatus: (input: RelationshipGraphStatusInput) => Promise<unknown>;
     readonly rebuild: (input: RelationshipGraphRebuildInput) => Promise<unknown>;
+    readonly refreshCacheStatus: (input: RelationshipGraphStatusInput) => Promise<unknown>;
+    readonly getCacheSettingsStatus: (input: RelationshipGraphStatusInput) => Promise<unknown>;
+    readonly upgradeMissingFromOriginalText: (input: RelationshipGraphUpgradeMissingFromOriginalTextInput) => Promise<unknown>;
   };
   readonly ai: {
     readonly createTask: (input: AiCreateTaskInput) => Promise<unknown>;
@@ -202,7 +206,11 @@ export const novelToolApi: NovelToolApi = Object.freeze({
   relationshipGraph: Object.freeze({
     getGraph: (input: RelationshipGraphGetInput) => ipcRenderer.invoke(ipcChannels.relationshipGraph.getGraph, input),
     getStatus: (input: RelationshipGraphStatusInput) => ipcRenderer.invoke(ipcChannels.relationshipGraph.getStatus, input),
-    rebuild: (input: RelationshipGraphRebuildInput) => ipcRenderer.invoke(ipcChannels.relationshipGraph.rebuild, input)
+    rebuild: (input: RelationshipGraphRebuildInput) => ipcRenderer.invoke(ipcChannels.relationshipGraph.rebuild, input),
+    refreshCacheStatus: (input: RelationshipGraphStatusInput) => ipcRenderer.invoke(ipcChannels.relationshipGraph.refreshCacheStatus, input),
+    getCacheSettingsStatus: (input: RelationshipGraphStatusInput) => ipcRenderer.invoke(ipcChannels.relationshipGraph.getCacheSettingsStatus, input),
+    upgradeMissingFromOriginalText: (input: RelationshipGraphUpgradeMissingFromOriginalTextInput) =>
+      ipcRenderer.invoke(ipcChannels.relationshipGraph.upgradeMissingFromOriginalText, input)
   }),
   ai: Object.freeze({
     createTask: (input: AiCreateTaskInput) => ipcRenderer.invoke(ipcChannels.ai.createTask, input),

@@ -12,6 +12,8 @@ import type {
   EditorSettings,
   OpenRouterModelSummary,
   ProjectRecord,
+  RelationshipCacheSettingsStatus,
+  RelationshipOriginalTextUpgradeQueueResult,
   SettingsSaveInput,
   SettingsState,
   SettingsTestConnectionInput,
@@ -694,13 +696,17 @@ type SummaryCacheSettingsPaneProps = {
 
 type RelationshipGraphCacheSettingsBlockProps = {
   readonly currentProject: ProjectRecord | null;
+  readonly onCacheSettingsStatusChange?: (status: RelationshipCacheSettingsStatus | null) => void;
 };
 
-function RelationshipGraphCacheSettingsBlock({ currentProject }: RelationshipGraphCacheSettingsBlockProps) {
+function RelationshipGraphCacheSettingsBlock({ currentProject, onCacheSettingsStatusChange }: RelationshipGraphCacheSettingsBlockProps) {
   const api = useMemo(getNovelToolApi, []);
   const [graph, setGraph] = useState<RelationshipGraphResult | null>(null);
   const [relationshipStatus, setRelationshipStatus] = useState<RelationshipGraphIndexStatus | null>(null);
+  const [cacheSettingsStatus, setCacheSettingsStatus] = useState<RelationshipCacheSettingsStatus | null>(null);
   const [loading, setLoading] = useState(true);
+  const [actionBusy, setActionBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function loadRelationshipCache(): Promise<void> {
@@ -710,11 +716,15 @@ function RelationshipGraphCacheSettingsBlock({ currentProject }: RelationshipGra
       if (!currentProject) {
         setGraph(null);
         setRelationshipStatus(null);
+        setCacheSettingsStatus(null);
+        onCacheSettingsStatusChange?.(null);
         return;
       }
 
-      const [status, result] = await Promise.all([
+      await api.relationshipGraph.refreshCacheStatus({ projectId: currentProject.id });
+      const [status, cacheStatus, result] = await Promise.all([
         api.relationshipGraph.getStatus({ projectId: currentProject.id }) as Promise<RelationshipGraphIndexStatus>,
+        api.relationshipGraph.getCacheSettingsStatus({ projectId: currentProject.id }) as Promise<RelationshipCacheSettingsStatus>,
         api.relationshipGraph.getGraph({
           projectId: currentProject.id,
           chapterCursor: "all",
@@ -726,6 +736,8 @@ function RelationshipGraphCacheSettingsBlock({ currentProject }: RelationshipGra
         }) as Promise<RelationshipGraphResult>
       ]);
       setRelationshipStatus(status);
+      setCacheSettingsStatus(cacheStatus);
+      onCacheSettingsStatusChange?.(cacheStatus);
       setGraph(result);
     } catch (reason) {
       setError(formatError(reason));
@@ -738,12 +750,38 @@ function RelationshipGraphCacheSettingsBlock({ currentProject }: RelationshipGra
     void loadRelationshipCache();
   }, [currentProject?.id]);
 
+  async function upgradeMissingRelationships(): Promise<void> {
+    if (!currentProject) {
+      return;
+    }
+    setActionBusy(true);
+    setMessage(null);
+    setError(null);
+    try {
+      const result = (await api.relationshipGraph.upgradeMissingFromOriginalText({
+        projectId: currentProject.id
+      })) as RelationshipOriginalTextUpgradeQueueResult;
+      setMessage(`已加入 ${result.queued} 章人物关系原文生成任务。章节缓存任务完成后会继续处理。`);
+      await loadRelationshipCache();
+    } catch (reason) {
+      setError(formatError(reason));
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  const relationshipCache = cacheSettingsStatus?.relationshipCache;
+  const chapterCache = cacheSettingsStatus?.chapterCache;
+  const canUpgradeMissing = Boolean(
+    currentProject && relationshipCache && (relationshipCache.legacyMissingRelationships > 0 || relationshipCache.failed > 0) && !relationshipCache.waitingForChapterCache
+  );
+
   return (
     <div className="settings-card wide relationship-cache-settings-card">
       <div className="settings-card-head">
         <div>
-          <h3>人物关系缓存结果</h3>
-          <p className="muted">随章节索引同次生成，用来检查关系图当前能读到多少人物、关系和章节。</p>
+          <h3>人物关系缓存详情</h3>
+          <p className="muted">人物关系缓存默认随章节缓存同次生成。旧章节缓存缺少人物关系索引时，后台会在章节缓存空闲后自动读取原文补齐。</p>
         </div>
         <Button variant="ghost" disabled={loading} onClick={() => void loadRelationshipCache()}>
           刷新
@@ -752,8 +790,63 @@ function RelationshipGraphCacheSettingsBlock({ currentProject }: RelationshipGra
       {!currentProject ? (
         <div className="empty-inline">请先打开项目，再查看人物关系缓存。</div>
       ) : (
-        <RelationshipGraphCachePanel graph={graph} loading={loading} status={relationshipStatus} />
+        <>
+          <div className="relationship-cache-detail-body">
+            <section className="cache-status-card relationship-cache-detail-card">
+              <div>
+                <h4>当前状态</h4>
+                <p>
+                  {relationshipCache?.waitingForChapterCache
+                    ? "等待章节缓存完成后处理人物关系。"
+                    : relationshipCache && relationshipCache.failed > 0
+                      ? "部分人物关系缓存失败，可以手动加入原文补齐队列重试。"
+                    : relationshipCache && relationshipCache.legacyMissingRelationships > 0
+                      ? "旧章节缓存缺少人物关系索引，将在章节缓存空闲后自动读取原文补齐。"
+                      : "人物关系缓存可用于图谱显示。"}
+                </p>
+              </div>
+              <div className="cache-status-metrics">
+                <span>
+                  <b>{relationshipCache?.ready ?? 0}</b>
+                  可用于图谱
+                </span>
+                <span>
+                  <b>{relationshipCache?.legacyMissingRelationships ?? 0}</b>
+                  旧缓存待原文生成
+                </span>
+                <span>
+                  <b>{relationshipCache?.waitingForChapterCache ? relationshipCache.queuedOriginalTextUpgrades : 0}</b>
+                  等待章节缓存
+                </span>
+                <span>
+                  <b>{relationshipCache?.failed ?? 0}</b>
+                  失败
+                </span>
+              </div>
+              <p className="summary-cache-hint">
+                章节缓存：已完成 {chapterCache?.ready ?? 0}，进行中/排队 {chapterCache?.queuedOrRunning ?? 0}，过期 {chapterCache?.stale ?? 0}，失败 {chapterCache?.failed ?? 0}。
+              </p>
+              <div className="relationship-cache-source-row">
+                <span>章节缓存派生 {relationshipCache?.sourceSummaryEmbedded ?? 0}</span>
+                <span>原文升级 {relationshipCache?.sourceLegacyOriginalTextUpgrade ?? 0}</span>
+                <span>原文精读补强 {relationshipCache?.sourceOriginalTextEnhancement ?? 0}</span>
+              </div>
+              <div className="summary-cache-actions">
+                <Button variant="secondary" disabled={!canUpgradeMissing || loading || actionBusy} onClick={() => void upgradeMissingRelationships()}>
+                  立即加入原文补齐队列
+                </Button>
+                <Button variant="ghost" disabled title="后续阶段支持按章节范围精读原文">
+                  原文精读补强
+                </Button>
+              </div>
+              <p className="summary-cache-hint">原文生成只用于旧缓存补齐和失败重试；正常新章节不会二次读取正文。手动按钮只会提前入队，不会越过章节缓存任务。</p>
+            </section>
+          </div>
+          <div className="relationship-cache-result-heading">人物关系缓存结果</div>
+          <RelationshipGraphCachePanel graph={graph} loading={loading} status={relationshipStatus} />
+        </>
       )}
+      {message ? <p className="settings-message saved">{message}</p> : null}
       {error ? <p className="settings-message error">{error}</p> : null}
     </div>
   );
@@ -763,6 +856,7 @@ function SummaryCacheSettingsPane({ currentProject }: SummaryCacheSettingsPanePr
   const api = useMemo(getNovelToolApi, []);
   const [project, setProject] = useState<ProjectRecord | null>(null);
   const [indexStatus, setIndexStatus] = useState<SummaryIndexStatus | null>(null);
+  const [relationshipOverviewStatus, setRelationshipOverviewStatus] = useState<RelationshipCacheSettingsStatus | null>(null);
   const [entries, setEntries] = useState<SummaryChapterCacheEntry[]>([]);
   const [selectedChapterId, setSelectedChapterId] = useState<string | null>(null);
   const [detail, setDetail] = useState<SummaryChapterCacheDetail | null>(null);
@@ -864,13 +958,54 @@ function SummaryCacheSettingsPane({ currentProject }: SummaryCacheSettingsPanePr
   }
 
   const selectedCanRunCacheAction = Boolean(project && canRunChapterCacheAction(selectedEntry));
+  const relationshipOverviewCache = relationshipOverviewStatus?.relationshipCache ?? null;
+  const relationshipQueuedOrRunning = (relationshipOverviewCache?.queued ?? 0) + (relationshipOverviewCache?.running ?? 0);
+  const relationshipNeedsAttention =
+    (relationshipOverviewCache?.legacyMissingRelationships ?? 0) +
+    (relationshipOverviewCache?.stale ?? 0) +
+    (relationshipOverviewCache?.failed ?? 0);
 
   return (
     <div className="settings-grid summary-cache-settings">
+      <div className="settings-card wide cache-system-overview">
+        <div className="settings-card-head">
+          <div>
+            <h3>缓存总览</h3>
+            <p className="muted">先看整体状态，再分别处理章节缓存和人物关系缓存。人物关系缓存跟随章节缓存派生，旧缓存补齐才会读取原文。</p>
+          </div>
+        </div>
+        {!currentProject ? (
+          <div className="empty-inline">请先打开项目，再查看缓存状态。</div>
+        ) : (
+          <div className="cache-system-metrics" aria-label="缓存总览">
+            <span>
+              <b>{indexStatus ? `${indexStatus.readyChapterCount}/${indexStatus.totalChapterCount}` : "--"}</b>
+              章节缓存
+              <small>已缓存 / 总章节</small>
+            </span>
+            <span>
+              <b>{relationshipOverviewCache ? `${relationshipOverviewCache.ready}/${relationshipOverviewCache.total}` : "--"}</b>
+              人物关系缓存
+              <small>可用于图谱 / 已登记章节</small>
+            </span>
+            <span>
+              <b>{(indexStatus?.queuedJobCount ?? 0) + relationshipQueuedOrRunning}</b>
+              排队或运行
+              <small>章节缓存优先执行</small>
+            </span>
+            <span>
+              <b>{(indexStatus?.staleChapterCount ?? 0) + (indexStatus?.failedJobCount ?? 0) + relationshipNeedsAttention}</b>
+              需要处理
+              <small>过期、失败或旧缓存待补齐</small>
+            </span>
+          </div>
+        )}
+      </div>
+
       <div className="settings-card wide summary-cache-overview">
         <div className="settings-card-head">
           <div>
-            <h3>章节索引缓存</h3>
+            <h3>章节缓存详情</h3>
             <p className="muted">用于全文总结、人物查询、伏笔查询和跨章节问答。这里不手动编辑缓存，只预览完整缓存信息并调度重试。</p>
           </div>
           <Button variant="ghost" disabled={loading || actionBusy} onClick={() => void loadCache(selectedChapterId)}>
@@ -974,7 +1109,7 @@ function SummaryCacheSettingsPane({ currentProject }: SummaryCacheSettingsPanePr
         {error ? <p className="settings-message error">{error}</p> : null}
       </div>
 
-      <RelationshipGraphCacheSettingsBlock currentProject={currentProject} />
+      <RelationshipGraphCacheSettingsBlock currentProject={currentProject} onCacheSettingsStatusChange={setRelationshipOverviewStatus} />
 
       {project ? (
         <div className="settings-card wide summary-cache-browser">

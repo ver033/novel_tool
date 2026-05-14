@@ -76,10 +76,21 @@ export class RelationshipIndexService {
     }
 
     const content = this.getProjectChapter(input.projectId, input.chapterId);
-    this.markWaitingStable(content, nextHash, addMilliseconds(input.updatedAt, RELATIONSHIP_INDEX_STABLE_IDLE_MS), input.updatedAt);
+    this.relationshipRepo.markChapterStale({
+      projectId: content.projectId,
+      chapterId: content.id,
+      chapterTitle: content.title,
+      chapterOrder: chapterOrder(content),
+      contentHash: nextHash,
+      extractorVersion: RELATIONSHIP_INDEX_EXTRACTOR_VERSION,
+      now: input.updatedAt
+    });
     this.relationshipRepo.cancelQueuedChapterJobsExceptHash(input.projectId, input.chapterId, nextHash, OLD_HASH_CANCEL_REASON, input.updatedAt);
   }
 
+  /**
+   * Development fallback only. Production relationship cache is derived from SummaryService.
+   */
   enqueueEligibleStableChapters(projectId: string, now: string): RelationshipIndexJobRecord[] {
     const jobs: RelationshipIndexJobRecord[] = [];
     for (const chapter of this.chapterRepo.listByProject(projectId)) {
@@ -140,6 +151,9 @@ export class RelationshipIndexService {
     return jobs;
   }
 
+  /**
+   * Development fallback only. Production relationship cache is derived from SummaryService.
+   */
   rebuildProjectRelationshipIndex(projectId: string, now: string, options: RelationshipRebuildOptions = {}): RelationshipGraphIndexStatus {
     for (const chapter of this.chapterRepo.listByProject(projectId)) {
       const content = this.chapterRepo.getContent(chapter.id);
@@ -172,10 +186,16 @@ export class RelationshipIndexService {
     return this.relationshipRepo.getIndexStatus(projectId);
   }
 
+  /**
+   * Development fallback only. Production relationship cache is derived from SummaryService.
+   */
   peekNextRelationshipJob(projectId: string, now: string): RelationshipIndexJobRecord | null {
     return this.relationshipRepo.peekNextRelationshipJob(projectId, now);
   }
 
+  /**
+   * Development fallback only. Production relationship cache is derived from SummaryService.
+   */
   claimNextRelationshipJob(projectId: string, now: string): RelationshipIndexJobRecord | null {
     return this.relationshipRepo.claimNextRelationshipJob(projectId, now);
   }
@@ -205,6 +225,9 @@ export class RelationshipIndexService {
     });
   }
 
+  /**
+   * Development fallback only. Production relationship cache is derived from SummaryService.
+   */
   async indexRelationshipJob(job: RelationshipIndexJobRecord, now: string, options: { readonly signal?: AbortSignal } = {}): Promise<void> {
     const generator = this.options.generator;
     if (!generator) {
@@ -247,6 +270,8 @@ export class RelationshipIndexService {
       tokenCount: estimateTextTokens(JSON.stringify(payload)),
       stableAfterMs: RELATIONSHIP_INDEX_STABLE_IDLE_MS,
       extractorVersion: RELATIONSHIP_INDEX_EXTRACTOR_VERSION,
+      extractionSource: "original_text_enhancement",
+      evidenceSource: "original_text",
       indexedAt: now,
       now
     });
