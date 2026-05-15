@@ -22,6 +22,7 @@ import type {
   SettingsTestConnectionInput,
   SummaryArcCacheDetail,
   SummaryArcCacheEntry,
+  SummaryBookCacheDetail,
   SummaryChapterCacheDetail,
   SummaryChapterCacheEntry,
   SummaryIndexStatus,
@@ -210,11 +211,11 @@ function formatContextLength(value: number | null): string {
   return `${value.toLocaleString("zh-CN")} tokens`;
 }
 
-function formatCacheState(entry: Pick<SummaryChapterCacheEntry, "cacheState"> | Pick<SummaryArcCacheEntry, "cacheState"> | null): string {
+function formatCacheState(entry: Pick<SummaryChapterCacheEntry, "cacheState"> | Pick<SummaryArcCacheEntry, "cacheState"> | Pick<SummaryBookCacheDetail, "cacheState"> | null): string {
   if (!entry) {
     return "未选择";
   }
-  const labels: Record<SummaryChapterCacheEntry["cacheState"] | SummaryArcCacheEntry["cacheState"], string> = {
+  const labels: Record<SummaryChapterCacheEntry["cacheState"] | SummaryArcCacheEntry["cacheState"] | SummaryBookCacheDetail["cacheState"], string> = {
     ready: "已缓存",
     stale: "过期",
     building: "构建中",
@@ -328,6 +329,30 @@ function getArcCacheActionLabel(entry: SummaryArcCacheEntry | null): string {
 
 function canRunArcCacheAction(entry: SummaryArcCacheEntry | null): boolean {
   if (!entry || entry.readyChapterCount <= 0 || entry.readyChapterCount < entry.chapterCount) {
+    return false;
+  }
+  return entry.cacheState === "ready" || entry.cacheState === "stale" || entry.cacheState === "missing" || entry.cacheState === "failed" || entry.cacheState === "cancelled";
+}
+
+function getBookCacheActionLabel(entry: SummaryBookCacheDetail | null): string {
+  if (!entry) {
+    return "生成全书摘要";
+  }
+  const labels: Record<SummaryBookCacheDetail["cacheState"], string> = {
+    ready: "重新生成全书摘要",
+    stale: "重新生成全书摘要",
+    building: "正在生成",
+    failed: "重试全书摘要",
+    missing: "生成全书摘要",
+    queued: "已排队",
+    running: "正在生成",
+    cancelled: "重试全书摘要"
+  };
+  return labels[entry.cacheState];
+}
+
+function canRunBookCacheAction(entry: SummaryBookCacheDetail | null): boolean {
+  if (!entry) {
     return false;
   }
   return entry.cacheState === "ready" || entry.cacheState === "stale" || entry.cacheState === "missing" || entry.cacheState === "failed" || entry.cacheState === "cancelled";
@@ -922,7 +947,7 @@ function ShareableProjectExportPane({ currentProject }: ShareableProjectExportPa
                 />
                 <span>
                   <b>章节索引缓存</b>
-                  <small>保留可用章节、阶段、全书摘要；人物关系图会随摘要结果保留。</small>
+                  <small>保留已生成的章节、阶段、全书摘要；人物关系图会随摘要结果保留。</small>
                 </span>
               </label>
               <label className={`shareable-export-option ${options.includeScratchNotes ? "active" : ""}`}>
@@ -989,10 +1014,11 @@ type SummaryCacheSettingsPaneProps = {
 
 type RelationshipGraphCacheSettingsBlockProps = {
   readonly currentProject: ProjectRecord | null;
+  readonly refreshToken: number;
   readonly onSourceStatusChange?: (status: RelationshipGraphSourceStatus | null) => void;
 };
 
-function RelationshipGraphCacheSettingsBlock({ currentProject, onSourceStatusChange }: RelationshipGraphCacheSettingsBlockProps) {
+function RelationshipGraphCacheSettingsBlock({ currentProject, refreshToken, onSourceStatusChange }: RelationshipGraphCacheSettingsBlockProps) {
   const api = useMemo(getNovelToolApi, []);
   const [graph, setGraph] = useState<RelationshipGraphResult | null>(null);
   const [sourceStatus, setSourceStatus] = useState<RelationshipGraphSourceStatus | null>(null);
@@ -1034,7 +1060,7 @@ function RelationshipGraphCacheSettingsBlock({ currentProject, onSourceStatusCha
 
   useEffect(() => {
     void loadRelationshipGraphSource();
-  }, [currentProject?.id]);
+  }, [currentProject?.id, refreshToken]);
 
   return (
     <div className="settings-card wide relationship-cache-settings-card">
@@ -1043,9 +1069,6 @@ function RelationshipGraphCacheSettingsBlock({ currentProject, onSourceStatusCha
           <h3>人物关系图来源</h3>
           <p className="muted">人物关系图由阶段摘要和全书摘要派生，不再额外维护逐章图谱任务或独立融合任务。</p>
         </div>
-        <Button variant="ghost" disabled={loading} onClick={() => void loadRelationshipGraphSource()}>
-          {loading ? "读取中" : "刷新"}
-        </Button>
       </div>
       {!currentProject ? (
         <div className="empty-inline">请先打开项目，再查看人物关系图来源。</div>
@@ -1079,7 +1102,7 @@ function RelationshipGraphCacheSettingsBlock({ currentProject, onSourceStatusCha
               </span>
             </div>
             <p className="summary-cache-hint">
-              {sourceStatus?.chapterRange ? `覆盖第 ${sourceStatus.chapterRange.start}-${sourceStatus.chapterRange.end} 章。` : "暂无可用覆盖范围。"}
+              {sourceStatus?.chapterRange ? `图谱覆盖：第 ${sourceStatus.chapterRange.start}-${sourceStatus.chapterRange.end} 章。` : "暂无图谱覆盖信息。"}
               {sourceStatus?.latestFailure ? ` 最近失败：${sourceStatus.latestFailure}` : ""}
             </p>
           </section>
@@ -1103,6 +1126,8 @@ function SummaryCacheSettingsPane({ cache, currentProject, onCacheSettingsChange
   const [selectedArcKey, setSelectedArcKey] = useState<string | null>(null);
   const [detail, setDetail] = useState<SummaryChapterCacheDetail | null>(null);
   const [arcDetail, setArcDetail] = useState<SummaryArcCacheDetail | null>(null);
+  const [bookDetail, setBookDetail] = useState<SummaryBookCacheDetail | null>(null);
+  const [relationshipRefreshToken, setRelationshipRefreshToken] = useState(0);
   const [loading, setLoading] = useState(true);
   const [actionBusy, setActionBusy] = useState(false);
   const [forceConfirm, setForceConfirm] = useState(false);
@@ -1145,6 +1170,19 @@ function SummaryCacheSettingsPane({ cache, currentProject, onCacheSettingsChange
         2
       )
     : "请选择一个阶段查看完整阶段摘要。";
+  const fullBookPreview = bookDetail
+    ? JSON.stringify(
+        {
+          全书: {
+            状态: formatCacheState(bookDetail),
+            更新时间: bookDetail.summary?.updatedAt ?? null
+          },
+          摘要: bookDetail.summary
+        },
+        null,
+        2
+      )
+    : "当前还没有可预览的全书摘要。";
 
   async function loadCache(nextSelectedChapterId?: string | null, nextSelectedArcKey?: string | null): Promise<void> {
     setLoading(true);
@@ -1159,6 +1197,7 @@ function SummaryCacheSettingsPane({ cache, currentProject, onCacheSettingsChange
         setSelectedArcKey(null);
         setDetail(null);
         setArcDetail(null);
+        setBookDetail(null);
         return;
       }
 
@@ -1189,11 +1228,17 @@ function SummaryCacheSettingsPane({ cache, currentProject, onCacheSettingsChange
       } else {
         setArcDetail(null);
       }
+      setBookDetail((await api.summary.getBookCache({ projectId: currentProject.id })) as SummaryBookCacheDetail);
     } catch (reason) {
       setError(formatError(reason));
     } finally {
       setLoading(false);
     }
+  }
+
+  async function refreshCache(nextSelectedChapterId?: string | null, nextSelectedArcKey?: string | null): Promise<void> {
+    await loadCache(nextSelectedChapterId, nextSelectedArcKey);
+    setRelationshipRefreshToken((value) => value + 1);
   }
 
   useEffect(() => {
@@ -1237,7 +1282,7 @@ function SummaryCacheSettingsPane({ cache, currentProject, onCacheSettingsChange
       await action();
       setMessage(successMessage);
       setForceConfirm(false);
-      await loadCache(selectedChapterId, selectedArcKey);
+      await refreshCache(selectedChapterId, selectedArcKey);
     } catch (reason) {
       setError(formatError(reason));
     } finally {
@@ -1262,6 +1307,7 @@ function SummaryCacheSettingsPane({ cache, currentProject, onCacheSettingsChange
 
   const selectedCanRunCacheAction = Boolean(project && canRunChapterCacheAction(selectedEntry));
   const selectedCanRunArcCacheAction = Boolean(project && canRunArcCacheAction(selectedArcEntry));
+  const selectedCanRunBookCacheAction = Boolean(project && canRunBookCacheAction(bookDetail));
   const relationshipOverviewMetric = formatRelationshipOverviewMetric(indexStatus, relationshipOverviewStatus);
   const relationshipNeedsAttention =
     (relationshipOverviewStatus?.arcSummary.missingGraphFields ?? 0) +
@@ -1335,7 +1381,7 @@ function SummaryCacheSettingsPane({ cache, currentProject, onCacheSettingsChange
             <h3>章节缓存详情</h3>
             <p className="muted">用于全文总结、人物查询、伏笔查询和跨章节问答。这里不手动编辑缓存，只预览完整缓存信息并调度重试。</p>
           </div>
-          <Button variant="ghost" disabled={loading || actionBusy} onClick={() => void loadCache(selectedChapterId, selectedArcKey)}>
+          <Button variant="ghost" disabled={loading || actionBusy} onClick={() => void refreshCache(selectedChapterId, selectedArcKey)}>
             刷新
           </Button>
         </div>
@@ -1436,7 +1482,54 @@ function SummaryCacheSettingsPane({ cache, currentProject, onCacheSettingsChange
         {error ? <p className="settings-message error">{error}</p> : null}
       </div>
 
-      <RelationshipGraphCacheSettingsBlock currentProject={currentProject} onSourceStatusChange={setRelationshipOverviewStatus} />
+      <RelationshipGraphCacheSettingsBlock currentProject={currentProject} refreshToken={relationshipRefreshToken} onSourceStatusChange={setRelationshipOverviewStatus} />
+
+      {project ? (
+        <div className="settings-card wide summary-cache-browser summary-book-cache-browser">
+          <div className="summary-cache-detail">
+            <div className="settings-card-head">
+              <div>
+                <h3>全书摘要预览</h3>
+                <p className="muted">
+                  状态：{formatCacheState(bookDetail)}；更新：{formatDateTime(bookDetail?.summaryUpdatedAt ?? null)}
+                </p>
+                {bookDetail?.jobError ? (
+                  <p className="summary-cache-hint">
+                    {bookDetail.jobFailureCategory ?? bookDetail.jobError}
+                    {bookDetail.jobActionHint ? `；${bookDetail.jobActionHint}` : ""}
+                  </p>
+                ) : null}
+              </div>
+              <div className="summary-cache-actions">
+                <Button
+                  variant="secondary"
+                  disabled={!selectedCanRunBookCacheAction || actionBusy}
+                  onClick={() =>
+                    void runAction(
+                      () => api.summary.clearAndRetryBookCache({ projectId: project.id }),
+                      "已重新排队生成全书摘要；章节缓存和阶段摘要不会被清空。"
+                    )
+                  }
+                >
+                  {getBookCacheActionLabel(bookDetail)}
+                </Button>
+                <Button variant="ghost" disabled={loading || actionBusy} onClick={() => void refreshCache(selectedChapterId, selectedArcKey)}>
+                  刷新
+                </Button>
+              </div>
+            </div>
+            <div className="summary-cache-preview-block">
+              <h4>全文短摘要</h4>
+              <p>{bookDetail?.summary?.summaryShort ?? "阶段摘要完成后会自动生成全书摘要。"}</p>
+              {bookDetail?.summary?.summaryLong ? <p className="muted">{bookDetail.summary.summaryLong}</p> : null}
+            </div>
+            <div className="summary-cache-preview-block">
+              <h4>完整全书缓存</h4>
+              <pre className="summary-cache-json">{fullBookPreview}</pre>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {project ? (
         <div className="settings-card wide summary-cache-browser">

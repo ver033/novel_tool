@@ -309,6 +309,42 @@ function compactChapterForArcPrompt(chapter: ArcIndexSummaryChapter): Record<str
   return card;
 }
 
+function compactArcForBookPrompt(arc: BookIndexSummaryArc): Record<string, unknown> {
+  const structured = arc.structured as unknown as Record<string, unknown>;
+  const graph = isPlainRecord(structured.人物图谱) ? structured.人物图谱 : null;
+  const card: Record<string, unknown> = {
+    阶段键: arc.arcKey,
+    章节范围: `第${arc.chapterFrom}-${arc.chapterTo}章`,
+    阶段摘要: compactArcText(arc.summary, 360)
+  };
+  setArcCardValue(card, "阶段一句话摘要", compactArcText(structured.阶段一句话摘要, 160));
+  setArcCardValue(card, "阶段详细梗概", compactArcText(structured.阶段详细梗概, 560));
+  setArcCardValue(card, "主线推进", compactArcStringList(structured.主线推进, 8, 140));
+  setArcCardValue(card, "人物线变化", compactArcStringList(structured.人物线变化, 8, 140));
+  setArcCardValue(card, "人物认知变化", compactArcStringList(structured.人物认知变化, 6, 140));
+  setArcCardValue(card, "关系线变化", compactArcStringList(structured.关系线变化, 8, 140));
+  setArcCardValue(card, "伏笔线变化", compactArcStringList(structured.伏笔线变化, 8, 140));
+  setArcCardValue(card, "道具线变化", compactArcStringList(structured.道具线变化, 6, 140));
+  setArcCardValue(card, "设定变化", compactArcStringList(structured.设定变化, 6, 140));
+  setArcCardValue(card, "时间地点推进", compactArcStringList(structured.时间地点推进, 6, 140));
+  setArcCardValue(card, "重要因果链", compactArcStringList(structured.重要因果链, 8, 160));
+  setArcCardValue(card, "未解决问题", compactArcStringList(structured.未解决问题, 8, 140));
+  setArcCardValue(card, "连续性风险", compactArcStringList(structured.连续性风险, 8, 140));
+  setArcCardValue(card, "可核对事实", compactArcStringList(structured.可核对事实, 10, 140));
+  setArcCardValue(card, "不可丢失信息", compactArcStringList(structured.不可丢失信息, 10, 140));
+  if (graph) {
+    setArcCardValue(card, "人物关系线索", {
+      人物数量: Array.isArray(graph.人物归一) ? graph.人物归一.length : 0,
+      基础关系数量: Array.isArray(graph.基础关系) ? graph.基础关系.length : 0,
+      剧情关系数量: Array.isArray(graph.剧情关系) ? graph.剧情关系.length : 0,
+      阶段关系摘要: compactArcText(graph.阶段关系摘要, 240),
+      称谓待确认: compactArcRecordList(graph.称谓待确认, ["mention", "candidates", "chapterNumber", "reason", "recommendedAction"], 8, 120),
+      质量提示: compactArcRecordList(graph.质量提示, ["level", "message", "chapterNumber"], 5, 120)
+    });
+  }
+  return card;
+}
+
 const BOOK_JSON_CONTRACT = [
   "{",
   '  "全书信息": {"覆盖阶段": ["第1-10章"], "覆盖章节范围": "第1-10章", "总章节数": 10, "已索引章节数": 10, "过期章节": [], "缺失章节": [], "过短跳过章节": [], "覆盖限制": []},',
@@ -329,8 +365,7 @@ const BOOK_JSON_CONTRACT = [
   '  "连续性风险": ["连续性风险"],',
   '  "可核对事实": ["可核对事实"],',
   '  "不可丢失信息": ["不可丢失信息"],',
-  '  "适合回答的问题": ["适合回答的问题"],',
-  '  "人物关系图谱": {"版本": "summary-relationship-v1", "生成来源": {"arcSummaryIds": ["auto:1-20"], "chapterRange": {"start": 1, "end": 20}}, "人物": [{"id": "character-1", "name": "人物姓名", "aliases": [], "mentionForms": [], "roleHints": [], "importance": "major", "firstSeenChapter": 1, "lastSeenChapter": 20, "chapterActivity": [{"chapterNumber": 1, "weight": 1, "relationEventCount": 1}], "confidence": 0.8, "sourceArcRanges": [{"start": 1, "end": 20}]}], "关系": [{"id": "relation-1", "sourceId": "character-1", "targetId": "character-2", "primaryLabel": "母子/师生/保护/冲突等正文决定的关系", "category": "基础关系", "polarity": "neutral", "directed": false, "stable": true, "labels": [{"label": "母子", "firstSeenChapter": 1, "lastSeenChapter": 20, "confidence": 0.8}], "evidence": [{"chapterNumber": 1, "arcRange": "第1-20章", "text": "证据短句或阶段摘要证据", "reason": "判断理由"}]}], "阶段索引": [{"arcKey": "auto:1-20", "startChapter": 1, "endChapter": 20, "characterIds": ["character-1"], "relationIds": ["relation-1"]}], "未确认称谓": [], "图谱摘要": "全书人物关系摘要", "质量提示": []}',
+  '  "适合回答的问题": ["适合回答的问题"]',
   "}"
 ].join("\n");
 
@@ -475,9 +510,11 @@ export function buildArcIndexSummaryMessages(input: ArcIndexSummaryInput): OpenR
         "如果输入提供“前序人物名册”，必须优先用它统一人物规范名和别名；例如后续章节只写妈妈、母亲、校长、师父时，应尽量对照前序人物名册判断是否指向已有角色。",
         "“基础关系”记录相对稳定的身份/血缘/婚姻/师生/同门/上下级/同学/同事/邻里等关系；“剧情关系”记录本阶段情节中的合作、保护、冲突、隐瞒、交易、背叛、救助、威胁等关系。具体 label 由正文决定。",
         "人物图谱里的 category 只能使用：基础关系、剧情关系、阵营关系、情感关系、冲突关系、社会关系、其他。",
-        "输入会提供每章压缩后的阶段聚合卡片，不包含完整章节结构；输出必须做阶段级归纳，不要逐章机械复述。",
-        "阶段详细梗概控制在 500 字以内；每个数组最多 5 条、每条不超过 60 字；完整 JSON 控制在 6000 个中文字符以内，避免把每章所有细节全部展开。",
-        "所有 JSON 键名必须使用简体中文；非证据字符串不得使用英文说明，但可以保留原缓存中的英文/缩写/编号/常用混写词。",
+        "输入会提供每章阶段聚合卡片，不包含完整章节结构；输出必须做阶段级归纳，不要逐章机械复述。",
+        "普通摘要字段需要克制：阶段详细梗概控制在 500 字以内；非人物图谱数组尽量控制在 5 条以内、每条不超过 60 字，避免把每章所有细节全部展开。",
+        "人物图谱不得为避免截断而省略会影响人物关系判断的人物、称谓、别名、基础关系或关键剧情关系；如果内容很多，优先精炼证据文字，每个人物/关系保留最关键证据。",
+        "普通摘要 JSON 键名必须使用简体中文；人物图谱内部是机器可读字段，必须严格使用字段格式示例中的英文字段名，例如 canonicalName、firstSeenChapter、confidence、chapterNumber，不得翻译、改名或省略。",
+        "非证据字符串不得使用英文说明，但可以保留原缓存中的英文/缩写/编号/常用混写词。",
         "输出 JSON，且只能输出 JSON。"
       ].join("\n")
     },
@@ -513,12 +550,11 @@ export function buildBookIndexSummaryMessages(input: BookIndexSummaryInput): Ope
         "你是中文长篇小说的全书摘要助手。",
         "任务是根据阶段缓存生成中文全书缓存。",
         "概括主线剧情、主要人物线、关系变化、人物认知线、关键冲突、伏笔线、道具线、世界规则、时间地点结构和未解决问题；不编造没有出现的内容。",
-        "必须生成“人物关系图谱”：只根据阶段摘要中的“人物图谱”合并全书人物和关系，解决跨阶段同一人物的不同称谓问题。优先真实姓名；没有真实姓名才使用稳定称谓。",
-        "同一人物合并规则：真实姓名一致、别名/称谓明确指向、亲属称谓与上下文可闭合、职业/身份称谓在同一关系网络中明确对应时合并；证据不足时放入“未确认称谓”，不要强行合并。",
-        "关系图谱必须同时保留稳定基础关系和剧情关系。基础关系适合默认显示，剧情关系用于点击关系线后查看细节。",
-        "人物 id 和关系 id 必须稳定、简短、只包含小写字母数字和连字符，例如 character-bai-jiaxuan、relation-bai-jiaxuan-heiwa。",
+        "全书摘要只输出叙事、人物线、关系线、伏笔、设定、风险和问题等摘要字段；不要输出“人物关系图谱”。",
+        "人物关系图谱会由系统根据阶段摘要中的“人物图谱”完整合成，避免模型输出超长图谱 JSON 被截断。",
         "如果阶段缓存存在缺失或过期信息，必须记录在“全书信息.覆盖限制”中。",
-        "所有 JSON 键名必须使用简体中文；非证据字符串不得使用英文说明，但可以保留原缓存中的英文/缩写/编号/常用混写词。",
+        "所有 JSON 键名必须使用简体中文，且必须严格符合字段格式示例；不得添加字段格式示例以外的顶层字段。",
+        "非证据字符串不得使用英文说明，但可以保留原缓存中的英文/缩写/编号/常用混写词。",
         "输出 JSON，且只能输出 JSON。"
       ].join("\n")
     },
@@ -534,7 +570,7 @@ export function buildBookIndexSummaryMessages(input: BookIndexSummaryInput): Ope
             [
               `[${arc.arcKey} 第${arc.chapterFrom}-${arc.chapterTo}章]`,
               arc.summary,
-              `结构化索引：${JSON.stringify(arc.structured)}`
+              `阶段聚合卡片：${JSON.stringify(compactArcForBookPrompt(arc))}`
             ].join("\n")
           )
           .join("\n\n")

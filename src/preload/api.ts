@@ -54,8 +54,10 @@ import type {
   SettingsTestConnectionInput,
   SummaryCancelCurrentJobInput,
   SummaryClearAndRetryArcCacheInput,
+  SummaryClearAndRetryBookCacheInput,
   SummaryClearAndRetryChapterCacheInput,
   SummaryGetArcCacheInput,
+  SummaryGetBookCacheInput,
   SummaryGetChapterCacheInput,
   SummaryIndexStatusInput,
   SummaryListCacheEntriesInput,
@@ -117,6 +119,8 @@ export type NovelToolApi = {
     readonly listArcCacheEntries: (input: SummaryListCacheEntriesInput) => Promise<unknown>;
     readonly getArcCache: (input: SummaryGetArcCacheInput) => Promise<unknown>;
     readonly clearAndRetryArcCache: (input: SummaryClearAndRetryArcCacheInput) => Promise<unknown>;
+    readonly getBookCache: (input: SummaryGetBookCacheInput) => Promise<unknown>;
+    readonly clearAndRetryBookCache: (input: SummaryClearAndRetryBookCacheInput) => Promise<unknown>;
   };
   readonly relationshipGraph: {
     readonly getGraph: (input: RelationshipGraphGetInput) => Promise<unknown>;
@@ -207,7 +211,9 @@ export const novelToolApi: NovelToolApi = Object.freeze({
     clearAndRetryChapterCache: (input: SummaryClearAndRetryChapterCacheInput) => ipcRenderer.invoke(ipcChannels.summary.clearAndRetryChapterCache, input),
     listArcCacheEntries: (input: SummaryListCacheEntriesInput) => ipcRenderer.invoke(ipcChannels.summary.listArcCacheEntries, input),
     getArcCache: (input: SummaryGetArcCacheInput) => ipcRenderer.invoke(ipcChannels.summary.getArcCache, input),
-    clearAndRetryArcCache: (input: SummaryClearAndRetryArcCacheInput) => ipcRenderer.invoke(ipcChannels.summary.clearAndRetryArcCache, input)
+    clearAndRetryArcCache: (input: SummaryClearAndRetryArcCacheInput) => ipcRenderer.invoke(ipcChannels.summary.clearAndRetryArcCache, input),
+    getBookCache: (input: SummaryGetBookCacheInput) => ipcRenderer.invoke(ipcChannels.summary.getBookCache, input),
+    clearAndRetryBookCache: (input: SummaryClearAndRetryBookCacheInput) => ipcRenderer.invoke(ipcChannels.summary.clearAndRetryBookCache, input)
   }),
   relationshipGraph: Object.freeze({
     getGraph: (input: RelationshipGraphGetInput) => ipcRenderer.invoke(ipcChannels.relationshipGraph.getGraph, input),

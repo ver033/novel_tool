@@ -32,6 +32,7 @@ import type {
   ChapterSummary,
   SummaryArcCacheDetail,
   SummaryArcCacheEntry,
+  SummaryBookCacheDetail,
   SummaryChapterCacheDetail,
   SummaryChapterCacheEntry,
   SummaryIndexJobDetail,
@@ -65,6 +66,16 @@ export class SummarySourceChangedError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "SummarySourceChangedError";
+  }
+}
+
+export class SummaryDependencyPendingError extends Error {
+  constructor(
+    message: string,
+    readonly delayMinutes = 5
+  ) {
+    super(message);
+    this.name = "SummaryDependencyPendingError";
   }
 }
 
@@ -167,7 +178,7 @@ function getSummaryJobOutputLabel(jobType?: SummaryJobType): string {
 function getTruncatedSummaryJobActionHint(jobType?: SummaryJobType): string {
   const label = getSummaryJobOutputLabel(jobType);
   if (jobType === "arc_summary") {
-    return `${label}输出超出模型额度。系统现在会使用压缩后的阶段聚合卡片降低输出被截断概率；如果仍反复失败，请换用输出上限更高的模型后重试。`;
+    return `${label}输出超出模型额度。系统会保留人物关系判断信息并使用更高输出额度；如果仍反复失败，请换用输出上限更高的模型后重试。`;
   }
   if (jobType === "book_summary") {
     return `${label}输出超出模型额度。请先确认阶段摘要已完成，必要时换用输出上限更高的模型后重试。`;
@@ -1111,6 +1122,414 @@ export function splitChapterForSummaryIndex(
   });
 }
 
+type BookRelationshipGraphPayload = NonNullable<BookAiSummaryPayload["人物关系图谱"]>;
+type BookGraphCharacterPayload = BookRelationshipGraphPayload["人物"][number];
+type BookGraphRelationPayload = BookRelationshipGraphPayload["关系"][number];
+type BookGraphLabelPayload = BookGraphRelationPayload["labels"][number];
+type BookGraphEvidencePayload = BookGraphRelationPayload["evidence"][number];
+type ArcCharacterGraphPayload = NonNullable<ArcAiSummaryPayload["人物图谱"]>;
+type ArcGraphCharacterPayload = ArcCharacterGraphPayload["人物归一"][number];
+type ArcGraphRelationPayload = ArcCharacterGraphPayload["基础关系"][number];
+type ArcGraphAmbiguousReferencePayload = ArcCharacterGraphPayload["称谓待确认"][number];
+type ArcGraphQualityIssuePayload = ArcCharacterGraphPayload["质量提示"][number];
+
+type BookGraphStageIndexAccumulator = {
+  readonly arcKey: string;
+  readonly startChapter: number;
+  readonly endChapter: number;
+  readonly characterIds: Set<string>;
+  readonly relationIds: Set<string>;
+};
+
+type BookGraphCharacterAccumulator = {
+  readonly id: string;
+  name: string;
+  readonly aliases: Set<string>;
+  readonly mentionForms: Set<string>;
+  readonly roleHints: Set<string>;
+  importance: BookGraphCharacterPayload["importance"];
+  firstSeenChapter: number;
+  lastSeenChapter: number;
+  readonly confidenceValues: number[];
+  readonly chapterActivity: Map<number, { weight: number; relationEventCount: number }>;
+  readonly sourceArcRanges: Map<string, { start: number; end: number }>;
+};
+
+type BookGraphRelationAccumulator = {
+  readonly id: string;
+  readonly sourceId: string;
+  readonly targetId: string;
+  primaryLabel: string;
+  category: BookGraphRelationPayload["category"];
+  polarity: BookGraphRelationPayload["polarity"];
+  directed: boolean;
+  stable: boolean;
+  readonly labels: Map<string, BookGraphLabelPayload & { confidenceValues: number[] }>;
+  readonly evidence: BookGraphEvidencePayload[];
+};
+
+const GRAPH_IMPORTANCE_RANK: Record<BookGraphCharacterPayload["importance"], number> = {
+  major: 4,
+  supporting: 3,
+  minor: 2,
+  unknown: 1
+};
+
+function normalizeGraphLookupKey(value: string): string {
+  return value.trim().toLocaleLowerCase("zh-CN").replace(/\s+/gu, "");
+}
+
+function isUsefulGraphText(value: string | null | undefined): value is string {
+  const text = value?.trim();
+  return Boolean(text && text !== "未明确" && text !== "无" && text !== "暂无" && text !== "未知");
+}
+
+function addUniqueGraphText(target: Set<string>, value: string | null | undefined): void {
+  const text = value?.trim();
+  if (isUsefulGraphText(text)) {
+    target.add(text);
+  }
+}
+
+function sortedGraphTexts(values: ReadonlySet<string>): string[] {
+  return [...values].sort((a, b) => a.localeCompare(b, "zh-CN"));
+}
+
+function roundGraphNumber(value: number): number {
+  return Number(value.toFixed(2));
+}
+
+function averageGraphConfidence(values: readonly number[]): number {
+  if (values.length === 0) {
+    return 0.6;
+  }
+  return roundGraphNumber(values.reduce((sum, value) => sum + value, 0) / values.length);
+}
+
+function strongerGraphImportance(
+  current: BookGraphCharacterPayload["importance"],
+  next: BookGraphCharacterPayload["importance"]
+): BookGraphCharacterPayload["importance"] {
+  return GRAPH_IMPORTANCE_RANK[next] > GRAPH_IMPORTANCE_RANK[current] ? next : current;
+}
+
+function graphId(prefix: string, parts: readonly string[]): string {
+  return `${prefix}-${computeSourceHash(parts).slice(0, 12)}`;
+}
+
+function arcRangeKey(arc: ArcAiSummaryRecord): string {
+  return `${arc.chapterFrom}-${arc.chapterTo}`;
+}
+
+function arcRangeLabel(arc: ArcAiSummaryRecord): string {
+  return `第${arc.chapterFrom}-${arc.chapterTo}章`;
+}
+
+function recordGraphCharacterActivity(
+  character: BookGraphCharacterAccumulator,
+  chapterNumber: number,
+  weight: number,
+  relationEventCount = 0
+): void {
+  if (!Number.isFinite(chapterNumber) || chapterNumber <= 0) {
+    return;
+  }
+  const current = character.chapterActivity.get(chapterNumber) ?? { weight: 0, relationEventCount: 0 };
+  character.chapterActivity.set(chapterNumber, {
+    weight: roundGraphNumber(current.weight + weight),
+    relationEventCount: current.relationEventCount + relationEventCount
+  });
+}
+
+function collectArcCharacterLookupNames(character: ArcGraphCharacterPayload): string[] {
+  return [
+    character.canonicalName,
+    character.displayName,
+    ...character.aliases,
+    ...character.mentionForms
+  ].filter(isUsefulGraphText);
+}
+
+function mergeArcCharacterIntoAccumulator(
+  accumulator: BookGraphCharacterAccumulator,
+  character: ArcGraphCharacterPayload,
+  arc: ArcAiSummaryRecord
+): void {
+  if (isUsefulGraphText(character.displayName) && !accumulator.name) {
+    accumulator.name = character.displayName;
+  }
+  addUniqueGraphText(accumulator.aliases, character.canonicalName === accumulator.name ? null : character.canonicalName);
+  for (const alias of character.aliases) {
+    addUniqueGraphText(accumulator.aliases, alias);
+  }
+  for (const mentionForm of character.mentionForms) {
+    addUniqueGraphText(accumulator.mentionForms, mentionForm);
+  }
+  for (const roleHint of character.roleHints) {
+    addUniqueGraphText(accumulator.roleHints, roleHint);
+  }
+  accumulator.importance = strongerGraphImportance(accumulator.importance, character.importance);
+  accumulator.firstSeenChapter = Math.min(accumulator.firstSeenChapter, character.firstSeenChapter);
+  accumulator.lastSeenChapter = Math.max(accumulator.lastSeenChapter, character.lastSeenChapter);
+  accumulator.confidenceValues.push(character.confidence);
+  accumulator.sourceArcRanges.set(arcRangeKey(arc), { start: arc.chapterFrom, end: arc.chapterTo });
+  for (const evidence of character.evidence) {
+    recordGraphCharacterActivity(accumulator, evidence.chapterNumber, 1, 0);
+  }
+  if (character.evidence.length === 0) {
+    recordGraphCharacterActivity(accumulator, character.firstSeenChapter, 1, 0);
+  }
+}
+
+function buildBookRelationshipGraphFromArcs(arcs: readonly ArcAiSummaryRecord[], coverage: BookSummaryCoverage): BookRelationshipGraphPayload {
+  const characters = new Map<string, BookGraphCharacterAccumulator>();
+  const nameLookup = new Map<string, string>();
+  const relations = new Map<string, BookGraphRelationAccumulator>();
+  const stageIndex = new Map<string, BookGraphStageIndexAccumulator>();
+  const ambiguousReferences: ArcGraphAmbiguousReferencePayload[] = [];
+  const qualityIssues: ArcGraphQualityIssuePayload[] = [];
+
+  function getStage(arc: ArcAiSummaryRecord): BookGraphStageIndexAccumulator {
+    let current = stageIndex.get(arc.arcKey);
+    if (!current) {
+      current = {
+        arcKey: arc.arcKey,
+        startChapter: arc.chapterFrom,
+        endChapter: arc.chapterTo,
+        characterIds: new Set<string>(),
+        relationIds: new Set<string>()
+      };
+      stageIndex.set(arc.arcKey, current);
+    }
+    return current;
+  }
+
+  function registerCharacterNames(characterId: string, names: readonly string[]): void {
+    for (const name of names) {
+      const key = normalizeGraphLookupKey(name);
+      if (key && !nameLookup.has(key)) {
+        nameLookup.set(key, characterId);
+      }
+    }
+  }
+
+  function getOrCreateCharacterByName(name: string, arc: ArcAiSummaryRecord): BookGraphCharacterAccumulator {
+    const normalizedName = normalizeGraphLookupKey(name);
+    const existingId = normalizedName ? nameLookup.get(normalizedName) : undefined;
+    if (existingId) {
+      const existing = characters.get(existingId);
+      if (existing) {
+        getStage(arc).characterIds.add(existing.id);
+        return existing;
+      }
+    }
+    const displayName = isUsefulGraphText(name) ? name.trim() : "未命名人物";
+    const id = graphId("character", [displayName]);
+    const created: BookGraphCharacterAccumulator = {
+      id,
+      name: displayName,
+      aliases: new Set<string>(),
+      mentionForms: new Set<string>(),
+      roleHints: new Set<string>(),
+      importance: "unknown",
+      firstSeenChapter: arc.chapterFrom,
+      lastSeenChapter: arc.chapterTo,
+      confidenceValues: [0.55],
+      chapterActivity: new Map<number, { weight: number; relationEventCount: number }>(),
+      sourceArcRanges: new Map<string, { start: number; end: number }>([[arcRangeKey(arc), { start: arc.chapterFrom, end: arc.chapterTo }]])
+    };
+    recordGraphCharacterActivity(created, arc.chapterFrom, 1, 0);
+    characters.set(id, created);
+    registerCharacterNames(id, [displayName]);
+    getStage(arc).characterIds.add(id);
+    return created;
+  }
+
+  function mergeCharacter(character: ArcGraphCharacterPayload, arc: ArcAiSummaryRecord): BookGraphCharacterAccumulator {
+    const names = collectArcCharacterLookupNames(character);
+    const existingId = names.map((name) => nameLookup.get(normalizeGraphLookupKey(name))).find(Boolean);
+    const target = existingId && characters.has(existingId)
+      ? characters.get(existingId)!
+      : getOrCreateCharacterByName(character.displayName || character.canonicalName, arc);
+    mergeArcCharacterIntoAccumulator(target, character, arc);
+    registerCharacterNames(target.id, names);
+    getStage(arc).characterIds.add(target.id);
+    return target;
+  }
+
+  function addRelation(relation: ArcGraphRelationPayload, arc: ArcAiSummaryRecord): void {
+    const source = getOrCreateCharacterByName(relation.source, arc);
+    const target = getOrCreateCharacterByName(relation.target, arc);
+    const orderedIds = relation.directed || source.id <= target.id ? [source.id, target.id] : [target.id, source.id];
+    const key = [
+      relation.directed ? "directed" : "undirected",
+      orderedIds[0],
+      orderedIds[1],
+      relation.category,
+      relation.stable ? "stable" : "dynamic"
+    ].join("|");
+    let current = relations.get(key);
+    if (!current) {
+      current = {
+        id: graphId("relation", [key]),
+        sourceId: orderedIds[0],
+        targetId: orderedIds[1],
+        primaryLabel: relation.label,
+        category: relation.category,
+        polarity: relation.polarity,
+        directed: relation.directed,
+        stable: relation.stable,
+        labels: new Map<string, BookGraphLabelPayload & { confidenceValues: number[] }>(),
+        evidence: []
+      };
+      relations.set(key, current);
+    }
+    if (current.polarity !== relation.polarity) {
+      current.polarity = "mixed";
+    }
+    current.directed = current.directed || relation.directed;
+    current.stable = current.stable && relation.stable;
+    const existingLabel = current.labels.get(relation.label);
+    if (existingLabel) {
+      existingLabel.firstSeenChapter = Math.min(existingLabel.firstSeenChapter, relation.firstSeenChapter);
+      existingLabel.lastSeenChapter = Math.max(existingLabel.lastSeenChapter, relation.lastSeenChapter);
+      existingLabel.confidenceValues.push(relation.confidence);
+      existingLabel.confidence = averageGraphConfidence(existingLabel.confidenceValues);
+    } else {
+      current.labels.set(relation.label, {
+        label: relation.label,
+        firstSeenChapter: relation.firstSeenChapter,
+        lastSeenChapter: relation.lastSeenChapter,
+        confidence: relation.confidence,
+        confidenceValues: [relation.confidence]
+      });
+    }
+    if (!current.primaryLabel || relation.confidence > (current.labels.get(current.primaryLabel)?.confidence ?? 0)) {
+      current.primaryLabel = relation.label;
+    }
+    const relationEvidence = relation.evidence.length > 0
+      ? relation.evidence
+      : [{ chapterNumber: relation.firstSeenChapter, text: "", reason: relation.label }];
+    for (const evidence of relationEvidence) {
+      current.evidence.push({
+        chapterNumber: evidence.chapterNumber,
+        arcRange: arcRangeLabel(arc),
+        text: evidence.text,
+        reason: evidence.reason
+      });
+      recordGraphCharacterActivity(source, evidence.chapterNumber, 0.5, 1);
+      recordGraphCharacterActivity(target, evidence.chapterNumber, 0.5, 1);
+    }
+    getStage(arc).characterIds.add(source.id);
+    getStage(arc).characterIds.add(target.id);
+    getStage(arc).relationIds.add(current.id);
+  }
+
+  for (const arc of arcs) {
+    const graph = arc.structured.人物图谱;
+    getStage(arc);
+    if (!graph) {
+      qualityIssues.push({
+        level: "warning",
+        message: `阶段 ${arcRangeLabel(arc)} 缺少人物图谱，未参与全书关系图合成。`,
+        chapterNumber: arc.chapterFrom
+      });
+      continue;
+    }
+    for (const character of graph.人物归一) {
+      mergeCharacter(character, arc);
+    }
+    ambiguousReferences.push(...graph.称谓待确认);
+    qualityIssues.push(...graph.质量提示);
+  }
+
+  for (const arc of arcs) {
+    const graph = arc.structured.人物图谱;
+    if (!graph) {
+      continue;
+    }
+    for (const relation of [...graph.基础关系, ...graph.剧情关系]) {
+      addRelation(relation, arc);
+    }
+  }
+
+  const sortedCharacters = [...characters.values()].sort((a, b) => {
+    const importanceDelta = GRAPH_IMPORTANCE_RANK[b.importance] - GRAPH_IMPORTANCE_RANK[a.importance];
+    if (importanceDelta !== 0) {
+      return importanceDelta;
+    }
+    if (a.firstSeenChapter !== b.firstSeenChapter) {
+      return a.firstSeenChapter - b.firstSeenChapter;
+    }
+    return a.name.localeCompare(b.name, "zh-CN");
+  });
+  const sortedRelations = [...relations.values()].sort((a, b) => {
+    const categoryDelta = a.category.localeCompare(b.category, "zh-CN");
+    if (categoryDelta !== 0) {
+      return categoryDelta;
+    }
+    return a.primaryLabel.localeCompare(b.primaryLabel, "zh-CN");
+  });
+  const chapterStart = arcs.length > 0 ? Math.min(...arcs.map((arc) => arc.chapterFrom)) : 1;
+  const chapterEnd = arcs.length > 0 ? Math.max(...arcs.map((arc) => arc.chapterTo)) : Math.max(1, coverage.totalChapterCount);
+
+  return {
+    版本: "summary-relationship-v1",
+    生成来源: {
+      arcSummaryIds: arcs.map((arc) => arc.arcKey),
+      chapterRange: {
+        start: chapterStart,
+        end: chapterEnd
+      }
+    },
+    人物: sortedCharacters.map((character): BookGraphCharacterPayload => ({
+      id: character.id,
+      name: character.name,
+      aliases: sortedGraphTexts(character.aliases).filter((alias) => alias !== character.name),
+      mentionForms: sortedGraphTexts(character.mentionForms),
+      roleHints: sortedGraphTexts(character.roleHints),
+      importance: character.importance,
+      firstSeenChapter: character.firstSeenChapter,
+      lastSeenChapter: character.lastSeenChapter,
+      chapterActivity: [...character.chapterActivity.entries()]
+        .sort(([left], [right]) => left - right)
+        .map(([chapterNumber, activity]) => ({
+          chapterNumber,
+          weight: roundGraphNumber(activity.weight),
+          relationEventCount: activity.relationEventCount
+        })),
+      confidence: averageGraphConfidence(character.confidenceValues),
+      sourceArcRanges: [...character.sourceArcRanges.values()].sort((a, b) => a.start - b.start || a.end - b.end)
+    })),
+    关系: sortedRelations.map((relation): BookGraphRelationPayload => ({
+      id: relation.id,
+      sourceId: relation.sourceId,
+      targetId: relation.targetId,
+      primaryLabel: relation.primaryLabel,
+      category: relation.category,
+      polarity: relation.polarity,
+      directed: relation.directed,
+      stable: relation.stable,
+      labels: [...relation.labels.values()]
+        .sort((a, b) => a.firstSeenChapter - b.firstSeenChapter || b.confidence - a.confidence)
+        .map(({ confidenceValues: _confidenceValues, ...label }) => label),
+      evidence: relation.evidence.sort((a, b) => a.chapterNumber - b.chapterNumber)
+    })),
+    阶段索引: [...stageIndex.values()]
+      .sort((a, b) => a.startChapter - b.startChapter)
+      .map((stage) => ({
+        arcKey: stage.arcKey,
+        startChapter: stage.startChapter,
+        endChapter: stage.endChapter,
+        characterIds: [...stage.characterIds].sort(),
+        relationIds: [...stage.relationIds].sort()
+      })),
+    未确认称谓: ambiguousReferences,
+    图谱摘要: `由 ${arcs.length} 个阶段人物图谱合成：${sortedCharacters.length} 个人物，${sortedRelations.length} 条关系。`,
+    质量提示: qualityIssues
+  };
+}
+
 export class SummaryService implements SummaryIndexInvalidator {
   private readonly activeChapterEditTimes = new Map<string, string>();
   private readonly changedWritingUnits = new Map<string, number>();
@@ -1437,6 +1856,36 @@ export class SummaryService implements SummaryIndexInvalidator {
     };
   }
 
+  getBookCacheDetail(projectId: string): SummaryBookCacheDetail {
+    const summary = this.summaryRepo.getLatestBookSummary(projectId);
+    const rawJob = this.currentBookJob(projectId);
+    const source = this.getReadyBookSummarySource(projectId);
+    const job = this.isBookJobResolvedByReadySummary(summary, rawJob, source.sourceHash) ? null : rawJob;
+    const failure = classifySummaryJobError(job?.error ?? null, job?.jobType);
+    return {
+      cacheState: this.deriveBookCacheState(summary, job, source.sourceHash),
+      summaryShort: summary?.summaryShort ?? null,
+      summaryLong: summary?.summaryLong ?? null,
+      summaryUpdatedAt: summary?.updatedAt ?? null,
+      sourceHash: summary?.sourceHash ?? null,
+      jobStatus: job?.status ?? null,
+      jobError: job?.error?.trim() || null,
+      jobFailureCategory: failure.failureCategory,
+      jobActionHint: failure.actionHint,
+      nextRunAt: job?.nextRunAt ?? null,
+      summary: summary
+        ? {
+            summaryShort: summary.summaryShort,
+            summaryLong: summary.summaryLong,
+            structured: summary.structured,
+            status: summary.status,
+            error: summary.error,
+            updatedAt: summary.updatedAt
+          }
+        : null
+    };
+  }
+
   clearAndRetryChapterCache(projectId: string, chapterId: string, now: string, options: SummaryIndexStatusOptions = {}): SummaryIndexStatus {
     const content = this.chapterRepo.getContent(chapterId);
     if (!content || content.projectId !== projectId) {
@@ -1473,6 +1922,26 @@ export class SummaryService implements SummaryIndexInvalidator {
       targetId: arcKey,
       sourceHash,
       priority: 6,
+      now
+    });
+    return this.getIndexStatus(projectId, now, options);
+  }
+
+  clearAndRetryBookCache(projectId: string, now: string, options: SummaryIndexStatusOptions = {}): SummaryIndexStatus {
+    const source = this.getReadyBookSummarySource(projectId);
+    if (!source.sourceHash || source.readyArcs.length === 0) {
+      throw new SummaryDependencyPendingError("全书摘要等待阶段摘要完成。");
+    }
+    this.assertCanClearAndRetryBookCache(projectId);
+
+    this.summaryRepo.setBackgroundIndexEnabled(projectId, true, now);
+    this.summaryRepo.deleteBookSummaryCache(projectId);
+    this.summaryRepo.enqueueSummaryJob({
+      projectId,
+      jobType: "book_summary",
+      targetId: null,
+      sourceHash: source.sourceHash,
+      priority: 4,
       now
     });
     return this.getIndexStatus(projectId, now, options);
@@ -1539,6 +2008,20 @@ export class SummaryService implements SummaryIndexInvalidator {
       jobs.set(job.targetId, job);
     }
     return jobs;
+  }
+
+  private currentBookJob(projectId: string): SummaryJobRecord | null {
+    return (
+      this.summaryRepo.listSummaryJobs(projectId).find((job) => {
+        if (job.jobType !== "book_summary") {
+          return false;
+        }
+        if (job.status === "failed" && !hasSummaryJobError(job)) {
+          return false;
+        }
+        return job.status !== "completed" && job.status !== "skipped";
+      }) ?? null
+    );
   }
 
   private listExpectedArcRanges(projectId: string): Array<{
@@ -1685,6 +2168,29 @@ export class SummaryService implements SummaryIndexInvalidator {
     return summary.status;
   }
 
+  private deriveBookCacheState(
+    summary: BookAiSummaryRecord | null,
+    job: SummaryJobRecord | null,
+    currentSourceHash: string | null
+  ): SummaryBookCacheDetail["cacheState"] {
+    if (job?.status === "running" || job?.status === "queued") {
+      return job.status;
+    }
+    if (job?.status === "failed" && summary?.status !== "ready") {
+      return "failed";
+    }
+    if (job?.status === "cancelled" && !summary) {
+      return "cancelled";
+    }
+    if (!summary) {
+      return "missing";
+    }
+    if (summary.status === "ready" && currentSourceHash && summary.sourceHash !== currentSourceHash) {
+      return "stale";
+    }
+    return summary.status;
+  }
+
   private assertCanClearAndRetryChapterCache(projectId: string, chapterId: string): void {
     const blockingJob =
       this.summaryRepo.listSummaryJobs(projectId).find((job) => job.status === "running" && (job.jobType !== "chapter_summary" || job.targetId === chapterId)) ?? null;
@@ -1731,6 +2237,13 @@ export class SummaryService implements SummaryIndexInvalidator {
     throw new Error("该阶段摘要正在运行。请等待完成，或先停止后台索引。");
   }
 
+  private assertCanClearAndRetryBookCache(projectId: string): void {
+    const blockingJob = this.summaryRepo.listSummaryJobs(projectId).find((job) => job.status === "running" && job.jobType === "book_summary") ?? null;
+    if (blockingJob) {
+      throw new Error("全书摘要正在整理。请等待完成，或先停止后台索引后再重试全书摘要。");
+    }
+  }
+
   private isChapterJobResolvedByReadySummary(
     summary: ChapterAiSummaryRecord | null,
     job: SummaryJobRecord | null,
@@ -1747,6 +2260,13 @@ export class SummaryService implements SummaryIndexInvalidator {
 
   private isArcJobResolvedByReadySummary(summary: ArcAiSummaryRecord | null, job: SummaryJobRecord | null, currentSourceHash: string | null): boolean {
     if (!summary || !job || job.jobType !== "arc_summary" || job.status !== "failed" || job.targetId !== summary.arcKey) {
+      return false;
+    }
+    return summary.status === "ready" && ((currentSourceHash && summary.sourceHash === currentSourceHash) || summary.updatedAt >= job.updatedAt);
+  }
+
+  private isBookJobResolvedByReadySummary(summary: BookAiSummaryRecord | null, job: SummaryJobRecord | null, currentSourceHash: string | null): boolean {
+    if (!summary || !job || job.jobType !== "book_summary" || job.status !== "failed") {
       return false;
     }
     return summary.status === "ready" && ((currentSourceHash && summary.sourceHash === currentSourceHash) || summary.updatedAt >= job.updatedAt);
@@ -1827,11 +2347,11 @@ export class SummaryService implements SummaryIndexInvalidator {
   }
 
   private isBookSummaryJobRelevantToCurrentIndex(projectId: string, job: SummaryJobRecord, cache: SummaryJobRelevanceCache): boolean {
-    const readyArcs = [...cache.arcSummaries.values()].filter((summary) => summary.status === "ready");
-    if (readyArcs.length === 0) {
+    const source = this.getReadyBookSummarySource(projectId);
+    if (!source.sourceHash) {
       return false;
     }
-    return this.computeBookSourceHash(readyArcs.map((summary) => summary.sourceHash), this.buildBookCoverage(projectId)) === job.sourceHash;
+    return source.sourceHash === job.sourceHash || Boolean(cache.bookSummary?.updatedAt && cache.bookSummary.updatedAt >= job.updatedAt);
   }
 
   private summaryJobResolutionKey(job: SummaryJobRecord): string {
@@ -2031,8 +2551,7 @@ export class SummaryService implements SummaryIndexInvalidator {
       throw new Error("AI 阶段摘要生成器未配置。");
     }
     if (!this.arePriorArcGraphsReady(projectId, chapterFrom)) {
-      this.requeueArcSummary(projectId, arcKey, sourceHash, now);
-      throw new Error("阶段摘要等待前序阶段人物图谱完成。");
+      throw new SummaryDependencyPendingError("阶段摘要等待前序阶段人物图谱完成。");
     }
     const readySummaries = this.collectReadyChapterSummariesForArc(projectId, chapterFrom, chapterTo);
     const currentSourceHash = this.computeArcSourceHash(projectId, chapterFrom, readySummaries);
@@ -2090,50 +2609,50 @@ export class SummaryService implements SummaryIndexInvalidator {
     if (!generator?.summarizeBookForIndex) {
       throw new Error("AI 全书摘要生成器未配置。");
     }
-    const coverage = this.buildBookCoverage(projectId);
-    const readyArcs = this.summaryRepo.listArcSummaries(projectId).filter((summary) => summary.status === "ready");
-    if (readyArcs.length === 0) {
-      throw new Error("全书摘要等待阶段摘要完成。");
+    const source = this.getReadyBookSummarySource(projectId);
+    if (!source.sourceHash || source.readyArcs.length === 0) {
+      throw new SummaryDependencyPendingError("全书摘要等待阶段摘要完成。");
     }
-    const currentSourceHash = this.computeBookSourceHash(readyArcs.map((summary) => summary.sourceHash), coverage);
-    if (currentSourceHash !== sourceHash) {
-      this.requeueBookSummary(projectId, currentSourceHash, now);
+    if (source.sourceHash !== sourceHash) {
+      this.requeueBookSummary(projectId, source.sourceHash, now);
       throw new SummarySourceChangedError("全书摘要来源已变化，已重新排队最新摘要任务。");
     }
 
     const generated = await generator.summarizeBookForIndex(
       {
-        arcs: readyArcs.map((summary) => ({
+        arcs: source.readyArcs.map((summary) => ({
           arcKey: summary.arcKey,
           chapterFrom: summary.chapterFrom,
           chapterTo: summary.chapterTo,
           summary: summary.summary,
           structured: summary.structured
         })),
-        coverage
+        coverage: source.coverage
       },
       options
     );
-    const latestCoverage = this.buildBookCoverage(projectId);
-    const latestReadyArcs = this.summaryRepo.listArcSummaries(projectId).filter((summary) => summary.status === "ready");
-    const latestSourceHash = this.computeBookSourceHash(latestReadyArcs.map((summary) => summary.sourceHash), latestCoverage);
-    if (latestSourceHash !== sourceHash) {
-      this.requeueBookSummary(projectId, latestSourceHash, now);
+    const latestSource = this.getReadyBookSummarySource(projectId);
+    if (!latestSource.sourceHash) {
+      throw new SummaryDependencyPendingError("全书摘要等待阶段摘要完成。");
+    }
+    if (latestSource.sourceHash !== sourceHash) {
+      this.requeueBookSummary(projectId, latestSource.sourceHash, now);
       throw new SummarySourceChangedError("全书摘要来源已变化，已重新排队最新摘要任务。");
     }
     const structured: BookAiSummaryPayload = {
       ...generated,
       全书信息: {
         ...generated.全书信息,
-        覆盖阶段: latestReadyArcs.map((summary) => formatArcCoverageLabel(summary.chapterFrom, summary.chapterTo)),
-        覆盖章节范围: latestCoverage.totalChapterCount > 0 ? `第1-${latestCoverage.totalChapterCount}章` : "无章节",
-        总章节数: latestCoverage.totalChapterCount,
-        已索引章节数: latestCoverage.indexedChapterCount,
-        过期章节: [...latestCoverage.staleChapterIds],
-        缺失章节: [...latestCoverage.missingChapterIds],
-        过短跳过章节: [...latestCoverage.skippedTooShortChapterIds],
+        覆盖阶段: latestSource.readyArcs.map((summary) => formatArcCoverageLabel(summary.chapterFrom, summary.chapterTo)),
+        覆盖章节范围: latestSource.coverage.totalChapterCount > 0 ? `第1-${latestSource.coverage.totalChapterCount}章` : "无章节",
+        总章节数: latestSource.coverage.totalChapterCount,
+        已索引章节数: latestSource.coverage.indexedChapterCount,
+        过期章节: [...latestSource.coverage.staleChapterIds],
+        缺失章节: [...latestSource.coverage.missingChapterIds],
+        过短跳过章节: [...latestSource.coverage.skippedTooShortChapterIds],
         覆盖限制: [...generated.全书信息.覆盖限制]
-      }
+      },
+      人物关系图谱: buildBookRelationshipGraphFromArcs(latestSource.readyArcs, latestSource.coverage)
     };
 
     return this.summaryRepo.upsertBookSummary({
@@ -2221,7 +2740,7 @@ export class SummaryService implements SummaryIndexInvalidator {
       return !summary || (!isFreshSkippedTooShortChapterSummary(summary, chapter) && !isFreshReadyChapterSummary(summary, chapter));
     });
     if (blocking.length > 0) {
-      throw new Error("阶段摘要等待章节摘要完成。");
+      throw new SummaryDependencyPendingError("阶段摘要等待章节摘要完成。");
     }
     const readySummaries = chapters
       .map((chapter) => summaries.get(chapter.id))
@@ -2349,22 +2868,37 @@ export class SummaryService implements SummaryIndexInvalidator {
     ]);
   }
 
-  private enqueueBookIfReady(projectId: string, now: string): SummaryJobRecord | null {
+  private getReadyBookSummarySource(projectId: string): {
+    readonly coverage: BookSummaryCoverage;
+    readonly readyArcs: readonly ArcAiSummaryRecord[];
+    readonly sourceHash: string | null;
+  } {
     const coverage = this.buildBookCoverage(projectId);
-    const readyArcs = this.summaryRepo.listArcSummaries(projectId).filter((summary) => summary.status === "ready");
-    if (readyArcs.length === 0) {
+    const readyArcs = this.summaryRepo
+      .listArcSummaries(projectId)
+      .filter((summary) => summary.status === "ready")
+      .sort((left, right) => left.chapterFrom - right.chapterFrom || left.chapterTo - right.chapterTo);
+    return {
+      coverage,
+      readyArcs,
+      sourceHash: readyArcs.length > 0 ? this.computeBookSourceHash(readyArcs.map((summary) => summary.sourceHash), coverage) : null
+    };
+  }
+
+  private enqueueBookIfReady(projectId: string, now: string): SummaryJobRecord | null {
+    const source = this.getReadyBookSummarySource(projectId);
+    if (!source.sourceHash) {
       return null;
     }
-    const sourceHash = this.computeBookSourceHash(readyArcs.map((summary) => summary.sourceHash), coverage);
     const existing = this.summaryRepo.getLatestBookSummary(projectId);
-    if (existing?.status === "ready" && existing.sourceHash === sourceHash) {
+    if (existing?.status === "ready" && existing.sourceHash === source.sourceHash) {
       return null;
     }
     return this.summaryRepo.enqueueSummaryJob({
       projectId,
       jobType: "book_summary",
       targetId: null,
-      sourceHash,
+      sourceHash: source.sourceHash,
       priority: 4,
       now
     });

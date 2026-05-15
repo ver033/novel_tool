@@ -35,8 +35,10 @@ import {
   parseIpcPayload,
   summaryCancelCurrentJobInputSchema,
   summaryClearAndRetryArcCacheInputSchema,
+  summaryClearAndRetryBookCacheInputSchema,
   summaryClearAndRetryChapterCacheInputSchema,
   summaryGetArcCacheInputSchema,
+  summaryGetBookCacheInputSchema,
   summaryGetChapterCacheInputSchema,
   summaryIndexStatusInputSchema,
   summaryListCacheEntriesInputSchema,
@@ -384,6 +386,18 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
       ipcChannels.summary.clearAndRetryArcCache,
       createValidatedIpcHandler(summaryClearAndRetryArcCacheInputSchema, (input) =>
         createSummaryService(input.projectId).clearAndRetryArcCache(input.projectId, input.arcKey, new Date().toISOString(), {
+          pausedReason: getSummaryIndexPausedReason()
+        })
+      )
+    );
+    ipcMain.handle(
+      ipcChannels.summary.getBookCache,
+      createValidatedIpcHandler(summaryGetBookCacheInputSchema, (input) => createSummaryService(input.projectId).getBookCacheDetail(input.projectId))
+    );
+    ipcMain.handle(
+      ipcChannels.summary.clearAndRetryBookCache,
+      createValidatedIpcHandler(summaryClearAndRetryBookCacheInputSchema, (input) =>
+        createSummaryService(input.projectId).clearAndRetryBookCache(input.projectId, new Date().toISOString(), {
           pausedReason: getSummaryIndexPausedReason()
         })
       )

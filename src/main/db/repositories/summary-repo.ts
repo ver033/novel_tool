@@ -590,6 +590,14 @@ export class SummaryRepository {
     transaction();
   }
 
+  deleteBookSummaryCache(projectId: string): void {
+    const transaction = this.db.transaction(() => {
+      this.db.prepare("DELETE FROM book_ai_summaries WHERE project_id = ?").run(projectId);
+      this.db.prepare("DELETE FROM summary_jobs WHERE project_id = ? AND job_type = 'book_summary' AND status != 'running'").run(projectId);
+    });
+    transaction();
+  }
+
   clearProjectIndexCache(projectId: string): void {
     const transaction = this.db.transaction(() => {
       this.db.prepare("DELETE FROM chapter_ai_summary_chunks WHERE project_id = ?").run(projectId);
@@ -789,6 +797,22 @@ export class SummaryRepository {
     this.db
       .prepare("UPDATE summary_jobs SET status = 'failed', error = ?, next_run_at = ?, finished_at = ?, updated_at = ? WHERE id = ?")
       .run(error, nextRunAt, now, now, jobId);
+  }
+
+  deferSummaryJob(jobId: string, error: string, nextRunAt: string, now: string): void {
+    this.db
+      .prepare(
+        `UPDATE summary_jobs
+         SET status = 'queued',
+             error = ?,
+             next_run_at = ?,
+             started_at = NULL,
+             finished_at = NULL,
+             attempt_count = CASE WHEN attempt_count > 0 THEN attempt_count - 1 ELSE 0 END,
+             updated_at = ?
+         WHERE id = ?`
+      )
+      .run(error, nextRunAt, now, jobId);
   }
 
   cancelSummaryJob(jobId: string, error: string, now: string): void {

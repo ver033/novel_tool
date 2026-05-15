@@ -1,7 +1,7 @@
 import { SummaryRepository, type SummaryJobRecord } from "../db/repositories/summary-repo";
 import type { ChapterCacheBuildOrder } from "../shared/types";
 import { OpenRouterError } from "./openrouter-error";
-import { SummarySourceChangedError } from "./summary-service";
+import { SummaryDependencyPendingError, SummarySourceChangedError } from "./summary-service";
 
 type SummaryWorkerService = {
   readonly summarizeChapter: (projectId: string, chapterId: string, sourceHash: string, now: string, options?: { readonly signal?: AbortSignal }) => Promise<unknown>;
@@ -140,6 +140,15 @@ export class SummaryWorker {
         return {
           status: "completed",
           jobId: job.id
+        };
+      }
+      if (error instanceof SummaryDependencyPendingError) {
+        const nextRunAt = addMinutes(now, error.delayMinutes);
+        this.deps.summaryRepo.deferSummaryJob(job.id, formatError(error), nextRunAt, now);
+        return {
+          status: "retry_scheduled",
+          jobId: job.id,
+          nextRunAt
         };
       }
       const retryPlan = retryPlanFor(error);

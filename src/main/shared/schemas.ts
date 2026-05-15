@@ -501,6 +501,8 @@ export const summaryGetArcCacheInputSchema = summaryIndexStatusInputSchema
   })
   .strict();
 export const summaryClearAndRetryArcCacheInputSchema = summaryGetArcCacheInputSchema;
+export const summaryGetBookCacheInputSchema = summaryIndexStatusInputSchema;
+export const summaryClearAndRetryBookCacheInputSchema = summaryGetBookCacheInputSchema;
 
 export const relationshipGraphGetInputSchema = z
   .object(relationshipGraphGetInputBaseSchema.shape)

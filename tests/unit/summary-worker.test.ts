@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { SummaryWorker } from "../../src/main/ai/summary-worker";
 import { OpenRouterError } from "../../src/main/ai/openrouter-error";
+import { SummaryDependencyPendingError } from "../../src/main/ai/summary-service";
 import { createDatabase, type SqliteDatabase } from "../../src/main/db/database";
 import { runMigrations } from "../../src/main/db/migrations";
 import { SummaryRepository } from "../../src/main/db/repositories/summary-repo";
@@ -267,6 +268,47 @@ describe("summary worker", () => {
       status: "queued",
       attempt_count: 1,
       next_run_at: "2026-05-01T00:16:00.000Z"
+    });
+    db.close();
+  });
+
+  it("defers dependency-pending summary jobs without marking them failed", async () => {
+    const db = createDb();
+    const repo = new SummaryRepository(db);
+    const job = repo.enqueueSummaryJob({
+      projectId: "project_1",
+      jobType: "arc_summary",
+      targetId: "auto:021-040",
+      sourceHash: "hash",
+      priority: 6,
+      now: createdAt
+    });
+    const worker = new SummaryWorker({
+      summaryRepo: repo,
+      summaryService: {
+        summarizeChapter: async () => undefined,
+        summarizeArc: async () => {
+          throw new SummaryDependencyPendingError("阶段摘要等待前序阶段人物图谱完成。", 5);
+        }
+      },
+      isForegroundAiActive: () => false,
+      ensureAiConfigured: async () => undefined
+    });
+
+    const result = await worker.runOnce("project_1", runAt);
+
+    expect(result).toEqual({
+      status: "retry_scheduled",
+      jobId: job.id,
+      nextRunAt: "2026-05-01T00:06:00.000Z"
+    });
+    expect(db.prepare("SELECT status, attempt_count, next_run_at, error, started_at, finished_at FROM summary_jobs WHERE id = ?").get(job.id)).toEqual({
+      status: "queued",
+      attempt_count: 0,
+      next_run_at: "2026-05-01T00:06:00.000Z",
+      error: "阶段摘要等待前序阶段人物图谱完成。",
+      started_at: null,
+      finished_at: null
     });
     db.close();
   });

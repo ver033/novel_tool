@@ -53,8 +53,10 @@ import type {
   settingsTestConnectionInputSchema,
   summaryCancelCurrentJobInputSchema,
   summaryClearAndRetryArcCacheInputSchema,
+  summaryClearAndRetryBookCacheInputSchema,
   summaryClearAndRetryChapterCacheInputSchema,
   summaryGetArcCacheInputSchema,
+  summaryGetBookCacheInputSchema,
   summaryGetChapterCacheInputSchema,
   summaryIndexStatusInputSchema,
   summaryListCacheEntriesInputSchema,
@@ -64,7 +66,7 @@ import type {
 import type { ProofreadIssue } from "./proofread";
 import type { RelationshipGraphResult, RelationshipGraphSourceStatus } from "./relationship-graph";
 import type { WritingContextPlanMetadata } from "./ai-candidate-metadata";
-import type { ArcAiSummaryPayload, ChapterAiSummaryChunkPayload, ChapterAiSummaryPayload, SummaryJobStatus, SummaryJobType, SummaryStatus } from "./summary-index";
+import type { ArcAiSummaryPayload, BookAiSummaryPayload, ChapterAiSummaryChunkPayload, ChapterAiSummaryPayload, SummaryJobStatus, SummaryJobType, SummaryStatus } from "./summary-index";
 
 export type TaskType = "polish" | "expand" | "proofread" | "continue";
 export type PromptPresetTaskType = "polish" | "expand" | "continue";
@@ -362,6 +364,8 @@ export type SummaryGetChapterCacheInput = z.input<typeof summaryGetChapterCacheI
 export type SummaryClearAndRetryChapterCacheInput = z.input<typeof summaryClearAndRetryChapterCacheInputSchema>;
 export type SummaryGetArcCacheInput = z.input<typeof summaryGetArcCacheInputSchema>;
 export type SummaryClearAndRetryArcCacheInput = z.input<typeof summaryClearAndRetryArcCacheInputSchema>;
+export type SummaryGetBookCacheInput = z.input<typeof summaryGetBookCacheInputSchema>;
+export type SummaryClearAndRetryBookCacheInput = z.input<typeof summaryClearAndRetryBookCacheInputSchema>;
 export type RelationshipGraphGetInput = z.input<typeof relationshipGraphGetInputSchema>;
 export type RelationshipGraphStatusInput = z.input<typeof relationshipGraphStatusInputSchema>;
 export type RelationshipGraphSourceStatusInput = z.input<typeof relationshipGraphSourceStatusInputSchema>;
@@ -428,6 +432,27 @@ export type SummaryArcCacheDetail = Omit<SummaryArcCacheEntry, "summary"> & {
   readonly summary: {
     readonly summary: string;
     readonly structured: ArcAiSummaryPayload;
+    readonly status: Exclude<SummaryStatus, "skipped_too_short">;
+    readonly error: string | null;
+    readonly updatedAt: string;
+  } | null;
+};
+export type SummaryBookCacheState = Exclude<SummaryStatus, "skipped_too_short"> | "missing" | "queued" | "running" | "cancelled";
+export type SummaryBookCacheDetail = {
+  readonly cacheState: SummaryBookCacheState;
+  readonly summaryShort: string | null;
+  readonly summaryLong: string | null;
+  readonly summaryUpdatedAt: string | null;
+  readonly sourceHash: string | null;
+  readonly jobStatus: SummaryJobStatus | null;
+  readonly jobError: string | null;
+  readonly jobFailureCategory: string | null;
+  readonly jobActionHint: string | null;
+  readonly nextRunAt: string | null;
+  readonly summary: {
+    readonly summaryShort: string;
+    readonly summaryLong: string;
+    readonly structured: BookAiSummaryPayload;
     readonly status: Exclude<SummaryStatus, "skipped_too_short">;
     readonly error: string | null;
     readonly updatedAt: string;
@@ -529,7 +554,9 @@ export const ipcChannels = {
     clearAndRetryChapterCache: "novelTool:summary:clearAndRetryChapterCache",
     listArcCacheEntries: "novelTool:summary:listArcCacheEntries",
     getArcCache: "novelTool:summary:getArcCache",
-    clearAndRetryArcCache: "novelTool:summary:clearAndRetryArcCache"
+    clearAndRetryArcCache: "novelTool:summary:clearAndRetryArcCache",
+    getBookCache: "novelTool:summary:getBookCache",
+    clearAndRetryBookCache: "novelTool:summary:clearAndRetryBookCache"
   },
   relationshipGraph: {
     getGraph: "novelTool:relationshipGraph:getGraph",

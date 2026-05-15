@@ -8,7 +8,7 @@ import { ProjectRepository } from "../../src/main/db/repositories/project-repo";
 import { SummaryRepository } from "../../src/main/db/repositories/summary-repo";
 import { createDatabase, type SqliteDatabase } from "../../src/main/db/database";
 import { runMigrations } from "../../src/main/db/migrations";
-import { computeChapterContentHash, computeSourceHash, type ChapterAiSummaryPayload } from "../../src/main/shared/summary-index";
+import { computeChapterContentHash, computeSourceHash, type ArcAiSummaryPayload, type ChapterAiSummaryPayload } from "../../src/main/shared/summary-index";
 import {
   arcIndexPayloadV2,
   bookIndexPayloadV2,
@@ -88,6 +88,66 @@ function summaryPayloadV2(): ChapterAiSummaryPayload {
     synopsis: "林远在风雨中回到故乡，旧日关系重新浮出水面。",
     detail: "林远在风雨中回到故乡，旧日关系重新浮出水面。旧信和旧宅共同构成本章需要后续承接的核心线索，人物状态、关系悬念和调查动机都被建立。"
   });
+}
+
+function arcPayloadWithRelationshipGraph(): ArcAiSummaryPayload {
+  return {
+    ...arcIndexPayloadV2(),
+    人物图谱: {
+      版本: "summary-relationship-v1",
+      阶段范围: {
+        起始章节号: 1,
+        结束章节号: 1,
+        起始章节标题: "第1章",
+        结束章节标题: "第1章"
+      },
+      人物归一: [
+        {
+          canonicalName: "林远",
+          displayName: "林远",
+          aliases: ["旧城来客"],
+          mentionForms: ["他"],
+          roleHints: ["主角"],
+          firstSeenChapter: 1,
+          lastSeenChapter: 1,
+          importance: "major",
+          confidence: 0.9,
+          evidence: [{ chapterNumber: 1, text: "林远回到旧城", reason: "姓名明确出现" }]
+        },
+        {
+          canonicalName: "旧友",
+          displayName: "旧友",
+          aliases: [],
+          mentionForms: ["旧友"],
+          roleHints: ["林远旧识"],
+          firstSeenChapter: 1,
+          lastSeenChapter: 1,
+          importance: "supporting",
+          confidence: 0.72,
+          evidence: [{ chapterNumber: 1, text: "旧友关系重新浮出水面", reason: "关系明确出现" }]
+        }
+      ],
+      称谓待确认: [],
+      基础关系: [
+        {
+          source: "林远",
+          target: "旧友",
+          label: "旧友",
+          category: "基础关系",
+          polarity: "neutral",
+          directed: false,
+          stable: true,
+          firstSeenChapter: 1,
+          lastSeenChapter: 1,
+          confidence: 0.75,
+          evidence: [{ chapterNumber: 1, text: "旧友关系重新浮出水面", reason: "两人关系明确为旧友" }]
+        }
+      ],
+      剧情关系: [],
+      阶段关系摘要: "林远与旧友的关系重新进入剧情。",
+      质量提示: []
+    }
+  };
 }
 
 function upsertReadyChapterSummary(summaryRepo: SummaryRepository, input: { readonly chapterId: string; readonly title: string; readonly order: number; readonly content: string }) {
@@ -1120,6 +1180,7 @@ describe("summary service generation", () => {
       createdAt,
       updatedAt: createdAt
     });
+    const arcPayload = arcPayloadWithRelationshipGraph();
     summaryRepo.upsertArcSummary({
       id: "arc_1",
       projectId: "project_1",
@@ -1128,7 +1189,7 @@ describe("summary service generation", () => {
       chapterTo: 1,
       sourceHash: computeChapterContentHash("春".repeat(620)),
       summary: "第1章阶段摘要。",
-      structured: arcIndexPayloadV2(),
+      structured: arcPayload,
       status: "ready",
       error: null,
       createdAt,
@@ -1163,6 +1224,13 @@ describe("summary service generation", () => {
       缺失章节: [],
       过短跳过章节: []
     });
+    expect(summary.structured.人物关系图谱?.人物.map((character) => character.name)).toEqual(["林远", "旧友"]);
+    expect(summary.structured.人物关系图谱?.关系).toEqual([
+      expect.objectContaining({
+        primaryLabel: "旧友",
+        category: "基础关系"
+      })
+    ]);
     expect(summary.summaryShort).toBe("全书摘要。");
     db.close();
   });
@@ -2197,6 +2265,71 @@ describe("summary index status and rebuild controls", () => {
       jobType: "arc_summary",
       targetId: "auto:001-002",
       sourceHash: computeSourceHash([computeChapterContentHash(firstContent), computeChapterContentHash(secondContent)])
+    });
+    db.close();
+  });
+
+  it("clears and retries the book summary without deleting chapter or arc summaries", () => {
+    const db = createDb();
+    const { chapterRepo, summaryRepo } = seedProject(db);
+    const firstContent = "春".repeat(620);
+    const secondContent = "夏".repeat(620);
+    const firstHash = computeChapterContentHash(firstContent);
+    const secondHash = computeChapterContentHash(secondContent);
+    const arcSourceHash = computeSourceHash([firstHash, secondHash]);
+    createChapterAtOrder(chapterRepo, "chapter_1", "第1章", 0, firstContent);
+    createChapterAtOrder(chapterRepo, "chapter_2", "第2章", 1, secondContent);
+    upsertReadyChapterSummary(summaryRepo, { chapterId: "chapter_1", title: "第1章", order: 1, content: firstContent });
+    upsertReadyChapterSummary(summaryRepo, { chapterId: "chapter_2", title: "第2章", order: 2, content: secondContent });
+    summaryRepo.upsertArcSummary({
+      id: "arc_summary_1",
+      projectId: "project_1",
+      arcKey: "auto:001-002",
+      chapterFrom: 1,
+      chapterTo: 2,
+      sourceHash: arcSourceHash,
+      summary: "第1-2章阶段摘要。",
+      structured: arcIndexPayloadV2(),
+      status: "ready",
+      error: null,
+      createdAt,
+      updatedAt: createdAt
+    });
+    summaryRepo.upsertBookSummary({
+      id: "book_summary_1",
+      projectId: "project_1",
+      sourceHash: "old_book_hash",
+      summaryShort: bookIndexPayloadV2().全文短摘要,
+      summaryLong: bookIndexPayloadV2().全文详细梗概,
+      structured: bookIndexPayloadV2(),
+      status: "ready",
+      error: null,
+      createdAt,
+      updatedAt: createdAt
+    });
+    const service = new SummaryService(summaryRepo, chapterRepo);
+
+    const status = service.clearAndRetryBookCache("project_1", "2026-05-01T00:50:00.000Z");
+    const nextJob = summaryRepo.claimNextSummaryJob("project_1", "2026-05-01T00:51:00.000Z");
+
+    expect(summaryRepo.getChapterSummary("project_1", "chapter_1")).toMatchObject({ status: "ready" });
+    expect(summaryRepo.getChapterSummary("project_1", "chapter_2")).toMatchObject({ status: "ready" });
+    expect(summaryRepo.listArcSummaries("project_1")).toHaveLength(1);
+    expect(summaryRepo.getLatestBookSummary("project_1")).toBeNull();
+    expect(status).toMatchObject({ queuedJobCount: 1 });
+    expect(nextJob).toMatchObject({
+      jobType: "book_summary",
+      targetId: null,
+      sourceHash: computeSourceHash([
+        arcSourceHash,
+        JSON.stringify({
+          indexed: 2,
+          total: 2,
+          stale: [],
+          missing: [],
+          skipped: []
+        })
+      ])
     });
     db.close();
   });

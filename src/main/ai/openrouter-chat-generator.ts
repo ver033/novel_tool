@@ -62,7 +62,7 @@ const CHAPTER_SUMMARY_MERGE_MAX_TOKENS = 2200;
 const CONTEXT_BATCH_SUMMARY_MAX_TOKENS = 3200;
 const CONTEXT_SUMMARY_MERGE_MAX_TOKENS = 3200;
 const CHAT_MEMORY_SUMMARY_MAX_TOKENS = 2200;
-const SUMMARY_INDEX_MAX_TOKENS = 12_000;
+const SUMMARY_INDEX_MAX_TOKENS = 24_000;
 const CHAT_MEMORY_SUMMARY_PROMPT_RATIO = 0.75;
 const CHAT_MEMORY_SUMMARY_RECOMPRESS_MAX_ROUNDS = 2;
 
@@ -233,7 +233,253 @@ function normalizeArcSummaryIndexJson(parsed: unknown, input: ArcIndexSummaryInp
       结束章节: input.chapterTo,
       覆盖章节: input.chapters.map((chapter) => chapter.ordinal),
       覆盖限制: arrayField(stageInfo.覆盖限制)
+    },
+    人物图谱: normalizeArcRelationshipGraph(parsed.人物图谱, input)
+  };
+}
+
+function firstDefined(record: Record<string, unknown>, keys: readonly string[]): unknown {
+  for (const key of keys) {
+    if (record[key] !== undefined && record[key] !== null) {
+      return record[key];
     }
+  }
+  return undefined;
+}
+
+function stringValue(value: unknown, fallback: string): string {
+  if (value === undefined || value === null) {
+    return fallback;
+  }
+  const text = String(value).trim();
+  return text || fallback;
+}
+
+function arrayFromUnknown(value: unknown): unknown[] {
+  if (Array.isArray(value)) {
+    return value;
+  }
+  if (value === undefined || value === null) {
+    return [];
+  }
+  const text = String(value).trim();
+  return text ? [text] : [];
+}
+
+function numberFromUnknown(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const percentMatch = /(\d+(?:\.\d+)?)\s*%/.exec(value);
+    if (percentMatch) {
+      return Number(percentMatch[1]) / 100;
+    }
+    const numberMatch = /(\d+(?:\.\d+)?)/.exec(value);
+    if (numberMatch) {
+      return Number(numberMatch[1]);
+    }
+  }
+  return null;
+}
+
+function positiveIntegerFromUnknown(value: unknown, fallback: number): number {
+  const parsed = numberFromUnknown(value);
+  if (parsed === null || !Number.isFinite(parsed)) {
+    return Math.max(1, Math.floor(fallback));
+  }
+  return Math.max(1, Math.floor(parsed));
+}
+
+function confidenceFromUnknown(value: unknown, fallback = 0.6): number {
+  if (typeof value === "string") {
+    if (value.includes("高")) {
+      return 0.85;
+    }
+    if (value.includes("低")) {
+      return 0.4;
+    }
+    if (value.includes("中")) {
+      return 0.6;
+    }
+  }
+  const parsed = numberFromUnknown(value);
+  if (parsed === null || !Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.max(0, Math.min(1, parsed > 1 ? parsed / 100 : parsed));
+}
+
+function booleanFromUnknown(value: unknown, fallback: boolean): boolean {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["true", "yes", "是", "有", "稳定"].includes(normalized)) {
+      return true;
+    }
+    if (["false", "no", "否", "无", "不稳定"].includes(normalized)) {
+      return false;
+    }
+  }
+  return fallback;
+}
+
+function enumFromUnknown<T extends string>(value: unknown, allowed: readonly T[], fallback: T, aliases: Record<string, T> = {}): T {
+  const text = stringValue(value, "");
+  if ((allowed as readonly string[]).includes(text)) {
+    return text as T;
+  }
+  return aliases[text] ?? fallback;
+}
+
+function normalizeGraphEvidenceArray(value: unknown, fallbackChapterNumber: number): unknown[] {
+  return arrayFromUnknown(value).slice(0, 5).map((item) => {
+    if (!isRecord(item)) {
+      return {
+        chapterNumber: fallbackChapterNumber,
+        text: stringValue(item, ""),
+        reason: "模型未提供结构化证据理由。"
+      };
+    }
+    return {
+      ...item,
+      chapterNumber: positiveIntegerFromUnknown(firstDefined(item, ["chapterNumber", "章节号", "章节", "chapter", "chapterIndex"]), fallbackChapterNumber),
+      text: stringValue(firstDefined(item, ["text", "证据", "证据短句", "原文", "片段"]), ""),
+      reason: stringValue(firstDefined(item, ["reason", "理由", "判断理由", "说明"]), "模型未提供结构化证据理由。")
+    };
+  });
+}
+
+function normalizeArcGraphCharacter(value: unknown, input: ArcIndexSummaryInput): unknown {
+  if (!isRecord(value)) {
+    return value;
+  }
+  const firstSeenChapter = positiveIntegerFromUnknown(firstDefined(value, ["firstSeenChapter", "首次出现章节", "初次出现章节", "起始章节", "章节"]), input.chapterFrom);
+  const lastSeenChapter = Math.max(
+    firstSeenChapter,
+    positiveIntegerFromUnknown(firstDefined(value, ["lastSeenChapter", "最后出现章节", "末次出现章节", "结束章节"]), input.chapterTo)
+  );
+  const canonicalName = stringValue(firstDefined(value, ["canonicalName", "规范名", "标准名", "人物", "姓名", "name", "displayName", "名称"]), "未命名人物");
+  return {
+    ...value,
+    canonicalName,
+    displayName: stringValue(firstDefined(value, ["displayName", "显示名", "展示名", "姓名", "name", "名称"]), canonicalName),
+    aliases: arrayFromUnknown(firstDefined(value, ["aliases", "别名", "曾用名", "其他名字"])),
+    mentionForms: arrayFromUnknown(firstDefined(value, ["mentionForms", "称谓", "提及形式", "出现称谓", "指称"])),
+    roleHints: arrayFromUnknown(firstDefined(value, ["roleHints", "身份提示", "角色身份", "身份", "人物身份"])),
+    firstSeenChapter,
+    lastSeenChapter,
+    importance: enumFromUnknown(firstDefined(value, ["importance", "重要性", "角色重要性"]), ["major", "supporting", "minor", "unknown"], "unknown", {
+      主要: "major",
+      核心: "major",
+      主角: "major",
+      配角: "supporting",
+      次要: "minor",
+      路人: "minor",
+      未知: "unknown"
+    }),
+    confidence: confidenceFromUnknown(firstDefined(value, ["confidence", "置信度", "可信度"])),
+    evidence: normalizeGraphEvidenceArray(firstDefined(value, ["evidence", "证据", "证据短句"]), firstSeenChapter)
+  };
+}
+
+function normalizeArcGraphRelation(value: unknown, input: ArcIndexSummaryInput, defaultCategory: string): unknown {
+  if (!isRecord(value)) {
+    return value;
+  }
+  const firstSeenChapter = positiveIntegerFromUnknown(firstDefined(value, ["firstSeenChapter", "首次出现章节", "初次出现章节", "起始章节", "章节"]), input.chapterFrom);
+  const lastSeenChapter = Math.max(
+    firstSeenChapter,
+    positiveIntegerFromUnknown(firstDefined(value, ["lastSeenChapter", "最后出现章节", "末次出现章节", "结束章节"]), input.chapterTo)
+  );
+  const category = enumFromUnknown(
+    firstDefined(value, ["category", "类别", "关系类别", "类型"]),
+    ["基础关系", "剧情关系", "阵营关系", "情感关系", "冲突关系", "社会关系", "其他"],
+    defaultCategory as "基础关系" | "剧情关系" | "阵营关系" | "情感关系" | "冲突关系" | "社会关系" | "其他"
+  );
+  return {
+    ...value,
+    source: stringValue(firstDefined(value, ["source", "来源", "主体", "人物A", "from", "sourceName"]), "未明确"),
+    target: stringValue(firstDefined(value, ["target", "目标", "客体", "人物B", "to", "targetName"]), "未明确"),
+    label: stringValue(firstDefined(value, ["label", "关系", "关系标签", "primaryLabel"]), "未明确关系"),
+    category,
+    polarity: enumFromUnknown(firstDefined(value, ["polarity", "极性", "倾向"]), ["positive", "negative", "neutral", "mixed", "unknown"], "unknown", {
+      正向: "positive",
+      负向: "negative",
+      中性: "neutral",
+      复杂: "mixed",
+      混合: "mixed",
+      未知: "unknown"
+    }),
+    directed: booleanFromUnknown(firstDefined(value, ["directed", "有向", "是否有向"]), false),
+    stable: booleanFromUnknown(firstDefined(value, ["stable", "稳定", "是否稳定"]), category === "基础关系"),
+    firstSeenChapter,
+    lastSeenChapter,
+    confidence: confidenceFromUnknown(firstDefined(value, ["confidence", "置信度", "可信度"])),
+    evidence: normalizeGraphEvidenceArray(firstDefined(value, ["evidence", "证据", "证据短句"]), firstSeenChapter)
+  };
+}
+
+function normalizeAmbiguousReference(value: unknown, input: ArcIndexSummaryInput): unknown {
+  if (!isRecord(value)) {
+    return value;
+  }
+  return {
+    ...value,
+    mention: stringValue(firstDefined(value, ["mention", "称谓", "提及", "指称"]), "未明确称谓"),
+    candidates: arrayFromUnknown(firstDefined(value, ["candidates", "候选", "候选人物"])),
+    chapterNumber: positiveIntegerFromUnknown(firstDefined(value, ["chapterNumber", "章节号", "章节"]), input.chapterFrom),
+    reason: stringValue(firstDefined(value, ["reason", "理由", "说明"]), "模型标记为待确认称谓。"),
+    recommendedAction: enumFromUnknown(
+      firstDefined(value, ["recommendedAction", "建议动作", "处理建议"]),
+      ["keep_separate", "needs_later_context", "manual_review"],
+      "needs_later_context",
+      {
+        保持分开: "keep_separate",
+        需要后文: "needs_later_context",
+        需要人工确认: "manual_review"
+      }
+    )
+  };
+}
+
+function normalizeGraphQualityIssue(value: unknown): unknown {
+  if (!isRecord(value)) {
+    return { level: "warning", message: stringValue(value, "人物图谱存在未结构化质量提示。") };
+  }
+  return {
+    ...value,
+    level: enumFromUnknown(firstDefined(value, ["level", "级别", "严重程度"]), ["info", "warning", "error"], "warning", {
+      信息: "info",
+      提示: "info",
+      警告: "warning",
+      错误: "error"
+    }),
+    message: stringValue(firstDefined(value, ["message", "信息", "提示", "说明"]), "人物图谱存在质量提示。")
+  };
+}
+
+function normalizeArcRelationshipGraph(value: unknown, input: ArcIndexSummaryInput): unknown {
+  if (!isRecord(value)) {
+    return value;
+  }
+  const stageRange = isRecord(value.阶段范围) ? value.阶段范围 : {};
+  return {
+    ...value,
+    版本: "summary-relationship-v1",
+    阶段范围: {
+      ...stageRange,
+      起始章节号: positiveIntegerFromUnknown(stageRange.起始章节号, input.chapterFrom),
+      结束章节号: positiveIntegerFromUnknown(stageRange.结束章节号, input.chapterTo)
+    },
+    人物归一: arrayFromUnknown(value.人物归一).map((item) => normalizeArcGraphCharacter(item, input)),
+    称谓待确认: arrayFromUnknown(value.称谓待确认).map((item) => normalizeAmbiguousReference(item, input)),
+    基础关系: arrayFromUnknown(value.基础关系).map((item) => normalizeArcGraphRelation(item, input, "基础关系")),
+    剧情关系: arrayFromUnknown(value.剧情关系).map((item) => normalizeArcGraphRelation(item, input, "剧情关系")),
+    阶段关系摘要: stringValue(value.阶段关系摘要, ""),
+    质量提示: arrayFromUnknown(value.质量提示).map(normalizeGraphQualityIssue)
   };
 }
 
@@ -253,9 +499,10 @@ function normalizeBookSummaryIndexJson(parsed: unknown, input: BookIndexSummaryI
   if (!isRecord(parsed)) {
     return parsed;
   }
+  const { 人物关系图谱: _ignoredRelationshipGraph, ...summaryFields } = parsed;
   const bookInfo = isRecord(parsed.全书信息) ? parsed.全书信息 : {};
   return {
-    ...parsed,
+    ...summaryFields,
     全书信息: {
       ...bookInfo,
       覆盖阶段: input.arcs.map((arc) => `第${arc.chapterFrom}-${arc.chapterTo}章`),
@@ -608,6 +855,7 @@ export class OpenRouterChatGenerator implements AiChatGenerator {
       messages,
       maxCompletionTokens,
       temperature: 0.2,
+      responseFormat: { type: "json_object" },
       signal: options.signal
     });
     const content = result.content.trim();
@@ -811,6 +1059,7 @@ export class OpenRouterChatGenerator implements AiChatGenerator {
       messages,
       maxCompletionTokens,
       temperature: 0.2,
+      responseFormat: { type: "json_object" },
       signal: options.signal
     });
     if (result.truncated) {
@@ -843,6 +1092,7 @@ export class OpenRouterChatGenerator implements AiChatGenerator {
       messages,
       maxCompletionTokens,
       temperature: 0.2,
+      responseFormat: { type: "json_object" },
       signal: options.signal
     });
     if (result.truncated) {

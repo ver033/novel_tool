@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { formatRelationshipOverviewMetric, getRelationshipSourceStatusText } from "../../src/renderer/routes/SettingsPage";
 import type { RelationshipGraphSourceStatus } from "../../src/main/shared/relationship-graph";
@@ -84,5 +86,14 @@ describe("settings relationship graph source status display", () => {
       value: "失败",
       detail: "阶段摘要输出被截断"
     });
+  });
+
+  it("links relationship graph source refresh to the summary cache refresh action", () => {
+    const source = readFileSync(join(process.cwd(), "src/renderer/routes/SettingsPage.tsx"), "utf8");
+
+    expect(source).toContain("refreshToken");
+    expect(source).toContain("setRelationshipRefreshToken");
+    expect(source).toContain("<RelationshipGraphCacheSettingsBlock");
+    expect(source).not.toContain('{loading ? "读取中" : "刷新"}');
   });
 });
