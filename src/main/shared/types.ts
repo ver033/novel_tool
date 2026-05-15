@@ -25,8 +25,11 @@ import type {
   chapterRenameInputSchema,
   chapterSaveContentInputSchema,
   chapterUpdateTargetWordCountInputSchema,
+  chapterCacheBuildOrderSchema,
   editorSettingsSchema,
+  exportSelectShareableProjectFilePathInputSchema,
   exportSelectTxtFilePathInputSchema,
+  exportShareableProjectCopyInputSchema,
   exportTxtInputSchema,
   importConfirmTxtInputSchema,
   importPreviewTxtInputSchema,
@@ -39,9 +42,8 @@ import type {
   projectSelectSavePathInputSchema,
   projectSuggestFilePathInputSchema,
   relationshipGraphGetInputSchema,
-  relationshipGraphRebuildInputSchema,
+  relationshipGraphSourceStatusInputSchema,
   relationshipGraphStatusInputSchema,
-  relationshipGraphUpgradeMissingFromOriginalTextInputSchema,
   scratchCreateInputSchema,
   scratchDeleteInputSchema,
   scratchListInputSchema,
@@ -50,7 +52,9 @@ import type {
   settingsListModelsInputSchema,
   settingsTestConnectionInputSchema,
   summaryCancelCurrentJobInputSchema,
+  summaryClearAndRetryArcCacheInputSchema,
   summaryClearAndRetryChapterCacheInputSchema,
+  summaryGetArcCacheInputSchema,
   summaryGetChapterCacheInputSchema,
   summaryIndexStatusInputSchema,
   summaryListCacheEntriesInputSchema,
@@ -58,9 +62,9 @@ import type {
   taskPromptPresetSchema
 } from "./schemas";
 import type { ProofreadIssue } from "./proofread";
-import type { RelationshipGraphIndexStatus, RelationshipGraphResult } from "./relationship-index";
+import type { RelationshipGraphResult, RelationshipGraphSourceStatus } from "./relationship-graph";
 import type { WritingContextPlanMetadata } from "./ai-candidate-metadata";
-import type { ChapterAiSummaryChunkPayload, ChapterAiSummaryPayload, SummaryJobStatus, SummaryJobType, SummaryStatus } from "./summary-index";
+import type { ArcAiSummaryPayload, ChapterAiSummaryChunkPayload, ChapterAiSummaryPayload, SummaryJobStatus, SummaryJobType, SummaryStatus } from "./summary-index";
 
 export type TaskType = "polish" | "expand" | "proofread" | "continue";
 export type PromptPresetTaskType = "polish" | "expand" | "continue";
@@ -264,6 +268,10 @@ export type ChapterSnapshot = {
 };
 
 export type EditorSettings = Required<z.output<typeof editorSettingsSchema>>;
+export type ChapterCacheBuildOrder = z.output<typeof chapterCacheBuildOrderSchema>;
+export type CacheSettings = {
+  readonly chapterCacheBuildOrder: ChapterCacheBuildOrder;
+};
 export type AiProviderSettingsState = Omit<z.output<typeof aiProviderSettingsSchema>, "apiKey"> & {
   readonly apiKeyConfigured: boolean;
 };
@@ -272,6 +280,7 @@ export type SettingsState = {
   readonly aiProvider: AiProviderSettingsState | null;
   readonly projectPath: string | null;
   readonly taskPromptPresets: readonly TaskPromptPreset[];
+  readonly cache: CacheSettings;
 };
 
 export type TaskPromptPreset = z.output<typeof taskPromptPresetSchema>;
@@ -333,46 +342,30 @@ export type ExportTxtResult = {
   readonly wordCount: number;
   readonly exportedAt: string;
 };
+export type ExportSelectShareableProjectFilePathInput = z.input<typeof exportSelectShareableProjectFilePathInputSchema>;
+export type ExportShareableProjectCopyInput = z.input<typeof exportShareableProjectCopyInputSchema>;
+export type ExportShareableProjectCopyResult = {
+  readonly filePath: string;
+  readonly exportedAt: string;
+  readonly included: readonly string[];
+  readonly removed: readonly string[];
+  readonly privacyScan: {
+    readonly scannedTableCount: number;
+    readonly scannedValueCount: number;
+  };
+};
 export type SummaryIndexStatusInput = z.input<typeof summaryIndexStatusInputSchema>;
 export type SummaryRebuildProjectIndexInput = z.input<typeof summaryRebuildProjectIndexInputSchema>;
 export type SummaryCancelCurrentJobInput = z.input<typeof summaryCancelCurrentJobInputSchema>;
 export type SummaryListCacheEntriesInput = z.input<typeof summaryListCacheEntriesInputSchema>;
 export type SummaryGetChapterCacheInput = z.input<typeof summaryGetChapterCacheInputSchema>;
 export type SummaryClearAndRetryChapterCacheInput = z.input<typeof summaryClearAndRetryChapterCacheInputSchema>;
+export type SummaryGetArcCacheInput = z.input<typeof summaryGetArcCacheInputSchema>;
+export type SummaryClearAndRetryArcCacheInput = z.input<typeof summaryClearAndRetryArcCacheInputSchema>;
 export type RelationshipGraphGetInput = z.input<typeof relationshipGraphGetInputSchema>;
 export type RelationshipGraphStatusInput = z.input<typeof relationshipGraphStatusInputSchema>;
-export type RelationshipGraphRebuildInput = z.input<typeof relationshipGraphRebuildInputSchema>;
-export type RelationshipGraphUpgradeMissingFromOriginalTextInput = z.input<typeof relationshipGraphUpgradeMissingFromOriginalTextInputSchema>;
-export type { RelationshipGraphIndexStatus, RelationshipGraphResult };
-export type RelationshipOriginalTextUpgradeQueueResult = {
-  readonly queued: number;
-  readonly skippedReady: number;
-  readonly skippedStale: number;
-  readonly skippedMissingSummary: number;
-};
-export type RelationshipCacheSettingsStatus = {
-  readonly chapterCache: {
-    readonly total: number;
-    readonly ready: number;
-    readonly queuedOrRunning: number;
-    readonly stale: number;
-    readonly failed: number;
-    readonly missing: number;
-    readonly skippedTooShort: number;
-  };
-  readonly relationshipCache: RelationshipGraphIndexStatus & {
-    readonly sourceSummaryEmbedded: number;
-    readonly sourceLegacyOriginalTextUpgrade: number;
-    readonly sourceOriginalTextEnhancement: number;
-    readonly sourceLegacySummaryDerived: number;
-    readonly queuedOriginalTextUpgrades: number;
-    readonly waitingForChapterCache: boolean;
-  };
-  readonly activeJob: {
-    readonly jobType: SummaryJobType;
-    readonly targetId: string | null;
-  } | null;
-};
+export type RelationshipGraphSourceStatusInput = z.input<typeof relationshipGraphSourceStatusInputSchema>;
+export type { RelationshipGraphResult, RelationshipGraphSourceStatus };
 export type SummaryIndexPausedReason = "ai_not_configured" | "foreground_ai_active" | "background_disabled" | null;
 export type SummaryChapterCacheState = SummaryStatus | "missing" | "queued" | "running" | "cancelled";
 export type SummaryChapterCacheEntry = {
@@ -412,6 +405,33 @@ export type SummaryChapterCacheDetail = SummaryChapterCacheEntry & {
     readonly error: string | null;
     readonly updatedAt: string;
   }[];
+};
+export type SummaryArcCacheState = Exclude<SummaryStatus, "skipped_too_short"> | "missing" | "queued" | "running" | "cancelled";
+export type SummaryArcCacheEntry = {
+  readonly arcKey: string;
+  readonly label: string;
+  readonly chapterFrom: number;
+  readonly chapterTo: number;
+  readonly chapterCount: number;
+  readonly readyChapterCount: number;
+  readonly cacheState: SummaryArcCacheState;
+  readonly summary: string | null;
+  readonly summaryUpdatedAt: string | null;
+  readonly sourceHash: string | null;
+  readonly jobStatus: SummaryJobStatus | null;
+  readonly jobError: string | null;
+  readonly jobFailureCategory: string | null;
+  readonly jobActionHint: string | null;
+  readonly nextRunAt: string | null;
+};
+export type SummaryArcCacheDetail = Omit<SummaryArcCacheEntry, "summary"> & {
+  readonly summary: {
+    readonly summary: string;
+    readonly structured: ArcAiSummaryPayload;
+    readonly status: Exclude<SummaryStatus, "skipped_too_short">;
+    readonly error: string | null;
+    readonly updatedAt: string;
+  } | null;
 };
 export type SummaryIndexJobDetail = {
   readonly jobId: string;
@@ -506,15 +526,14 @@ export const ipcChannels = {
     cancelCurrentJob: "novelTool:summary:cancelCurrentJob",
     listCacheEntries: "novelTool:summary:listCacheEntries",
     getChapterCache: "novelTool:summary:getChapterCache",
-    clearAndRetryChapterCache: "novelTool:summary:clearAndRetryChapterCache"
+    clearAndRetryChapterCache: "novelTool:summary:clearAndRetryChapterCache",
+    listArcCacheEntries: "novelTool:summary:listArcCacheEntries",
+    getArcCache: "novelTool:summary:getArcCache",
+    clearAndRetryArcCache: "novelTool:summary:clearAndRetryArcCache"
   },
   relationshipGraph: {
     getGraph: "novelTool:relationshipGraph:getGraph",
-    getStatus: "novelTool:relationshipGraph:getStatus",
-    rebuild: "novelTool:relationshipGraph:rebuild",
-    refreshCacheStatus: "novelTool:relationshipGraph:refreshCacheStatus",
-    getCacheSettingsStatus: "novelTool:relationshipGraph:getCacheSettingsStatus",
-    upgradeMissingFromOriginalText: "novelTool:relationshipGraph:upgradeMissingFromOriginalText"
+    getSourceStatus: "novelTool:relationshipGraph:getSourceStatus"
   },
   scratch: {
     list: "novelTool:scratch:list",
@@ -530,6 +549,8 @@ export const ipcChannels = {
   },
   export: {
     selectTxtFilePath: "novelTool:export:selectTxtFilePath",
-    exportTxt: "novelTool:export:exportTxt"
+    exportTxt: "novelTool:export:exportTxt",
+    selectShareableProjectFilePath: "novelTool:export:selectShareableProjectFilePath",
+    exportShareableProjectCopy: "novelTool:export:exportShareableProjectCopy"
   }
 } as const;

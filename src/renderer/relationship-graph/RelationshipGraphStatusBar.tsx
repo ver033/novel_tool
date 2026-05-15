@@ -1,40 +1,27 @@
-import type { RelationshipGraphIndexStatus, RelationshipGraphStats } from "../../main/shared/relationship-index";
+import type { RelationshipGraphSourceStatus, RelationshipGraphStats } from "../../main/shared/relationship-graph";
 
 type RelationshipGraphStatusBarProps = {
-  readonly status: RelationshipGraphIndexStatus | null;
+  readonly status: RelationshipGraphSourceStatus | null;
   readonly stats: RelationshipGraphStats | null;
   readonly loading: boolean;
   readonly error: string | null;
-  readonly rebuilding: boolean;
-  readonly onRebuild: () => void;
+  readonly onOpenSettings: () => void;
 };
 
-function statusText(status: RelationshipGraphIndexStatus | null, loading: boolean, error: string | null): string {
+function statusText(status: RelationshipGraphSourceStatus | null, loading: boolean, error: string | null): string {
   if (error) {
     return `读取失败：${error}`;
   }
   if (loading && !status) {
-    return "正在读取人物关系缓存";
+    return "正在读取人物关系图";
   }
-  if (!status || status.total === 0) {
-    return "还没有可用人物关系缓存";
+  if (!status) {
+    return "还没有读取图谱来源状态";
   }
-  if (status.running > 0) {
-    return "正在后台分析人物关系";
-  }
-  if (status.legacyMissingRelationships > 0 || status.stale > 0) {
-    return "部分章节关系缓存未更新";
-  }
-  if (status.queued > 0 || status.waitingStable > 0) {
-    return `关系缓存队列 ${status.queued} 章，旧等待状态 ${status.waitingStable} 章`;
-  }
-  if (status.failed > 0) {
-    return `有 ${status.failed} 章关系索引失败`;
-  }
-  return "关系图缓存已就绪";
+  return status.message;
 }
 
-export function RelationshipGraphStatusBar({ status, stats, loading, error, rebuilding, onRebuild }: RelationshipGraphStatusBarProps) {
+export function RelationshipGraphStatusBar({ status, stats, loading, error, onOpenSettings }: RelationshipGraphStatusBarProps) {
   return (
     <div className="relationship-status-bar" aria-live="polite">
       <span>{statusText(status, loading, error)}</span>
@@ -43,8 +30,8 @@ export function RelationshipGraphStatusBar({ status, stats, loading, error, rebu
           当前显示 {stats.visibleChapterCount} 章，使用 {stats.usedMentionCount}/{stats.totalMentionCount} 条关系证据
         </span>
       ) : null}
-      <button disabled={rebuilding} onClick={onRebuild} type="button">
-        {rebuilding ? "已加入队列" : "重建章节缓存并更新关系"}
+      <button onClick={onOpenSettings} type="button">
+        缓存设置
       </button>
     </div>
   );

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { RelationshipGraphEdge, RelationshipGraphNode } from "../../src/main/shared/relationship-index";
+import type { RelationshipGraphEdge, RelationshipGraphNode } from "../../src/main/shared/relationship-graph";
 import { buildRelationshipHubSeedLayoutPositions } from "../../src/renderer/relationship-graph/relationship-graph-hub-layout";
 
 function makeNode(id: string, name: string, score = 4): RelationshipGraphNode {

@@ -48,6 +48,16 @@ export type ArcIndexSummaryInput = {
   readonly arcKey: string;
   readonly chapterFrom: number;
   readonly chapterTo: number;
+  readonly priorCharacterLedger?: readonly {
+    readonly canonicalName: string;
+    readonly aliases: readonly string[];
+    readonly mentionForms: readonly string[];
+    readonly roleHints: readonly string[];
+    readonly firstSeenChapter: number;
+    readonly lastSeenChapter: number;
+    readonly importance: "major" | "supporting" | "minor" | "unknown";
+  }[];
+  readonly priorCharacterLedgerHash?: string;
   readonly chapters: readonly ArcIndexSummaryChapter[];
 };
 
@@ -89,7 +99,6 @@ const CHAPTER_JSON_CONTRACT = [
   '  "人物状态": [{"人物": "人物名", "本章变化": "未明确", "行动": [], "目标或动机": "未明确", "新获得信息": [], "仍不知道的信息": [], "关系变化": [], "证据短句": []}],',
   '  "人物认知边界": [{"人物": "人物名", "认知变化": "未明确", "仍不知道": [], "误解或风险": [], "证据短句": []}],',
   '  "关系变化": ["关系变化或称呼/立场变化"],',
-  '  "人物关系索引": {"人物": [{"姓名": "人物名", "别名": [], "实体类型": "person", "重要程度": "main", "身份摘要": "未明确", "阵营": null, "置信度": 0.8, "证据短句": []}], "关系事件": [{"主体": "人物A", "客体": "人物B", "关系维度": [{"名称": "由正文决定的关系类别", "说明": "不要使用产品固定枚举", "置信度": 0.8}], "主维度": "由正文决定的关系类别", "基础关系": {"名称": "母子/师生/同门/未明确等由正文决定", "说明": "稳定身份或社会关系"}, "剧情关系": {"名称": "保护/怀疑/压制/交易等由正文决定", "说明": "本章情节中的关系状态"}, "方向": "unclear", "极性": "unknown", "强度": 0.5, "本章变化": "未明确", "证据短句": "", "置信度": 0.8}], "不确定项": []},',
   '  "时间地点": {"本章时间": "未明确", "主要地点": [], "时间线索": [], "地点移动": [], "可能风险": []},',
   '  "道具设定变化": ["道具状态、新设定、规则限制或否定事实的高价值变化"],',
   '  "伏笔与线索": [{"线索": "线索", "类型": "普通线索", "状态": "待判断", "指向或意义": "未明确", "证据短句": []}],',
@@ -110,7 +119,6 @@ const CHAPTER_CHUNK_JSON_CONTRACT = [
   '  "人物状态": [{"人物": "人物名", "本章变化": "未明确", "行动": [], "目标或动机": "未明确", "新获得信息": [], "仍不知道的信息": [], "关系变化": [], "证据短句": []}],',
   '  "人物认知边界": [{"人物": "人物名", "认知变化": "未明确", "仍不知道": [], "误解或风险": [], "证据短句": []}],',
   '  "关系变化": ["关系变化或称呼/立场变化"],',
-  '  "人物关系索引": {"人物": [], "关系事件": [], "不确定项": []},',
   '  "时间地点": {"本章时间": "未明确", "主要地点": [], "时间线索": [], "地点移动": [], "可能风险": []},',
   '  "道具设定变化": ["道具状态、新设定、规则限制或否定事实的高价值变化"],',
   '  "伏笔与线索": [{"线索": "线索", "类型": "普通线索", "状态": "待判断", "指向或意义": "未明确", "证据短句": []}],',
@@ -139,7 +147,8 @@ const ARC_JSON_CONTRACT = [
   '  "连续性风险": ["连续性风险"],',
   '  "可核对事实": ["可核对事实"],',
   '  "不可丢失信息": ["不可丢失信息"],',
-  '  "适合回答的问题": ["适合回答的问题"]',
+  '  "适合回答的问题": ["适合回答的问题"],',
+  '  "人物图谱": {"版本": "summary-relationship-v1", "阶段范围": {"起始章节号": 1, "结束章节号": 10, "起始章节标题": "标题", "结束章节标题": "标题"}, "人物归一": [{"canonicalName": "人物姓名", "displayName": "人物姓名", "aliases": [], "mentionForms": [], "roleHints": [], "firstSeenChapter": 1, "lastSeenChapter": 10, "importance": "major", "confidence": 0.8, "evidence": [{"chapterNumber": 1, "text": "证据短句", "reason": "判断理由"}]}], "称谓待确认": [{"mention": "母亲/主角/我等无法确认指向的称谓", "candidates": [], "chapterNumber": 1, "reason": "无法确认原因", "recommendedAction": "needs_later_context"}], "基础关系": [{"source": "人物A", "target": "人物B", "label": "母子/师生/同门等正文决定的稳定关系", "category": "基础关系", "polarity": "neutral", "directed": false, "stable": true, "firstSeenChapter": 1, "lastSeenChapter": 10, "confidence": 0.8, "evidence": [{"chapterNumber": 1, "text": "证据短句", "reason": "判断理由"}]}], "剧情关系": [{"source": "人物A", "target": "人物B", "label": "保护/背叛/竞争等剧情关系", "category": "剧情关系", "polarity": "mixed", "directed": false, "stable": false, "firstSeenChapter": 1, "lastSeenChapter": 10, "confidence": 0.8, "evidence": [{"chapterNumber": 1, "text": "证据短句", "reason": "判断理由"}]}], "阶段关系摘要": "阶段内人物与关系变化摘要", "质量提示": []}',
   "}"
 ].join("\n");
 
@@ -264,9 +273,7 @@ function setArcCardValue(target: Record<string, unknown>, key: string, value: un
 }
 
 function compactArcRelationshipEvents(structured: Record<string, unknown>): unknown[] {
-  const relationshipIndex = isPlainRecord(structured.人物关系索引) ? structured.人物关系索引 : null;
-  const relationshipEvents = relationshipIndex ? relationshipIndex.关系事件 : null;
-  const source = relationshipEvents ?? structured.关系变化 ?? structured.关系动态;
+  const source = structured.关系变化 ?? structured.关系动态;
   return compactArcRecordList(
     source,
     ["主体", "客体", "主维度", "基础关系", "剧情关系", "关系双方", "关系类型", "本章变化", "变化原因", "是否需要后文承接"],
@@ -322,7 +329,8 @@ const BOOK_JSON_CONTRACT = [
   '  "连续性风险": ["连续性风险"],',
   '  "可核对事实": ["可核对事实"],',
   '  "不可丢失信息": ["不可丢失信息"],',
-  '  "适合回答的问题": ["适合回答的问题"]',
+  '  "适合回答的问题": ["适合回答的问题"],',
+  '  "人物关系图谱": {"版本": "summary-relationship-v1", "生成来源": {"arcSummaryIds": ["auto:1-20"], "chapterRange": {"start": 1, "end": 20}}, "人物": [{"id": "character-1", "name": "人物姓名", "aliases": [], "mentionForms": [], "roleHints": [], "importance": "major", "firstSeenChapter": 1, "lastSeenChapter": 20, "chapterActivity": [{"chapterNumber": 1, "weight": 1, "relationEventCount": 1}], "confidence": 0.8, "sourceArcRanges": [{"start": 1, "end": 20}]}], "关系": [{"id": "relation-1", "sourceId": "character-1", "targetId": "character-2", "primaryLabel": "母子/师生/保护/冲突等正文决定的关系", "category": "基础关系", "polarity": "neutral", "directed": false, "stable": true, "labels": [{"label": "母子", "firstSeenChapter": 1, "lastSeenChapter": 20, "confidence": 0.8}], "evidence": [{"chapterNumber": 1, "arcRange": "第1-20章", "text": "证据短句或阶段摘要证据", "reason": "判断理由"}]}], "阶段索引": [{"arcKey": "auto:1-20", "startChapter": 1, "endChapter": 20, "characterIds": ["character-1"], "relationIds": ["relation-1"]}], "未确认称谓": [], "图谱摘要": "全书人物关系摘要", "质量提示": []}',
   "}"
 ].join("\n");
 
@@ -366,9 +374,7 @@ export function buildChapterIndexSummaryMessages(input: ChapterIndexSummaryInput
         "6. 控制输出规模：场景推进最多 5 项；关键事件、人物状态、人物认知边界、伏笔与线索、可核对事实、不可丢失信息各最多 8 项；连续性风险最多 6 项；每项证据短句最多 1 条。",
         "7. 8000 字章节的 JSON 总长度应尽量控制在 15000 个中文字符以内；不要输出完整场景表，不要机械重复同一事实。",
         "8. 优先保留影响后文连续性、人物状态、人物认知、伏笔、道具状态、设定规则和因果链的高价值信息。",
-        "9. “人物关系索引”必须来自本章正文，由模型决定关系类别和具体关系名称；同时保留基础关系（血缘、师承、同门、雇佣等稳定身份/社会关系）和剧情关系（保护、怀疑、背叛、交易、压制等本章情节状态）。不要使用产品固定枚举。",
-        "10. 同一人物的人名、别名、身份称呼和亲属称谓必须尽量统一到同一个规范名；例如妈妈、母亲、妈、娘若能由正文确认指向同一人，应把称呼放入别名，不要把称呼词单独当成新人物。",
-        "11. 人物关系索引只记录本章有证据的人物和关系事件；称呼词无法确认指向哪个已有人物时写入“不确定项”，不要为了补图谱而补全不存在的关系。",
+        "9. 章节缓存只记录章节事实，不生成独立人物关系图谱；人物关系图谱会在阶段摘要和全书摘要阶段根据这些事实统一归纳。",
         "章节正文：",
         input.plainText.trim() || "（本章暂无正文）"
       ].join("\n")
@@ -403,8 +409,7 @@ export function buildChapterChunkIndexSummaryMessages(input: ChapterChunkIndexSu
         CHAPTER_CHUNK_JSON_CONTRACT,
         "控制输出规模：片段关键事件、人物状态、人物认知边界、可核对事实、不可丢失信息各最多 5 项；伏笔与线索、连续性风险各最多 4 项；每项证据短句最多 1 条。不要为了填字段重复同一事实。",
         "必须把当前片段内明确出现的空间移动、行动起止、限制条件、否定事实和不能成立的信息压缩进“道具设定变化”“可核对事实”或“连续性风险”；没有原文依据时用空数组，不要照抄示例占位。",
-        "“人物关系索引”只记录当前片段内有证据的人物和关系事件；关系类别和具体名称由正文决定，不要使用产品固定枚举。",
-        "同一人物的人名、别名、身份称呼和亲属称谓必须尽量统一到同一个规范名；例如妈妈、母亲、妈、娘若能由正文确认指向同一人，应把称呼放入别名，不要把称呼词单独当成新人物。",
+        "片段缓存只记录片段事实，不生成独立人物关系图谱；称呼、身份、亲属关系等人物线索应写入人物状态、关系变化或可核对事实，供阶段摘要统一归纳。",
         "片段正文：",
         input.plainText.trim() || "（本片段暂无正文）"
       ].join("\n")
@@ -423,8 +428,7 @@ export function buildChapterChunkMergeSummaryMessages(input: ChapterChunkMergeSu
         "如果多个片段出现同一人物、道具、伏笔或关系，必须合并为连续变化，而不是重复罗列。",
         "不得遗漏片段缓存中明确出现的重要内容。",
         "必须保留场景顺序、人物状态变化、人物认知边界、伏笔、道具设定变化、可核对事实、连续性风险和未解决问题。",
-        "必须保留片段缓存中的“人物关系索引”，同一人物、同一关系事件要合并去重，不能丢掉基础关系和剧情关系两层信息。",
-        "合并人物关系索引时，同一人物的人名、别名、身份称呼和亲属称谓必须尽量统一到同一个规范名；例如妈妈、母亲、妈、娘若指向同一人，不要拆成多个节点。",
+        "同一人物、道具、伏笔、称谓和关系变化要合并去重；如果片段里出现称呼、亲属关系或身份关系，应保留在人物状态、关系变化或可核对事实里。",
         "合并时要提炼，不要机械拼接全部片段缓存；同一人物、道具、伏笔、关系和事实必须合并去重。",
         "控制输出规模：场景推进最多 6 项；关键事件、人物状态、人物认知边界、伏笔与线索、可核对事实、不可丢失信息各最多 10 项；连续性风险最多 8 项；每项证据短句最多 1 条。",
         "合并输出是完整章节缓存，不是片段缓存；“章节信息.缓存版本”必须是“三-Lite”，不得沿用片段缓存的“二-Lite”。",
@@ -456,6 +460,8 @@ export function buildChapterChunkMergeSummaryMessages(input: ChapterChunkMergeSu
 }
 
 export function buildArcIndexSummaryMessages(input: ArcIndexSummaryInput): OpenRouterMessage[] {
+  const priorCharacterLedger = input.priorCharacterLedger ?? [];
+  const priorCharacterLedgerHash = input.priorCharacterLedgerHash ?? "none";
   return [
     {
       role: "system",
@@ -464,8 +470,13 @@ export function buildArcIndexSummaryMessages(input: ArcIndexSummaryInput): OpenR
         "任务是把连续章节的长期索引缓存聚合成中文阶段缓存。",
         "按时间和因果顺序整理；不加入原缓存没有的信息。",
         "必须保留主线推进、人物线变化、人物认知变化、关系线变化、伏笔线变化、道具线变化、设定变化、可核对事实、连续性风险和未解决问题。",
+        "必须生成“人物图谱”：根据本阶段章节事实统一归纳人物、称谓、别名、基础关系和剧情关系。人物图谱必须只使用阶段内提供的章节缓存，不得发明人物或关系。",
+        "人物归一优先真实姓名；同一人物的人名、别名、身份称呼、亲属称谓、叙事代称要尽量合并，例如妈妈/母亲/妈/娘、我/主角/主人公、校长/某某校长。无法确认指向时写入“称谓待确认”，不要强行合并。",
+        "如果输入提供“前序人物名册”，必须优先用它统一人物规范名和别名；例如后续章节只写妈妈、母亲、校长、师父时，应尽量对照前序人物名册判断是否指向已有角色。",
+        "“基础关系”记录相对稳定的身份/血缘/婚姻/师生/同门/上下级/同学/同事/邻里等关系；“剧情关系”记录本阶段情节中的合作、保护、冲突、隐瞒、交易、背叛、救助、威胁等关系。具体 label 由正文决定。",
+        "人物图谱里的 category 只能使用：基础关系、剧情关系、阵营关系、情感关系、冲突关系、社会关系、其他。",
         "输入会提供每章压缩后的阶段聚合卡片，不包含完整章节结构；输出必须做阶段级归纳，不要逐章机械复述。",
-        "阶段详细梗概控制在 800 字以内；每个数组优先保留 3-8 条高价值信息，避免把每章所有细节全部展开。",
+        "阶段详细梗概控制在 500 字以内；每个数组最多 5 条、每条不超过 60 字；完整 JSON 控制在 6000 个中文字符以内，避免把每章所有细节全部展开。",
         "所有 JSON 键名必须使用简体中文；非证据字符串不得使用英文说明，但可以保留原缓存中的英文/缩写/编号/常用混写词。",
         "输出 JSON，且只能输出 JSON。"
       ].join("\n")
@@ -475,6 +486,9 @@ export function buildArcIndexSummaryMessages(input: ArcIndexSummaryInput): OpenR
       content: [
         `阶段键：${input.arcKey}`,
         `章节范围：第${input.chapterFrom}-${input.chapterTo}章`,
+        `前序人物名册哈希：${priorCharacterLedgerHash}`,
+        "前序人物名册：",
+        priorCharacterLedger.length > 0 ? JSON.stringify(priorCharacterLedger) : "[]",
         "JSON 字段格式：",
         ARC_JSON_CONTRACT,
         "阶段聚合卡片：",
@@ -499,6 +513,10 @@ export function buildBookIndexSummaryMessages(input: BookIndexSummaryInput): Ope
         "你是中文长篇小说的全书摘要助手。",
         "任务是根据阶段缓存生成中文全书缓存。",
         "概括主线剧情、主要人物线、关系变化、人物认知线、关键冲突、伏笔线、道具线、世界规则、时间地点结构和未解决问题；不编造没有出现的内容。",
+        "必须生成“人物关系图谱”：只根据阶段摘要中的“人物图谱”合并全书人物和关系，解决跨阶段同一人物的不同称谓问题。优先真实姓名；没有真实姓名才使用稳定称谓。",
+        "同一人物合并规则：真实姓名一致、别名/称谓明确指向、亲属称谓与上下文可闭合、职业/身份称谓在同一关系网络中明确对应时合并；证据不足时放入“未确认称谓”，不要强行合并。",
+        "关系图谱必须同时保留稳定基础关系和剧情关系。基础关系适合默认显示，剧情关系用于点击关系线后查看细节。",
+        "人物 id 和关系 id 必须稳定、简短、只包含小写字母数字和连字符，例如 character-bai-jiaxuan、relation-bai-jiaxuan-heiwa。",
         "如果阶段缓存存在缺失或过期信息，必须记录在“全书信息.覆盖限制”中。",
         "所有 JSON 键名必须使用简体中文；非证据字符串不得使用英文说明，但可以保留原缓存中的英文/缩写/编号/常用混写词。",
         "输出 JSON，且只能输出 JSON。"

@@ -1,4 +1,4 @@
-import type { RelationshipGraphEdge, RelationshipGraphNode } from "../../main/shared/relationship-index";
+import type { RelationshipGraphEdge, RelationshipGraphNode } from "../../main/shared/relationship-graph";
 import type { RelationshipGraphLabelDensity } from "./relationship-graph-display-settings";
 import type { RelationshipGraphPosition } from "./relationship-graph-position";
 

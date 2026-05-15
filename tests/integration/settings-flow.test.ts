@@ -56,7 +56,10 @@ describe("settings flow", () => {
         autosaveMs: 1000
       },
       aiProvider: null,
-      projectPath: null
+      projectPath: null,
+      cache: {
+        chapterCacheBuildOrder: "latest_first"
+      }
     });
 
     const saved = settingsService.saveSettings({
@@ -112,6 +115,38 @@ describe("settings flow", () => {
       contextLength: null
     });
     expect(JSON.stringify(preservedKey)).not.toContain("secret_key");
+
+    db.close();
+  });
+
+  it("persists cache scheduling settings without dropping other settings sections", () => {
+    const { db, settingsService } = createSettingsService();
+
+    const saved = settingsService.saveSettings({
+      cache: {
+        chapterCacheBuildOrder: "front_to_back"
+      }
+    });
+    expect(saved.cache.chapterCacheBuildOrder).toBe("front_to_back");
+
+    const reopenedSettingsService = new SettingsService(new SettingsRepository(db), {
+      secretStore: memorySecretStore
+    });
+    expect(reopenedSettingsService.getSettings().cache.chapterCacheBuildOrder).toBe("front_to_back");
+
+    reopenedSettingsService.saveSettings({
+      editor: {
+        fontSize: 19
+      }
+    });
+    expect(reopenedSettingsService.getSettings()).toMatchObject({
+      editor: {
+        fontSize: 19
+      },
+      cache: {
+        chapterCacheBuildOrder: "front_to_back"
+      }
+    });
 
     db.close();
   });

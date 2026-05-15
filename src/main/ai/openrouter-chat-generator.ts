@@ -21,10 +21,6 @@ import {
   type ChapterIndexSummaryInput,
   type ContinuityCheckInput
 } from "./summary-prompts";
-import {
-  buildRelationshipIndexMessages,
-  type RelationshipIndexSummaryInput
-} from "../relationships/relationship-index-prompts";
 import { runChatAgentLoop, type ChatAgentModel } from "./chat-agent-harness";
 import { buildChatAgentMemoryText } from "./chat-agent-memory";
 import type {
@@ -52,10 +48,6 @@ import {
   type ChapterAiSummaryPayload,
   type ContinuityCheckResult
 } from "../shared/summary-index";
-import {
-  parseRelationshipExtractionPayload,
-  type RelationshipIndexExtractionPayload
-} from "../shared/relationship-index";
 import { getTokenBudget, type TokenBudget } from "./token-budget";
 import { estimateMessagesTokens, estimateTextTokens, truncateTextToTokenBudget } from "./token-estimator";
 import type { SettingsService } from "../settings/settings-service";
@@ -71,7 +63,6 @@ const CONTEXT_BATCH_SUMMARY_MAX_TOKENS = 3200;
 const CONTEXT_SUMMARY_MERGE_MAX_TOKENS = 3200;
 const CHAT_MEMORY_SUMMARY_MAX_TOKENS = 2200;
 const SUMMARY_INDEX_MAX_TOKENS = 12_000;
-const RELATIONSHIP_INDEX_MAX_TOKENS = 8000;
 const CHAT_MEMORY_SUMMARY_PROMPT_RATIO = 0.75;
 const CHAT_MEMORY_SUMMARY_RECOMPRESS_MAX_ROUNDS = 2;
 
@@ -151,6 +142,14 @@ function stripJsonCodeFence(content: string): string {
   return (fenced?.[1] ?? trimmed).trim();
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function arrayField(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
 type SummarySchemaIssue = {
   readonly path?: readonly PropertyKey[];
   readonly code?: string;
@@ -200,7 +199,7 @@ function formatSummarySchemaError(label: string, issues: readonly SummarySchemaI
     .join("\n");
 }
 
-function parseSummaryIndexJson<T>(label: string, content: string, schema: z.ZodType<T>): T {
+function parseSummaryIndexJson<T>(label: string, content: string, schema: z.ZodType<T>, normalize?: (parsed: unknown) => unknown): T {
   if (!content.trim()) {
     throw new Error(`${label}为空。`);
   }
@@ -210,6 +209,9 @@ function parseSummaryIndexJson<T>(label: string, content: string, schema: z.ZodT
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     throw new Error(`${label}无效：模型没有返回合法 JSON（${reason}）。这通常是模型输出被截断或混入了非 JSON 文本，不是章节正文内容问题。`);
+  }
+  if (normalize) {
+    parsed = normalize(parsed);
   }
   const result = schema.safeParse(parsed);
   if (!result.success) {
@@ -218,23 +220,54 @@ function parseSummaryIndexJson<T>(label: string, content: string, schema: z.ZodT
   return result.data;
 }
 
-function parseRelationshipIndexJson(label: string, content: string): RelationshipIndexExtractionPayload {
-  if (!content.trim()) {
-    throw new Error(`${label}为空。`);
+function normalizeArcSummaryIndexJson(parsed: unknown, input: ArcIndexSummaryInput): unknown {
+  if (!isRecord(parsed)) {
+    return parsed;
   }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(stripJsonCodeFence(content));
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    throw new Error(`${label}无效：模型没有返回合法 JSON（${reason}）。这通常是模型输出被截断或混入了非 JSON 文本，不是章节正文内容问题。`);
+  const stageInfo = isRecord(parsed.阶段信息) ? parsed.阶段信息 : {};
+  return {
+    ...parsed,
+    阶段信息: {
+      ...stageInfo,
+      起始章节: input.chapterFrom,
+      结束章节: input.chapterTo,
+      覆盖章节: input.chapters.map((chapter) => chapter.ordinal),
+      覆盖限制: arrayField(stageInfo.覆盖限制)
+    }
+  };
+}
+
+function formatBookCoverageRange(input: BookIndexSummaryInput): string {
+  if (input.coverage.totalChapterCount > 0) {
+    return `第1-${input.coverage.totalChapterCount}章`;
   }
-  try {
-    return parseRelationshipExtractionPayload(parsed);
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    throw new Error(`${label}无效：模型返回的 JSON 结构不符合人物关系索引契约（${reason}）。`);
+  if (input.arcs.length > 0) {
+    const chapterFrom = Math.min(...input.arcs.map((arc) => arc.chapterFrom));
+    const chapterTo = Math.max(...input.arcs.map((arc) => arc.chapterTo));
+    return `第${chapterFrom}-${chapterTo}章`;
   }
+  return "无章节";
+}
+
+function normalizeBookSummaryIndexJson(parsed: unknown, input: BookIndexSummaryInput): unknown {
+  if (!isRecord(parsed)) {
+    return parsed;
+  }
+  const bookInfo = isRecord(parsed.全书信息) ? parsed.全书信息 : {};
+  return {
+    ...parsed,
+    全书信息: {
+      ...bookInfo,
+      覆盖阶段: input.arcs.map((arc) => `第${arc.chapterFrom}-${arc.chapterTo}章`),
+      覆盖章节范围: formatBookCoverageRange(input),
+      总章节数: input.coverage.totalChapterCount,
+      已索引章节数: input.coverage.indexedChapterCount,
+      过期章节: input.coverage.staleChapterIds,
+      缺失章节: input.coverage.missingChapterIds,
+      过短跳过章节: input.coverage.skippedTooShortChapterIds,
+      覆盖限制: arrayField(bookInfo.覆盖限制)
+    }
+  };
 }
 
 export function buildChatCompletionMessages(input: AiChatGenerationInput, chatBudget: TokenBudget = getTokenBudget("chat")): OpenRouterMessage[] {
@@ -692,42 +725,6 @@ export class OpenRouterChatGenerator implements AiChatGenerator {
     return parseSummaryIndexJson("章节索引摘要", result.content, chapterAiSummaryPayloadSchema);
   }
 
-  async extractChapterRelationshipsForIndex(
-    input: RelationshipIndexSummaryInput,
-    options: AiGenerationOptions = {}
-  ): Promise<RelationshipIndexExtractionPayload> {
-    const { chatBudget, client, modelName } = await this.createClient();
-    const maxCompletionTokens = capInternalMaxCompletionTokens(RELATIONSHIP_INDEX_MAX_TOKENS, chatBudget);
-    const messages = buildRelationshipIndexMessages(input);
-    logDevLlmPrompt({
-      kind: "relationship-index:chapter",
-      modelName,
-      messages,
-      meta: {
-        chapterId: input.chapterId,
-        chapterTitle: input.title,
-        knownEntityCount: input.knownEntities.length,
-        ordinal: input.ordinal,
-        projectId: input.projectId
-      },
-      params: {
-        maxCompletionTokens,
-        temperature: 0.1
-      }
-    });
-    const result = await this.runInternalStreamingCompletion(client, {
-      messages,
-      maxCompletionTokens,
-      temperature: 0.1,
-      responseFormat: { type: "json_object" },
-      signal: options.signal
-    });
-    if (result.truncated) {
-      throw new Error("章节人物关系索引被截断，请换用输出额度更高的模型后重试。");
-    }
-    return parseRelationshipIndexJson("章节人物关系索引", result.content);
-  }
-
   async summarizeChapterChunkForIndex(input: ChapterChunkIndexSummaryInput, options: AiGenerationOptions = {}): Promise<ChapterAiSummaryChunkPayload> {
     const { chatBudget, client, modelName } = await this.createClient();
     const maxCompletionTokens = capInternalMaxCompletionTokens(SUMMARY_INDEX_MAX_TOKENS, chatBudget);
@@ -819,7 +816,9 @@ export class OpenRouterChatGenerator implements AiChatGenerator {
     if (result.truncated) {
       throw new Error("阶段索引摘要被截断，请换用输出额度更高的模型后重试。");
     }
-    return parseSummaryIndexJson("阶段索引摘要", result.content, arcAiSummaryPayloadSchema);
+    return parseSummaryIndexJson("阶段索引摘要", result.content, arcAiSummaryPayloadSchema, (parsed) =>
+      normalizeArcSummaryIndexJson(parsed, input)
+    );
   }
 
   async summarizeBookForIndex(input: BookIndexSummaryInput, options: AiGenerationOptions = {}): Promise<BookAiSummaryPayload> {
@@ -849,7 +848,9 @@ export class OpenRouterChatGenerator implements AiChatGenerator {
     if (result.truncated) {
       throw new Error("全书索引摘要被截断，请换用输出额度更高的模型后重试。");
     }
-    return parseSummaryIndexJson("全书索引摘要", result.content, bookAiSummaryPayloadSchema);
+    return parseSummaryIndexJson("全书索引摘要", result.content, bookAiSummaryPayloadSchema, (parsed) =>
+      normalizeBookSummaryIndexJson(parsed, input)
+    );
   }
 
   async checkContinuity(input: ContinuityCheckInput, options: AiGenerationOptions = {}): Promise<ContinuityCheckResult> {

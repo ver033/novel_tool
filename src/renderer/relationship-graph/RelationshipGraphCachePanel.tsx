@@ -1,48 +1,27 @@
-import type { RelationshipGraphIndexStatus, RelationshipGraphResult } from "../../main/shared/relationship-index";
+import type { RelationshipGraphResult, RelationshipGraphSourceStatus } from "../../main/shared/relationship-graph";
 
 type RelationshipGraphCachePanelProps = {
   readonly graph: RelationshipGraphResult | null;
   readonly loading: boolean;
-  readonly status: RelationshipGraphIndexStatus | null;
+  readonly status: RelationshipGraphSourceStatus | null;
 };
 
 const chapterStatusLabels: Record<string, string> = {
   ready: "已完成",
   stale: "内容已更新",
-  legacy_missing_relationships: "旧缓存待原文生成",
-  waiting_stable: "旧等待状态",
-  queued: "队列中",
-  running: "分析中",
   failed: "失败",
+  missing: "缺失",
   skipped_too_short: "过短跳过"
 };
 
-function cacheSummary(status: RelationshipGraphIndexStatus | null, loading: boolean): string {
+function cacheSummary(status: RelationshipGraphSourceStatus | null, loading: boolean): string {
   if (loading && !status) {
-    return "正在读取缓存状态";
+    return "正在读取人物关系图来源状态";
   }
-  if (!status || status.total === 0) {
-    return "还没有人物关系缓存记录";
+  if (!status) {
+    return "还没有人物关系图来源状态";
   }
-  if (status.ready > 0) {
-    return `已完成 ${status.ready} 章人物关系缓存`;
-  }
-  if (status.legacyMissingRelationships > 0) {
-    return `有 ${status.legacyMissingRelationships} 章旧缓存需要读取原文生成关系`;
-  }
-  if (status.stale > 0) {
-    return `有 ${status.stale} 章关系来自旧章节快照`;
-  }
-  if (status.running > 0) {
-    return `正在分析 ${status.running} 章`;
-  }
-  if (status.queued > 0 || status.waitingStable > 0) {
-    return `队列 ${status.queued} 章，旧等待状态 ${status.waitingStable} 章`;
-  }
-  if (status.failed > 0) {
-    return `有 ${status.failed} 章缓存失败`;
-  }
-  return "暂无可用缓存结果";
+  return status.message;
 }
 
 function chapterStatusLabel(status: string): string {
@@ -55,29 +34,29 @@ export function RelationshipGraphCachePanel({ graph, loading, status }: Relation
   const hiddenChapterCount = Math.max(0, (graph?.availableChapters.length ?? 0) - chapters.length);
 
   return (
-    <section className="relationship-cache-panel" aria-label="人物关系缓存结果">
+    <section className="relationship-cache-panel" aria-label="人物关系图结果">
       <div className="relationship-cache-head">
-        <h2>缓存结果</h2>
+        <h2>图谱结果</h2>
         <span>{cacheSummary(status, loading)}</span>
-        <span>随章节缓存同次生成，不单独二次读取正文</span>
+        <span>由阶段摘要和全书摘要派生，不再逐章二次读取正文</span>
       </div>
 
       <div className="relationship-cache-metrics">
         <span>
-          <b>{status?.ready ?? 0}</b>
-          已完成
+          <b>{status?.nodeCount ?? 0}</b>
+          人物
         </span>
         <span>
-          <b>{status?.legacyMissingRelationships ?? 0}</b>
-          旧缓存待原文生成
+          <b>{status?.edgeCount ?? 0}</b>
+          关系
         </span>
         <span>
-          <b>{(status?.queued ?? 0) + (status?.running ?? 0)}</b>
-          队列/分析
+          <b>{status ? `${status.arcSummary.readyForGraph}/${status.arcSummary.total}` : "0/0"}</b>
+          阶段图谱
         </span>
         <span>
-          <b>{status?.failed ?? 0}</b>
-          失败
+          <b>{(status?.arcSummary.failed ?? 0) + (status?.bookSummary.failed ? 1 : 0)}</b>
+          摘要失败
         </span>
       </div>
 
@@ -88,7 +67,7 @@ export function RelationshipGraphCachePanel({ graph, loading, status }: Relation
             {graph.nodes.length} 个人物，{graph.edges.length} 条关系，使用 {graph.graphStats.usedMentionCount}/{graph.graphStats.totalMentionCount} 条关系证据。
           </p>
         ) : (
-          <p>当前还没有可展示的缓存结果。</p>
+          <p>当前还没有可展示的图谱结果。</p>
         )}
       </div>
 
@@ -104,7 +83,7 @@ export function RelationshipGraphCachePanel({ graph, loading, status }: Relation
       ) : null}
 
       <div className="relationship-cache-chapter-block">
-        <span>缓存章节</span>
+        <span>可用章节范围</span>
         {chapters.length ? (
           <div className="relationship-cache-chapters">
             {chapters.map((chapter) => (
@@ -116,7 +95,7 @@ export function RelationshipGraphCachePanel({ graph, loading, status }: Relation
             {hiddenChapterCount > 0 ? <span className="more">+{hiddenChapterCount}</span> : null}
           </div>
         ) : (
-          <p>还没有章节进入人物关系缓存。</p>
+          <p>阶段摘要和全书摘要生成后会显示可用章节范围。</p>
         )}
       </div>
     </section>

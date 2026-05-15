@@ -1,4 +1,4 @@
-import type { RelationshipGraphEdge, RelationshipGraphNode } from "../../main/shared/relationship-index";
+import type { RelationshipGraphEdge, RelationshipGraphNode } from "../../main/shared/relationship-graph";
 import { SigmaRelationshipGraph } from "./SigmaRelationshipGraph";
 import type { RelationshipGraphDisplaySettings } from "./relationship-graph-display-settings";
 
@@ -36,7 +36,7 @@ export function RelationshipGraphCanvas({
     return (
       <section className="relationship-graph-canvas empty" aria-busy="true">
         <h2>正在读取关系图</h2>
-        <p>正在读取已缓存的人物关系索引。</p>
+        <p>正在读取阶段摘要和全书摘要中的人物关系图来源。</p>
       </section>
     );
   }
@@ -45,7 +45,7 @@ export function RelationshipGraphCanvas({
     return (
       <section className="relationship-graph-canvas empty">
         <h2>还没有可展示的人物关系</h2>
-        <p>章节关系索引完成后，这里会显示人物与关系变化。</p>
+        <p>阶段摘要和全书摘要完成后，这里会显示人物与关系变化。</p>
       </section>
     );
   }

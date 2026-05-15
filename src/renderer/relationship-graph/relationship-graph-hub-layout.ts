@@ -1,4 +1,4 @@
-import type { RelationshipGraphEdge, RelationshipGraphNode } from "../../main/shared/relationship-index";
+import type { RelationshipGraphEdge, RelationshipGraphNode } from "../../main/shared/relationship-graph";
 import type { RelationshipGraphPosition } from "./relationship-graph-position";
 
 type RelationshipHubSeedLayoutInput = {
@@ -24,7 +24,7 @@ type BestHubForNode = {
   readonly strength: number;
 };
 
-const minSeededNodeCount = 12;
+const minSeededNodeCount = 8;
 const minSeededEdgeCount = 10;
 const minHubDegree = 3;
 const hubSpineAnchors: ReadonlyArray<{ readonly xRatio: number; readonly yRatio: number }> = [
@@ -126,7 +126,8 @@ function selectHubIds(
     .sort((left, right) => compareStatsByConnectivity(nodeById, left, right));
 
   const connectivityHubCount = Math.ceil(Math.sqrt(Math.max(1, candidates.length + nodes.length / 6)));
-  const denseGraphMinimum = nodes.length >= 36 ? 8 : nodes.length >= 24 ? 6 : 2;
+  const denseSmallMinimum = nodes.length >= 8 && edges.length / Math.max(1, nodes.length) >= 2.2 ? 6 : 2;
+  const denseGraphMinimum = nodes.length >= 36 ? 8 : nodes.length >= 24 ? 6 : denseSmallMinimum;
   const maxHubCount = nodes.length >= 100 ? 10 : 8;
   const hubCount = Math.min(candidates.length, maxHubCount, Math.max(2, denseGraphMinimum, connectivityHubCount));
   return candidates.slice(0, hubCount).map((item) => item.id);
@@ -244,7 +245,8 @@ export function shouldUseRelationshipHubSectorLayout(
   nodes: readonly RelationshipGraphNode[],
   edges: readonly RelationshipGraphEdge[]
 ): boolean {
-  if (nodes.length < 24 || edges.length < 18) {
+  const denseSmallCandidate = nodes.length >= 8 && edges.length >= 18 && edges.length / Math.max(1, nodes.length) >= 2.2;
+  if (edges.length < 18 || (nodes.length < 24 && !denseSmallCandidate)) {
     return false;
   }
   const nodeById = new Map(nodes.map((node) => [node.id, node]));
@@ -256,7 +258,8 @@ export function shouldUseRelationshipHubSectorLayout(
     return false;
   }
   const maxDegree = highDegreeNodes[0].degree;
-  return maxDegree >= 10 && (nodes.length >= 36 || strongestHubSkew(highDegreeNodes) >= 1.6);
+  const denseSmallGraph = denseSmallCandidate && highDegreeNodes.length >= 4;
+  return maxDegree >= 10 && (nodes.length >= 36 || denseSmallGraph || strongestHubSkew(highDegreeNodes) >= 1.6);
 }
 
 export function buildRelationshipHubSeedLayoutPositions(input: RelationshipHubSeedLayoutInput): Map<string, RelationshipGraphPosition> {

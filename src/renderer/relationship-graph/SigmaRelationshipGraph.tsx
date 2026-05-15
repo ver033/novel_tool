@@ -8,7 +8,7 @@ import noverlap from "graphology-layout-noverlap";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { EdgeLabelDrawingFunction, NodeHoverDrawingFunction, NodeLabelDrawingFunction } from "sigma/rendering";
 import { animateNodes } from "sigma/utils";
-import type { RelationshipGraphEdge, RelationshipGraphNode } from "../../main/shared/relationship-index";
+import type { RelationshipGraphEdge, RelationshipGraphNode } from "../../main/shared/relationship-graph";
 import {
   relationshipGraphToSigmaGraphData,
   type RelationshipGraphSigmaEdgeData,

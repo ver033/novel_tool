@@ -67,7 +67,7 @@ describe("summary index migrations and repository", () => {
     expect(tables).toEqual(
       expect.arrayContaining(["chapter_ai_summaries", "chapter_ai_summary_chunks", "arc_ai_summaries", "book_ai_summaries", "summary_jobs"])
     );
-    expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").get()).toEqual({ version: 15 });
+    expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").get()).toEqual({ version: 17 });
     expect(db.prepare("PRAGMA table_info(chapter_ai_summaries)").all().map((row) => row.name)).toEqual(
       expect.arrayContaining(["content_hash", "summary_short", "summary_long", "structured_json", "status", "error"])
     );
@@ -332,35 +332,46 @@ describe("summary index migrations and repository", () => {
     db.close();
   });
 
-  it("accepts relationship original text upgrade as a summary worker job", () => {
-    expect(summaryJobTypeSchema.parse("relationship_original_text_upgrade")).toBe("relationship_original_text_upgrade");
-  });
-
-  it("persists relationship original text upgrade jobs in summary_jobs", () => {
+  it("can claim queued chapter summary jobs from front to back when configured", () => {
     const db = createDb();
     seedProjectAndChapter(db);
+    db.prepare(
+      `INSERT INTO chapters
+       (id, project_id, title, sort_order, content_json, plain_text, word_count, daily_word_count, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run("chapter_2", "project_1", "第2章", 1, JSON.stringify({ type: "doc", content: [] }), "第二章正文", 5, 0, createdAt, createdAt);
+    db.prepare(
+      `INSERT INTO chapters
+       (id, project_id, title, sort_order, content_json, plain_text, word_count, daily_word_count, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run("chapter_3", "project_1", "第3章", 2, JSON.stringify({ type: "doc", content: [] }), "第三章正文", 5, 0, createdAt, createdAt);
     const repo = new SummaryRepository(db);
 
-    const job = repo.enqueueSummaryJob({
-      projectId: "project_1",
-      jobType: "relationship_original_text_upgrade",
-      targetId: "chapter_1",
-      sourceHash: "hash_1",
-      priority: 40,
-      now: createdAt
-    });
+    for (const chapterId of ["chapter_1", "chapter_2", "chapter_3"]) {
+      repo.enqueueSummaryJob({
+        projectId: "project_1",
+        jobType: "chapter_summary",
+        targetId: chapterId,
+        sourceHash: `hash_${chapterId}`,
+        priority: 8,
+        now: createdAt
+      });
+    }
 
-    expect(repo.claimNextSummaryJob("project_1", createdAt)).toMatchObject({
-      id: job.id,
-      jobType: "relationship_original_text_upgrade",
-      targetId: "chapter_1",
-      sourceHash: "hash_1"
+    expect(repo.claimNextSummaryJob("project_1", updatedAt, { chapterCacheBuildOrder: "front_to_back" })).toMatchObject({
+      targetId: "chapter_1"
     });
+    expect(
+      repo.claimNextSummaryJob("project_1", "2026-05-01T00:02:00.000Z", { chapterCacheBuildOrder: "front_to_back" })
+    ).toMatchObject({ targetId: "chapter_2" });
+    expect(
+      repo.claimNextSummaryJob("project_1", "2026-05-01T00:03:00.000Z", { chapterCacheBuildOrder: "front_to_back" })
+    ).toMatchObject({ targetId: "chapter_3" });
 
     db.close();
   });
 
-  it("does not claim relationship original text upgrade while normal summary jobs are queued", () => {
+  it("keeps summary job priority above chapter cache build order", () => {
     const db = createDb();
     seedProjectAndChapter(db);
     db.prepare(
@@ -369,137 +380,25 @@ describe("summary index migrations and repository", () => {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run("chapter_2", "project_1", "第2章", 1, JSON.stringify({ type: "doc", content: [] }), "第二章正文", 5, 0, createdAt, createdAt);
     const repo = new SummaryRepository(db);
+
     repo.enqueueSummaryJob({
       projectId: "project_1",
-      jobType: "relationship_original_text_upgrade",
+      jobType: "chapter_summary",
       targetId: "chapter_1",
-      sourceHash: "relationship_hash",
-      priority: 99,
+      sourceHash: "hash_1",
+      priority: 20,
       now: createdAt
     });
-    const chapterJob = repo.enqueueSummaryJob({
+    repo.enqueueSummaryJob({
       projectId: "project_1",
       jobType: "chapter_summary",
       targetId: "chapter_2",
-      sourceHash: "chapter_hash",
-      priority: 1,
+      sourceHash: "hash_2",
+      priority: 8,
       now: createdAt
     });
 
-    const first = repo.claimNextSummaryJob("project_1", createdAt);
-    expect(first).toMatchObject({ id: chapterJob.id, jobType: "chapter_summary" });
-    expect(repo.hasPendingNormalSummaryJobs("project_1", createdAt)).toBe(true);
-    repo.completeSummaryJob(chapterJob.id, "2026-05-01T00:02:00.000Z");
-
-    expect(repo.hasPendingNormalSummaryJobs("project_1", createdAt)).toBe(false);
-    expect(repo.claimNextSummaryJob("project_1", createdAt)).toMatchObject({
-      jobType: "relationship_original_text_upgrade",
-      targetId: "chapter_1"
-    });
-
-    db.close();
-  });
-
-  it("keeps relationship original text upgrades behind all normal summary job kinds", () => {
-    const blockingJobTypes = [
-      { jobType: "arc_summary", targetId: "auto:001-001" },
-      { jobType: "book_summary", targetId: null },
-      { jobType: "rebuild_project_index", targetId: null }
-    ] as const;
-
-    for (const blocking of blockingJobTypes) {
-      const db = createDb();
-      seedProjectAndChapter(db);
-      const repo = new SummaryRepository(db);
-      repo.enqueueSummaryJob({
-        projectId: "project_1",
-        jobType: "relationship_original_text_upgrade",
-        targetId: "chapter_1",
-        sourceHash: `relationship_hash_${blocking.jobType}`,
-        priority: 99,
-        now: createdAt
-      });
-      const normalJob = repo.enqueueSummaryJob({
-        projectId: "project_1",
-        jobType: blocking.jobType,
-        targetId: blocking.targetId,
-        sourceHash: `normal_hash_${blocking.jobType}`,
-        priority: 1,
-        now: createdAt
-      });
-
-      expect(repo.claimNextSummaryJob("project_1", createdAt)).toMatchObject({
-        id: normalJob.id,
-        jobType: blocking.jobType
-      });
-      repo.completeSummaryJob(normalJob.id, "2026-05-01T00:02:00.000Z");
-      expect(repo.claimNextSummaryJob("project_1", "2026-05-01T00:03:00.000Z")).toMatchObject({
-        jobType: "relationship_original_text_upgrade"
-      });
-
-      db.close();
-    }
-  });
-
-  it("does not claim relationship original text upgrades while a normal summary job is running", () => {
-    const db = createDb();
-    seedProjectAndChapter(db);
-    const repo = new SummaryRepository(db);
-    const normalJob = repo.enqueueSummaryJob({
-      projectId: "project_1",
-      jobType: "chapter_summary",
-      targetId: "chapter_1",
-      sourceHash: "chapter_hash",
-      priority: 1,
-      now: createdAt
-    });
-    expect(repo.claimNextSummaryJob("project_1", updatedAt)).toMatchObject({ id: normalJob.id, jobType: "chapter_summary" });
-    repo.enqueueSummaryJob({
-      projectId: "project_1",
-      jobType: "relationship_original_text_upgrade",
-      targetId: "chapter_1",
-      sourceHash: "relationship_hash",
-      priority: 99,
-      now: "2026-05-01T00:02:00.000Z"
-    });
-
-    expect(repo.claimNextSummaryJob("project_1", "2026-05-01T00:03:00.000Z")).toBeNull();
-    repo.completeSummaryJob(normalJob.id, "2026-05-01T00:04:00.000Z");
-    expect(repo.claimNextSummaryJob("project_1", "2026-05-01T00:05:00.000Z")).toMatchObject({
-      jobType: "relationship_original_text_upgrade"
-    });
-
-    db.close();
-  });
-
-  it("keeps relationship original text upgrades behind delayed normal retries", () => {
-    const db = createDb();
-    seedProjectAndChapter(db);
-    const repo = new SummaryRepository(db);
-    repo.enqueueSummaryJob({
-      projectId: "project_1",
-      jobType: "relationship_original_text_upgrade",
-      targetId: "chapter_1",
-      sourceHash: "relationship_hash",
-      priority: 99,
-      now: createdAt
-    });
-    const retryingJob = repo.enqueueSummaryJob({
-      projectId: "project_1",
-      jobType: "chapter_summary",
-      targetId: "chapter_1",
-      sourceHash: "chapter_hash",
-      priority: 1,
-      now: createdAt,
-      nextRunAt: "2026-05-01T00:10:00.000Z"
-    });
-
-    expect(repo.hasPendingNormalSummaryJobs("project_1", "2026-05-01T00:01:00.000Z")).toBe(true);
-    expect(repo.claimNextSummaryJob("project_1", "2026-05-01T00:01:00.000Z")).toBeNull();
-    expect(repo.claimNextSummaryJob("project_1", "2026-05-01T00:10:00.000Z")).toMatchObject({
-      id: retryingJob.id,
-      jobType: "chapter_summary"
-    });
+    expect(repo.claimNextSummaryJob("project_1", updatedAt)).toMatchObject({ targetId: "chapter_1" });
 
     db.close();
   });

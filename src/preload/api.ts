@@ -29,7 +29,9 @@ import type {
   ChapterRenameInput,
   ChapterSaveContentInput,
   ChapterUpdateTargetWordCountInput,
+  ExportSelectShareableProjectFilePathInput,
   ExportSelectTxtFilePathInput,
+  ExportShareableProjectCopyInput,
   ExportTxtInput,
   ImportConfirmTxtInput,
   ImportPreviewTxtInput,
@@ -42,9 +44,7 @@ import type {
   ProjectSelectSavePathInput,
   ProjectSuggestFilePathInput,
   RelationshipGraphGetInput,
-  RelationshipGraphRebuildInput,
-  RelationshipGraphStatusInput,
-  RelationshipGraphUpgradeMissingFromOriginalTextInput,
+  RelationshipGraphSourceStatusInput,
   ScratchCreateInput,
   ScratchDeleteInput,
   ScratchListInput,
@@ -53,7 +53,9 @@ import type {
   SettingsSaveInput,
   SettingsTestConnectionInput,
   SummaryCancelCurrentJobInput,
+  SummaryClearAndRetryArcCacheInput,
   SummaryClearAndRetryChapterCacheInput,
+  SummaryGetArcCacheInput,
   SummaryGetChapterCacheInput,
   SummaryIndexStatusInput,
   SummaryListCacheEntriesInput,
@@ -112,14 +114,13 @@ export type NovelToolApi = {
     readonly listCacheEntries: (input: SummaryListCacheEntriesInput) => Promise<unknown>;
     readonly getChapterCache: (input: SummaryGetChapterCacheInput) => Promise<unknown>;
     readonly clearAndRetryChapterCache: (input: SummaryClearAndRetryChapterCacheInput) => Promise<unknown>;
+    readonly listArcCacheEntries: (input: SummaryListCacheEntriesInput) => Promise<unknown>;
+    readonly getArcCache: (input: SummaryGetArcCacheInput) => Promise<unknown>;
+    readonly clearAndRetryArcCache: (input: SummaryClearAndRetryArcCacheInput) => Promise<unknown>;
   };
   readonly relationshipGraph: {
     readonly getGraph: (input: RelationshipGraphGetInput) => Promise<unknown>;
-    readonly getStatus: (input: RelationshipGraphStatusInput) => Promise<unknown>;
-    readonly rebuild: (input: RelationshipGraphRebuildInput) => Promise<unknown>;
-    readonly refreshCacheStatus: (input: RelationshipGraphStatusInput) => Promise<unknown>;
-    readonly getCacheSettingsStatus: (input: RelationshipGraphStatusInput) => Promise<unknown>;
-    readonly upgradeMissingFromOriginalText: (input: RelationshipGraphUpgradeMissingFromOriginalTextInput) => Promise<unknown>;
+    readonly getSourceStatus: (input: RelationshipGraphSourceStatusInput) => Promise<unknown>;
   };
   readonly ai: {
     readonly createTask: (input: AiCreateTaskInput) => Promise<unknown>;
@@ -156,6 +157,8 @@ export type NovelToolApi = {
   readonly export: {
     readonly selectTxtFilePath: (input: ExportSelectTxtFilePathInput) => Promise<unknown>;
     readonly exportTxt: (input: ExportTxtInput) => Promise<unknown>;
+    readonly selectShareableProjectFilePath: (input: ExportSelectShareableProjectFilePathInput) => Promise<unknown>;
+    readonly exportShareableProjectCopy: (input: ExportShareableProjectCopyInput) => Promise<unknown>;
   };
 };
 
@@ -201,16 +204,14 @@ export const novelToolApi: NovelToolApi = Object.freeze({
     cancelCurrentJob: (input: SummaryCancelCurrentJobInput) => ipcRenderer.invoke(ipcChannels.summary.cancelCurrentJob, input),
     listCacheEntries: (input: SummaryListCacheEntriesInput) => ipcRenderer.invoke(ipcChannels.summary.listCacheEntries, input),
     getChapterCache: (input: SummaryGetChapterCacheInput) => ipcRenderer.invoke(ipcChannels.summary.getChapterCache, input),
-    clearAndRetryChapterCache: (input: SummaryClearAndRetryChapterCacheInput) => ipcRenderer.invoke(ipcChannels.summary.clearAndRetryChapterCache, input)
+    clearAndRetryChapterCache: (input: SummaryClearAndRetryChapterCacheInput) => ipcRenderer.invoke(ipcChannels.summary.clearAndRetryChapterCache, input),
+    listArcCacheEntries: (input: SummaryListCacheEntriesInput) => ipcRenderer.invoke(ipcChannels.summary.listArcCacheEntries, input),
+    getArcCache: (input: SummaryGetArcCacheInput) => ipcRenderer.invoke(ipcChannels.summary.getArcCache, input),
+    clearAndRetryArcCache: (input: SummaryClearAndRetryArcCacheInput) => ipcRenderer.invoke(ipcChannels.summary.clearAndRetryArcCache, input)
   }),
   relationshipGraph: Object.freeze({
     getGraph: (input: RelationshipGraphGetInput) => ipcRenderer.invoke(ipcChannels.relationshipGraph.getGraph, input),
-    getStatus: (input: RelationshipGraphStatusInput) => ipcRenderer.invoke(ipcChannels.relationshipGraph.getStatus, input),
-    rebuild: (input: RelationshipGraphRebuildInput) => ipcRenderer.invoke(ipcChannels.relationshipGraph.rebuild, input),
-    refreshCacheStatus: (input: RelationshipGraphStatusInput) => ipcRenderer.invoke(ipcChannels.relationshipGraph.refreshCacheStatus, input),
-    getCacheSettingsStatus: (input: RelationshipGraphStatusInput) => ipcRenderer.invoke(ipcChannels.relationshipGraph.getCacheSettingsStatus, input),
-    upgradeMissingFromOriginalText: (input: RelationshipGraphUpgradeMissingFromOriginalTextInput) =>
-      ipcRenderer.invoke(ipcChannels.relationshipGraph.upgradeMissingFromOriginalText, input)
+    getSourceStatus: (input: RelationshipGraphSourceStatusInput) => ipcRenderer.invoke(ipcChannels.relationshipGraph.getSourceStatus, input)
   }),
   ai: Object.freeze({
     createTask: (input: AiCreateTaskInput) => ipcRenderer.invoke(ipcChannels.ai.createTask, input),
@@ -284,6 +285,9 @@ export const novelToolApi: NovelToolApi = Object.freeze({
   }),
   export: Object.freeze({
     selectTxtFilePath: (input: ExportSelectTxtFilePathInput) => ipcRenderer.invoke(ipcChannels.export.selectTxtFilePath, input),
-    exportTxt: (input: ExportTxtInput) => ipcRenderer.invoke(ipcChannels.export.exportTxt, input)
+    exportTxt: (input: ExportTxtInput) => ipcRenderer.invoke(ipcChannels.export.exportTxt, input),
+    selectShareableProjectFilePath: (input: ExportSelectShareableProjectFilePathInput) =>
+      ipcRenderer.invoke(ipcChannels.export.selectShareableProjectFilePath, input),
+    exportShareableProjectCopy: (input: ExportShareableProjectCopyInput) => ipcRenderer.invoke(ipcChannels.export.exportShareableProjectCopy, input)
   })
 });

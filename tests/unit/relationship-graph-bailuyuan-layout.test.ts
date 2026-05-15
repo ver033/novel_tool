@@ -9,7 +9,7 @@ import type {
   RelationshipGraphNode,
   RelationshipMentionDirection,
   RelationshipMentionPolarity
-} from "../../src/main/shared/relationship-index";
+} from "../../src/main/shared/relationship-graph";
 import { relationshipGraphToSigmaGraphData } from "../../src/renderer/relationship-graph/relationship-graph-elements";
 import { buildRelationshipHubSeedLayoutPositions } from "../../src/renderer/relationship-graph/relationship-graph-hub-layout";
 
@@ -301,7 +301,7 @@ describe.skipIf(!existsSync(bailuyuanProjectPath))("白鹿原人物关系图布�
   it("seeds the real high-degree characters into separate readable sectors without locking them", () => {
     const graph = loadBailuyuanRelationshipGraph();
     const positions = buildRelationshipHubSeedLayoutPositions({ ...graph, width: 1100, height: 760 });
-    const expectedHubIds = ["白嘉轩", "黑娃", "鹿子霖", "鹿兆鹏", "朱先生", "鹿三"]
+    const expectedHubIds = ["白嘉轩", "黑娃", "鹿子霖", "鹿三", "白孝文", "田小娥"]
       .map((name) => graph.nodes.find((node) => node.name === name)?.id)
       .filter((id): id is string => Boolean(id));
 

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { relationshipGraphGetInputSchema as relationshipGraphGetInputBaseSchema } from "./relationship-index";
+import { relationshipGraphGetInputSchema as relationshipGraphGetInputBaseSchema } from "./relationship-graph";
 
 const nonEmptyString = z.string().trim().min(1);
 const idSchema = nonEmptyString.max(128);
@@ -189,15 +189,24 @@ export const taskPromptPresetSchema = z
   })
   .strict();
 
+export const chapterCacheBuildOrderSchema = z.enum(["latest_first", "front_to_back"]);
+
+export const cacheSettingsSchema = z
+  .object({
+    chapterCacheBuildOrder: chapterCacheBuildOrderSchema.optional()
+  })
+  .strict();
+
 export const settingsSaveInputSchema = z
   .object({
     editor: editorSettingsSchema.optional(),
     aiProvider: aiProviderSettingsSchema.optional(),
     projectPath: z.string().trim().min(1).optional(),
-    taskPromptPresets: z.array(taskPromptPresetSchema).max(100).optional()
+    taskPromptPresets: z.array(taskPromptPresetSchema).max(100).optional(),
+    cache: cacheSettingsSchema.optional()
   })
   .strict()
-  .refine((value) => Boolean(value.editor ?? value.aiProvider ?? value.projectPath ?? value.taskPromptPresets), {
+  .refine((value) => Boolean(value.editor ?? value.aiProvider ?? value.projectPath ?? value.taskPromptPresets ?? value.cache), {
     message: "at least one settings section is required"
   });
 
@@ -450,6 +459,23 @@ export const exportTxtInputSchema = z
   })
   .strict();
 
+export const exportSelectShareableProjectFilePathInputSchema = z
+  .object({
+    projectId: idSchema,
+    suggestedName: nonEmptyString.max(120).optional()
+  })
+  .strict();
+
+export const exportShareableProjectCopyInputSchema = z
+  .object({
+    projectId: idSchema,
+    filePath: nonEmptyString.max(4096),
+    includeScratchNotes: z.boolean(),
+    includePromptPresets: z.boolean(),
+    includeSummaryCache: z.boolean()
+  })
+  .strict();
+
 export const summaryIndexStatusInputSchema = z
   .object({
     projectId: idSchema
@@ -469,6 +495,12 @@ export const summaryGetChapterCacheInputSchema = summaryIndexStatusInputSchema
   })
   .strict();
 export const summaryClearAndRetryChapterCacheInputSchema = summaryGetChapterCacheInputSchema;
+export const summaryGetArcCacheInputSchema = summaryIndexStatusInputSchema
+  .extend({
+    arcKey: idSchema
+  })
+  .strict();
+export const summaryClearAndRetryArcCacheInputSchema = summaryGetArcCacheInputSchema;
 
 export const relationshipGraphGetInputSchema = z
   .object(relationshipGraphGetInputBaseSchema.shape)
@@ -484,23 +516,7 @@ export const relationshipGraphStatusInputSchema = z
   })
   .strict();
 
-export const relationshipGraphRebuildInputSchema = relationshipGraphStatusInputSchema
-  .extend({
-    force: z.boolean().optional()
-  })
-  .strict();
-
-export const relationshipGraphUpgradeMissingFromOriginalTextInputSchema = relationshipGraphStatusInputSchema
-  .extend({
-    chapterIds: z.array(idSchema).optional(),
-    chapterFrom: z.number().int().positive().optional(),
-    chapterTo: z.number().int().positive().optional()
-  })
-  .strict()
-  .refine((value) => value.chapterFrom === undefined || value.chapterTo === undefined || value.chapterFrom <= value.chapterTo, {
-    message: "chapterFrom must be less than or equal to chapterTo",
-    path: ["chapterTo"]
-  });
+export const relationshipGraphSourceStatusInputSchema = relationshipGraphStatusInputSchema;
 
 export class IpcPayloadValidationError extends Error {
   constructor(readonly issues: z.ZodIssue[]) {

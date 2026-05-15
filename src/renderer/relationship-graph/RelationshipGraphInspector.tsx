@@ -1,5 +1,5 @@
 import { CaretRight, Crosshair, NotePencil } from "@phosphor-icons/react";
-import type { RelationshipGraphEdge, RelationshipGraphNode } from "../../main/shared/relationship-index";
+import type { RelationshipGraphEdge, RelationshipGraphNode } from "../../main/shared/relationship-graph";
 
 type RelationshipGraphInspectorProps = {
   readonly edges: readonly RelationshipGraphEdge[];

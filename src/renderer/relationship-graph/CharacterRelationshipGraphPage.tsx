@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CaretRight } from "@phosphor-icons/react";
 import type { ProjectRecord } from "../../main/shared/types";
-import type { RelationshipGraphIndexStatus, RelationshipGraphNode, RelationshipGraphResult } from "../../main/shared/relationship-index";
+import type { RelationshipGraphNode, RelationshipGraphResult, RelationshipGraphSourceStatus } from "../../main/shared/relationship-graph";
 import { ProjectModuleRail, type ProjectModule } from "../layout/ProjectModuleRail";
 import { TopBar } from "../layout/TopBar";
 import { getNovelToolApi } from "../state/app-store";
@@ -52,7 +52,7 @@ export function CharacterRelationshipGraphPage({
   const [focusNode, setFocusNode] = useState<{ readonly id: string; readonly name: string } | null>(null);
   const [hopDepth, setHopDepth] = useState<1 | 2>(1);
   const [graph, setGraph] = useState<RelationshipGraphResult | null>(null);
-  const [status, setStatus] = useState<RelationshipGraphIndexStatus | null>(null);
+  const [status, setStatus] = useState<RelationshipGraphSourceStatus | null>(null);
   const [displaySettings, setDisplaySettings] = useState<RelationshipGraphDisplaySettings>(
     defaultRelationshipGraphDisplaySettings
   );
@@ -60,7 +60,6 @@ export function CharacterRelationshipGraphPage({
   const [displayPanelCollapsed, setDisplayPanelCollapsed] = useState(true);
   const [detailPanelCollapsed, setDetailPanelCollapsed] = useState(true);
   const [loading, setLoading] = useState(false);
-  const [rebuilding, setRebuilding] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -91,14 +90,14 @@ export function CharacterRelationshipGraphPage({
       setStatus(null);
       return;
     }
-    const getStatus = api.relationshipGraph?.getStatus;
-    if (typeof getStatus !== "function") {
+    const getSourceStatus = api.relationshipGraph?.getSourceStatus;
+    if (typeof getSourceStatus !== "function") {
       return;
     }
-    void Promise.resolve(getStatus({ projectId }))
+    void Promise.resolve(getSourceStatus({ projectId }))
       .then((result) => {
         if (mountedRef.current && statusRequestIdRef.current === requestId) {
-          setStatus(result as RelationshipGraphIndexStatus);
+          setStatus(result as RelationshipGraphSourceStatus);
         }
       })
       .catch(() => {
@@ -127,7 +126,7 @@ export function CharacterRelationshipGraphPage({
       .then((result) => {
         if (mountedRef.current && loadRequestIdRef.current === requestId) {
           setGraph(result);
-          setStatus(result.indexStatus);
+          setStatus(result.sourceStatus);
         }
       })
       .catch((reason: unknown) => {
@@ -161,36 +160,6 @@ export function CharacterRelationshipGraphPage({
       setDetailPanelCollapsed(true);
     }
   }, [graph, selectedId]);
-
-  const handleRebuild = useCallback(() => {
-    if (!projectId) {
-      return;
-    }
-    const rebuild = api.relationshipGraph?.rebuild;
-    if (typeof rebuild !== "function") {
-      setError("人物关系图重建接口未加载。请重启应用后再试。");
-      return;
-    }
-    setRebuilding(true);
-    setError(null);
-    void Promise.resolve(rebuild({ projectId, force: false }))
-      .then((result) => {
-        if (mountedRef.current) {
-          setStatus(result as RelationshipGraphIndexStatus);
-          refreshStatus();
-        }
-      })
-      .catch((reason: unknown) => {
-        if (mountedRef.current) {
-          setError(reason instanceof Error ? reason.message : String(reason));
-        }
-      })
-      .finally(() => {
-        if (mountedRef.current) {
-          setRebuilding(false);
-        }
-      });
-  }, [api, projectId, refreshStatus]);
 
   function handleNavigate(module: ProjectModule): void {
     if (module === "writing") {
@@ -234,7 +203,7 @@ export function CharacterRelationshipGraphPage({
   }, []);
 
   const focusNodeId = mode === "focus" ? (focusNode?.id ?? null) : null;
-  const statusForUi = status ?? graph?.indexStatus ?? null;
+  const statusForUi = status ?? graph?.sourceStatus ?? null;
   const selectedNode = selectedId ? (graph?.nodes.find((node) => node.id === selectedId) ?? null) : null;
   const shouldShowDetailPanel = Boolean(selectedNode) && !detailPanelCollapsed;
   const workspaceClassName = [
@@ -304,10 +273,9 @@ export function CharacterRelationshipGraphPage({
             <RelationshipGraphStatusBar
               error={error}
               loading={loading}
-              rebuilding={rebuilding}
               stats={graph?.graphStats ?? null}
               status={statusForUi}
-              onRebuild={handleRebuild}
+              onOpenSettings={onOpenSettings}
             />
             <RelationshipGraphChapterSlider
               availableChapters={graph?.availableChapters ?? []}

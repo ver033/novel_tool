@@ -36,6 +36,7 @@ type OpenedProject = {
 
 type ProjectServiceOptions = {
   readonly projectFileDirectory?: string | (() => string);
+  readonly onActiveProjectDatabaseClosed?: (projectId: string) => void;
 };
 
 function nowIso(): string {
@@ -174,10 +175,7 @@ export class ProjectService {
     }
     if (project.rootPath && isNovelToolProjectFile(project.rootPath) && existsSync(project.rootPath)) {
       if (this.activeProjectFilePath === project.rootPath) {
-        this.activeProjectDb?.close();
-        this.activeProjectDb = null;
-        this.activeProjectFilePath = null;
-        this.activeProjectId = null;
+        this.closeActiveProjectDatabase();
       }
       unlinkSync(project.rootPath);
     }
@@ -250,12 +248,7 @@ export class ProjectService {
   }
 
   close(): void {
-    if (this.activeProjectDb) {
-      this.activeProjectDb.close();
-      this.activeProjectDb = null;
-      this.activeProjectFilePath = null;
-      this.activeProjectId = null;
-    }
+    this.closeActiveProjectDatabase();
   }
 
   private registerRecentProject(project: ProjectRecord, updatedAt: string): void {
@@ -268,12 +261,26 @@ export class ProjectService {
 
   private replaceActiveProject(projectDb: SqliteDatabase, projectFilePath: string, projectId: string): void {
     if (this.activeProjectDb && this.activeProjectDb !== projectDb) {
-      this.activeProjectDb.close();
+      this.closeActiveProjectDatabase();
     }
 
     this.activeProjectDb = projectDb;
     this.activeProjectFilePath = projectFilePath;
     this.activeProjectId = projectId;
+  }
+
+  private closeActiveProjectDatabase(): void {
+    if (!this.activeProjectDb) {
+      return;
+    }
+    const closedProjectId = this.activeProjectId;
+    this.activeProjectDb.close();
+    this.activeProjectDb = null;
+    this.activeProjectFilePath = null;
+    this.activeProjectId = null;
+    if (closedProjectId) {
+      this.options.onActiveProjectDatabaseClosed?.(closedProjectId);
+    }
   }
 
   private resolveNewProjectFilePath(input: ProjectCreateInput): string {

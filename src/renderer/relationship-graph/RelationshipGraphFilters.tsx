@@ -1,5 +1,5 @@
 import { CaretLeft } from "@phosphor-icons/react";
-import type { RelationshipGraphIndexStatus } from "../../main/shared/relationship-index";
+import type { RelationshipGraphSourceStatus } from "../../main/shared/relationship-graph";
 import {
   defaultRelationshipGraphDisplaySettings,
   type RelationshipGraphDisplaySettings,
@@ -19,7 +19,7 @@ type RelationshipGraphFiltersProps = {
   readonly filters: RelationshipGraphFilterState;
   readonly displaySettings: RelationshipGraphDisplaySettings;
   readonly loading: boolean;
-  readonly status: RelationshipGraphIndexStatus | null;
+  readonly status: RelationshipGraphSourceStatus | null;
   readonly onChange: (filters: RelationshipGraphFilterState) => void;
   readonly onDisplaySettingsChange: (settings: RelationshipGraphDisplaySettings) => void;
   readonly onCollapse: () => void;
@@ -66,9 +66,7 @@ export function RelationshipGraphFilters({
   onRefresh,
   onResetDisplaySettings
 }: RelationshipGraphFiltersProps) {
-  const indexLabel = status
-    ? `图谱：${status.ready} 章可用，${status.waitingStable} 章旧等待状态，${status.queued + status.running} 章生成中，${status.failed} 章失败`
-    : "图谱：正在读取";
+  const indexLabel = status ? `图谱：${status.message}` : "图谱：正在读取";
   const displaySettingsChanged = !isDefaultDisplaySettings(displaySettings);
 
   return (
@@ -215,7 +213,7 @@ export function RelationshipGraphFilters({
         </button>
       </div>
 
-      <p className="relationship-index-status">{indexLabel}</p>
+      <p className="relationship-source-status">{indexLabel}</p>
     </aside>
   );
 }

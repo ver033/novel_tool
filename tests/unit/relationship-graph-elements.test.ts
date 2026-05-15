@@ -4,7 +4,7 @@ import {
   type RelationshipGraphFocusPosition
 } from "../../src/renderer/relationship-graph/relationship-graph-focus-layout";
 import { relationshipGraphToSigmaGraphData } from "../../src/renderer/relationship-graph/relationship-graph-elements";
-import type { RelationshipGraphEdge, RelationshipGraphNode } from "../../src/main/shared/relationship-index";
+import type { RelationshipGraphEdge, RelationshipGraphNode } from "../../src/main/shared/relationship-graph";
 
 const nodes: RelationshipGraphNode[] = [
   {

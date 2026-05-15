@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { formatRelationshipOverviewMetric, getRelationshipCacheStatusText, getRelationshipUpgradeActionLabel } from "../../src/renderer/routes/SettingsPage";
-import type { RelationshipCacheSettingsStatus, SummaryIndexStatus } from "../../src/main/shared/types";
+import { formatRelationshipOverviewMetric, getRelationshipSourceStatusText } from "../../src/renderer/routes/SettingsPage";
+import type { RelationshipGraphSourceStatus } from "../../src/main/shared/relationship-graph";
+import type { SummaryIndexStatus } from "../../src/main/shared/types";
 
 function summaryStatus(patch: Partial<SummaryIndexStatus> = {}): SummaryIndexStatus {
   return {
@@ -25,81 +26,63 @@ function summaryStatus(patch: Partial<SummaryIndexStatus> = {}): SummaryIndexSta
   };
 }
 
-function relationshipStatus(patch: {
-  readonly chapterCache?: Partial<RelationshipCacheSettingsStatus["chapterCache"]>;
-  readonly relationshipCache?: Partial<RelationshipCacheSettingsStatus["relationshipCache"]>;
-} = {}): RelationshipCacheSettingsStatus {
+function sourceStatus(patch: Partial<RelationshipGraphSourceStatus> = {}): RelationshipGraphSourceStatus {
   return {
-    chapterCache: {
+    state: "needs_arc_summary",
+    nodeCount: 0,
+    edgeCount: 0,
+    chapterRange: null,
+    arcSummary: {
       total: 2,
-      ready: 0,
-      queuedOrRunning: 0,
-      stale: 0,
+      readyForGraph: 0,
+      missingGraphFields: 0,
       failed: 0,
-      missing: 2,
-      skippedTooShort: 0,
-      ...patch.chapterCache
+      blocked: 0
     },
-    relationshipCache: {
-      ready: 0,
-      stale: 0,
-      legacyMissingRelationships: 0,
-      waitingStable: 0,
-      queued: 0,
-      running: 0,
-      failed: 0,
-      skippedTooShort: 0,
-      total: 0,
-      sourceSummaryEmbedded: 0,
-      sourceLegacyOriginalTextUpgrade: 0,
-      sourceOriginalTextEnhancement: 0,
-      sourceLegacySummaryDerived: 0,
-      queuedOriginalTextUpgrades: 0,
-      waitingForChapterCache: false,
-      ...patch.relationshipCache
+    bookSummary: {
+      exists: false,
+      hasRelationshipGraph: false,
+      failed: false
     },
-    activeJob: null
+    message: "等待阶段摘要生成。",
+    latestFailure: null,
+    ...patch
   };
 }
 
-describe("settings relationship cache status display", () => {
-  it("uses chapter totals instead of registered relationship rows for a fresh project", () => {
-    expect(formatRelationshipOverviewMetric(summaryStatus(), relationshipStatus())).toEqual({
-      value: "0/2",
-      detail: "等待章节缓存完成"
-    });
-  });
-
-  it("keeps chapter-cache success and relationship-cache failure visible at the same time", () => {
-    const status = relationshipStatus({
-      chapterCache: { total: 1, ready: 1, missing: 0 },
-      relationshipCache: { failed: 1, total: 1 }
-    });
-
-    expect(formatRelationshipOverviewMetric(summaryStatus({ totalChapterCount: 1, readyChapterCount: 1, missingChapterCount: 0 }), status)).toEqual({
-      value: "0/1",
-      detail: "失败 1 章，需重试"
-    });
-    expect(getRelationshipCacheStatusText(status)).toBe("部分人物关系缓存失败，可以手动加入原文补齐队列重试。");
-    expect(getRelationshipUpgradeActionLabel(status)).toBe("重试失败关系缓存");
-  });
-
-  it("shows the pending relationship-generation state after chapter cache is already ready", () => {
-    const status = relationshipStatus({
-      chapterCache: { total: 1, ready: 1, missing: 0 }
-    });
-
-    expect(formatRelationshipOverviewMetric(summaryStatus({ totalChapterCount: 1, readyChapterCount: 1, missingChapterCount: 0 }), status)).toEqual({
-      value: "0/1",
-      detail: "章节缓存已完成，人物关系缓存尚未生成"
-    });
-    expect(getRelationshipCacheStatusText(status)).toBe("章节缓存已完成，人物关系缓存尚未生成，后台会继续处理。");
-  });
-
-  it("does not show 0/0 as a meaningful relationship cache state when the project has no chapters", () => {
-    expect(formatRelationshipOverviewMetric(summaryStatus({ totalChapterCount: 0, missingChapterCount: 0 }), relationshipStatus({ chapterCache: { total: 0, missing: 0 } }))).toEqual({
+describe("settings relationship graph source status display", () => {
+  it("does not show 0/0 as a meaningful graph state when the project has no chapters", () => {
+    expect(formatRelationshipOverviewMetric(summaryStatus({ totalChapterCount: 0, missingChapterCount: 0 }), sourceStatus())).toEqual({
       value: "未开始",
       detail: "还没有章节"
+    });
+  });
+
+  it("shows ready graph node and edge counts", () => {
+    const status = sourceStatus({
+      state: "ready",
+      nodeCount: 12,
+      edgeCount: 20,
+      message: "人物关系图已可用。"
+    });
+
+    expect(formatRelationshipOverviewMetric(summaryStatus({ readyChapterCount: 2, missingChapterCount: 0 }), status)).toEqual({
+      value: "12/20",
+      detail: "人物 / 关系"
+    });
+    expect(getRelationshipSourceStatusText(status)).toBe("人物关系图已可用。");
+  });
+
+  it("keeps summary failures visible in the overview metric", () => {
+    const status = sourceStatus({
+      state: "failed",
+      latestFailure: "阶段摘要输出被截断",
+      message: "阶段摘要失败，人物关系图不可用。"
+    });
+
+    expect(formatRelationshipOverviewMetric(summaryStatus({ readyChapterCount: 2, missingChapterCount: 0, failedJobCount: 1 }), status)).toEqual({
+      value: "失败",
+      detail: "阶段摘要输出被截断"
     });
   });
 });

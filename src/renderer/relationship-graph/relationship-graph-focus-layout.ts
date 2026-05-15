@@ -1,4 +1,4 @@
-import type { RelationshipGraphEdge, RelationshipGraphNode } from "../../main/shared/relationship-index";
+import type { RelationshipGraphEdge, RelationshipGraphNode } from "../../main/shared/relationship-graph";
 
 export type RelationshipGraphFocusPosition = {
   readonly x: number;

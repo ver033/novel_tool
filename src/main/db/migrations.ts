@@ -414,203 +414,15 @@ const migrations: readonly Migration[] = [
     }
   },
   {
-    version: 13,
-    name: "relationship_index_v2",
-    up(db) {
-      db.exec(`
-        CREATE TABLE IF NOT EXISTS relationship_index_chapters (
-          id TEXT PRIMARY KEY,
-          project_id TEXT NOT NULL,
-          chapter_id TEXT NOT NULL,
-          chapter_title TEXT NOT NULL,
-          chapter_order INTEGER NOT NULL,
-          content_hash TEXT NOT NULL,
-          status TEXT NOT NULL CHECK(status IN ('waiting_stable','queued','running','ready','stale','failed','skipped_too_short')),
-          eligible_at TEXT,
-          indexed_at TEXT,
-          stable_after_ms INTEGER NOT NULL,
-          extractor_version TEXT NOT NULL,
-          token_count INTEGER NOT NULL DEFAULT 0,
-          error TEXT,
-          created_at TEXT NOT NULL,
-          updated_at TEXT NOT NULL,
-          UNIQUE(project_id, chapter_id),
-          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
-          FOREIGN KEY (chapter_id) REFERENCES chapters(id) ON DELETE CASCADE
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_relationship_index_chapters_status
-          ON relationship_index_chapters(project_id, status, eligible_at);
-        CREATE INDEX IF NOT EXISTS idx_relationship_index_chapters_order
-          ON relationship_index_chapters(project_id, chapter_order);
-
-        CREATE TABLE IF NOT EXISTS relationship_index_jobs (
-          id TEXT PRIMARY KEY,
-          project_id TEXT NOT NULL,
-          chapter_id TEXT NOT NULL,
-          source_hash TEXT NOT NULL,
-          status TEXT NOT NULL CHECK(status IN ('queued','running','completed','failed','cancelled','skipped')),
-          priority INTEGER NOT NULL DEFAULT 0,
-          attempt_count INTEGER NOT NULL DEFAULT 0,
-          eligible_at TEXT,
-          next_run_at TEXT,
-          error TEXT,
-          created_at TEXT NOT NULL,
-          updated_at TEXT NOT NULL,
-          started_at TEXT,
-          finished_at TEXT,
-          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
-          FOREIGN KEY (chapter_id) REFERENCES chapters(id) ON DELETE CASCADE
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_relationship_index_jobs_runnable
-          ON relationship_index_jobs(project_id, status, priority, eligible_at, next_run_at, created_at);
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_relationship_index_jobs_active_unique
-          ON relationship_index_jobs(project_id, chapter_id, source_hash)
-          WHERE status IN ('queued','running');
-
-        CREATE TABLE IF NOT EXISTS relationship_entities (
-          id TEXT PRIMARY KEY,
-          project_id TEXT NOT NULL,
-          canonical_name TEXT NOT NULL,
-          aliases_json TEXT NOT NULL,
-          entity_kind TEXT NOT NULL CHECK(entity_kind IN ('person','nonhuman','group','identity','unknown')),
-          importance TEXT NOT NULL CHECK(importance IN ('main','supporting','minor','unknown')),
-          role_summary TEXT,
-          faction TEXT,
-          first_chapter_order INTEGER,
-          latest_chapter_order INTEGER,
-          source_chapter_ids_json TEXT NOT NULL,
-          confidence REAL NOT NULL,
-          created_at TEXT NOT NULL,
-          updated_at TEXT NOT NULL,
-          UNIQUE(project_id, canonical_name),
-          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_relationship_entities_project_importance
-          ON relationship_entities(project_id, importance);
-
-        CREATE TABLE IF NOT EXISTS relationship_mentions (
-          id TEXT PRIMARY KEY,
-          project_id TEXT NOT NULL,
-          chapter_id TEXT NOT NULL,
-          chapter_title TEXT NOT NULL,
-          chapter_order INTEGER NOT NULL,
-          source_hash TEXT NOT NULL,
-          source_name TEXT NOT NULL,
-          target_name TEXT NOT NULL,
-          source_entity_id TEXT,
-          target_entity_id TEXT,
-          base_relation_label TEXT NOT NULL,
-          base_relation_summary TEXT,
-          plot_relation_label TEXT NOT NULL,
-          plot_relation_summary TEXT NOT NULL,
-          primary_dimension_name TEXT NOT NULL,
-          relationship_dimensions_json TEXT NOT NULL,
-          semantic_markers_json TEXT NOT NULL,
-          direction TEXT NOT NULL CHECK(direction IN ('undirected','source_to_target','target_to_source','unclear')),
-          polarity TEXT NOT NULL CHECK(polarity IN ('positive','negative','mixed','neutral','unknown')),
-          intensity REAL NOT NULL,
-          change_summary TEXT NOT NULL,
-          start_state TEXT,
-          end_state TEXT,
-          reason TEXT,
-          evidence_quote TEXT NOT NULL,
-          confidence REAL NOT NULL,
-          uncertainty TEXT,
-          created_at TEXT NOT NULL,
-          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
-          FOREIGN KEY (chapter_id) REFERENCES chapters(id) ON DELETE CASCADE,
-          FOREIGN KEY (source_entity_id) REFERENCES relationship_entities(id) ON DELETE SET NULL,
-          FOREIGN KEY (target_entity_id) REFERENCES relationship_entities(id) ON DELETE SET NULL
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_relationship_mentions_project_order
-          ON relationship_mentions(project_id, chapter_order);
-        CREATE INDEX IF NOT EXISTS idx_relationship_mentions_source_entity
-          ON relationship_mentions(project_id, source_entity_id);
-        CREATE INDEX IF NOT EXISTS idx_relationship_mentions_target_entity
-          ON relationship_mentions(project_id, target_entity_id);
-        CREATE INDEX IF NOT EXISTS idx_relationship_mentions_chapter_hash
-          ON relationship_mentions(project_id, chapter_id, source_hash);
-      `);
-    }
-  },
-  {
-    version: 14,
-    name: "relationship_index_source_metadata",
-    up(db) {
-      if (!tableExists(db, "relationship_index_chapters")) {
-        return;
-      }
-      const hasExtractionSource = tableHasColumn(db, "relationship_index_chapters", "extraction_source");
-      db.exec("PRAGMA foreign_keys = OFF;");
-      db.exec(`
-        CREATE TABLE relationship_index_chapters_new (
-          id TEXT PRIMARY KEY,
-          project_id TEXT NOT NULL,
-          chapter_id TEXT NOT NULL,
-          chapter_title TEXT NOT NULL,
-          chapter_order INTEGER NOT NULL,
-          content_hash TEXT NOT NULL,
-          status TEXT NOT NULL CHECK(status IN ('waiting_stable','queued','running','ready','stale','legacy_missing_relationships','failed','skipped_too_short')),
-          eligible_at TEXT,
-          indexed_at TEXT,
-          stable_after_ms INTEGER NOT NULL,
-          extractor_version TEXT NOT NULL,
-          extraction_source TEXT NOT NULL DEFAULT 'summary_payload'
-            CHECK(extraction_source IN ('summary_payload','legacy_original_text_upgrade','original_text_enhancement')),
-          token_count INTEGER NOT NULL DEFAULT 0,
-          error TEXT,
-          created_at TEXT NOT NULL,
-          updated_at TEXT NOT NULL,
-          UNIQUE(project_id, chapter_id),
-          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
-          FOREIGN KEY (chapter_id) REFERENCES chapters(id) ON DELETE CASCADE
-        );
-      `);
-      db.exec(`
-        INSERT INTO relationship_index_chapters_new
-          (id, project_id, chapter_id, chapter_title, chapter_order, content_hash, status, eligible_at,
-           indexed_at, stable_after_ms, extractor_version, extraction_source, token_count, error, created_at, updated_at)
-        SELECT
-          id, project_id, chapter_id, chapter_title, chapter_order, content_hash, status, eligible_at,
-          indexed_at, stable_after_ms, extractor_version,
-          ${hasExtractionSource ? "COALESCE(extraction_source, 'summary_payload')" : "'summary_payload'"},
-          token_count, error, created_at, updated_at
-        FROM relationship_index_chapters;
-      `);
-      db.exec(`
-        DROP TABLE relationship_index_chapters;
-        ALTER TABLE relationship_index_chapters_new RENAME TO relationship_index_chapters;
-
-        CREATE INDEX IF NOT EXISTS idx_relationship_index_chapters_status
-          ON relationship_index_chapters(project_id, status, eligible_at);
-        CREATE INDEX IF NOT EXISTS idx_relationship_index_chapters_order
-          ON relationship_index_chapters(project_id, chapter_order);
-      `);
-      db.exec("PRAGMA foreign_keys = ON;");
-
-      if (tableExists(db, "relationship_mentions") && !tableHasColumn(db, "relationship_mentions", "evidence_source")) {
-        db.exec(
-          `ALTER TABLE relationship_mentions
-           ADD COLUMN evidence_source TEXT NOT NULL DEFAULT 'summary_payload'
-           CHECK(evidence_source IN ('summary_payload','original_text'));`
-        );
-      }
-    }
-  },
-  {
     version: 15,
-    name: "summary_relationship_upgrade_jobs",
+    name: "summary_jobs",
     up(db) {
       if (!tableExists(db, "summary_jobs")) {
         db.exec(`
           CREATE TABLE IF NOT EXISTS summary_jobs (
             id TEXT PRIMARY KEY,
             project_id TEXT NOT NULL,
-            job_type TEXT NOT NULL CHECK (job_type IN ('chapter_summary', 'arc_summary', 'book_summary', 'rebuild_project_index', 'relationship_original_text_upgrade')),
+            job_type TEXT NOT NULL CHECK (job_type IN ('chapter_summary', 'arc_summary', 'book_summary', 'rebuild_project_index')),
             target_id TEXT,
             source_hash TEXT NOT NULL,
             status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'completed', 'failed', 'cancelled', 'skipped')),
@@ -635,7 +447,7 @@ const migrations: readonly Migration[] = [
         CREATE TABLE summary_jobs_new (
           id TEXT PRIMARY KEY,
           project_id TEXT NOT NULL,
-          job_type TEXT NOT NULL CHECK (job_type IN ('chapter_summary', 'arc_summary', 'book_summary', 'rebuild_project_index', 'relationship_original_text_upgrade')),
+          job_type TEXT NOT NULL CHECK (job_type IN ('chapter_summary', 'arc_summary', 'book_summary', 'rebuild_project_index')),
           target_id TEXT,
           source_hash TEXT NOT NULL,
           status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'completed', 'failed', 'cancelled', 'skipped')),
@@ -656,7 +468,8 @@ const migrations: readonly Migration[] = [
         SELECT
           id, project_id, job_type, target_id, source_hash, status, priority, attempt_count,
           next_run_at, error, created_at, updated_at, started_at, finished_at
-        FROM summary_jobs;
+        FROM summary_jobs
+        WHERE job_type IN ('chapter_summary', 'arc_summary', 'book_summary', 'rebuild_project_index');
 
         DROP TABLE summary_jobs;
         ALTER TABLE summary_jobs_new RENAME TO summary_jobs;
@@ -666,7 +479,62 @@ const migrations: readonly Migration[] = [
       `);
       db.exec("PRAGMA foreign_keys = ON;");
     }
-  }
+  },
+  {
+    version: 17,
+    name: "remove_obsolete_relationship_indexes",
+    up(db) {
+      if (tableExists(db, "summary_jobs")) {
+        db.exec("PRAGMA foreign_keys = OFF;");
+        db.exec(`
+          CREATE TABLE summary_jobs_new (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            job_type TEXT NOT NULL CHECK (job_type IN ('chapter_summary', 'arc_summary', 'book_summary', 'rebuild_project_index')),
+            target_id TEXT,
+            source_hash TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'completed', 'failed', 'cancelled', 'skipped')),
+            priority INTEGER NOT NULL DEFAULT 0,
+            attempt_count INTEGER NOT NULL DEFAULT 0,
+            next_run_at TEXT,
+            error TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            started_at TEXT,
+            finished_at TEXT,
+            FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+          );
+
+          INSERT INTO summary_jobs_new
+            (id, project_id, job_type, target_id, source_hash, status, priority, attempt_count,
+             next_run_at, error, created_at, updated_at, started_at, finished_at)
+          SELECT
+            id, project_id, job_type, target_id, source_hash, status, priority, attempt_count,
+            next_run_at, error, created_at, updated_at, started_at, finished_at
+          FROM summary_jobs
+          WHERE job_type IN ('chapter_summary', 'arc_summary', 'book_summary', 'rebuild_project_index');
+
+          DROP TABLE summary_jobs;
+          ALTER TABLE summary_jobs_new RENAME TO summary_jobs;
+
+          CREATE INDEX IF NOT EXISTS idx_summary_jobs_project_status_priority
+            ON summary_jobs(project_id, status, priority, created_at);
+        `);
+        db.exec("PRAGMA foreign_keys = ON;");
+      }
+      db.exec(`
+        DROP TABLE IF EXISTS relationship_identity_overrides;
+        DROP TABLE IF EXISTS relationship_inferred_relations;
+        DROP TABLE IF EXISTS relationship_identity_cluster_members;
+        DROP TABLE IF EXISTS relationship_identity_clusters;
+        DROP TABLE IF EXISTS relationship_identity_resolution_runs;
+        DROP TABLE IF EXISTS relationship_mentions;
+        DROP TABLE IF EXISTS relationship_entities;
+        DROP TABLE IF EXISTS relationship_index_jobs;
+        DROP TABLE IF EXISTS relationship_index_chapters;
+      `);
+    }
+  },
 ];
 
 export function runMigrations(db: SqliteDatabase): void {

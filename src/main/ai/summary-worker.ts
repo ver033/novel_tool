@@ -1,16 +1,10 @@
 import { SummaryRepository, type SummaryJobRecord } from "../db/repositories/summary-repo";
+import type { ChapterCacheBuildOrder } from "../shared/types";
 import { OpenRouterError } from "./openrouter-error";
 import { SummarySourceChangedError } from "./summary-service";
 
 type SummaryWorkerService = {
   readonly summarizeChapter: (projectId: string, chapterId: string, sourceHash: string, now: string, options?: { readonly signal?: AbortSignal }) => Promise<unknown>;
-  readonly upgradeLegacyRelationshipIndexFromOriginalTextJob?: (
-    projectId: string,
-    chapterId: string,
-    sourceHash: string,
-    now: string,
-    options?: { readonly signal?: AbortSignal }
-  ) => Promise<unknown>;
   readonly summarizeArc?: (
     projectId: string,
     arcKey: string,
@@ -41,6 +35,7 @@ export type SummaryWorkerDeps = {
   readonly summaryService: SummaryWorkerService;
   readonly isForegroundAiActive: () => boolean;
   readonly ensureAiConfigured: () => Promise<void>;
+  readonly chapterCacheBuildOrder?: () => ChapterCacheBuildOrder;
 };
 
 function addMinutes(iso: string, minutes: number): string {
@@ -99,7 +94,8 @@ export class SummaryWorker {
       return { status: "paused_foreground_ai" };
     }
 
-    if (!this.deps.summaryRepo.peekNextSummaryJob(projectId, now)) {
+    const claimOptions = { chapterCacheBuildOrder: this.deps.chapterCacheBuildOrder?.() ?? "latest_first" };
+    if (!this.deps.summaryRepo.peekNextSummaryJob(projectId, now, claimOptions)) {
       return { status: "idle" };
     }
 
@@ -112,7 +108,7 @@ export class SummaryWorker {
       };
     }
 
-    const job = this.deps.summaryRepo.claimNextSummaryJob(projectId, now);
+    const job = this.deps.summaryRepo.claimNextSummaryJob(projectId, now, claimOptions);
     if (!job) {
       return { status: "idle" };
     }
@@ -201,16 +197,6 @@ export class SummaryWorker {
         throw new Error("AI 全书摘要生成器未配置。");
       }
       await this.deps.summaryService.summarizeBook(job.projectId, job.sourceHash, now, options);
-      return;
-    }
-    if (job.jobType === "relationship_original_text_upgrade") {
-      if (!job.targetId) {
-        throw new Error("人物关系原文升级任务缺少章节 ID。");
-      }
-      if (!this.deps.summaryService.upgradeLegacyRelationshipIndexFromOriginalTextJob) {
-        throw new Error("人物关系原文升级生成器未配置。");
-      }
-      await this.deps.summaryService.upgradeLegacyRelationshipIndexFromOriginalTextJob(job.projectId, job.targetId, job.sourceHash, now, options);
       return;
     }
     if (job.jobType === "rebuild_project_index") {

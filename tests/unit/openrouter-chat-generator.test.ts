@@ -11,7 +11,13 @@ import { estimateMessagesTokens } from "../../src/main/ai/token-estimator";
 import { getTokenBudget } from "../../src/main/ai/token-budget";
 import type { AiChatGenerationInput } from "../../src/main/ai/ai-task-service";
 import type { ChapterAiSummaryPayload, ContinuityCheckResult } from "../../src/main/shared/summary-index";
-import { chapterChunkIndexPayload, chapterIndexPayloadV2, chapterIndexPayloadV3Lite } from "../helpers/summary-index-fixtures";
+import {
+  arcIndexPayloadV2,
+  bookIndexPayloadV2,
+  chapterChunkIndexPayload,
+  chapterIndexPayloadV2,
+  chapterIndexPayloadV3Lite
+} from "../helpers/summary-index-fixtures";
 
 function createInput(patch: Partial<AiChatGenerationInput> = {}): AiChatGenerationInput {
   return {
@@ -719,10 +725,125 @@ describe("OpenRouter persistent summary index generation", () => {
     const prompt = messages.map((message) => message.content).join("\n");
 
     expect(prompt).toContain("阶段聚合卡片");
+    expect(prompt).toContain("完整 JSON 控制在 6000 个中文字符以内");
     expect(prompt).not.toContain("结构化索引：");
     expect(prompt).not.toContain("场景列表");
     expect(prompt).not.toContain("空间与行动逻辑");
     expect(prompt.length).toBeLessThan(45_000);
+  });
+
+  it("fills authoritative arc coverage fields before validating model JSON", async () => {
+    const partialArcPayload = {
+      ...arcIndexPayloadV2(),
+      阶段信息: {
+        起始章节: 99,
+        覆盖章节: [],
+        覆盖限制: []
+      }
+    };
+    const generator = new OpenRouterChatGenerator({} as never);
+    Object.assign(generator as unknown as { createClient: () => Promise<unknown> }, {
+      createClient: async () => ({
+        chatBudget: getTokenBudget("chat", 16_384),
+        contextLength: 16_384,
+        modelName: "summary/model",
+        client: {
+          streamChatCompletion: async () => ({
+            content: JSON.stringify(partialArcPayload),
+            reasoning: "",
+            truncated: false,
+            toolCalls: []
+          })
+        }
+      })
+    });
+
+    const result = await generator.summarizeArcForIndex({
+      arcKey: "auto:001-020",
+      chapterFrom: 1,
+      chapterTo: 20,
+      chapters: Array.from({ length: 20 }, (_, index) => ({
+        chapterId: `chapter_${index + 1}`,
+        title: `第${index + 1}章`,
+        ordinal: index + 1,
+        summaryShort: `第${index + 1}章短摘要。`,
+        summaryLong: `第${index + 1}章长摘要。`,
+        structured: chapterIndexPayloadV2()
+      }))
+    });
+
+    expect(result.阶段信息).toMatchObject({
+      起始章节: 1,
+      结束章节: 20,
+      覆盖章节: Array.from({ length: 20 }, (_, index) => index + 1)
+    });
+  });
+
+  it("fills authoritative book coverage fields before validating model JSON", async () => {
+    const partialBookPayload = {
+      ...bookIndexPayloadV2(),
+      全书信息: {
+        覆盖阶段: [],
+        覆盖章节范围: "模型随意写的范围",
+        总章节数: 0,
+        过期章节: [],
+        缺失章节: [],
+        过短跳过章节: [],
+        覆盖限制: []
+      }
+    };
+    const generator = new OpenRouterChatGenerator({} as never);
+    Object.assign(generator as unknown as { createClient: () => Promise<unknown> }, {
+      createClient: async () => ({
+        chatBudget: getTokenBudget("chat", 16_384),
+        contextLength: 16_384,
+        modelName: "summary/model",
+        client: {
+          streamChatCompletion: async () => ({
+            content: JSON.stringify(partialBookPayload),
+            reasoning: "",
+            truncated: false,
+            toolCalls: []
+          })
+        }
+      })
+    });
+
+    const result = await generator.summarizeBookForIndex({
+      arcs: [
+        {
+          arcKey: "auto:001-020",
+          chapterFrom: 1,
+          chapterTo: 20,
+          summary: "第1到20章摘要。",
+          structured: arcIndexPayloadV2()
+        },
+        {
+          arcKey: "auto:041-048",
+          chapterFrom: 41,
+          chapterTo: 48,
+          summary: "第41到48章摘要。",
+          structured: arcIndexPayloadV2()
+        }
+      ],
+      coverage: {
+        totalChapterCount: 48,
+        indexedChapterCount: 43,
+        staleChapterIds: ["chapter_2"],
+        missingChapterIds: ["chapter_7"],
+        skippedTooShortChapterIds: ["chapter_12"]
+      }
+    });
+
+    expect(result.全书信息).toMatchObject({
+      覆盖阶段: ["第1-20章", "第41-48章"],
+      覆盖章节范围: "第1-48章",
+      总章节数: 48,
+      已索引章节数: 43,
+      过期章节: ["chapter_2"],
+      缺失章节: ["chapter_7"],
+      过短跳过章节: ["chapter_12"]
+    });
   });
 
   it("streams and parses continuity check JSON", async () => {

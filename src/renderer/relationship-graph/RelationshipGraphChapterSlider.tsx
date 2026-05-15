@@ -1,4 +1,4 @@
-import type { RelationshipGraphAvailableChapter } from "../../main/shared/relationship-index";
+import type { RelationshipGraphAvailableChapter } from "../../main/shared/relationship-graph";
 import type { RelationshipGraphChapterCursor } from "./relationship-graph-load";
 
 type RelationshipGraphChapterSliderProps = {

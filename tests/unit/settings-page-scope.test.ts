@@ -13,7 +13,7 @@ describe("settings page scope", () => {
     const settings = readSource("src/renderer/routes/SettingsPage.tsx");
     const app = readSource("src/renderer/App.tsx");
 
-    expect(settings).toContain('const visibleCategories = ["AI 服务", "提示词预设", "章节索引缓存"] as const satisfies readonly SettingsCategory[];');
+    expect(settings).toContain('const visibleCategories = ["AI 服务", "提示词预设", "章节索引缓存", "导入导出"] as const satisfies readonly SettingsCategory[];');
     expect(settings).toContain("visibleCategories.map");
     expect(settings).toContain("activeVisibleCategory");
     expect(app).toContain('useState<SettingsCategory>("AI 服务")');
@@ -45,28 +45,24 @@ describe("settings page scope", () => {
 
     expect(settings).toContain("章节索引缓存");
     expect(settings).toContain("完整缓存信息");
-    expect(settings).toContain("人物关系缓存结果");
+    expect(settings).toContain("人物关系图结果");
     expect(settings).toContain("缓存总览");
     expect(settings).toContain("章节缓存");
-    expect(settings).toContain("人物关系缓存");
-    expect(settings).toContain("立即加入原文补齐队列");
+    expect(settings).toContain("人物关系图");
+    expect(settings).toContain("阶段摘要");
+    expect(settings).toContain("全书摘要");
     expect(settings).toContain("失败重试");
-    expect(settings).toContain("旧章节缓存缺少人物关系索引");
-    expect(settings).toContain("等待章节缓存完成后处理人物关系");
-    expect(settings).toContain("章节缓存已完成，人物关系缓存尚未生成");
-    expect(settings).toContain("可用于图谱 / 总章节");
-    expect(settings).toContain("章节缓存优先");
-    expect(settings).toContain("原文精读补强");
-    expect(settings).toContain("不会越过章节缓存任务");
-    expect(settings).toContain("重试失败并补齐旧缓存");
-    expect(settings).toContain("重试失败关系缓存");
+    expect(settings).toContain("摘要图谱字段缺失");
+    expect(settings).toContain("人物关系图来源");
+    expect(settings).toContain("不再额外维护逐章图谱任务或独立融合任务");
     expect(settings).toContain("RelationshipGraphCachePanel");
-    expect(settings).toContain("api.relationshipGraph.getStatus");
     expect(settings).toContain("api.relationshipGraph.getGraph");
-    expect(settings).toContain("api.relationshipGraph.refreshCacheStatus");
-    expect(settings).toContain("api.relationshipGraph.getCacheSettingsStatus");
-    expect(settings).toContain("api.relationshipGraph.upgradeMissingFromOriginalText");
-    expect(settings).toContain("relationshipCacheStatusPromise");
+    expect(settings).toContain("api.relationshipGraph.getSourceStatus");
+    expect(settings).not.toContain("api.relationshipGraph.refreshCacheStatus");
+    expect(settings).not.toContain("api.relationshipGraph.getCacheSettingsStatus");
+    expect(settings).not.toContain("api.relationshipGraph.upgradeMissingFromOriginalText");
+    expect(settings).not.toContain("api.relationshipGraph.retryIdentityResolution");
+    expect(settings).toContain("relationshipGraphSourceStatusPromise");
     expect(settings).toContain(".catch(() => null)");
     expect(settings).toContain("点击查看完整缓存");
     expect(settings).toContain("getChapterCacheActionLabel");
@@ -81,7 +77,7 @@ describe("settings page scope", () => {
     expect(settings).toContain("api.summary.clearAndRetryChapterCache");
     expect(settings).not.toContain("api.project.getCurrentProject");
     expect(settings).toContain("currentProject: ProjectRecord | null");
-    expect(settings).toContain("<SummaryCacheSettingsPane currentProject={currentProject} />");
+    expect(settings).toContain("<SummaryCacheSettingsPane cache={form.cache} currentProject={currentProject} onCacheSettingsChange={onCacheSettingsChange} />");
     expect(app).toContain('type SettingsReturnPage = "welcome" | "writing" | "relationshipGraph"');
     expect(app).toContain('currentProject={settingsReturnPage === "welcome" ? null : appStore.currentProject}');
     expect(settings).not.toContain("pendingChapterId");
@@ -91,5 +87,33 @@ describe("settings page scope", () => {
     expect(settings).not.toContain("已登记章节");
     expect(chatTab).toContain("打开缓存设置");
     expect(chatTab).not.toContain("void chatStore.rebuildSummaryIndex({ force: true })");
+  });
+
+  it("shows unified cache controls before detailed cache browsers", () => {
+    const settings = readSource("src/renderer/routes/SettingsPage.tsx");
+
+    expect(settings).toContain("章节缓存顺序");
+    expect(settings).toContain("最近章节优先");
+    expect(settings).toContain("从第 1 章开始");
+    expect(settings).toContain("chapterCacheBuildOrder");
+    expect(settings).toContain("api.settings.save({ cache:");
+    expect(settings).toContain("人物关系图来源");
+    expect(settings).toContain("阶段图谱");
+    expect(settings).toContain("全书图谱");
+    expect(settings.indexOf("缓存总览")).toBeLessThan(settings.indexOf("章节缓存详情"));
+    expect(settings.indexOf("<RelationshipGraphCacheSettingsBlock")).toBeGreaterThan(settings.indexOf("summary-cache-overview"));
+    expect(settings.indexOf("<RelationshipGraphCacheSettingsBlock")).toBeLessThan(settings.indexOf("summary-cache-browser"));
+  });
+
+  it("puts the shareable copy export in settings with strict privacy copy", () => {
+    const settings = readSource("src/renderer/routes/SettingsPage.tsx");
+
+    expect(settings).toContain("导入导出");
+    expect(settings).toContain("ShareableProjectExportPane");
+    expect(settings).toContain("导出可分享副本");
+    expect(settings).toContain("严格隐私清理");
+    expect(settings).toContain("api.export.selectShareableProjectFilePath");
+    expect(settings).toContain("api.export.exportShareableProjectCopy");
+    expect(settings).toContain("AI 聊天记录、AI 改写任务记录、章节快照和导入记录会始终移除");
   });
 });

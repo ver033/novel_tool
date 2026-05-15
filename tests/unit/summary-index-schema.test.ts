@@ -305,8 +305,8 @@ const validChapterIndexPayloadV3Lite = {
 };
 
 describe("summary index schemas", () => {
-  it("accepts relationship original text upgrade as a summary job and rejects unknown job types", () => {
-    expect(summaryJobTypeSchema.parse("relationship_original_text_upgrade")).toBe("relationship_original_text_upgrade");
+  it("rejects removed relationship jobs and unknown job types", () => {
+    expect(() => summaryJobTypeSchema.parse("relationship_original_text_upgrade")).toThrow();
     expect(() => summaryJobTypeSchema.parse("relationship_index_job")).toThrow();
   });
 
@@ -334,45 +334,6 @@ describe("summary index schemas", () => {
     expect(getChapterSummaryShortText(parsed)).toBe(validChapterIndexPayloadV3Lite.一句话摘要);
     expect(getChapterSummaryLongText(parsed)).toBe(validChapterIndexPayloadV3Lite.详细梗概);
     expect(JSON.stringify(parsed).length).toBeLessThan(JSON.stringify(validChapterIndexPayloadV2).length / 2);
-  });
-
-  it("keeps the LLM-produced relationship graph index inside the chapter cache payload", () => {
-    const payload = JSON.parse(JSON.stringify(validChapterIndexPayloadV3Lite));
-    payload.人物关系索引 = {
-      人物: [
-        {
-          姓名: "萧炎",
-          别名: [],
-          实体类型: "person",
-          重要程度: "main",
-          身份摘要: "低谷中的主角",
-          阵营: "萧家",
-          置信度: 0.95,
-          证据短句: ["斗之力，三段"]
-        }
-      ],
-      关系事件: [
-        {
-          主体: "萧薰儿",
-          客体: "萧炎",
-          关系维度: [{ 名称: "情感支持", 说明: "本章由模型按正文识别的关系维度", 置信度: 0.88 }],
-          主维度: "情感支持",
-          基础关系: { 名称: "同族", 说明: "同属萧家" },
-          剧情关系: { 名称: "维护", 说明: "萧薰儿没有随众人轻视萧炎" },
-          方向: "source_to_target",
-          极性: "positive",
-          强度: 0.72,
-          本章变化: "萧薰儿的支持关系被明确保留",
-          证据短句: "萧薰儿没有随众人轻视萧炎",
-          置信度: 0.9
-        }
-      ],
-      不确定项: []
-    };
-
-    const parsed = chapterAiSummaryPayloadSchema.parse(payload);
-
-    expect((parsed as typeof payload).人物关系索引).toEqual(payload.人物关系索引);
   });
 
   it("keeps future-facing index material inside the V3 Lite chapter cache payload", () => {
@@ -491,7 +452,6 @@ describe("summary index schemas", () => {
         }
       ],
       关系变化: ["萧炎与族人的距离加深"],
-      人物关系索引: { 人物: [], 关系事件: [], 不确定项: [] },
       时间地点: {
         本章时间: "未明确",
         主要地点: ["萧家测试广场"],

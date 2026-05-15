@@ -112,7 +112,7 @@ describe("relationship graph page v2 renderer wiring", () => {
     expect(page).toContain("chapterCursor");
     expect(page).toContain("displaySettings");
     expect(page).toContain("defaultRelationshipGraphDisplaySettings");
-    expect(page).toContain("handleRebuild");
+    expect(page).toContain("refreshStatus");
     expect(page).toContain("loadRequestIdRef");
     expect(filters).toContain("主要角色");
     expect(filters).toContain("配角");
@@ -130,9 +130,9 @@ describe("relationship graph page v2 renderer wiring", () => {
     expect(inspector).toContain("返回全局图");
     expect(inspector).toContain("基础关系");
     expect(inspector).toContain("剧情关系");
-    expect(statusBar).toContain("部分章节关系缓存未更新");
+    expect(statusBar).toContain("人物关系图");
     expect(statusBar).not.toContain("等待稳定");
-    expect(statusBar).toContain("重建章节缓存并更新关系");
+    expect(statusBar).toContain("缓存设置");
     expect(legend).toContain("基础关系默认显示");
     expect(legend).toContain("优先常驻关键关系");
     expect(legend).toContain("点击关系线");
