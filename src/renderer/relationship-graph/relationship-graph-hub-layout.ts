@@ -1,4 +1,8 @@
 import type { RelationshipGraphEdge, RelationshipGraphNode } from "../../main/shared/relationship-graph";
+import {
+  defaultRelationshipGraphDisplaySettings,
+  type RelationshipGraphDisplaySettings
+} from "./relationship-graph-display-settings";
 import type { RelationshipGraphPosition } from "./relationship-graph-position";
 
 type RelationshipHubSeedLayoutInput = {
@@ -6,6 +10,7 @@ type RelationshipHubSeedLayoutInput = {
   readonly edges: readonly RelationshipGraphEdge[];
   readonly width: number;
   readonly height: number;
+  readonly displaySettings?: RelationshipGraphDisplaySettings;
 };
 
 type NodeLayoutStats = {
@@ -44,6 +49,14 @@ function roundPosition(value: number): number {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function resolveDisplayScale(displaySettings: RelationshipGraphDisplaySettings | undefined): number {
+  const nodeRepulsionScale = displaySettings?.nodeRepulsionScale ?? defaultRelationshipGraphDisplaySettings.nodeRepulsionScale;
+  const linkDistanceScale = displaySettings?.linkDistanceScale ?? defaultRelationshipGraphDisplaySettings.linkDistanceScale;
+  const repulsionRatio = nodeRepulsionScale / defaultRelationshipGraphDisplaySettings.nodeRepulsionScale;
+  const linkDistanceRatio = linkDistanceScale / defaultRelationshipGraphDisplaySettings.linkDistanceScale;
+  return clamp(repulsionRatio * 0.72 + linkDistanceRatio * 0.28, 0.72, 2.4);
 }
 
 function edgeStrength(edge: RelationshipGraphEdge): number {
@@ -218,6 +231,20 @@ function hubSpinePosition(index: number, total: number, width: number, height: n
   };
 }
 
+function scalePositionAroundCenter(
+  position: RelationshipGraphPosition,
+  centerX: number,
+  centerY: number,
+  displayScale: number,
+  width: number,
+  height: number
+): RelationshipGraphPosition {
+  return {
+    x: roundPosition(clamp(centerX + (position.x - centerX) * displayScale, 28, Math.max(28, width - 28))),
+    y: roundPosition(clamp(centerY + (position.y - centerY) * displayScale, 28, Math.max(28, height - 28)))
+  };
+}
+
 function satelliteSectorWidth(assignmentCount: number, hubIndex: number): number {
   const baseWidth = hubIndex < 2 ? Math.PI * 0.92 : Math.PI * 0.74;
   return Math.min(Math.PI * 1.12, baseWidth + Math.max(0, assignmentCount - 8) * 0.035);
@@ -277,13 +304,21 @@ export function buildRelationshipHubSeedLayoutPositions(input: RelationshipHubSe
 
   const centerX = input.width / 2;
   const centerY = input.height / 2;
-  const hubRadiusX = Math.max(240, input.width * 0.36);
-  const hubRadiusY = Math.max(220, input.height * 0.4);
+  const displayScale = resolveDisplayScale(input.displaySettings);
+  const hubRadiusX = Math.max(240, input.width * 0.36) * displayScale;
+  const hubRadiusY = Math.max(220, input.height * 0.4) * displayScale;
   const useHubSectorLayout = shouldUseRelationshipHubSectorLayout(input.nodes, validEdges);
   const hubPositions = new Map<string, RelationshipGraphPosition>();
   hubIds.forEach((hubId, index) => {
     const position = useHubSectorLayout
-      ? hubSpinePosition(index, hubIds.length, input.width, input.height)
+      ? scalePositionAroundCenter(
+        hubSpinePosition(index, hubIds.length, input.width, input.height),
+        centerX,
+        centerY,
+        displayScale,
+        input.width,
+        input.height
+      )
       : {
         x: roundPosition(centerX + Math.cos(hubAngle(index, hubIds.length)) * hubRadiusX),
         y: roundPosition(centerY + Math.sin(hubAngle(index, hubIds.length)) * hubRadiusY)
@@ -306,7 +341,7 @@ export function buildRelationshipHubSeedLayoutPositions(input: RelationshipHubSe
       const angle = useHubSectorLayout
         ? satelliteAngle(hubPosition, centerX, centerY, index, slotCount, assignedNodes.length, hubIndex)
         : hubAngle(hubIndex, hubIds.length) + Math.PI + (Math.PI * 2 * (index % slotCount)) / slotCount;
-      const radius = useHubSectorLayout ? 100 + ring * 66 : 78 + ring * 54;
+      const radius = (useHubSectorLayout ? 100 + ring * 66 : 78 + ring * 54) * displayScale;
       setClampedPosition(
         positions,
         assignment.nodeId,
@@ -325,8 +360,8 @@ export function buildRelationshipHubSeedLayoutPositions(input: RelationshipHubSe
     setClampedPosition(
       positions,
       node.id,
-      centerX + Math.cos(angle) * input.width * 0.28,
-      centerY + Math.sin(angle) * input.height * 0.26,
+      centerX + Math.cos(angle) * input.width * 0.28 * displayScale,
+      centerY + Math.sin(angle) * input.height * 0.26 * displayScale,
       input.width,
       input.height
     );

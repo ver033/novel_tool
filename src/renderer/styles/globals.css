@@ -5806,6 +5806,11 @@ select:focus-visible {
   gap: 18px;
 }
 
+.summary-book-cache-browser {
+  min-height: auto;
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .summary-cache-list {
   min-height: 0;
   max-height: 680px;

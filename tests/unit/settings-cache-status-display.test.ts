@@ -96,4 +96,11 @@ describe("settings relationship graph source status display", () => {
     expect(source).toContain("<RelationshipGraphCacheSettingsBlock");
     expect(source).not.toContain('{loading ? "读取中" : "刷新"}');
   });
+
+  it("keeps the full book summary preview as a single full-width detail card", () => {
+    const styles = readFileSync(join(process.cwd(), "src/renderer/styles/globals.css"), "utf8");
+
+    expect(styles).toContain(".summary-book-cache-browser");
+    expect(styles).toContain("grid-template-columns: minmax(0, 1fr);");
+  });
 });

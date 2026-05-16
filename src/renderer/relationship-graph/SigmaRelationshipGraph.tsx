@@ -385,7 +385,8 @@ function buildLayoutDataKey(
 function buildSeedPositions(
   nodes: readonly RelationshipGraphNode[],
   edges: readonly RelationshipGraphEdge[],
-  focusNodeId: string | null | undefined
+  focusNodeId: string | null | undefined,
+  displaySettings: RelationshipGraphDisplaySettings
 ): Map<string, RelationshipGraphPosition> {
   if (focusNodeId && nodes.some((node) => node.id === focusNodeId)) {
     return buildRelationshipFocusLayoutPositions({
@@ -400,7 +401,8 @@ function buildSeedPositions(
     nodes,
     edges,
     width: 1100,
-    height: 760
+    height: 760,
+    displaySettings: displaySettings
   });
 }
 
@@ -476,7 +478,7 @@ function buildGraph(
 ): SigmaGraphBuildResult {
   const { displaySettings } = input;
   const config = graphDensityConfig[resolveGraphDensity(input.nodes.length)];
-  const seedPositions = buildSeedPositions(input.nodes, input.edges, input.focusNodeId);
+  const seedPositions = buildSeedPositions(input.nodes, input.edges, input.focusNodeId, displaySettings);
   const useStaticHubSectorLayout =
     !input.focusNodeId &&
     seedPositions.size === input.nodes.length &&
@@ -494,8 +496,15 @@ function buildGraph(
     const node = nodeElement.data;
     const cached = positionCache.get(nodeElement.id);
     const seeded = node.position;
-    const position = cached ?? seeded ?? fallbackPosition(index, data.nodes.length);
+    const targetPosition = useStaticHubSectorLayout && seeded ? seeded : null;
+    const position = targetPosition
+      ? cached ?? fallbackPosition(index, data.nodes.length)
+      : cached ?? seeded ?? fallbackPosition(index, data.nodes.length);
     initialPositions.set(nodeElement.id, position);
+    if (targetPosition) {
+      animationTargets[nodeElement.id] = { x: targetPosition.x, y: targetPosition.y };
+      positionCache.set(nodeElement.id, targetPosition);
+    }
     graph.addNode(nodeElement.id, {
       ...node,
       data: node,
@@ -546,7 +555,7 @@ function buildGraph(
       graph.setNodeAttribute(node, "x", initial.x);
       graph.setNodeAttribute(node, "y", initial.y);
     });
-  } else {
+  } else if (Object.keys(animationTargets).length === 0) {
     cacheGraphPositions(graph, positionCache);
   }
 
@@ -687,7 +696,7 @@ function SigmaGraphController({
   const startSettlingLayout = useCallback(
     (activeGraph: SigmaGraph, fixedNode: string | null = null, duration = 900) => {
       stopSettlingLayout();
-      if (focusNodeId || activeGraph.order < 3 || shouldUseRelationshipHubSectorLayout(nodes, edges)) {
+      if (focusNodeId || activeGraph.order < 3) {
         return;
       }
       if (fixedNode && activeGraph.hasNode(fixedNode)) {
@@ -706,7 +715,7 @@ function SigmaGraphController({
         sigma.refresh();
       }, duration);
     },
-    [displaySettings, edges, focusNodeId, nodes, sigma, stopSettlingLayout]
+    [displaySettings, focusNodeId, sigma, stopSettlingLayout]
   );
 
   useEffect(() => {

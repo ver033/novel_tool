@@ -247,6 +247,25 @@ describe("relationship graph page v2 renderer wiring", () => {
     expect(component).toContain("MAX_DENSE_NODE_SIZE");
   });
 
+  it("applies display tuning to hub-sector static layouts", () => {
+    const component = readSource("src/renderer/relationship-graph/SigmaRelationshipGraph.tsx");
+    const hubLayout = readSource("src/renderer/relationship-graph/relationship-graph-hub-layout.ts");
+
+    expect(component).toContain("displaySettings: displaySettings");
+    expect(hubLayout).toContain("nodeRepulsionScale");
+    expect(hubLayout).toContain("linkDistanceScale");
+    expect(hubLayout).toContain("displayScale");
+  });
+
+  it("animates hub-sector layout targets instead of letting cached positions hide display tuning", () => {
+    const component = readSource("src/renderer/relationship-graph/SigmaRelationshipGraph.tsx");
+
+    expect(component).toContain("const targetPosition = useStaticHubSectorLayout && seeded ? seeded : null");
+    expect(component).toContain("cached ?? fallbackPosition(index, data.nodes.length)");
+    expect(component).toContain("animationTargets[nodeElement.id] = { x: targetPosition.x, y: targetPosition.y }");
+    expect(component).not.toContain("focusNodeId || activeGraph.order < 3 || shouldUseRelationshipHubSectorLayout(nodes, edges)");
+  });
+
   it("creates the Sigma container with a multi graph so parallel relationship edges cannot crash startup", () => {
     const component = readSource("src/renderer/relationship-graph/SigmaRelationshipGraph.tsx");
 
