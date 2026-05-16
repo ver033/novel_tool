@@ -68,7 +68,16 @@ import type {
   summaryIndexStatusInputSchema,
   summaryListCacheEntriesInputSchema,
   summaryRebuildProjectIndexInputSchema,
-  taskPromptPresetSchema
+  taskPromptPresetSchema,
+  writingGoalCreateInputSchema,
+  writingGoalDayDetailInputSchema,
+  writingGoalListDailyStatsInputSchema,
+  writingGoalOverviewInputSchema,
+  writingGoalStatusInputSchema,
+  writingGoalStatusSchema,
+  writingGoalTypeSchema,
+  writingGoalUpdateInputSchema,
+  writingWordEventSourceSchema
 } from "./schemas";
 import type { ProofreadIssue } from "./proofread";
 import type { RelationshipGraphResult, RelationshipGraphSourceStatus } from "./relationship-graph";
@@ -309,6 +318,126 @@ export type ChapterSnapshot = {
   readonly createdAt: string;
 };
 
+export type WritingGoalStatus = z.output<typeof writingGoalStatusSchema>;
+export type WritingGoalType = z.output<typeof writingGoalTypeSchema>;
+export type WritingWordEventSource = z.output<typeof writingWordEventSourceSchema>;
+
+export type WritingGoalRecord = {
+  readonly id: string;
+  readonly projectId: string;
+  readonly name: string;
+  readonly goalType: WritingGoalType;
+  readonly targetWordCount: number;
+  readonly baselineWordCount: number;
+  readonly startDate: string;
+  readonly deadlineDate: string;
+  readonly activeWeekdays: readonly number[];
+  readonly restDates: readonly string[];
+  readonly status: WritingGoalStatus;
+  readonly completedAt: string | null;
+  readonly archivedAt: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+};
+
+export type WritingWordEventRecord = {
+  readonly id: string;
+  readonly projectId: string;
+  readonly goalId: string | null;
+  readonly chapterId: string | null;
+  readonly chapterTitle: string | null;
+  readonly chapterSortOrder: number | null;
+  readonly localDate: string;
+  readonly deltaWords: number;
+  readonly addedWords: number;
+  readonly deletedWords: number;
+  readonly previousWordCount: number;
+  readonly nextWordCount: number;
+  readonly previousProjectWordCount: number;
+  readonly nextProjectWordCount: number;
+  readonly source: WritingWordEventSource;
+  readonly createdAt: string;
+};
+
+export type WritingDailyStat = {
+  readonly projectId: string;
+  readonly localDate: string;
+  readonly addedWords: number;
+  readonly deletedWords: number;
+  readonly netWords: number;
+  readonly eventCount: number;
+  readonly startingTotalWordCount: number;
+  readonly endingTotalWordCount: number;
+  readonly firstWriteAt: string | null;
+  readonly lastWriteAt: string | null;
+  readonly updatedAt: string;
+};
+
+export type WritingDailyPlan = {
+  readonly goalId: string;
+  readonly projectId: string;
+  readonly localDate: string;
+  readonly plannedWords: number;
+  readonly isWritingDay: boolean;
+  readonly isRestDay: boolean;
+  readonly generatedAt: string;
+  readonly updatedAt: string;
+};
+
+export type WritingCalendarDay = {
+  readonly localDate: string;
+  readonly plannedWords: number;
+  readonly netWords: number;
+  readonly addedWords: number;
+  readonly deletedWords: number;
+  readonly eventCount: number;
+  readonly isWritingDay: boolean;
+  readonly isRestDay: boolean;
+  readonly status: "no-data" | "rest" | "missed" | "partial" | "done" | "over" | "deadline" | "system-adjusted";
+};
+
+export type WritingGoalOverview = {
+  readonly projectId: string;
+  readonly currentTotalWordCount: number;
+  readonly goal: WritingGoalRecord | null;
+  readonly progressWords: number;
+  readonly remainingWords: number;
+  readonly completionRatio: number;
+  readonly today: {
+    readonly localDate: string;
+    readonly plannedWords: number;
+    readonly netWords: number;
+    readonly addedWords: number;
+    readonly deletedWords: number;
+    readonly remainingTodayWords: number;
+  };
+  readonly remainingWritingDays: number;
+  readonly requiredPerDay: number;
+  readonly futureRequiredPerDay: number;
+  readonly paceStatus: "no_goal" | "ahead" | "on_track" | "behind" | "completed" | "overdue" | "paused";
+  readonly estimatedCompletionDate: string | null;
+  readonly recentStats: readonly WritingDailyStat[];
+  readonly calendarDays: readonly WritingCalendarDay[];
+  readonly warning: string | null;
+};
+
+export type WritingDayDetail = {
+  readonly projectId: string;
+  readonly localDate: string;
+  readonly plan: WritingDailyPlan | null;
+  readonly stat: WritingDailyStat | null;
+  readonly events: readonly WritingWordEventRecord[];
+  readonly chapterSummaries: readonly {
+    readonly chapterId: string | null;
+    readonly chapterTitle: string;
+    readonly addedWords: number;
+    readonly deletedWords: number;
+    readonly netWords: number;
+    readonly eventCount: number;
+    readonly sources: readonly WritingWordEventSource[];
+  }[];
+};
+
 export type EditorSettings = Required<z.output<typeof editorSettingsSchema>>;
 export type ChapterCacheBuildOrder = z.output<typeof chapterCacheBuildOrderSchema>;
 export type CacheSettings = {
@@ -349,6 +478,12 @@ export type ChapterGetContentInput = z.input<typeof chapterGetContentInputSchema
 export type ChapterSaveContentInput = z.input<typeof chapterSaveContentInputSchema>;
 export type ChapterCreateSnapshotInput = z.input<typeof chapterCreateSnapshotInputSchema>;
 export type ChapterUpdateTargetWordCountInput = z.input<typeof chapterUpdateTargetWordCountInputSchema>;
+export type WritingGoalOverviewInput = z.input<typeof writingGoalOverviewInputSchema>;
+export type WritingGoalCreateInput = z.input<typeof writingGoalCreateInputSchema>;
+export type WritingGoalUpdateInput = z.input<typeof writingGoalUpdateInputSchema>;
+export type WritingGoalStatusInput = z.input<typeof writingGoalStatusInputSchema>;
+export type WritingGoalListDailyStatsInput = z.input<typeof writingGoalListDailyStatsInputSchema>;
+export type WritingGoalDayDetailInput = z.input<typeof writingGoalDayDetailInputSchema>;
 export type SettingsSaveInput = z.input<typeof settingsSaveInputSchema>;
 export type SettingsTestConnectionInput = z.input<typeof settingsTestConnectionInputSchema>;
 export type SettingsListModelsInput = z.input<typeof settingsListModelsInputSchema>;
@@ -615,6 +750,16 @@ export const ipcChannels = {
     createRelationship: "novelTool:authorRelationship:createRelationship",
     deleteCharacter: "novelTool:authorRelationship:deleteCharacter",
     deleteRelationship: "novelTool:authorRelationship:deleteRelationship"
+  },
+  writingGoals: {
+    getOverview: "novelTool:writingGoals:getOverview",
+    createGoal: "novelTool:writingGoals:createGoal",
+    updateGoal: "novelTool:writingGoals:updateGoal",
+    pauseGoal: "novelTool:writingGoals:pauseGoal",
+    resumeGoal: "novelTool:writingGoals:resumeGoal",
+    archiveGoal: "novelTool:writingGoals:archiveGoal",
+    listDailyStats: "novelTool:writingGoals:listDailyStats",
+    getDayDetail: "novelTool:writingGoals:getDayDetail"
   },
   scratch: {
     list: "novelTool:scratch:list",

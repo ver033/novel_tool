@@ -67,7 +67,13 @@ import type {
   SummaryGetChapterCacheInput,
   SummaryIndexStatusInput,
   SummaryListCacheEntriesInput,
-  SummaryRebuildProjectIndexInput
+  SummaryRebuildProjectIndexInput,
+  WritingGoalCreateInput,
+  WritingGoalDayDetailInput,
+  WritingGoalListDailyStatsInput,
+  WritingGoalOverviewInput,
+  WritingGoalStatusInput,
+  WritingGoalUpdateInput
 } from "../main/shared/types";
 import { ipcChannels } from "../main/shared/types";
 
@@ -139,6 +145,16 @@ export type NovelToolApi = {
     readonly createRelationship: (input: AuthorRelationshipCreateRelationshipInput) => Promise<unknown>;
     readonly deleteCharacter: (input: AuthorRelationshipDeleteCharacterInput) => Promise<unknown>;
     readonly deleteRelationship: (input: AuthorRelationshipDeleteRelationshipInput) => Promise<unknown>;
+  };
+  readonly writingGoals: {
+    readonly getOverview: (input: WritingGoalOverviewInput) => Promise<unknown>;
+    readonly createGoal: (input: WritingGoalCreateInput) => Promise<unknown>;
+    readonly updateGoal: (input: WritingGoalUpdateInput) => Promise<unknown>;
+    readonly pauseGoal: (input: WritingGoalStatusInput) => Promise<unknown>;
+    readonly resumeGoal: (input: WritingGoalStatusInput) => Promise<unknown>;
+    readonly archiveGoal: (input: WritingGoalStatusInput) => Promise<unknown>;
+    readonly listDailyStats: (input: WritingGoalListDailyStatsInput) => Promise<unknown>;
+    readonly getDayDetail: (input: WritingGoalDayDetailInput) => Promise<unknown>;
   };
   readonly ai: {
     readonly createTask: (input: AiCreateTaskInput) => Promise<unknown>;
@@ -240,6 +256,16 @@ export const novelToolApi: NovelToolApi = Object.freeze({
     createRelationship: (input: AuthorRelationshipCreateRelationshipInput) => ipcRenderer.invoke(ipcChannels.authorRelationship.createRelationship, input),
     deleteCharacter: (input: AuthorRelationshipDeleteCharacterInput) => ipcRenderer.invoke(ipcChannels.authorRelationship.deleteCharacter, input),
     deleteRelationship: (input: AuthorRelationshipDeleteRelationshipInput) => ipcRenderer.invoke(ipcChannels.authorRelationship.deleteRelationship, input)
+  }),
+  writingGoals: Object.freeze({
+    getOverview: (input: WritingGoalOverviewInput) => ipcRenderer.invoke(ipcChannels.writingGoals.getOverview, input),
+    createGoal: (input: WritingGoalCreateInput) => ipcRenderer.invoke(ipcChannels.writingGoals.createGoal, input),
+    updateGoal: (input: WritingGoalUpdateInput) => ipcRenderer.invoke(ipcChannels.writingGoals.updateGoal, input),
+    pauseGoal: (input: WritingGoalStatusInput) => ipcRenderer.invoke(ipcChannels.writingGoals.pauseGoal, input),
+    resumeGoal: (input: WritingGoalStatusInput) => ipcRenderer.invoke(ipcChannels.writingGoals.resumeGoal, input),
+    archiveGoal: (input: WritingGoalStatusInput) => ipcRenderer.invoke(ipcChannels.writingGoals.archiveGoal, input),
+    listDailyStats: (input: WritingGoalListDailyStatsInput) => ipcRenderer.invoke(ipcChannels.writingGoals.listDailyStats, input),
+    getDayDetail: (input: WritingGoalDayDetailInput) => ipcRenderer.invoke(ipcChannels.writingGoals.getDayDetail, input)
   }),
   ai: Object.freeze({
     createTask: (input: AiCreateTaskInput) => ipcRenderer.invoke(ipcChannels.ai.createTask, input),

@@ -621,6 +621,7 @@ select:focus-visible {
 
 .secondary-button,
 .primary-button,
+.danger-button,
 .ghost-button {
   height: 48px;
   display: inline-flex;
@@ -661,12 +662,14 @@ select:focus-visible {
 
 .primary-button:hover,
 .secondary-button:hover,
+.danger-button:hover,
 .ghost-button:hover {
   transform: translateY(-1px);
 }
 
 .secondary-button:disabled,
 .primary-button:disabled,
+.danger-button:disabled,
 .ghost-button:disabled {
   cursor: not-allowed;
   opacity: 0.58;
@@ -1166,6 +1169,759 @@ select:focus-visible {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.writing-goals-page {
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 72% 8%, rgba(59, 130, 246, 0.07), transparent 34%),
+    linear-gradient(180deg, #ffffff 0%, #fbfaf6 100%);
+}
+
+.writing-goals-shell {
+  height: calc(100vh - var(--topbar));
+  display: flex;
+  min-width: 0;
+}
+
+.writing-goals-workspace {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  padding: 18px 22px 26px;
+}
+
+.writing-goals-empty {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 10px;
+  color: #64748b;
+  text-align: center;
+}
+
+.writing-goals-empty h1,
+.writing-goals-toolbar h1,
+.writing-goal-overview-card h2,
+.writing-calendar-head h2,
+.writing-goal-day-detail h2,
+.writing-goal-form h2 {
+  margin: 0;
+  color: #111827;
+  letter-spacing: 0;
+}
+
+.writing-goals-empty p,
+.writing-goal-overview-card p,
+.writing-goal-day-detail p {
+  margin: 0;
+  color: #64748b;
+  line-height: 1.7;
+}
+
+.writing-goals-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 16px;
+}
+
+.writing-goals-toolbar h1 {
+  margin-top: 4px;
+  font-size: 24px;
+}
+
+.writing-goal-panel-kicker {
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 760;
+}
+
+.writing-goal-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.writing-goal-actions .primary-button,
+.writing-goal-actions .secondary-button,
+.writing-goal-form-actions .primary-button,
+.writing-goal-form-actions .danger-button {
+  height: 40px;
+  padding: 0 14px;
+}
+
+.writing-goal-error,
+.writing-goal-warning {
+  margin-bottom: 12px;
+  padding: 11px 14px;
+  border-radius: 8px;
+  line-height: 1.55;
+}
+
+.writing-goal-error {
+  border: 1px solid #fecaca;
+  background: #fff1f2;
+  color: #be123c;
+}
+
+.writing-goal-warning {
+  border: 1px solid #fde68a;
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.writing-goals-grid {
+  display: grid;
+  grid-template-columns: minmax(360px, 1.45fr) repeat(3, minmax(160px, 0.55fr));
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.writing-goal-overview-card,
+.writing-goal-stat-card,
+.writing-calendar-panel,
+.writing-goal-trend-panel,
+.writing-goal-day-detail,
+.writing-goal-form {
+  border: 1px solid rgba(226, 232, 240, 0.94);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: 0 16px 36px rgba(15, 23, 42, 0.05);
+}
+
+.writing-goal-overview-card {
+  min-height: 154px;
+  display: grid;
+  grid-template-columns: 128px minmax(0, 1fr);
+  gap: 20px;
+  align-items: center;
+  padding: 22px;
+}
+
+.writing-goal-ring {
+  width: 116px;
+  height: 116px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle, #ffffff 58%, transparent 59%),
+    conic-gradient(var(--blue) var(--goal-progress), #e6edf7 0);
+}
+
+.writing-goal-ring span {
+  color: #0f172a;
+  font-size: 24px;
+  font-weight: 780;
+}
+
+.writing-goal-overview-copy {
+  min-width: 0;
+}
+
+.writing-goal-overview-copy h2 {
+  margin: 8px 0 8px;
+  font-size: 28px;
+  line-height: 1.25;
+}
+
+.writing-goal-pace {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  border-radius: 999px;
+  padding: 0 10px;
+  background: #eaf4ff;
+  color: var(--blue);
+  font-size: 13px;
+  font-weight: 780;
+}
+
+.writing-goal-pace.behind,
+.writing-goal-pace.overdue {
+  background: #fff1f2;
+  color: #e11d48;
+}
+
+.writing-goal-pace.ahead,
+.writing-goal-pace.completed,
+.writing-goal-pace.on_track {
+  background: #ecfdf3;
+  color: #059669;
+}
+
+.writing-goal-pace.paused {
+  background: #f1f5f9;
+  color: #64748b;
+}
+
+.writing-goal-stat-card {
+  min-height: 154px;
+  display: grid;
+  align-content: center;
+  gap: 8px;
+  padding: 18px;
+  color: #64748b;
+}
+
+.writing-goal-stat-card svg {
+  color: var(--blue);
+}
+
+.writing-goal-stat-card strong {
+  color: #0f172a;
+  font-size: 27px;
+  line-height: 1;
+}
+
+.writing-goal-stat-card small {
+  color: #8a98ad;
+}
+
+.writing-goals-content {
+  display: grid;
+  grid-template-columns: minmax(620px, 1fr) 360px;
+  gap: 14px;
+  align-items: start;
+}
+
+.writing-calendar-panel,
+.writing-goal-trend-panel {
+  padding: 18px;
+}
+
+.writing-calendar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.writing-calendar-head h2 {
+  margin-top: 4px;
+  font-size: 20px;
+}
+
+.writing-calendar-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.writing-calendar-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.writing-calendar-legend span::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #cbd5e1;
+}
+
+.writing-calendar-legend .done::before {
+  background: #10b981;
+}
+
+.writing-calendar-legend .partial::before {
+  background: #f59e0b;
+}
+
+.writing-calendar-legend .missed::before {
+  background: #ef4444;
+}
+
+.writing-calendar-weekdays,
+.writing-calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.writing-calendar-weekdays {
+  margin-bottom: 8px;
+  color: #94a3b8;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.writing-calendar-day {
+  min-height: 94px;
+  display: grid;
+  align-content: space-between;
+  gap: 5px;
+  border: 1px solid #e7edf5;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #334155;
+  padding: 10px;
+  text-align: left;
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+.writing-calendar-day:not(.blank):hover,
+.writing-calendar-day.selected {
+  border-color: #93c5fd;
+  box-shadow: 0 12px 26px rgba(37, 99, 235, 0.12);
+  transform: translateY(-1px);
+}
+
+.writing-calendar-day.blank {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.writing-calendar-day b {
+  color: #0f172a;
+  font-size: 17px;
+}
+
+.writing-calendar-day small {
+  min-width: 0;
+  overflow: hidden;
+  color: #64748b;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.writing-calendar-date {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.writing-calendar-day.done,
+.writing-calendar-day.over {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+}
+
+.writing-calendar-day.partial {
+  background: #fffbeb;
+  border-color: #fde68a;
+}
+
+.writing-calendar-day.missed,
+.writing-calendar-day.deadline {
+  background: #fff1f2;
+  border-color: #fecdd3;
+}
+
+.writing-calendar-day.rest {
+  background: #f8fafc;
+  color: #94a3b8;
+}
+
+.writing-calendar-day.system-adjusted {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+}
+
+.writing-goal-trend-panel {
+  min-height: 240px;
+}
+
+.writing-trend-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 720;
+  white-space: nowrap;
+}
+
+.writing-trend-summary span {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.writing-trend-summary strong {
+  color: #0f172a;
+}
+
+.writing-trend-summary strong.negative {
+  color: #e11d48;
+}
+
+.writing-goal-trend-chart {
+  position: relative;
+  min-height: 184px;
+  border: 1px solid #e8eef7;
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(248, 251, 255, 0.96), rgba(255, 255, 255, 0.9)),
+    repeating-linear-gradient(0deg, transparent 0, transparent 35px, rgba(148, 163, 184, 0.12) 36px);
+  padding: 18px 10px 10px;
+  overflow: hidden;
+}
+
+.writing-goal-trend-chart.empty {
+  background:
+    linear-gradient(180deg, rgba(248, 251, 255, 0.78), rgba(255, 255, 255, 0.92)),
+    repeating-linear-gradient(0deg, transparent 0, transparent 35px, rgba(148, 163, 184, 0.1) 36px);
+}
+
+.writing-trend-target-line,
+.writing-trend-zero-line {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  pointer-events: none;
+}
+
+.writing-trend-target-line {
+  top: var(--target-top);
+  z-index: 1;
+  border-top: 1px dashed rgba(37, 99, 235, 0.38);
+}
+
+.writing-trend-target-line span {
+  position: absolute;
+  right: 0;
+  top: -18px;
+  border: 1px solid #dbeafe;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #2563eb;
+  padding: 2px 7px;
+  font-size: 11px;
+  font-weight: 760;
+}
+
+.writing-trend-zero-line {
+  top: 130px;
+  border-top: 1px solid rgba(148, 163, 184, 0.24);
+}
+
+.writing-trend-days {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: repeat(14, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.writing-trend-day {
+  min-width: 0;
+  display: grid;
+  grid-template-rows: 18px 148px 28px;
+  gap: 4px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #64748b;
+  padding: 0 2px;
+  transition: background 160ms ease, transform 160ms ease;
+}
+
+.writing-trend-day:hover,
+.writing-trend-day.selected {
+  background: rgba(219, 234, 254, 0.52);
+  transform: translateY(-1px);
+}
+
+.writing-trend-day.today small b {
+  color: #2563eb;
+}
+
+.writing-trend-value {
+  min-height: 18px;
+  overflow: hidden;
+  color: #334155;
+  font-size: 10px;
+  font-weight: 760;
+  line-height: 18px;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.writing-trend-day.negative .writing-trend-value {
+  color: #e11d48;
+}
+
+.writing-trend-bar-stack {
+  display: grid;
+  grid-template-rows: 112px 1px 35px;
+  align-items: stretch;
+  justify-items: center;
+}
+
+.writing-trend-positive-zone,
+.writing-trend-negative-zone {
+  position: relative;
+  width: 100%;
+}
+
+.writing-trend-positive-bar,
+.writing-trend-negative-bar {
+  position: absolute;
+  left: 50%;
+  width: min(100%, 18px);
+  min-height: 0;
+  border-radius: 999px 999px 3px 3px;
+  transform: translateX(-50%);
+  transition: height 220ms ease, filter 160ms ease;
+}
+
+.writing-trend-positive-bar {
+  bottom: 0;
+  height: var(--positive-height);
+  background: linear-gradient(180deg, #60a5fa, #2385e8);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.38);
+}
+
+.writing-trend-day.hit .writing-trend-positive-bar {
+  background: linear-gradient(180deg, #34d399, #12a869);
+}
+
+.writing-trend-day.quiet .writing-trend-positive-bar {
+  height: 4px;
+  background: #dbe4ef;
+  border-radius: 999px;
+}
+
+.writing-trend-negative-bar {
+  top: 0;
+  height: var(--negative-height);
+  border-radius: 3px 3px 999px 999px;
+  background: linear-gradient(180deg, #fb7185, #e11d48);
+}
+
+.writing-trend-baseline-dot {
+  width: 4px;
+  height: 4px;
+  align-self: center;
+  border-radius: 50%;
+  background: #cbd5e1;
+}
+
+.writing-trend-day small {
+  display: grid;
+  gap: 1px;
+  color: #94a3b8;
+  font-size: 10px;
+  line-height: 1.1;
+  text-align: center;
+}
+
+.writing-trend-day small b {
+  color: #475569;
+  font-size: 11px;
+}
+
+.writing-trend-foot {
+  min-height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 10px;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 690;
+}
+
+.writing-goal-day-detail {
+  width: 340px;
+  flex: 0 0 340px;
+  margin: 18px 18px 18px 0;
+  padding: 20px;
+  overflow: auto;
+}
+
+.writing-goal-detail-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.writing-goal-detail-head strong {
+  font-size: 22px;
+}
+
+.writing-goal-detail-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.writing-goal-detail-metrics span {
+  min-height: 48px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #edf2f7;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 720;
+}
+
+.writing-goal-event-list {
+  display: grid;
+  gap: 10px;
+}
+
+.writing-goal-event-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 58px;
+  padding: 12px;
+  border: 1px solid #edf2f7;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.writing-goal-event-row div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.writing-goal-event-row strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #0f172a;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.writing-goal-event-row span,
+.writing-goal-muted {
+  color: #64748b;
+  font-size: 13px;
+}
+
+.positive {
+  color: #059669;
+}
+
+.negative {
+  color: #e11d48;
+}
+
+.writing-goal-form-backdrop {
+  position: fixed;
+  inset: var(--topbar) 0 0;
+  z-index: 90;
+  display: flex;
+  justify-content: flex-end;
+  background: rgba(15, 23, 42, 0.18);
+  backdrop-filter: blur(8px);
+}
+
+.writing-goal-form {
+  width: min(448px, calc(100vw - 28px));
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  border-radius: 0;
+  padding: 22px;
+  overflow: auto;
+}
+
+.writing-goal-form-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 4px;
+}
+
+.writing-goal-form-head button {
+  width: 38px;
+  height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: white;
+  color: #64748b;
+  font-size: 24px;
+}
+
+.writing-goal-form label {
+  display: grid;
+  gap: 7px;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 720;
+}
+
+.writing-goal-form input {
+  height: 42px;
+  border: 1px solid #dbe3ef;
+  border-radius: 8px;
+  background: #fff;
+  color: #0f172a;
+  padding: 0 12px;
+  font: inherit;
+}
+
+.writing-goal-form input:disabled {
+  background: #f8fafc;
+  color: #94a3b8;
+}
+
+.writing-goal-form-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.writing-goal-type-switch,
+.writing-goal-weekdays {
+  display: flex;
+  gap: 8px;
+}
+
+.writing-goal-type-switch button,
+.writing-goal-weekdays button {
+  min-height: 38px;
+  flex: 1;
+  border: 1px solid #dbe3ef;
+  border-radius: 8px;
+  background: white;
+  color: #475569;
+  font-weight: 760;
+}
+
+.writing-goal-type-switch button.active,
+.writing-goal-weekdays button.active {
+  border-color: #93c5fd;
+  background: #eff6ff;
+  color: var(--blue);
+}
+
+.writing-goal-form-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: auto;
+  padding-top: 10px;
 }
 
 .sr-only {
@@ -6671,6 +7427,23 @@ select:focus-visible {
     left: 0;
     width: min(520px, calc(100vw - 96px));
   }
+
+  .writing-goals-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .writing-goal-overview-card {
+    grid-column: 1 / -1;
+  }
+
+  .writing-goals-content {
+    grid-template-columns: 1fr;
+  }
+
+  .writing-goal-day-detail {
+    width: 304px;
+    flex-basis: 304px;
+  }
 }
 
 @media (max-width: 760px) {
@@ -6711,6 +7484,45 @@ select:focus-visible {
 
   .relationship-graph-shell {
     display: grid;
+  }
+
+  .writing-goals-shell {
+    height: auto;
+    display: grid;
+  }
+
+  .writing-goals-toolbar,
+  .writing-calendar-head,
+  .writing-goal-detail-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .writing-goals-grid,
+  .writing-goals-content,
+  .writing-goal-overview-card,
+  .writing-goal-form-row {
+    grid-template-columns: 1fr;
+  }
+
+  .writing-goals-workspace {
+    padding: 16px;
+  }
+
+  .writing-calendar-weekdays,
+  .writing-calendar-grid {
+    gap: 5px;
+  }
+
+  .writing-calendar-day {
+    min-height: 82px;
+    padding: 8px;
+  }
+
+  .writing-goal-day-detail {
+    width: auto;
+    min-height: auto;
+    margin: 0 16px 16px;
   }
 
   .relationship-graph-workspace {

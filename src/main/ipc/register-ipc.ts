@@ -22,6 +22,7 @@ import { ProjectRepository } from "../db/repositories/project-repo";
 import { ScratchNoteRepository } from "../db/repositories/scratch-note-repo";
 import { SettingsRepository } from "../db/repositories/settings-repo";
 import { SummaryRepository } from "../db/repositories/summary-repo";
+import { WritingGoalRepository } from "../db/repositories/writing-goal-repo";
 import { ShareableProjectExporter } from "../export/shareable-project-exporter";
 import { TxtExporter } from "../export/txt-exporter";
 import { TxtImporter } from "../import/txt-importer";
@@ -32,6 +33,7 @@ import { createElectronSecretStore } from "../settings/electron-secret-store";
 import { SettingsService } from "../settings/settings-service";
 import { ipcChannels } from "../shared/types";
 import type { TaskType } from "../shared/types";
+import { WritingGoalService } from "../writing-goals/writing-goal-service";
 import {
   IpcPayloadValidationError,
   parseIpcPayload,
@@ -56,6 +58,7 @@ import { registerProjectIpc } from "./project-ipc";
 import { registerRelationshipGraphIpc } from "./relationship-graph-ipc";
 import { registerScratchIpc } from "./scratch-ipc";
 import { registerSettingsIpc } from "./settings-ipc";
+import { registerWritingGoalIpc } from "./writing-goal-ipc";
 
 type RegisterIpcOptions = {
   readonly database?: SqliteDatabase;
@@ -213,6 +216,8 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
     const resolveChapterRepo = (projectId: string): ChapterRepository => new ChapterRepository(resolveProjectDb(projectId));
     const resolveSummaryRepo = (projectId: string): SummaryRepository => new SummaryRepository(resolveProjectDb(projectId));
     const resolveAuthorRelationshipRepo = (projectId: string): AuthorRelationshipRepository => new AuthorRelationshipRepository(resolveProjectDb(projectId));
+    const resolveWritingGoalRepo = (projectId: string): WritingGoalRepository => new WritingGoalRepository(resolveProjectDb(projectId));
+    const resolveWritingGoalService = (projectId: string): WritingGoalService => new WritingGoalService(resolveWritingGoalRepo(projectId));
     const writingOperationRunner = useE2eAiGenerators()
       ? undefined
       : WritingOperationRunner.fromSettings(settingsService, resolveChapterRepo, resolveSummaryRepo);
@@ -234,7 +239,8 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
             createSummaryService(input.projectId).markChapterContentChanged(input);
           }
         }
-      })
+      }),
+      writingGoalRecorder: resolveWritingGoalService
     });
     const aiTaskService = new AiTaskService(
       (projectId) => new AiTaskRepository(resolveProjectDb(projectId)),
@@ -328,6 +334,35 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
     );
     registerProjectIpc(projectService);
     registerChapterIpc(chapterService);
+    registerWritingGoalIpc((projectId) => {
+      const service = resolveWritingGoalService(projectId);
+      return {
+        getOverview(input) {
+          return service.getOverview(input.projectId, input.today);
+        },
+        createGoal(input) {
+          return service.createGoal(input);
+        },
+        updateGoal(input) {
+          return service.updateGoal(input);
+        },
+        pauseGoal(input) {
+          return service.pauseGoal(input);
+        },
+        resumeGoal(input) {
+          return service.resumeGoal(input);
+        },
+        archiveGoal(input) {
+          return service.archiveGoal(input);
+        },
+        listDailyStats(input) {
+          return service.listDailyStats(input);
+        },
+        getDayDetail(input) {
+          return service.getDayDetail(input);
+        }
+      };
+    });
     registerAiIpc(aiTaskService);
     registerRelationshipGraphIpc((projectId) => ({
       getGraph(input) {

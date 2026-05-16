@@ -18,15 +18,15 @@ describe("app shell configuration", () => {
     expect(mainSource).toContain("minHeight: 760");
   });
 
-  it("keeps package metadata aligned with the V1 release version", () => {
+  it("keeps package metadata aligned with the current release version", () => {
     const packageJson = JSON.parse(readRepoFile("package.json")) as { version?: string };
     const packageLock = JSON.parse(readRepoFile("package-lock.json")) as {
       version?: string;
       packages?: { "": { version?: string } };
     };
 
-    expect(packageJson.version).toBe("1.4.0");
-    expect(packageLock.version).toBe("1.4.0");
-    expect(packageLock.packages?.[""].version).toBe("1.4.0");
+    expect(packageJson.version).toBe("1.5.0");
+    expect(packageLock.version).toBe("1.5.0");
+    expect(packageLock.packages?.[""].version).toBe("1.5.0");
   });
 });

@@ -15,6 +15,20 @@ import { buildRelationshipHubSeedLayoutPositions } from "../../src/renderer/rela
 
 const bailuyuanProjectPath = join(__dirname, "..", "..", "..", "test_novel", "《白鹿原》全集.noveltool");
 
+function hasBailuyuanRelationshipFixture(): boolean {
+  if (!existsSync(bailuyuanProjectPath)) {
+    return false;
+  }
+  const db = Database(bailuyuanProjectPath, { readonly: true, fileMustExist: true });
+  try {
+    const entityTable = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'relationship_entities'").get();
+    const mentionTable = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'relationship_mentions'").get();
+    return Boolean(entityTable && mentionTable);
+  } finally {
+    db.close();
+  }
+}
+
 type EntityRow = {
   readonly id: string;
   readonly canonical_name: string;
@@ -297,7 +311,7 @@ function distance(left: { readonly x: number; readonly y: number }, right: { rea
   return Math.hypot(left.x - right.x, left.y - right.y);
 }
 
-describe.skipIf(!existsSync(bailuyuanProjectPath))("白鹿原人物关系图布局", () => {
+describe.skipIf(!hasBailuyuanRelationshipFixture())("白鹿原人物关系图布局", () => {
   it("seeds the real high-degree characters into separate readable sectors without locking them", () => {
     const graph = loadBailuyuanRelationshipGraph();
     const positions = buildRelationshipHubSeedLayoutPositions({ ...graph, width: 1100, height: 760 });

@@ -49,7 +49,11 @@ describe("phase 2 database migrations", () => {
       "schema_migrations",
       "scratch_notes",
       "settings",
-      "summary_jobs"
+      "summary_jobs",
+      "writing_daily_stats",
+      "writing_goal_daily_plans",
+      "writing_goals",
+      "writing_word_events"
     ]);
     expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version").all()).toEqual([
       { version: 1 },
@@ -67,7 +71,8 @@ describe("phase 2 database migrations", () => {
       { version: 15 },
       { version: 17 },
       { version: 18 },
-      { version: 19 }
+      { version: 19 },
+      { version: 20 }
     ]);
     expect(db.prepare("PRAGMA table_info(import_jobs)").all().find((row) => row.name === "project_id")).toMatchObject({ notnull: 0 });
     expect(db.prepare("PRAGMA table_info(ai_task_candidates)").all().find((row) => row.name === "metadata_json")).toMatchObject({
@@ -101,7 +106,7 @@ describe("phase 2 database migrations", () => {
     runMigrations(db);
     runMigrations(db);
 
-    expect(db.prepare("SELECT COUNT(*) AS count FROM schema_migrations").get()).toEqual({ count: 16 });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM schema_migrations").get()).toEqual({ count: 17 });
 
     db.close();
   });
@@ -148,6 +153,55 @@ describe("phase 2 database migrations", () => {
         "normalized_relation_key",
         "created_at",
         "updated_at"
+      ])
+    );
+
+    db.close();
+  });
+
+  it("creates writing goal and statistics tables for project-level planning", () => {
+    const db = createDatabase(createTempDbPath());
+
+    runMigrations(db);
+
+    const goalColumns = db.prepare("PRAGMA table_info(writing_goals)").all().map((row) => row.name);
+    expect(goalColumns).toEqual(
+      expect.arrayContaining([
+        "id",
+        "project_id",
+        "goal_type",
+        "target_word_count",
+        "baseline_word_count",
+        "active_weekdays_json",
+        "rest_dates_json",
+        "status"
+      ])
+    );
+
+    const eventColumns = db.prepare("PRAGMA table_info(writing_word_events)").all().map((row) => row.name);
+    expect(eventColumns).toEqual(
+      expect.arrayContaining([
+        "goal_id",
+        "chapter_id",
+        "chapter_title",
+        "chapter_sort_order",
+        "delta_words",
+        "previous_project_word_count",
+        "next_project_word_count",
+        "source"
+      ])
+    );
+
+    const planColumns = db.prepare("PRAGMA table_info(writing_goal_daily_plans)").all().map((row) => row.name);
+    expect(planColumns).toEqual(expect.arrayContaining(["goal_id", "project_id", "local_date", "planned_words", "is_writing_day", "is_rest_day"]));
+
+    const indexes = db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name LIKE 'writing_%' ORDER BY name").all().map((row) => row.name);
+    expect(indexes).toEqual(
+      expect.arrayContaining([
+        "idx_writing_goals_one_open_goal",
+        "idx_writing_goals_project_status",
+        "idx_writing_word_events_project_date",
+        "idx_writing_goal_daily_plans_project_date"
       ])
     );
 
@@ -235,7 +289,7 @@ describe("phase 2 database migrations", () => {
     expect(db.prepare("SELECT COUNT(*) AS count FROM arc_ai_summaries").get()).toEqual({ count: 0 });
     expect(db.prepare("SELECT COUNT(*) AS count FROM book_ai_summaries").get()).toEqual({ count: 0 });
     expect(db.prepare("SELECT COUNT(*) AS count FROM summary_jobs").get()).toEqual({ count: 0 });
-    expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").get()).toEqual({ version: 19 });
+    expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").get()).toEqual({ version: 20 });
 
     db.close();
   });
@@ -293,7 +347,7 @@ describe("phase 2 database migrations", () => {
       change_summary: "旧版校对结果已失效，请重新生成。",
       metadata_json: null
     });
-    expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").get()).toEqual({ version: 19 });
+    expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").get()).toEqual({ version: 20 });
 
     db.close();
   });

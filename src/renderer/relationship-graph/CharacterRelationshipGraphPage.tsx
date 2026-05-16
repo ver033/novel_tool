@@ -28,6 +28,7 @@ type CharacterRelationshipGraphPageProps = {
   readonly onOpenChapter: (chapterId: string) => void;
   readonly onOpenSettings: () => void;
   readonly onOpenWriting: () => void;
+  readonly onOpenWritingGoals: () => void;
   readonly onWelcome: () => void;
 };
 
@@ -45,6 +46,7 @@ export function CharacterRelationshipGraphPage({
   onOpenChapter,
   onOpenSettings,
   onOpenWriting,
+  onOpenWritingGoals,
   onWelcome
 }: CharacterRelationshipGraphPageProps) {
   const api = useMemo(getNovelToolApi, []);
@@ -182,6 +184,10 @@ export function CharacterRelationshipGraphPage({
     }
     if (module === "settings") {
       onOpenSettings();
+      return;
+    }
+    if (module === "goals") {
+      onOpenWritingGoals();
     }
   }
 

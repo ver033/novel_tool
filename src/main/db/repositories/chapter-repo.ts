@@ -274,6 +274,13 @@ export class ChapterRepository {
     return row?.nextSortOrder ?? 0;
   }
 
+  getProjectWordCount(projectId: string): number {
+    const row = this.db.prepare("SELECT COALESCE(SUM(word_count), 0) AS wordCount FROM chapters WHERE project_id = ?").get(projectId) as
+      | { readonly wordCount: number }
+      | undefined;
+    return row?.wordCount ?? 0;
+  }
+
   findRowById(chapterId: string): ChapterRow {
     const row = this.db.prepare("SELECT * FROM chapters WHERE id = ?").get(chapterId) as ChapterRow | undefined;
     if (!row) {

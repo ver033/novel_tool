@@ -267,6 +267,12 @@ export class ShareableProjectExporter {
               db.prepare("DELETE FROM book_ai_summaries WHERE status <> 'ready'").run();
             }
           }
+          if (!input.includeWritingGoalsAndStats) {
+            deleteFromTableIfExists(db, "writing_goal_daily_plans");
+            deleteFromTableIfExists(db, "writing_daily_stats");
+            deleteFromTableIfExists(db, "writing_word_events");
+            deleteFromTableIfExists(db, "writing_goals");
+          }
         })();
       } finally {
         db.pragma("foreign_keys = ON");
@@ -295,7 +301,8 @@ export class ShareableProjectExporter {
       "人物关系设定",
       ...(input.includeScratchNotes ? ["草稿纸/素材"] : []),
       ...(input.includePromptPresets ? ["提示词预设"] : []),
-      ...(input.includeSummaryCache ? ["章节索引缓存"] : [])
+      ...(input.includeSummaryCache ? ["章节索引缓存"] : []),
+      ...(input.includeWritingGoalsAndStats ? ["写作目标/每日统计"] : [])
     ];
   }
 
@@ -304,7 +311,8 @@ export class ShareableProjectExporter {
       ...ALWAYS_REMOVED_LABELS,
       ...(!input.includeScratchNotes ? ["草稿纸/素材"] : []),
       ...(!input.includePromptPresets ? ["提示词预设"] : []),
-      ...(!input.includeSummaryCache ? ["章节索引缓存"] : [])
+      ...(!input.includeSummaryCache ? ["章节索引缓存"] : []),
+      ...(!input.includeWritingGoalsAndStats ? ["写作目标/每日统计"] : [])
     ];
   }
 }

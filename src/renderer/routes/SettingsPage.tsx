@@ -830,12 +830,14 @@ type ShareableExportOptions = {
   readonly includeScratchNotes: boolean;
   readonly includePromptPresets: boolean;
   readonly includeSummaryCache: boolean;
+  readonly includeWritingGoalsAndStats: boolean;
 };
 
 const defaultShareableExportOptions: ShareableExportOptions = {
   includeScratchNotes: false,
   includePromptPresets: false,
-  includeSummaryCache: true
+  includeSummaryCache: true,
+  includeWritingGoalsAndStats: false
 };
 
 const alwaysRemovedShareableItems = ["AI 聊天记录", "AI 改写任务记录", "章节快照", "导入记录", "本机路径", "缓存任务记录"] as const;
@@ -959,6 +961,17 @@ function ShareableProjectExportPane({ currentProject }: ShareableProjectExportPa
                 <span>
                   <b>草稿纸/素材</b>
                   <small>可能包含私人构思，默认不导出。</small>
+                </span>
+              </label>
+              <label className={`shareable-export-option ${options.includeWritingGoalsAndStats ? "active" : ""}`}>
+                <input
+                  checked={options.includeWritingGoalsAndStats}
+                  onChange={(event) => updateOption("includeWritingGoalsAndStats", event.target.checked)}
+                  type="checkbox"
+                />
+                <span>
+                  <b>写作目标/每日统计</b>
+                  <small>包含每日写作节奏、删改记录和目标计划，默认不导出。</small>
                 </span>
               </label>
               <label className={`shareable-export-option ${options.includePromptPresets ? "active" : ""}`}>

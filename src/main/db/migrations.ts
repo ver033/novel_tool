@@ -600,6 +600,97 @@ const migrations: readonly Migration[] = [
       }
     }
   },
+  {
+    version: 20,
+    name: "writing_goals_and_statistics",
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS writing_goals (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          goal_type TEXT NOT NULL CHECK (goal_type IN ('total_words', 'added_words')),
+          target_word_count INTEGER NOT NULL,
+          baseline_word_count INTEGER NOT NULL,
+          start_date TEXT NOT NULL,
+          deadline_date TEXT NOT NULL,
+          active_weekdays_json TEXT NOT NULL,
+          rest_dates_json TEXT NOT NULL DEFAULT '[]',
+          status TEXT NOT NULL CHECK (status IN ('active', 'paused', 'completed', 'archived')),
+          completed_at TEXT,
+          archived_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_writing_goals_project_status
+          ON writing_goals(project_id, status, updated_at);
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_writing_goals_one_open_goal
+          ON writing_goals(project_id)
+          WHERE status IN ('active', 'paused');
+
+        CREATE TABLE IF NOT EXISTS writing_word_events (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          goal_id TEXT,
+          chapter_id TEXT,
+          chapter_title TEXT,
+          chapter_sort_order INTEGER,
+          local_date TEXT NOT NULL,
+          delta_words INTEGER NOT NULL,
+          added_words INTEGER NOT NULL,
+          deleted_words INTEGER NOT NULL,
+          previous_word_count INTEGER NOT NULL,
+          next_word_count INTEGER NOT NULL,
+          previous_project_word_count INTEGER NOT NULL,
+          next_project_word_count INTEGER NOT NULL,
+          source TEXT NOT NULL CHECK (source IN ('manual', 'ai_apply', 'chapter_delete', 'system')),
+          created_at TEXT NOT NULL,
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+          FOREIGN KEY (goal_id) REFERENCES writing_goals(id) ON DELETE SET NULL,
+          FOREIGN KEY (chapter_id) REFERENCES chapters(id) ON DELETE SET NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_writing_word_events_project_date
+          ON writing_word_events(project_id, local_date, created_at);
+
+        CREATE TABLE IF NOT EXISTS writing_daily_stats (
+          project_id TEXT NOT NULL,
+          local_date TEXT NOT NULL,
+          added_words INTEGER NOT NULL DEFAULT 0,
+          deleted_words INTEGER NOT NULL DEFAULT 0,
+          net_words INTEGER NOT NULL DEFAULT 0,
+          event_count INTEGER NOT NULL DEFAULT 0,
+          starting_total_word_count INTEGER NOT NULL DEFAULT 0,
+          ending_total_word_count INTEGER NOT NULL DEFAULT 0,
+          first_write_at TEXT,
+          last_write_at TEXT,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (project_id, local_date),
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS writing_goal_daily_plans (
+          goal_id TEXT NOT NULL,
+          project_id TEXT NOT NULL,
+          local_date TEXT NOT NULL,
+          planned_words INTEGER NOT NULL DEFAULT 0,
+          is_writing_day INTEGER NOT NULL DEFAULT 1,
+          is_rest_day INTEGER NOT NULL DEFAULT 0,
+          generated_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (goal_id, local_date),
+          FOREIGN KEY (goal_id) REFERENCES writing_goals(id) ON DELETE CASCADE,
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_writing_goal_daily_plans_project_date
+          ON writing_goal_daily_plans(project_id, local_date);
+      `);
+    }
+  },
 ];
 
 export function runMigrations(db: SqliteDatabase): void {

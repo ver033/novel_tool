@@ -33,6 +33,7 @@ type TopBarProps = {
   readonly onSettings: () => void;
   readonly searchValue?: string;
   readonly searchPlaceholder?: string;
+  readonly showSearch?: boolean;
   readonly showEditorHistoryControls?: boolean;
   readonly showSaveStatus?: boolean;
 };
@@ -181,6 +182,7 @@ export function TopBar({
   onSettings,
   searchValue = "",
   searchPlaceholder,
+  showSearch = true,
   showEditorHistoryControls = true,
   showSaveStatus = true
 }: TopBarProps) {
@@ -219,6 +221,8 @@ export function TopBar({
         ) : null}
         {focusMode ? (
           <span className="focus-mode-label">专注写作</span>
+        ) : !showSearch ? (
+          <span className="focus-mode-label">{searchPlaceholder ?? title}</span>
         ) : (
           <label className="search">
             <MagnifyingGlass size={21} />

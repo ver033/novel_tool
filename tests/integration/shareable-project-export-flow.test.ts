@@ -8,11 +8,13 @@ import { ChapterRepository } from "../../src/main/db/repositories/chapter-repo";
 import { AuthorRelationshipRepository } from "../../src/main/db/repositories/author-relationship-repo";
 import { ProjectRepository } from "../../src/main/db/repositories/project-repo";
 import { SummaryRepository } from "../../src/main/db/repositories/summary-repo";
+import { WritingGoalRepository } from "../../src/main/db/repositories/writing-goal-repo";
 import { SummaryService } from "../../src/main/ai/summary-service";
 import { ShareableProjectExporter } from "../../src/main/export/shareable-project-exporter";
 import { openExistingProjectDatabase } from "../../src/main/project/project-file";
 import { ProjectService } from "../../src/main/project/project-service";
 import { countWritingUnits } from "../../src/main/shared/text";
+import { WritingGoalService } from "../../src/main/writing-goals/writing-goal-service";
 import { chapterIndexPayloadV2 } from "../helpers/summary-index-fixtures";
 
 const tempDirs: string[] = [];
@@ -134,6 +136,28 @@ describe("shareable project export flow", () => {
       sourceToTargetLabel: "主人",
       targetToSourceLabel: "长工"
     });
+    const writingGoalService = new WritingGoalService(new WritingGoalRepository(projectDb));
+    writingGoalService.createGoal({
+      projectId: project.id,
+      name: "私密写作目标",
+      goalType: "total_words",
+      targetWordCount: 100_000,
+      startDate: "2026-05-15",
+      deadlineDate: "2026-06-15",
+      activeWeekdays: [0, 1, 2, 3, 4, 5, 6],
+      restDates: []
+    });
+    writingGoalService.recordWordDelta({
+      projectId: project.id,
+      chapterId: initialChapter.id,
+      chapterTitle: initialChapter.title,
+      chapterSortOrder: initialChapter.sortOrder,
+      previousWordCount: 0,
+      nextWordCount: countWritingUnits("白嘉轩站在原上。"),
+      previousProjectWordCount: 0,
+      nextProjectWordCount: countWritingUnits("白嘉轩站在原上。"),
+      now
+    });
     projectDb
       .prepare(
         "INSERT INTO summary_jobs (id, project_id, job_type, target_id, source_hash, status, error, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
@@ -146,7 +170,8 @@ describe("shareable project export flow", () => {
       filePath: outputPath,
       includeScratchNotes: false,
       includePromptPresets: false,
-      includeSummaryCache: true
+      includeSummaryCache: true,
+      includeWritingGoalsAndStats: false
     });
 
     expect(result.filePath).toBe(outputPath);
@@ -171,6 +196,10 @@ describe("shareable project export flow", () => {
       expect(countRows(exportedDb, "scratch_notes")).toBe(0);
       expect(countRows(exportedDb, "prompt_presets")).toBe(0);
       expect(countRows(exportedDb, "summary_jobs")).toBe(0);
+      expect(countRows(exportedDb, "writing_goals")).toBe(0);
+      expect(countRows(exportedDb, "writing_word_events")).toBe(0);
+      expect(countRows(exportedDb, "writing_daily_stats")).toBe(0);
+      expect(countRows(exportedDb, "writing_goal_daily_plans")).toBe(0);
       expect(countRows(exportedDb, "chapter_ai_summaries")).toBe(1);
       const authorCharacters = exportedDb.prepare("SELECT name, project_id FROM author_relationship_characters ORDER BY name ASC").all() as {
         readonly name: string;
@@ -221,7 +250,8 @@ describe("shareable project export flow", () => {
         filePath: outputPath,
         includeScratchNotes: false,
         includePromptPresets: false,
-        includeSummaryCache: false
+        includeSummaryCache: false,
+        includeWritingGoalsAndStats: false
       })
     ).rejects.toThrow("可分享副本隐私扫描失败");
     expect(existsSync(outputPath)).toBe(false);

@@ -124,7 +124,8 @@ export const chapterSaveContentInputSchema = z
     contentJson: tiptapJsonSchema,
     plainText: z.string().max(MAX_CHAPTER_PLAIN_TEXT_CHARS),
     wordCount: z.number().int().nonnegative().optional(),
-    expectedUpdatedAt: nonEmptyString.optional()
+    expectedUpdatedAt: nonEmptyString.optional(),
+    saveSource: z.enum(["manual", "ai_apply", "system"]).optional()
   })
   .strict();
 
@@ -141,6 +142,81 @@ export const chapterCreateSnapshotInputSchema = z
     projectId: optionalIdSchema,
     chapterId: idSchema,
     reason: nonEmptyString.max(120)
+  })
+  .strict();
+
+const localDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+
+export const writingGoalStatusSchema = z.enum(["active", "paused", "completed", "archived"]);
+export const writingGoalTypeSchema = z.enum(["total_words", "added_words"]);
+export const writingWordEventSourceSchema = z.enum(["manual", "ai_apply", "chapter_delete", "system"]);
+
+export const writingGoalOverviewInputSchema = z
+  .object({
+    projectId: idSchema,
+    today: localDateSchema.optional()
+  })
+  .strict();
+
+export const writingGoalCreateInputSchema = z
+  .object({
+    projectId: idSchema,
+    name: nonEmptyString.max(80).optional(),
+    goalType: writingGoalTypeSchema,
+    targetWordCount: z.number().int().min(100).max(50_000_000),
+    startDate: localDateSchema,
+    deadlineDate: localDateSchema,
+    activeWeekdays: z.array(z.number().int().min(0).max(6)).min(1).max(7),
+    restDates: z.array(localDateSchema).max(366).optional()
+  })
+  .strict()
+  .refine((value) => value.deadlineDate >= value.startDate, {
+    message: "deadlineDate must be greater than or equal to startDate",
+    path: ["deadlineDate"]
+  });
+
+export const writingGoalUpdateInputSchema = z
+  .object({
+    projectId: idSchema,
+    goalId: idSchema,
+    patch: z
+      .object({
+        name: nonEmptyString.max(80).optional(),
+        targetWordCount: z.number().int().min(100).max(50_000_000).optional(),
+        deadlineDate: localDateSchema.optional(),
+        activeWeekdays: z.array(z.number().int().min(0).max(6)).min(1).max(7).optional(),
+        restDates: z.array(localDateSchema).max(366).optional()
+      })
+      .strict()
+      .refine((value) => Object.keys(value).length > 0, {
+        message: "patch must include at least one field"
+      })
+  })
+  .strict();
+
+export const writingGoalStatusInputSchema = z
+  .object({
+    projectId: idSchema,
+    goalId: idSchema
+  })
+  .strict();
+
+export const writingGoalListDailyStatsInputSchema = z
+  .object({
+    projectId: idSchema,
+    from: localDateSchema,
+    to: localDateSchema
+  })
+  .strict()
+  .refine((value) => value.to >= value.from, {
+    message: "to must be greater than or equal to from",
+    path: ["to"]
+  });
+
+export const writingGoalDayDetailInputSchema = z
+  .object({
+    projectId: idSchema,
+    date: localDateSchema
   })
   .strict();
 
@@ -476,7 +552,8 @@ export const exportShareableProjectCopyInputSchema = z
     filePath: nonEmptyString.max(4096),
     includeScratchNotes: z.boolean(),
     includePromptPresets: z.boolean(),
-    includeSummaryCache: z.boolean()
+    includeSummaryCache: z.boolean(),
+    includeWritingGoalsAndStats: z.boolean()
   })
   .strict();
 

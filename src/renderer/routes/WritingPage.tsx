@@ -252,6 +252,7 @@ type WritingPageProps = {
   readonly onOpenFloatingPanel: (kind: FloatingPanelKind, chapterId?: string | null, scratchNoteId?: string | null) => void;
   readonly onOpenFloatingScratchpad: (chapterId?: string | null, scratchNoteId?: string | null) => void;
   readonly onOpenRelationshipGraph: () => void;
+  readonly onOpenWritingGoals: () => void;
   readonly onOpenScratchpad: () => void;
   readonly onRaiseFloatingPanel: (panelId: string) => void;
   readonly onResetAllFloatingPanels: () => void;
@@ -299,6 +300,7 @@ export function WritingPage({
   onOpenFloatingPanel,
   onOpenFloatingScratchpad,
   onOpenRelationshipGraph,
+  onOpenWritingGoals,
   onOpenScratchpad,
   onRaiseFloatingPanel,
   onResetAllFloatingPanels,
@@ -605,11 +607,15 @@ export function WritingPage({
         handleOpenRelationshipGraph();
         return;
       }
+      if (module === "goals") {
+        flushBeforeNavigation(onOpenWritingGoals);
+        return;
+      }
       if (module === "settings") {
         handleSettings();
       }
     },
-    [handleOpenRelationshipGraph, handleSettings]
+    [flushBeforeNavigation, handleOpenRelationshipGraph, handleSettings, onOpenWritingGoals]
   );
   const handleFocusModeToggle = useCallback(() => {
     setFocusMode((current) => !current);

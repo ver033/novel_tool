@@ -8,6 +8,8 @@ import { createDatabase, type SqliteDatabase } from "../../src/main/db/database"
 import { runMigrations } from "../../src/main/db/migrations";
 import { ChapterRepository } from "../../src/main/db/repositories/chapter-repo";
 import { ProjectRepository } from "../../src/main/db/repositories/project-repo";
+import { WritingGoalRepository } from "../../src/main/db/repositories/writing-goal-repo";
+import { WritingGoalService } from "../../src/main/writing-goals/writing-goal-service";
 import { createTiptapDocumentFromPlainText } from "../../src/renderer/editor/tiptap/converters";
 
 const tempDirs: string[] = [];
@@ -508,6 +510,110 @@ describe("chapter save and edit flow", () => {
       wordCount: 4
     });
     expect(undone.dailyWordCount).toBe(3);
+  });
+
+  it("records writing goal stats after chapter content changes without trusting renderer word count", () => {
+    const db = createTestDatabase();
+    const projectRepo = new ProjectRepository(db);
+    const chapterRepo = new ChapterRepository(db);
+    createProject(projectRepo, "project_1");
+    const chapter = createChapter(chapterRepo, { chapterId: "chapter_1", projectId: "project_1", title: "第1章", text: "原文" });
+    const writingRepo = new WritingGoalRepository(db);
+    const writingService = new WritingGoalService(writingRepo);
+    writingService.createGoal({
+      projectId: "project_1",
+      name: "本周目标",
+      goalType: "total_words",
+      targetWordCount: 1_000,
+      startDate: "2026-05-01",
+      deadlineDate: "2026-05-07",
+      activeWeekdays: [0, 1, 2, 3, 4, 5, 6],
+      restDates: []
+    });
+    const service = new ChapterService(chapterRepo, { writingGoalRecorder: writingService });
+
+    service.saveContent({
+      projectId: "project_1",
+      chapterId: chapter.id,
+      contentJson: createTiptapDocumentFromPlainText("新正文扩写"),
+      plainText: "新正文扩写",
+      wordCount: 999,
+      saveSource: "ai_apply"
+    });
+    const event = writingRepo.getLatestEvent("project_1");
+
+    expect(event).toMatchObject({
+      chapterId: chapter.id,
+      chapterTitle: "第1章",
+      previousWordCount: 2,
+      nextWordCount: 5,
+      deltaWords: 3,
+      source: "ai_apply"
+    });
+    expect(writingRepo.getDailyStat("project_1", event?.localDate ?? "")).toMatchObject({
+      addedWords: 3,
+      netWords: 3,
+      eventCount: 1
+    });
+  });
+
+  it("does not report chapter save as failed when writing goal stats cannot be recorded", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const db = createTestDatabase();
+      const projectRepo = new ProjectRepository(db);
+      const chapterRepo = new ChapterRepository(db);
+      createProject(projectRepo, "project_1");
+      const chapter = createChapter(chapterRepo, { chapterId: "chapter_1", projectId: "project_1", title: "第1章", text: "原文" });
+      const service = new ChapterService(chapterRepo, {
+        writingGoalRecorder: {
+          recordWordDelta() {
+            throw new Error("stats table locked");
+          }
+        }
+      });
+
+      const saved = service.saveContent({
+        projectId: "project_1",
+        chapterId: chapter.id,
+        contentJson: createTiptapDocumentFromPlainText("新正文"),
+        plainText: "新正文",
+        wordCount: 3
+      });
+
+      expect(saved.plainText).toBe("新正文");
+      expect(warn).toHaveBeenCalledWith("Failed to record writing goal word delta", expect.any(Error));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("records chapter deletion as a writing stat and keeps the title snapshot after the chapter row is gone", () => {
+    const db = createTestDatabase();
+    const projectRepo = new ProjectRepository(db);
+    const chapterRepo = new ChapterRepository(db);
+    createProject(projectRepo, "project_1");
+    const chapter = createChapter(chapterRepo, { chapterId: "chapter_1", projectId: "project_1", title: "第1章", text: "删除正文" });
+    const writingRepo = new WritingGoalRepository(db);
+    const writingService = new WritingGoalService(writingRepo);
+    const service = new ChapterService(chapterRepo, { writingGoalRecorder: writingService });
+
+    service.deleteChapter({ projectId: "project_1", chapterId: chapter.id });
+    const event = writingRepo.getLatestEvent("project_1");
+
+    expect(event).toMatchObject({
+      chapterId: null,
+      chapterTitle: "第1章",
+      previousWordCount: 4,
+      nextWordCount: 0,
+      deltaWords: -4,
+      source: "chapter_delete"
+    });
+    expect(writingRepo.getDailyStat("project_1", event?.localDate ?? "")).toMatchObject({
+      deletedWords: 4,
+      netWords: -4,
+      eventCount: 1
+    });
   });
 
   it("creates a snapshot from the current saved content without changing the chapter", () => {
