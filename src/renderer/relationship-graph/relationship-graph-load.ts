@@ -16,6 +16,9 @@ type RelationshipGraphApiLike = {
   readonly relationshipGraph?: {
     readonly getGraph?: (input: RelationshipGraphGetInput) => Promise<unknown> | unknown;
   };
+  readonly authorRelationship?: {
+    readonly getGraph?: (input: RelationshipGraphGetInput) => Promise<unknown> | unknown;
+  };
 };
 
 const DEFAULT_RELATIONSHIP_GRAPH_LOAD_TIMEOUT_MS = 10_000;
@@ -70,6 +73,21 @@ export async function requestRelationshipGraph(
   const getGraph = api.relationshipGraph?.getGraph;
   if (typeof getGraph !== "function") {
     throw new Error("人物关系图接口未加载。请重启应用后再试。");
+  }
+
+  const request = Promise.resolve().then(() => getGraph(buildRelationshipGraphInput(projectId, requestState)));
+  return (await withGraphLoadTimeout(request, timeoutMs)) as RelationshipGraphResult;
+}
+
+export async function requestAuthorRelationshipGraph(
+  api: RelationshipGraphApiLike,
+  projectId: string,
+  requestState: RelationshipGraphRequestState,
+  timeoutMs = DEFAULT_RELATIONSHIP_GRAPH_LOAD_TIMEOUT_MS
+): Promise<RelationshipGraphResult> {
+  const getGraph = api.authorRelationship?.getGraph;
+  if (typeof getGraph !== "function") {
+    throw new Error("作者手工关系图接口未加载。请重启应用后再试。");
   }
 
   const request = Promise.resolve().then(() => getGraph(buildRelationshipGraphInput(projectId, requestState)));

@@ -21,6 +21,12 @@ import type {
   AiStreamErrorEvent,
   AiStreamReasoningEvent,
   AiUpdateTaskInput,
+  AuthorRelationshipCreateCharacterInput,
+  AuthorRelationshipCreateRelationshipInput,
+  AuthorRelationshipDeleteCharacterInput,
+  AuthorRelationshipDeleteRelationshipInput,
+  AuthorRelationshipGetGraphInput,
+  AuthorRelationshipUpdateCharacterInput,
   ChapterCreateInput,
   ChapterCreateSnapshotInput,
   ChapterDeleteInput,
@@ -126,6 +132,14 @@ export type NovelToolApi = {
     readonly getGraph: (input: RelationshipGraphGetInput) => Promise<unknown>;
     readonly getSourceStatus: (input: RelationshipGraphSourceStatusInput) => Promise<unknown>;
   };
+  readonly authorRelationship: {
+    readonly getGraph: (input: AuthorRelationshipGetGraphInput) => Promise<unknown>;
+    readonly createCharacter: (input: AuthorRelationshipCreateCharacterInput) => Promise<unknown>;
+    readonly updateCharacter: (input: AuthorRelationshipUpdateCharacterInput) => Promise<unknown>;
+    readonly createRelationship: (input: AuthorRelationshipCreateRelationshipInput) => Promise<unknown>;
+    readonly deleteCharacter: (input: AuthorRelationshipDeleteCharacterInput) => Promise<unknown>;
+    readonly deleteRelationship: (input: AuthorRelationshipDeleteRelationshipInput) => Promise<unknown>;
+  };
   readonly ai: {
     readonly createTask: (input: AiCreateTaskInput) => Promise<unknown>;
     readonly updateTask: (input: AiUpdateTaskInput) => Promise<unknown>;
@@ -218,6 +232,14 @@ export const novelToolApi: NovelToolApi = Object.freeze({
   relationshipGraph: Object.freeze({
     getGraph: (input: RelationshipGraphGetInput) => ipcRenderer.invoke(ipcChannels.relationshipGraph.getGraph, input),
     getSourceStatus: (input: RelationshipGraphSourceStatusInput) => ipcRenderer.invoke(ipcChannels.relationshipGraph.getSourceStatus, input)
+  }),
+  authorRelationship: Object.freeze({
+    getGraph: (input: AuthorRelationshipGetGraphInput) => ipcRenderer.invoke(ipcChannels.authorRelationship.getGraph, input),
+    createCharacter: (input: AuthorRelationshipCreateCharacterInput) => ipcRenderer.invoke(ipcChannels.authorRelationship.createCharacter, input),
+    updateCharacter: (input: AuthorRelationshipUpdateCharacterInput) => ipcRenderer.invoke(ipcChannels.authorRelationship.updateCharacter, input),
+    createRelationship: (input: AuthorRelationshipCreateRelationshipInput) => ipcRenderer.invoke(ipcChannels.authorRelationship.createRelationship, input),
+    deleteCharacter: (input: AuthorRelationshipDeleteCharacterInput) => ipcRenderer.invoke(ipcChannels.authorRelationship.deleteCharacter, input),
+    deleteRelationship: (input: AuthorRelationshipDeleteRelationshipInput) => ipcRenderer.invoke(ipcChannels.authorRelationship.deleteRelationship, input)
   }),
   ai: Object.freeze({
     createTask: (input: AiCreateTaskInput) => ipcRenderer.invoke(ipcChannels.ai.createTask, input),

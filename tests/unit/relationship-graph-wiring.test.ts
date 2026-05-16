@@ -1,7 +1,16 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseIpcPayload, relationshipGraphGetInputSchema, relationshipGraphSourceStatusInputSchema } from "../../src/main/shared/schemas";
+import {
+  authorRelationshipCreateCharacterInputSchema,
+  authorRelationshipCreateRelationshipInputSchema,
+  authorRelationshipDeleteCharacterInputSchema,
+  authorRelationshipDeleteRelationshipInputSchema,
+  parseIpcPayload,
+  authorRelationshipUpdateCharacterInputSchema,
+  relationshipGraphGetInputSchema,
+  relationshipGraphSourceStatusInputSchema
+} from "../../src/main/shared/schemas";
 
 const rootDir = process.cwd();
 
@@ -61,6 +70,7 @@ describe("relationship graph contracts", () => {
     expect(graphTypes).toContain("availableChapters");
     expect(graphTypes).toContain("baseRelationLabel");
     expect(graphTypes).toContain("relationshipDimensions");
+    expect(graphTypes).toContain("authorRelationshipId");
     expect(sharedTypes).toContain("RelationshipGraphGetInput");
     expect(sharedTypes).toContain("RelationshipGraphSourceStatusInput");
     expect(sharedTypes).toContain('getGraph: "novelTool:relationshipGraph:getGraph"');
@@ -90,5 +100,63 @@ describe("relationship graph IPC wiring", () => {
     expect(relationshipIpc).toContain("createValidatedIpcHandler");
     expect(relationshipIpc).toContain("ipcChannels.relationshipGraph.getGraph");
     expect(relationshipIpc).toContain("ipcChannels.relationshipGraph.getSourceStatus");
+  });
+
+  it("exposes author-defined relationship APIs separately from AI graph APIs", () => {
+    const preload = readSource("src/preload/api.ts");
+    const registerIpc = readSource("src/main/ipc/register-ipc.ts");
+    const authorIpc = readSource("src/main/ipc/author-relationship-ipc.ts");
+    const sharedTypes = readSource("src/main/shared/types.ts");
+
+    expect(
+      parseIpcPayload(authorRelationshipCreateCharacterInputSchema, {
+        projectId: "project_1",
+        name: "白嘉轩"
+      })
+    ).toEqual({ projectId: "project_1", name: "白嘉轩" });
+    expect(
+      parseIpcPayload(authorRelationshipCreateRelationshipInputSchema, {
+        projectId: "project_1",
+        sourceCharacterName: "白嘉轩",
+        targetCharacterName: "鹿三",
+        sourceToTargetLabel: "主家与长工",
+        targetToSourceLabel: "长工与主家"
+      })
+    ).toMatchObject({ sourceCharacterName: "白嘉轩", targetCharacterName: "鹿三" });
+    expect(() => parseIpcPayload(authorRelationshipDeleteCharacterInputSchema, { projectId: "project_1" })).toThrow("IPC payload validation failed");
+    expect(() => parseIpcPayload(authorRelationshipDeleteRelationshipInputSchema, { projectId: "project_1" })).toThrow("IPC payload validation failed");
+    expect(
+      parseIpcPayload(authorRelationshipUpdateCharacterInputSchema, {
+        projectId: "project_1",
+        characterId: "author_character_1",
+        name: "白嘉轩",
+        aliases: ["族长", "白家掌柜"],
+        entityKind: "person",
+        importance: "main",
+        roleSummary: "白家族长",
+        faction: "白家",
+        notes: "作者备注"
+      })
+    ).toMatchObject({ name: "白嘉轩", aliases: ["族长", "白家掌柜"] });
+
+    expect(sharedTypes).toContain("authorRelationship");
+    expect(sharedTypes).toContain('getGraph: "novelTool:authorRelationship:getGraph"');
+    expect(sharedTypes).toContain('createCharacter: "novelTool:authorRelationship:createCharacter"');
+    expect(sharedTypes).toContain('updateCharacter: "novelTool:authorRelationship:updateCharacter"');
+    expect(sharedTypes).toContain('createRelationship: "novelTool:authorRelationship:createRelationship"');
+    expect(sharedTypes).toContain('deleteCharacter: "novelTool:authorRelationship:deleteCharacter"');
+    expect(sharedTypes).toContain('deleteRelationship: "novelTool:authorRelationship:deleteRelationship"');
+    expect(preload).toContain("readonly authorRelationship");
+    expect(preload).toContain("getGraph: (input: RelationshipGraphGetInput)");
+    expect(preload).toContain("createCharacter: (input: AuthorRelationshipCreateCharacterInput)");
+    expect(preload).toContain("updateCharacter: (input: AuthorRelationshipUpdateCharacterInput)");
+    expect(preload).toContain("createRelationship: (input: AuthorRelationshipCreateRelationshipInput)");
+    expect(preload).toContain("deleteCharacter: (input: AuthorRelationshipDeleteCharacterInput)");
+    expect(preload).toContain("deleteRelationship: (input: AuthorRelationshipDeleteRelationshipInput)");
+    expect(registerIpc).toContain("registerAuthorRelationshipIpc");
+    expect(registerIpc).toContain("AuthorRelationshipGraphService");
+    expect(authorIpc).toContain("ipcChannels.authorRelationship.getGraph");
+    expect(authorIpc).toContain("ipcChannels.authorRelationship.updateCharacter");
+    expect(authorIpc).toContain("createValidatedIpcHandler");
   });
 });

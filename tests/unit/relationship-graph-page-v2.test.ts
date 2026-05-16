@@ -86,6 +86,32 @@ describe("relationship graph page v2 renderer wiring", () => {
     expect(component).toContain("positionCache.current.set(draggedNode");
   });
 
+  it("keeps author-created graph nodes in a manual layout mode so dragging survives mutations", () => {
+    const page = readSource("src/renderer/relationship-graph/CharacterRelationshipGraphPage.tsx");
+    const canvas = readSource("src/renderer/relationship-graph/RelationshipGraphCanvas.tsx");
+    const component = readSource("src/renderer/relationship-graph/SigmaRelationshipGraph.tsx");
+
+    expect(page).toContain('layoutMode={graphSource === "author" ? "manual" : "auto"}');
+    expect(canvas).toContain('layoutMode?: "auto" | "manual"');
+    expect(canvas).toContain("layoutMode={layoutMode}");
+    expect(component).toContain('type RelationshipGraphLayoutMode = "auto" | "manual"');
+    expect(component).toContain("buildManualSeedPositions");
+    expect(component).toContain("prunePositionCache");
+    expect(component).toContain('layoutMode === "manual"');
+    expect(component).toContain("skipSettlingLayout");
+    expect(component).toContain('autoCenter: layoutMode !== "manual"');
+    expect(component).toContain('autoRescale: layoutMode !== "manual"');
+    expect(component).toContain("lastCameraLayoutModeRef");
+    expect(component).toContain('if (layoutMode === "manual")');
+    expect(component).toContain("buildManualGraphBBox");
+    expect(component).toContain("sigma.setCustomBBox(manualGraphBBox)");
+    expect(component).toContain("sigma.setCustomBBox(null)");
+    expect(component).toContain("sigma.getCamera().setState({ x: 0.5, y: 0.5, angle: 0, ratio: 1 })");
+    expect(component).not.toContain("sigma.getCamera().setState({ x: 0, y: 0, angle: 0, ratio: 1 })");
+    expect(component).not.toContain('layoutMode === "manual") {\n      sigma.getCamera().animatedReset');
+    expect(component).not.toContain("positionCache.current.clear();\n      lastLayoutDataKey.current = layoutDataKey;");
+  });
+
   it("animates into ForceAtlas2 positions and briefly settles the graph after drag", () => {
     const component = readSource("src/renderer/relationship-graph/SigmaRelationshipGraph.tsx");
 
@@ -118,7 +144,7 @@ describe("relationship graph page v2 renderer wiring", () => {
     expect(filters).toContain("配角");
     expect(filters).toContain("全部");
     expect(filters).toContain('className="relationship-segmented role-scope"');
-    expect(filters).toContain("显示设置");
+    expect(filters).toContain("筛选与显示");
     expect(filters).toContain("节点排斥力");
     expect(filters).toContain("连线长度");
     expect(filters).toContain("标签密度");
@@ -342,6 +368,29 @@ describe("relationship graph page v2 renderer wiring", () => {
     expect(styles).toContain(".relationship-character-timeline");
     expect(styles).toContain(".relationship-key-relation-list");
     expect(styles).toContain(".relationship-character-action-row");
+  });
+
+  it("renders a separate author-setting inspector instead of AI evidence fields in manual graph mode", () => {
+    const page = readSource("src/renderer/relationship-graph/CharacterRelationshipGraphPage.tsx");
+    const inspector = readSource("src/renderer/relationship-graph/RelationshipGraphInspector.tsx");
+    const styles = readSource("src/renderer/styles/globals.css");
+
+    expect(page).toContain('graphSource={graphSource}');
+    expect(page).toContain("onUpdateAuthorCharacter");
+    expect(inspector).toContain('graphSource === "author"');
+    expect(inspector).toContain("relationship-author-detail-form");
+    expect(inspector).toContain("relationship-author-field-grid");
+    expect(inspector).toContain("relationship-author-relation-list");
+    expect(inspector).toContain("parseAliasDraft");
+    expect(inspector).toContain("onUpdateAuthorCharacter");
+    expect(inspector).toContain("作者设定");
+    expect(inspector).toContain("别名 / 称呼");
+    expect(inspector).toContain("身份定位");
+    expect(inspector).toContain("所属阵营");
+    expect(inspector).toContain("保存设定");
+    expect(styles).toContain(".relationship-author-detail-form");
+    expect(styles).toContain(".relationship-author-field-grid");
+    expect(styles).toContain(".relationship-author-relation-list");
   });
 
   it("keeps the chapter slider cache-read-only and avoids product-fixed semantic dimensions", () => {

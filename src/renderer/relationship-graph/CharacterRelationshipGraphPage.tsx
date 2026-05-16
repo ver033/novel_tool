@@ -5,9 +5,10 @@ import type { RelationshipGraphNode, RelationshipGraphResult, RelationshipGraphS
 import { ProjectModuleRail, type ProjectModule } from "../layout/ProjectModuleRail";
 import { TopBar } from "../layout/TopBar";
 import { getNovelToolApi } from "../state/app-store";
+import { AuthorRelationshipControls } from "./AuthorRelationshipControls";
 import { RelationshipGraphCanvas } from "./RelationshipGraphCanvas";
 import { RelationshipGraphChapterSlider } from "./RelationshipGraphChapterSlider";
-import { RelationshipGraphFilters, type RelationshipGraphFilterState } from "./RelationshipGraphFilters";
+import { RelationshipGraphFilters, type RelationshipGraphFilterState, type RelationshipGraphSourceMode } from "./RelationshipGraphFilters";
 import { RelationshipGraphInspector } from "./RelationshipGraphInspector";
 import { RelationshipGraphLegend } from "./RelationshipGraphLegend";
 import { RelationshipGraphStatusBar } from "./RelationshipGraphStatusBar";
@@ -15,7 +16,12 @@ import {
   defaultRelationshipGraphDisplaySettings,
   type RelationshipGraphDisplaySettings
 } from "./relationship-graph-display-settings";
-import { requestRelationshipGraph, type RelationshipGraphChapterCursor, type RelationshipGraphRequestState } from "./relationship-graph-load";
+import {
+  requestAuthorRelationshipGraph,
+  requestRelationshipGraph,
+  type RelationshipGraphChapterCursor,
+  type RelationshipGraphRequestState
+} from "./relationship-graph-load";
 
 type CharacterRelationshipGraphPageProps = {
   readonly currentProject: ProjectRecord | null;
@@ -47,6 +53,7 @@ export function CharacterRelationshipGraphPage({
   const statusRequestIdRef = useRef(0);
   const lastAutoLoadKeyRef = useRef<string | null>(null);
   const [filters, setFilters] = useState<RelationshipGraphFilterState>(defaultFilters);
+  const [graphSource, setGraphSource] = useState<RelationshipGraphSourceMode>("ai");
   const [chapterCursor, setChapterCursor] = useState<RelationshipGraphChapterCursor>("all");
   const [mode, setMode] = useState<"global" | "focus">("global");
   const [focusNode, setFocusNode] = useState<{ readonly id: string; readonly name: string } | null>(null);
@@ -81,13 +88,16 @@ export function CharacterRelationshipGraphPage({
     }),
     [chapterCursor, filters, focusNode, hopDepth, mode]
   );
-  const graphRequestKey = useMemo(() => JSON.stringify({ projectId, requestState }), [projectId, requestState]);
+  const graphRequestKey = useMemo(() => JSON.stringify({ graphSource, projectId, requestState }), [graphSource, projectId, requestState]);
 
   const refreshStatus = useCallback(() => {
     const requestId = statusRequestIdRef.current + 1;
     statusRequestIdRef.current = requestId;
     if (!projectId) {
       setStatus(null);
+      return;
+    }
+    if (graphSource === "author") {
       return;
     }
     const getSourceStatus = api.relationshipGraph?.getSourceStatus;
@@ -105,7 +115,7 @@ export function CharacterRelationshipGraphPage({
           setStatus(null);
         }
       });
-  }, [api, projectId]);
+  }, [api, graphSource, projectId]);
 
   const loadGraph = useCallback(() => {
     const requestId = loadRequestIdRef.current + 1;
@@ -122,7 +132,11 @@ export function CharacterRelationshipGraphPage({
 
     setLoading(true);
     setError(null);
-    void requestRelationshipGraph(api, projectId, requestState)
+    const graphPromise =
+      graphSource === "author"
+        ? requestAuthorRelationshipGraph(api, projectId, requestState)
+        : requestRelationshipGraph(api, projectId, requestState);
+    void graphPromise
       .then((result) => {
         if (mountedRef.current && loadRequestIdRef.current === requestId) {
           setGraph(result);
@@ -139,7 +153,7 @@ export function CharacterRelationshipGraphPage({
           setLoading(false);
         }
       });
-  }, [api, projectId, requestState]);
+  }, [api, graphSource, projectId, requestState]);
 
   useEffect(() => {
     if (loadRequestIdRef.current > 0 && graphRequestKey === lastAutoLoadKeyRef.current) {
@@ -178,11 +192,11 @@ export function CharacterRelationshipGraphPage({
   const handleGraphSelect = useCallback(
     (id: string) => {
       setSelectedId(id);
-      if (graph?.nodes.some((node) => node.id === id)) {
+      if (graph?.nodes.some((node) => node.id === id) || graph?.edges.some((edge) => edge.id === id)) {
         setDetailPanelCollapsed(false);
       }
     },
-    [graph?.nodes]
+    [graph?.edges, graph?.nodes]
   );
 
   const handleFocusNode = useCallback((node: RelationshipGraphNode) => {
@@ -198,6 +212,46 @@ export function CharacterRelationshipGraphPage({
     setHopDepth(1);
   }, []);
 
+  const handleGraphSourceChange = useCallback((nextSource: RelationshipGraphSourceMode) => {
+    setGraphSource(nextSource);
+    setMode("global");
+    setFocusNode(null);
+    setHopDepth(1);
+    setSelectedId(null);
+    setDetailPanelCollapsed(true);
+    setGraph(null);
+    setStatus(null);
+    setError(null);
+  }, []);
+
+  const runAuthorMutation = useCallback(
+    async (operation: () => Promise<unknown> | unknown): Promise<void> => {
+      if (!projectId) {
+        return;
+      }
+      setError(null);
+      await Promise.resolve(operation());
+      loadRequestIdRef.current += 1;
+      setLoading(true);
+      try {
+        const result = await requestAuthorRelationshipGraph(api, projectId, requestState);
+        if (mountedRef.current) {
+          setGraph(result);
+          setStatus(result.sourceStatus);
+        }
+      } catch (reason) {
+        if (mountedRef.current) {
+          setError(reason instanceof Error ? reason.message : String(reason));
+        }
+      } finally {
+        if (mountedRef.current) {
+          setLoading(false);
+        }
+      }
+    },
+    [api, projectId, requestState]
+  );
+
   const handleResetDisplaySettings = useCallback(() => {
     setDisplaySettings(defaultRelationshipGraphDisplaySettings);
   }, []);
@@ -205,7 +259,8 @@ export function CharacterRelationshipGraphPage({
   const focusNodeId = mode === "focus" ? (focusNode?.id ?? null) : null;
   const statusForUi = status ?? graph?.sourceStatus ?? null;
   const selectedNode = selectedId ? (graph?.nodes.find((node) => node.id === selectedId) ?? null) : null;
-  const shouldShowDetailPanel = Boolean(selectedNode) && !detailPanelCollapsed;
+  const selectedEdge = selectedId ? (graph?.edges.find((edge) => edge.id === selectedId) ?? null) : null;
+  const shouldShowDetailPanel = Boolean(selectedNode || selectedEdge) && !detailPanelCollapsed;
   const workspaceClassName = [
     "relationship-graph-workspace",
     displayPanelCollapsed ? "display-collapsed" : "",
@@ -246,6 +301,7 @@ export function CharacterRelationshipGraphPage({
                 <RelationshipGraphFilters
                   displaySettings={displaySettings}
                   filters={filters}
+                  graphSource={graphSource}
                   loading={loading}
                   status={statusForUi}
                   onChange={setFilters}
@@ -254,17 +310,58 @@ export function CharacterRelationshipGraphPage({
                   onRefresh={loadGraph}
                   onResetDisplaySettings={handleResetDisplaySettings}
                 />
-                <RelationshipGraphLegend />
+                {graphSource === "ai" ? <RelationshipGraphLegend /> : null}
               </>
             )}
           </div>
           <div className="relationship-graph-main-area">
+            <div className="relationship-graph-view-toolbar">
+              <div className="relationship-view-switcher">
+                <span>图谱视图</span>
+                <div className="relationship-segmented relationship-view-tabs" role="group" aria-label="图谱视图">
+                  <button className={graphSource === "ai" ? "active" : ""} onClick={() => handleGraphSourceChange("ai")} type="button">
+                    AI 分析图谱
+                  </button>
+                  <button className={graphSource === "author" ? "active" : ""} onClick={() => handleGraphSourceChange("author")} type="button">
+                    作者设定图谱
+                  </button>
+                </div>
+              </div>
+              {graphSource === "author" ? (
+                <AuthorRelationshipControls
+                  edges={graph?.edges ?? []}
+                  loading={loading}
+                  nodes={graph?.nodes ?? []}
+                  selectedNodeName={selectedNode?.name ?? null}
+                  onCreateCharacter={(name) =>
+                    runAuthorMutation(() => api.authorRelationship?.createCharacter({ projectId: projectId ?? "", name }))
+                  }
+                  onCreateRelationship={(input) =>
+                    runAuthorMutation(() =>
+                      api.authorRelationship?.createRelationship({
+                        projectId: projectId ?? "",
+                        ...input
+                      })
+                    )
+                  }
+                  onDeleteCharacter={(characterId) =>
+                    runAuthorMutation(() => api.authorRelationship?.deleteCharacter({ projectId: projectId ?? "", characterId }))
+                  }
+                  onDeleteRelationship={(relationshipId) =>
+                    runAuthorMutation(() => api.authorRelationship?.deleteRelationship({ projectId: projectId ?? "", relationshipId }))
+                  }
+                />
+              ) : (
+                <span className="relationship-view-toolbar-hint">AI 图谱来自阶段摘要和全书摘要；手工设定不会改写缓存。</span>
+              )}
+            </div>
             {!currentProject ? <p className="relationship-no-project">请先打开项目</p> : null}
             <RelationshipGraphCanvas
               displaySettings={displaySettings}
               edges={graph?.edges ?? []}
               error={error}
               focusNodeId={focusNodeId}
+              layoutMode={graphSource === "author" ? "manual" : "auto"}
               loading={loading}
               nodes={graph?.nodes ?? []}
               selectedId={selectedId}
@@ -277,18 +374,21 @@ export function CharacterRelationshipGraphPage({
               status={statusForUi}
               onOpenSettings={onOpenSettings}
             />
-            <RelationshipGraphChapterSlider
-              availableChapters={graph?.availableChapters ?? []}
-              chapterCursor={chapterCursor}
-              loading={loading}
-              onChange={setChapterCursor}
-            />
+            {graphSource === "ai" ? (
+              <RelationshipGraphChapterSlider
+                availableChapters={graph?.availableChapters ?? []}
+                chapterCursor={chapterCursor}
+                loading={loading}
+                onChange={setChapterCursor}
+              />
+            ) : null}
           </div>
           {shouldShowDetailPanel ? (
             <div className="relationship-graph-detail-panel">
               <RelationshipGraphInspector
                 edges={graph?.edges ?? []}
                 focusNodeId={focusNodeId}
+                graphSource={graphSource}
                 hopDepth={hopDepth}
                 mode={mode}
                 nodes={graph?.nodes ?? []}
@@ -298,6 +398,15 @@ export function CharacterRelationshipGraphPage({
                 onHopDepthChange={setHopDepth}
                 onOpenChapter={onOpenChapter}
                 onReturnGlobal={handleReturnGlobal}
+                onUpdateAuthorCharacter={(input) =>
+                  runAuthorMutation(() =>
+                    api.authorRelationship?.updateCharacter({
+                      projectId: projectId ?? "",
+                      ...input,
+                      aliases: [...input.aliases]
+                    })
+                  )
+                }
               />
             </div>
           ) : null}

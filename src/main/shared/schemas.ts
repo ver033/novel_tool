@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { relationshipGraphGetInputSchema as relationshipGraphGetInputBaseSchema } from "./relationship-graph";
+import {
+  relationshipEntityImportanceSchema,
+  relationshipEntityKindSchema,
+  relationshipGraphGetInputSchema as relationshipGraphGetInputBaseSchema
+} from "./relationship-graph";
 
 const nonEmptyString = z.string().trim().min(1);
 const idSchema = nonEmptyString.max(128);
@@ -519,6 +523,48 @@ export const relationshipGraphStatusInputSchema = z
   .strict();
 
 export const relationshipGraphSourceStatusInputSchema = relationshipGraphStatusInputSchema;
+
+export const authorRelationshipGetGraphInputSchema = relationshipGraphGetInputSchema;
+export const authorRelationshipCreateCharacterInputSchema = z
+  .object({
+    projectId: idSchema,
+    name: nonEmptyString.max(80)
+  })
+  .strict();
+export const authorRelationshipUpdateCharacterInputSchema = z
+  .object({
+    projectId: idSchema,
+    characterId: idSchema,
+    name: nonEmptyString.max(80),
+    aliases: z.array(z.string().trim().min(1).max(80)).max(20),
+    entityKind: relationshipEntityKindSchema,
+    importance: relationshipEntityImportanceSchema,
+    roleSummary: z.string().trim().max(300).nullable().optional(),
+    faction: z.string().trim().max(120).nullable().optional(),
+    notes: z.string().trim().max(1000).nullable().optional()
+  })
+  .strict();
+export const authorRelationshipCreateRelationshipInputSchema = z
+  .object({
+    projectId: idSchema,
+    sourceCharacterName: nonEmptyString.max(80),
+    targetCharacterName: nonEmptyString.max(80),
+    sourceToTargetLabel: nonEmptyString.max(120),
+    targetToSourceLabel: z.string().trim().max(120).nullable().optional()
+  })
+  .strict();
+export const authorRelationshipDeleteCharacterInputSchema = z
+  .object({
+    projectId: idSchema,
+    characterId: idSchema
+  })
+  .strict();
+export const authorRelationshipDeleteRelationshipInputSchema = z
+  .object({
+    projectId: idSchema,
+    relationshipId: idSchema
+  })
+  .strict();
 
 export class IpcPayloadValidationError extends Error {
   constructor(readonly issues: z.ZodIssue[]) {

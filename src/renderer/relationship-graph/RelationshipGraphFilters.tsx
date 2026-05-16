@@ -15,8 +15,11 @@ export type RelationshipGraphFilterState = {
   readonly query: string;
 };
 
+export type RelationshipGraphSourceMode = "ai" | "author";
+
 type RelationshipGraphFiltersProps = {
   readonly filters: RelationshipGraphFilterState;
+  readonly graphSource: RelationshipGraphSourceMode;
   readonly displaySettings: RelationshipGraphDisplaySettings;
   readonly loading: boolean;
   readonly status: RelationshipGraphSourceStatus | null;
@@ -57,6 +60,7 @@ function isDefaultDisplaySettings(settings: RelationshipGraphDisplaySettings): b
 
 export function RelationshipGraphFilters({
   filters,
+  graphSource,
   displaySettings,
   loading,
   status,
@@ -72,7 +76,7 @@ export function RelationshipGraphFilters({
   return (
     <aside className="relationship-graph-filters relationship-display-controls">
       <div className="relationship-graph-filter-head">
-        <h1>显示设置</h1>
+        <h1>筛选与显示</h1>
         <div className="relationship-filter-actions">
           <button className="small-button" disabled={loading} onClick={onRefresh} type="button">
             {loading ? "读取中" : "刷新图谱"}
@@ -103,65 +107,69 @@ export function RelationshipGraphFilters({
         />
       </div>
 
-      <div className="relationship-filter-group">
-        <span className="relationship-filter-label">角色范围</span>
-        <div className="relationship-segmented role-scope" role="group" aria-label="角色范围">
-          {roleScopeOptions.map((option) => (
-            <button
-              className={filters.roleScope === option.value ? "active" : ""}
-              key={option.value}
-              onClick={() => onChange({ ...filters, roleScope: option.value })}
-              type="button"
-            >
-              {option.label}
-            </button>
-          ))}
-        </div>
-      </div>
+      {graphSource === "ai" ? (
+        <>
+          <div className="relationship-filter-group">
+            <span className="relationship-filter-label">角色范围</span>
+            <div className="relationship-segmented role-scope" role="group" aria-label="角色范围">
+              {roleScopeOptions.map((option) => (
+                <button
+                  className={filters.roleScope === option.value ? "active" : ""}
+                  key={option.value}
+                  onClick={() => onChange({ ...filters, roleScope: option.value })}
+                  type="button"
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
 
-      <div className="relationship-filter-group">
-        <span className="relationship-filter-label">章节范围</span>
-        <div className="relationship-range-inputs">
-          <input
-            aria-label="起始章节"
-            className="relationship-filter-input"
-            inputMode="numeric"
-            onChange={(event) => onChange({ ...filters, chapterFrom: event.target.value })}
-            placeholder="第1章"
-            value={filters.chapterFrom}
-          />
-          <input
-            aria-label="结束章节"
-            className="relationship-filter-input"
-            inputMode="numeric"
-            onChange={(event) => onChange({ ...filters, chapterTo: event.target.value })}
-            placeholder="第10章"
-            value={filters.chapterTo}
-          />
-        </div>
-      </div>
+          <div className="relationship-filter-group">
+            <span className="relationship-filter-label">章节范围</span>
+            <div className="relationship-range-inputs">
+              <input
+                aria-label="起始章节"
+                className="relationship-filter-input"
+                inputMode="numeric"
+                onChange={(event) => onChange({ ...filters, chapterFrom: event.target.value })}
+                placeholder="第1章"
+                value={filters.chapterFrom}
+              />
+              <input
+                aria-label="结束章节"
+                className="relationship-filter-input"
+                inputMode="numeric"
+                onChange={(event) => onChange({ ...filters, chapterTo: event.target.value })}
+                placeholder="第10章"
+                value={filters.chapterTo}
+              />
+            </div>
+          </div>
 
-      <div className="relationship-filter-group">
-        <span className="relationship-filter-label">最低置信度 {formatPercent(filters.minConfidence)}</span>
-        <input
-          aria-label="最低置信度"
-          className="relationship-filter-slider"
-          max="1"
-          min="0"
-          onChange={(event) => onChange({ ...filters, minConfidence: Number(event.target.value) })}
-          step="0.05"
-          type="range"
-          value={filters.minConfidence}
-        />
-        <label className="relationship-checkline">
-          <input
-            checked={filters.includeUncertain}
-            onChange={(event) => onChange({ ...filters, includeUncertain: event.target.checked })}
-            type="checkbox"
-          />
-          显示不确定关系
-        </label>
-      </div>
+          <div className="relationship-filter-group">
+            <span className="relationship-filter-label">最低置信度 {formatPercent(filters.minConfidence)}</span>
+            <input
+              aria-label="最低置信度"
+              className="relationship-filter-slider"
+              max="1"
+              min="0"
+              onChange={(event) => onChange({ ...filters, minConfidence: Number(event.target.value) })}
+              step="0.05"
+              type="range"
+              value={filters.minConfidence}
+            />
+            <label className="relationship-checkline">
+              <input
+                checked={filters.includeUncertain}
+                onChange={(event) => onChange({ ...filters, includeUncertain: event.target.checked })}
+                type="checkbox"
+              />
+              显示不确定关系
+            </label>
+          </div>
+        </>
+      ) : null}
 
       <div className="relationship-filter-group relationship-display-tuning">
         <span className="relationship-filter-label">节点排斥力 {formatMultiplier(displaySettings.nodeRepulsionScale)}</span>

@@ -15,6 +15,7 @@ import { createDatabase, resolveDatabasePath, type SqliteDatabase } from "../db/
 import { runMigrations } from "../db/migrations";
 import { AiChatRepository } from "../db/repositories/ai-chat-repo";
 import { AiTaskRepository } from "../db/repositories/ai-task-repo";
+import { AuthorRelationshipRepository } from "../db/repositories/author-relationship-repo";
 import { ChapterRepository } from "../db/repositories/chapter-repo";
 import { ImportJobRepository } from "../db/repositories/import-job-repo";
 import { ProjectRepository } from "../db/repositories/project-repo";
@@ -25,6 +26,7 @@ import { ShareableProjectExporter } from "../export/shareable-project-exporter";
 import { TxtExporter } from "../export/txt-exporter";
 import { TxtImporter } from "../import/txt-importer";
 import { ProjectService } from "../project/project-service";
+import { AuthorRelationshipGraphService } from "../relationships/author-relationship-graph";
 import { SummaryRelationshipGraphAggregator } from "../relationships/relationship-graph-aggregator";
 import { createElectronSecretStore } from "../settings/electron-secret-store";
 import { SettingsService } from "../settings/settings-service";
@@ -46,6 +48,7 @@ import {
 } from "../shared/schemas";
 import type { z } from "zod";
 import { registerAiIpc } from "./ai-ipc";
+import { registerAuthorRelationshipIpc } from "./author-relationship-ipc";
 import { registerChapterIpc } from "./chapter-ipc";
 import { registerExportIpc } from "./export-ipc";
 import { registerImportIpc } from "./import-ipc";
@@ -209,6 +212,7 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
       projectId ? projectService.getProjectDatabaseForProject(projectId) : projectService.getActiveProjectDatabase();
     const resolveChapterRepo = (projectId: string): ChapterRepository => new ChapterRepository(resolveProjectDb(projectId));
     const resolveSummaryRepo = (projectId: string): SummaryRepository => new SummaryRepository(resolveProjectDb(projectId));
+    const resolveAuthorRelationshipRepo = (projectId: string): AuthorRelationshipRepository => new AuthorRelationshipRepository(resolveProjectDb(projectId));
     const writingOperationRunner = useE2eAiGenerators()
       ? undefined
       : WritingOperationRunner.fromSettings(settingsService, resolveChapterRepo, resolveSummaryRepo);
@@ -333,6 +337,32 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
         return new SummaryRelationshipGraphAggregator(resolveSummaryRepo(projectId), resolveChapterRepo(projectId)).getSourceStatus(input.projectId);
       }
     }));
+    registerAuthorRelationshipIpc((projectId) => {
+      const repo = resolveAuthorRelationshipRepo(projectId);
+      const graphService = new AuthorRelationshipGraphService(repo);
+      return {
+        getGraph(input) {
+          return graphService.getGraph(input);
+        },
+        createCharacter(input) {
+          return repo.createCharacter(input);
+        },
+        updateCharacter(input) {
+          return repo.updateCharacter(input);
+        },
+        createRelationship(input) {
+          return repo.createRelationship(input);
+        },
+        deleteCharacter(input) {
+          repo.deleteCharacter(input);
+          return { ok: true };
+        },
+        deleteRelationship(input) {
+          repo.deleteRelationship(input);
+          return { ok: true };
+        }
+      };
+    });
     ipcMain.handle(
       ipcChannels.summary.getIndexStatus,
       createValidatedIpcHandler(summaryIndexStatusInputSchema, (input) =>

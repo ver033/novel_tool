@@ -535,6 +535,71 @@ const migrations: readonly Migration[] = [
       `);
     }
   },
+  {
+    version: 18,
+    name: "author_relationship_layer",
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS author_relationship_characters (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          normalized_name TEXT NOT NULL,
+          aliases_json TEXT NOT NULL DEFAULT '[]',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(project_id, normalized_name),
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_author_relationship_characters_project_updated
+          ON author_relationship_characters(project_id, updated_at);
+
+        CREATE TABLE IF NOT EXISTS author_relationships (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          source_character_id TEXT NOT NULL,
+          target_character_id TEXT NOT NULL,
+          source_to_target_label TEXT NOT NULL,
+          target_to_source_label TEXT,
+          normalized_relation_key TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          CHECK (source_character_id <> target_character_id),
+          UNIQUE(project_id, normalized_relation_key),
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+          FOREIGN KEY (source_character_id) REFERENCES author_relationship_characters(id) ON DELETE CASCADE,
+          FOREIGN KEY (target_character_id) REFERENCES author_relationship_characters(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_author_relationships_project_updated
+          ON author_relationships(project_id, updated_at);
+      `);
+    }
+  },
+  {
+    version: 19,
+    name: "author_relationship_character_metadata",
+    up(db) {
+      const columns = db.prepare("PRAGMA table_info(author_relationship_characters)").all() as { name: string }[];
+      const columnNames = new Set(columns.map((column) => column.name));
+      if (!columnNames.has("entity_kind")) {
+        db.exec("ALTER TABLE author_relationship_characters ADD COLUMN entity_kind TEXT NOT NULL DEFAULT 'person';");
+      }
+      if (!columnNames.has("importance")) {
+        db.exec("ALTER TABLE author_relationship_characters ADD COLUMN importance TEXT NOT NULL DEFAULT 'supporting';");
+      }
+      if (!columnNames.has("role_summary")) {
+        db.exec("ALTER TABLE author_relationship_characters ADD COLUMN role_summary TEXT;");
+      }
+      if (!columnNames.has("faction")) {
+        db.exec("ALTER TABLE author_relationship_characters ADD COLUMN faction TEXT;");
+      }
+      if (!columnNames.has("notes")) {
+        db.exec("ALTER TABLE author_relationship_characters ADD COLUMN notes TEXT;");
+      }
+    }
+  },
 ];
 
 export function runMigrations(db: SqliteDatabase): void {

@@ -32,12 +32,14 @@ type SigmaRelationshipGraphProps = {
   readonly nodes: readonly RelationshipGraphNode[];
   readonly edges: readonly RelationshipGraphEdge[];
   readonly displaySettings: RelationshipGraphDisplaySettings;
+  readonly layoutMode?: RelationshipGraphLayoutMode;
   readonly selectedId: string | null;
   readonly focusNodeId?: string | null;
   readonly onSelectNode: (id: string) => void;
   readonly onSelectEdge: (id: string) => void;
 };
 
+type RelationshipGraphLayoutMode = "auto" | "manual";
 type GraphDensity = "spacious" | "balanced" | "dense";
 
 type GraphDensityConfig = {
@@ -82,6 +84,10 @@ type SigmaEdgeAttributes = RelationshipGraphSigmaEdgeData & {
 
 type SigmaGraph = Graph<SigmaNodeAttributes, SigmaEdgeAttributes>;
 type LayoutAnimationTargets = Record<string, { readonly x: number; readonly y: number }>;
+type SigmaGraphBBox = {
+  x: [number, number];
+  y: [number, number];
+};
 
 type SigmaGraphBuildResult = {
   readonly graph: SigmaGraph;
@@ -366,6 +372,72 @@ function fallbackPosition(index: number, total: number): RelationshipGraphPositi
   };
 }
 
+function roundPosition(value: number): number {
+  return Math.round(value * 1000) / 1000;
+}
+
+function buildManualSeedPositions(nodes: readonly RelationshipGraphNode[]): Map<string, RelationshipGraphPosition> {
+  const positions = new Map<string, RelationshipGraphPosition>();
+  if (nodes.length === 0) {
+    return positions;
+  }
+  if (nodes.length === 1) {
+    positions.set(nodes[0].id, { x: 0, y: 0 });
+    return positions;
+  }
+  if (nodes.length === 2) {
+    positions.set(nodes[0].id, { x: -220, y: 0 });
+    positions.set(nodes[1].id, { x: 220, y: 0 });
+    return positions;
+  }
+
+  const radius = 190 + Math.min(8, nodes.length) * 14;
+  nodes.forEach((node, index) => {
+    const angle = -Math.PI / 2 + (Math.PI * 2 * index) / nodes.length;
+    positions.set(node.id, {
+      x: roundPosition(Math.cos(angle) * radius),
+      y: roundPosition(Math.sin(angle) * radius)
+    });
+  });
+  return positions;
+}
+
+function prunePositionCache(
+  positionCache: Map<string, RelationshipGraphPosition>,
+  nodes: readonly RelationshipGraphNode[]
+): void {
+  const currentNodeIds = new Set(nodes.map((node) => node.id));
+  for (const nodeId of positionCache.keys()) {
+    if (!currentNodeIds.has(nodeId)) {
+      positionCache.delete(nodeId);
+    }
+  }
+}
+
+function buildManualGraphBBox(graph: SigmaGraph): SigmaGraphBBox | null {
+  if (graph.order === 0) {
+    return null;
+  }
+  let minX = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+  graph.forEachNode((_node, attributes) => {
+    minX = Math.min(minX, attributes.x);
+    maxX = Math.max(maxX, attributes.x);
+    minY = Math.min(minY, attributes.y);
+    maxY = Math.max(maxY, attributes.y);
+  });
+  const centerX = (minX + maxX) / 2;
+  const centerY = (minY + maxY) / 2;
+  const width = Math.max(900, maxX - minX + 360);
+  const height = Math.max(640, maxY - minY + 320);
+  return {
+    x: [centerX - width / 2, centerX + width / 2],
+    y: [centerY - height / 2, centerY + height / 2]
+  };
+}
+
 function buildLayoutDataKey(
   nodes: readonly RelationshipGraphNode[],
   edges: readonly RelationshipGraphEdge[],
@@ -386,8 +458,12 @@ function buildSeedPositions(
   nodes: readonly RelationshipGraphNode[],
   edges: readonly RelationshipGraphEdge[],
   focusNodeId: string | null | undefined,
-  displaySettings: RelationshipGraphDisplaySettings
+  displaySettings: RelationshipGraphDisplaySettings,
+  layoutMode: RelationshipGraphLayoutMode
 ): Map<string, RelationshipGraphPosition> {
+  if (layoutMode === "manual") {
+    return buildManualSeedPositions(nodes);
+  }
   if (focusNodeId && nodes.some((node) => node.id === focusNodeId)) {
     return buildRelationshipFocusLayoutPositions({
       nodes,
@@ -472,14 +548,17 @@ function buildGraph(
     readonly nodes: readonly RelationshipGraphNode[];
     readonly edges: readonly RelationshipGraphEdge[];
     readonly displaySettings: RelationshipGraphDisplaySettings;
+    readonly layoutMode: RelationshipGraphLayoutMode;
     readonly focusNodeId?: string | null;
   },
   positionCache: Map<string, RelationshipGraphPosition>
 ): SigmaGraphBuildResult {
   const { displaySettings } = input;
   const config = graphDensityConfig[resolveGraphDensity(input.nodes.length)];
-  const seedPositions = buildSeedPositions(input.nodes, input.edges, input.focusNodeId, displaySettings);
+  const isManualLayout = input.layoutMode === "manual";
+  const seedPositions = buildSeedPositions(input.nodes, input.edges, input.focusNodeId, displaySettings, input.layoutMode);
   const useStaticHubSectorLayout =
+    !isManualLayout &&
     !input.focusNodeId &&
     seedPositions.size === input.nodes.length &&
     shouldUseRelationshipHubSectorLayout(input.nodes, input.edges);
@@ -538,7 +617,7 @@ function buildGraph(
     });
   });
 
-  if (!input.focusNodeId && graph.order > 1 && !useStaticHubSectorLayout) {
+  if (!isManualLayout && !input.focusNodeId && graph.order > 1 && !useStaticHubSectorLayout) {
     forceAtlas2.assign(graph, {
       iterations: config.iterations,
       getEdgeWeight: "layoutWeight",
@@ -602,6 +681,7 @@ function SigmaGraphController({
   nodes,
   edges,
   displaySettings,
+  layoutMode = "auto",
   selectedId,
   focusNodeId,
   onSelectNode,
@@ -618,6 +698,7 @@ function SigmaGraphController({
   const cancelAnimationRef = useRef<(() => void) | null>(null);
   const draggedNodeRef = useRef<string | null>(null);
   const dragStartRef = useRef<RelationshipGraphPosition | null>(null);
+  const lastCameraLayoutModeRef = useRef<RelationshipGraphLayoutMode | null>(null);
   const layoutSupervisorRef = useRef<FA2LayoutSupervisor<SigmaNodeAttributes, SigmaEdgeAttributes> | null>(null);
   const settleTimerRef = useRef<number | null>(null);
   const settlingFixedNodeRef = useRef<string | null>(null);
@@ -660,14 +741,19 @@ function SigmaGraphController({
     onSelectEdgeRef.current = onSelectEdge;
   }, [onSelectEdge]);
 
+  const skipSettlingLayout = layoutMode === "manual";
   const layoutDataKey = useMemo(() => buildLayoutDataKey(nodes, edges, focusNodeId), [edges, focusNodeId, nodes]);
   const graphBuild = useMemo(() => {
     if (lastLayoutDataKey.current !== layoutDataKey) {
-      positionCache.current.clear();
+      if (layoutMode === "manual") {
+        prunePositionCache(positionCache.current, nodes);
+      } else {
+        positionCache.current.clear();
+      }
       lastLayoutDataKey.current = layoutDataKey;
     }
-    return buildGraph({ nodes, edges, displaySettings, focusNodeId }, positionCache.current);
-  }, [displaySettings, edges, focusNodeId, layoutDataKey, nodes]);
+    return buildGraph({ nodes, edges, displaySettings, layoutMode, focusNodeId }, positionCache.current);
+  }, [displaySettings, edges, focusNodeId, layoutDataKey, layoutMode, nodes]);
   const graph = graphBuild.graph;
 
   const stopSettlingLayout = useCallback((options: StopSettlingLayoutOptions = {}) => {
@@ -687,16 +773,16 @@ function SigmaGraphController({
       activeGraph.setNodeAttribute(fixedNode, "dragging", false);
     }
     settlingFixedNodeRef.current = null;
-    if (options.resolveOverlap && !focusNodeId && activeGraph.order > 1) {
+    if (!skipSettlingLayout && options.resolveOverlap && !focusNodeId && activeGraph.order > 1) {
       applyNoverlapLayout(activeGraph, graphDensityConfig[resolveGraphDensity(activeGraph.order)], displaySettings);
     }
     cacheGraphPositions(activeGraph, positionCache.current);
-  }, [displaySettings, focusNodeId, sigma]);
+  }, [displaySettings, focusNodeId, sigma, skipSettlingLayout]);
 
   const startSettlingLayout = useCallback(
     (activeGraph: SigmaGraph, fixedNode: string | null = null, duration = 900) => {
       stopSettlingLayout();
-      if (focusNodeId || activeGraph.order < 3) {
+      if (skipSettlingLayout || focusNodeId || activeGraph.order < 3) {
         return;
       }
       if (fixedNode && activeGraph.hasNode(fixedNode)) {
@@ -715,16 +801,30 @@ function SigmaGraphController({
         sigma.refresh();
       }, duration);
     },
-    [displaySettings, focusNodeId, sigma, stopSettlingLayout]
+    [displaySettings, focusNodeId, sigma, skipSettlingLayout, stopSettlingLayout]
   );
 
   useEffect(() => {
     cancelAnimationRef.current?.();
     cancelAnimationRef.current = null;
     stopSettlingLayout();
+    const manualGraphBBox = layoutMode === "manual" ? buildManualGraphBBox(graph) : null;
+    if (layoutMode === "manual") {
+      sigma.setCustomBBox(manualGraphBBox);
+    } else {
+      sigma.setCustomBBox(null);
+    }
     loadGraph(graph);
     const activeGraph = sigma.getGraph() as SigmaGraph;
-    sigma.getCamera().animatedReset({ duration: 420 });
+    if (layoutMode === "manual") {
+      if (lastCameraLayoutModeRef.current !== "manual") {
+        sigma.getCamera().setState({ x: 0.5, y: 0.5, angle: 0, ratio: 1 });
+      }
+      lastCameraLayoutModeRef.current = "manual";
+    } else {
+      lastCameraLayoutModeRef.current = "auto";
+      sigma.getCamera().animatedReset({ duration: 420 });
+    }
     if (Object.keys(graphBuild.animationTargets).length > 0) {
       cancelAnimationRef.current = animateNodes(
         activeGraph,
@@ -743,7 +843,7 @@ function SigmaGraphController({
       cancelAnimationRef.current?.();
       cancelAnimationRef.current = null;
     };
-  }, [graph, graphBuild.animationTargets, loadGraph, sigma, startSettlingLayout, stopSettlingLayout]);
+  }, [graph, graphBuild.animationTargets, layoutMode, loadGraph, sigma, startSettlingLayout, stopSettlingLayout]);
 
   useEffect(() => {
     return () => {
@@ -804,7 +904,9 @@ function SigmaGraphController({
         });
       }
       sigma.refresh();
-      startSettlingLayout(activeGraph, draggedNode, 900);
+      if (!skipSettlingLayout) {
+        startSettlingLayout(activeGraph, draggedNode, 900);
+      }
     };
 
     registerEvents({
@@ -875,7 +977,7 @@ function SigmaGraphController({
       mouseup: finishDragging,
       touchup: finishDragging
     });
-  }, [graph, registerEvents, sigma, startSettlingLayout, stopSettlingLayout]);
+  }, [graph, registerEvents, sigma, skipSettlingLayout, startSettlingLayout, stopSettlingLayout]);
 
   useEffect(() => {
     return () => {
@@ -890,11 +992,12 @@ function SigmaGraphController({
 }
 
 export function SigmaRelationshipGraph(props: SigmaRelationshipGraphProps) {
+  const layoutMode = props.layoutMode ?? "auto";
   const settings = useMemo(
     () => ({
       allowInvalidContainer: true,
-      autoCenter: true,
-      autoRescale: true,
+      autoCenter: layoutMode !== "manual",
+      autoRescale: layoutMode !== "manual",
       defaultEdgeColor: "#94a3b8",
       defaultDrawEdgeLabel: drawRelationshipEdgeLabel,
       defaultDrawNodeHover: drawRelationshipNodeHover,
@@ -921,7 +1024,7 @@ export function SigmaRelationshipGraph(props: SigmaRelationshipGraphProps) {
       renderLabels: true,
       zIndex: true
     }),
-    []
+    [layoutMode]
   );
 
   return (

@@ -6,6 +6,7 @@ type RelationshipGraphCanvasProps = {
   readonly nodes: readonly RelationshipGraphNode[];
   readonly edges: readonly RelationshipGraphEdge[];
   readonly displaySettings: RelationshipGraphDisplaySettings;
+  readonly layoutMode?: "auto" | "manual";
   readonly selectedId: string | null;
   readonly focusNodeId?: string | null;
   readonly loading: boolean;
@@ -17,6 +18,7 @@ export function RelationshipGraphCanvas({
   nodes,
   edges,
   displaySettings,
+  layoutMode = "auto",
   selectedId,
   focusNodeId,
   loading,
@@ -68,6 +70,7 @@ export function RelationshipGraphCanvas({
         edges={edges}
         displaySettings={displaySettings}
         focusNodeId={focusNodeId}
+        layoutMode={layoutMode}
         nodes={nodes}
         selectedId={selectedId}
         onSelectEdge={onSelect}

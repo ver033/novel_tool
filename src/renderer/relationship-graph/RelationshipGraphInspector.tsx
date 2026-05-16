@@ -1,10 +1,12 @@
 import { CaretRight, Crosshair, NotePencil } from "@phosphor-icons/react";
+import { useEffect, useState, type FormEvent } from "react";
 import type { RelationshipGraphEdge, RelationshipGraphNode } from "../../main/shared/relationship-graph";
 
 type RelationshipGraphInspectorProps = {
   readonly edges: readonly RelationshipGraphEdge[];
   readonly nodes: readonly RelationshipGraphNode[];
   readonly selectedId: string | null;
+  readonly graphSource?: "ai" | "author";
   readonly mode: "global" | "focus";
   readonly focusNodeId: string | null;
   readonly hopDepth: 1 | 2;
@@ -13,6 +15,7 @@ type RelationshipGraphInspectorProps = {
   readonly onReturnGlobal: () => void;
   readonly onHopDepthChange: (hopDepth: 1 | 2) => void;
   readonly onOpenChapter: (chapterId: string) => void;
+  readonly onUpdateAuthorCharacter?: (input: AuthorRelationshipCharacterDraftInput) => Promise<void>;
 };
 
 type ChapterActivityItem = {
@@ -21,6 +24,17 @@ type ChapterActivityItem = {
   readonly chapterTitle: string;
   readonly count: number;
   readonly summary: string;
+};
+
+type AuthorRelationshipCharacterDraftInput = {
+  readonly characterId: string;
+  readonly name: string;
+  readonly aliases: readonly string[];
+  readonly entityKind: RelationshipGraphNode["entityKind"];
+  readonly importance: RelationshipGraphNode["importance"];
+  readonly roleSummary: string | null;
+  readonly faction: string | null;
+  readonly notes: string | null;
 };
 
 const importanceLabels: Record<RelationshipGraphNode["importance"], string> = {
@@ -37,6 +51,21 @@ const entityKindLabels: Record<RelationshipGraphNode["entityKind"], string> = {
   identity: "身份",
   unknown: "未定实体"
 };
+
+const authorImportanceOptions: ReadonlyArray<{ readonly value: RelationshipGraphNode["importance"]; readonly label: string }> = [
+  { value: "main", label: "主要人物" },
+  { value: "supporting", label: "配角" },
+  { value: "minor", label: "边缘人物" },
+  { value: "unknown", label: "未定" }
+];
+
+const authorEntityKindOptions: ReadonlyArray<{ readonly value: RelationshipGraphNode["entityKind"]; readonly label: string }> = [
+  { value: "person", label: "人物" },
+  { value: "group", label: "组织 / 家族" },
+  { value: "identity", label: "身份称谓" },
+  { value: "nonhuman", label: "非人实体" },
+  { value: "unknown", label: "未定" }
+];
 
 function formatPercent(value: number): string {
   return `${Math.round(value * 100)}%`;
@@ -58,6 +87,9 @@ function buildChapterActivity(edges: readonly RelationshipGraphEdge[]): ChapterA
   const activityByChapter = new Map<string, ChapterActivityItem>();
   for (const edge of edges) {
     for (const stage of edge.timeline) {
+      if (stage.evidenceSource === "author_manual") {
+        continue;
+      }
       const key = `${stage.chapterOrder}:${stage.chapterId}`;
       const existing = activityByChapter.get(key);
       const summary = stage.changeSummary || stage.evidenceQuote || stage.plotRelationLabel || edge.plotRelationLabel;
@@ -94,6 +126,29 @@ function polarityClassName(edge: RelationshipGraphEdge): string {
   return "unknown";
 }
 
+function parseAliasDraft(value: string): readonly string[] {
+  const aliases: string[] = [];
+  const seen = new Set<string>();
+  for (const segment of value.split(/[\n,，、;；]+/)) {
+    const alias = segment.replace(/\s+/g, " ").trim();
+    if (!alias) {
+      continue;
+    }
+    const key = alias.toLocaleLowerCase("zh-CN");
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    aliases.push(alias);
+  }
+  return aliases.slice(0, 20);
+}
+
+function nullableDraft(value: string): string | null {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized ? normalized : null;
+}
+
 function CollapseDetailButton({ onCollapse }: { readonly onCollapse: () => void }) {
   return (
     <button
@@ -112,6 +167,7 @@ export function RelationshipGraphInspector({
   edges,
   nodes,
   selectedId,
+  graphSource = "ai",
   mode,
   focusNodeId,
   hopDepth,
@@ -119,10 +175,70 @@ export function RelationshipGraphInspector({
   onFocusNode,
   onReturnGlobal,
   onHopDepthChange,
-  onOpenChapter
+  onOpenChapter,
+  onUpdateAuthorCharacter
 }: RelationshipGraphInspectorProps) {
   const selectedNode = nodes.find((node) => node.id === selectedId) ?? null;
   const selectedEdge = edges.find((edge) => edge.id === selectedId) ?? null;
+  const selectedNodeAliasDraft = selectedNode?.aliases.join("、") ?? "";
+  const [authorName, setAuthorName] = useState("");
+  const [authorAliasDraft, setAuthorAliasDraft] = useState("");
+  const [authorEntityKind, setAuthorEntityKind] = useState<RelationshipGraphNode["entityKind"]>("person");
+  const [authorImportance, setAuthorImportance] = useState<RelationshipGraphNode["importance"]>("supporting");
+  const [authorRoleSummary, setAuthorRoleSummary] = useState("");
+  const [authorFaction, setAuthorFaction] = useState("");
+  const [authorNotes, setAuthorNotes] = useState("");
+  const [authorSaving, setAuthorSaving] = useState(false);
+  const [authorError, setAuthorError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (graphSource !== "author" || !selectedNode) {
+      setAuthorError(null);
+      return;
+    }
+    setAuthorName(selectedNode.name);
+    setAuthorAliasDraft(selectedNodeAliasDraft);
+    setAuthorEntityKind(selectedNode.entityKind);
+    setAuthorImportance(selectedNode.importance);
+    setAuthorRoleSummary(selectedNode.roleSummary ?? "");
+    setAuthorFaction(selectedNode.faction ?? "");
+    setAuthorNotes(selectedNode.authorNotes ?? "");
+    setAuthorError(null);
+  }, [
+    graphSource,
+    selectedNode,
+    selectedNodeAliasDraft
+  ]);
+
+  async function handleSaveAuthorCharacter(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    if (!selectedNode || !onUpdateAuthorCharacter) {
+      return;
+    }
+    const name = authorName.trim();
+    if (!name) {
+      setAuthorError("人物名不能为空。");
+      return;
+    }
+    setAuthorSaving(true);
+    setAuthorError(null);
+    try {
+      await onUpdateAuthorCharacter({
+        characterId: selectedNode.id,
+        name,
+        aliases: parseAliasDraft(authorAliasDraft).filter((alias) => alias.toLocaleLowerCase("zh-CN") !== name.toLocaleLowerCase("zh-CN")),
+        entityKind: authorEntityKind,
+        importance: authorImportance,
+        roleSummary: nullableDraft(authorRoleSummary),
+        faction: nullableDraft(authorFaction),
+        notes: nullableDraft(authorNotes)
+      });
+    } catch (error) {
+      setAuthorError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setAuthorSaving(false);
+    }
+  }
 
   if (!selectedNode && !selectedEdge) {
     return (
@@ -143,6 +259,203 @@ export function RelationshipGraphInspector({
     );
   }
 
+  if (graphSource === "author" && selectedNode) {
+    const relatedEdges = edges
+      .filter((edge) => edge.sourceId === selectedNode.id || edge.targetId === selectedNode.id)
+      .sort((left, right) => edgeScore(right) - edgeScore(left));
+    return (
+      <aside className="relationship-graph-inspector">
+        <div className="relationship-character-head">
+          <div className="relationship-inspector-topline">
+            <div className="relationship-character-title">
+              <span>作者设定</span>
+              <h2>{selectedNode.name}</h2>
+            </div>
+            <div className="relationship-inspector-top-actions">
+              <CollapseDetailButton onCollapse={onCollapse} />
+            </div>
+          </div>
+          <div className="relationship-inspector-chips">
+            <span>{importanceLabels[selectedNode.importance]}</span>
+            <span>{entityKindLabels[selectedNode.entityKind]}</span>
+            {selectedNode.aliases.length ? <span>{selectedNode.aliases.length} 个别名</span> : null}
+            {selectedNode.faction ? <span>{selectedNode.faction}</span> : <span>未分阵营</span>}
+          </div>
+        </div>
+
+        <form className="relationship-author-detail-form" onSubmit={(event) => void handleSaveAuthorCharacter(event)}>
+          <div className="relationship-author-field-grid">
+            <label>
+              <span>人物名</span>
+              <input
+                className="relationship-filter-input"
+                onChange={(event) => setAuthorName(event.target.value)}
+                placeholder="例如：白嘉轩"
+                value={authorName}
+              />
+            </label>
+            <label>
+              <span>别名 / 称呼</span>
+              <input
+                className="relationship-filter-input"
+                onChange={(event) => setAuthorAliasDraft(event.target.value)}
+                placeholder="母亲、族长、校长"
+                value={authorAliasDraft}
+              />
+            </label>
+            <label>
+              <span>人物类型</span>
+              <select
+                className="relationship-filter-input"
+                onChange={(event) => setAuthorEntityKind(event.target.value as RelationshipGraphNode["entityKind"])}
+                value={authorEntityKind}
+              >
+                {authorEntityKindOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span>角色级别</span>
+              <select
+                className="relationship-filter-input"
+                onChange={(event) => setAuthorImportance(event.target.value as RelationshipGraphNode["importance"])}
+                value={authorImportance}
+              >
+                {authorImportanceOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <label>
+            <span>身份定位</span>
+            <textarea
+              className="relationship-filter-input relationship-author-textarea"
+              onChange={(event) => setAuthorRoleSummary(event.target.value)}
+              placeholder="例如：白鹿村白家族长，强势守旧，是家族秩序的核心。"
+              rows={3}
+              value={authorRoleSummary}
+            />
+          </label>
+          <label>
+            <span>所属阵营</span>
+            <input
+              className="relationship-filter-input"
+              onChange={(event) => setAuthorFaction(event.target.value)}
+              placeholder="家族、门派、班级、公司或势力"
+              value={authorFaction}
+            />
+          </label>
+          <label>
+            <span>作者备注</span>
+            <textarea
+              className="relationship-filter-input relationship-author-textarea"
+              onChange={(event) => setAuthorNotes(event.target.value)}
+              placeholder="只记录写作时真正需要提醒自己的设定。"
+              rows={4}
+              value={authorNotes}
+            />
+          </label>
+          {authorError ? <p className="author-relationship-error">{authorError}</p> : null}
+          <button className="relationship-primary-action full" disabled={authorSaving || !authorName.trim()} type="submit">
+            保存设定
+          </button>
+        </form>
+
+        <section>
+          <div className="relationship-section-head">
+            <h3>手动关系</h3>
+            <span>{relatedEdges.length}</span>
+          </div>
+          <div className="relationship-author-relation-list">
+            {relatedEdges.length ? (
+              relatedEdges.map((edge) => (
+                <div key={edge.id} className="relationship-author-relation-row">
+                  <b>{counterpartName(edge, selectedNode.id)}</b>
+                  <span>{edge.baseRelationLabel}</span>
+                  <em>{edge.baseRelationSummary ?? "作者手动录入"}</em>
+                </div>
+              ))
+            ) : (
+              <p>暂无手动关系。可以在顶部添加关系。</p>
+            )}
+          </div>
+        </section>
+
+        <div className="relationship-character-action-row footer">
+          <button
+            className={`relationship-primary-action ${focusNodeId === selectedNode.id && mode === "focus" ? "active" : ""}`}
+            disabled={focusNodeId === selectedNode.id && mode === "focus"}
+            onClick={() => onFocusNode(selectedNode)}
+            type="button"
+          >
+            <Crosshair size={15} weight="bold" />
+            以此为中心
+          </button>
+          {mode === "focus" ? (
+            <button className="relationship-return-global-button" onClick={onReturnGlobal} type="button">
+              返回全局图
+            </button>
+          ) : null}
+          {mode === "focus" ? (
+            <div className="relationship-segmented compact" role="group" aria-label="关系跳数">
+              <button className={hopDepth === 1 ? "active" : ""} onClick={() => onHopDepthChange(1)} type="button">
+                一跳
+              </button>
+              <button className={hopDepth === 2 ? "active" : ""} onClick={() => onHopDepthChange(2)} type="button">
+                二跳
+              </button>
+            </div>
+          ) : null}
+        </div>
+      </aside>
+    );
+  }
+
+  if (graphSource === "author" && selectedEdge) {
+    return (
+      <aside className="relationship-graph-inspector">
+        <div className="relationship-inspector-topline">
+          <h2>
+            {selectedEdge.sourceName} - {selectedEdge.targetName}
+          </h2>
+          <div className="relationship-inspector-top-actions">
+            <CollapseDetailButton onCollapse={onCollapse} />
+          </div>
+        </div>
+        <div className="relationship-inspector-chips">
+          <span>作者关系</span>
+          <span>手动设定</span>
+        </div>
+        <section>
+          <h3>关系名称</h3>
+          <p>
+            <b>{selectedEdge.baseRelationLabel}</b>
+          </p>
+        </section>
+        <section>
+          <h3>关系说明</h3>
+          <p>{selectedEdge.baseRelationSummary ?? "作者手动录入的固定关系。"}</p>
+        </section>
+        <section>
+          <h3>关系两端</h3>
+          <div className="relationship-author-relation-list">
+            <div className="relationship-author-relation-row">
+              <b>{selectedEdge.sourceName}</b>
+              <span>指向</span>
+              <em>{selectedEdge.targetName}</em>
+            </div>
+          </div>
+        </section>
+      </aside>
+    );
+  }
+
   if (selectedNode) {
     const relatedEdges = edges
       .filter((edge) => edge.sourceId === selectedNode.id || edge.targetId === selectedNode.id)
@@ -153,6 +466,7 @@ export function RelationshipGraphInspector({
       .sort((left, right) => right.stage.chapterOrder - left.stage.chapterOrder)[0] ?? null;
     const evidenceSnippets = relatedEdges
       .flatMap((edge) => edge.timeline.map((stage) => ({ edge, stage })))
+      .filter((item) => item.stage.evidenceSource !== "author_manual")
       .filter((item) => item.stage.evidenceQuote || item.stage.changeSummary)
       .sort((left, right) => right.stage.chapterOrder - left.stage.chapterOrder)
       .slice(0, 3);
@@ -349,9 +663,7 @@ export function RelationshipGraphInspector({
       </section>
       <section>
         <h3>剧情关系</h3>
-        <p>
-          <b>{selectedEdge.plotRelationLabel}</b>：{selectedEdge.plotRelationSummary}
-        </p>
+        <p>{selectedEdge.plotRelationLabel ? <b>{selectedEdge.plotRelationLabel}</b> : null}{selectedEdge.plotRelationLabel ? "：" : ""}{selectedEdge.plotRelationSummary}</p>
       </section>
       <section>
         <h3>关系维度</h3>
@@ -367,13 +679,20 @@ export function RelationshipGraphInspector({
         <h3>证据来源</h3>
         <div className="relationship-evidence-list">
           {selectedEdge.timeline.map((item) => (
-            <button key={`${item.chapterId}:${item.chapterOrder}:${item.evidenceQuote}`} onClick={() => onOpenChapter(item.chapterId)} type="button">
-              <b>
-                第{item.chapterOrder}章 {item.chapterTitle}
-              </b>
-              <span>{item.evidenceQuote || item.changeSummary}</span>
-              <em>打开原文</em>
-            </button>
+            item.evidenceSource === "author_manual" ? (
+              <div className="relationship-evidence-manual" key={`${item.chapterId}:${item.chapterOrder}:${item.evidenceQuote}`}>
+                <b>{item.chapterTitle}</b>
+                <span>{item.changeSummary || item.evidenceQuote}</span>
+              </div>
+            ) : (
+              <button key={`${item.chapterId}:${item.chapterOrder}:${item.evidenceQuote}`} onClick={() => onOpenChapter(item.chapterId)} type="button">
+                <b>
+                  第{item.chapterOrder}章 {item.chapterTitle}
+                </b>
+                <span>{item.evidenceQuote || item.changeSummary}</span>
+                <em>打开原文</em>
+              </button>
+            )
           ))}
         </div>
       </section>

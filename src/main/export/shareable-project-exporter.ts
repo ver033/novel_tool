@@ -292,6 +292,7 @@ export class ShareableProjectExporter {
   private getIncludedLabels(input: ExportShareableProjectCopyInput): readonly string[] {
     return [
       "章节正文",
+      "人物关系设定",
       ...(input.includeScratchNotes ? ["草稿纸/素材"] : []),
       ...(input.includePromptPresets ? ["提示词预设"] : []),
       ...(input.includeSummaryCache ? ["章节索引缓存"] : [])

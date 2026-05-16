@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createDatabase } from "../../src/main/db/database";
 import { runMigrations } from "../../src/main/db/migrations";
 import { ChapterRepository } from "../../src/main/db/repositories/chapter-repo";
+import { AuthorRelationshipRepository } from "../../src/main/db/repositories/author-relationship-repo";
 import { ProjectRepository } from "../../src/main/db/repositories/project-repo";
 import { SummaryRepository } from "../../src/main/db/repositories/summary-repo";
 import { SummaryService } from "../../src/main/ai/summary-service";
@@ -52,6 +53,7 @@ describe("shareable project export flow", () => {
     const { project, initialChapter } = projectService.createProject({ name: "白鹿原" });
     const projectDb = projectService.getProjectDatabaseForProject(project.id);
     const chapterRepo = new ChapterRepository(projectDb);
+    const authorRelationshipRepo = new AuthorRelationshipRepository(projectDb);
     const now = "2026-05-15T00:00:00.000Z";
 
     chapterRepo.saveContent(
@@ -125,6 +127,13 @@ describe("shareable project export flow", () => {
         now,
         now
       );
+    authorRelationshipRepo.createRelationship({
+      projectId: project.id,
+      sourceCharacterName: "白嘉轩",
+      targetCharacterName: "鹿三",
+      sourceToTargetLabel: "主人",
+      targetToSourceLabel: "长工"
+    });
     projectDb
       .prepare(
         "INSERT INTO summary_jobs (id, project_id, job_type, target_id, source_hash, status, error, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
@@ -141,7 +150,7 @@ describe("shareable project export flow", () => {
     });
 
     expect(result.filePath).toBe(outputPath);
-    expect(result.included).toEqual(expect.arrayContaining(["章节正文", "章节索引缓存"]));
+    expect(result.included).toEqual(expect.arrayContaining(["章节正文", "人物关系设定", "章节索引缓存"]));
     expect(result.removed).toEqual(expect.arrayContaining(["本机路径", "章节快照", "AI 聊天记录", "AI 改写任务记录", "导入记录", "缓存任务记录"]));
 
     const exportedDb = openExistingProjectDatabase(outputPath);
@@ -163,6 +172,22 @@ describe("shareable project export flow", () => {
       expect(countRows(exportedDb, "prompt_presets")).toBe(0);
       expect(countRows(exportedDb, "summary_jobs")).toBe(0);
       expect(countRows(exportedDb, "chapter_ai_summaries")).toBe(1);
+      const authorCharacters = exportedDb.prepare("SELECT name, project_id FROM author_relationship_characters ORDER BY name ASC").all() as {
+        readonly name: string;
+        readonly project_id: string;
+      }[];
+      const authorRelationships = exportedDb
+        .prepare("SELECT source_to_target_label, target_to_source_label, project_id FROM author_relationships")
+        .all() as { readonly source_to_target_label: string; readonly target_to_source_label: string | null; readonly project_id: string }[];
+      expect(authorCharacters.map((row) => row.name).sort()).toEqual(["白嘉轩", "鹿三"]);
+      expect(authorCharacters.every((row) => row.project_id === exportedProject.id)).toBe(true);
+      expect(authorRelationships).toEqual([
+        {
+          source_to_target_label: "主人",
+          target_to_source_label: "长工",
+          project_id: exportedProject.id
+        }
+      ]);
     } finally {
       exportedDb.close();
     }

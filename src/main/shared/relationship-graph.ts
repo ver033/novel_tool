@@ -4,7 +4,7 @@ export const relationshipEntityKindSchema = z.enum(["person", "nonhuman", "group
 export const relationshipEntityImportanceSchema = z.enum(["main", "supporting", "minor", "unknown"]);
 export const relationshipMentionDirectionSchema = z.enum(["undirected", "source_to_target", "target_to_source", "unclear"]);
 export const relationshipMentionPolaritySchema = z.enum(["positive", "negative", "mixed", "neutral", "unknown"]);
-export const relationshipEvidenceSourceSchema = z.enum(["summary_payload", "summary_arc", "summary_book"]);
+export const relationshipEvidenceSourceSchema = z.enum(["summary_payload", "summary_arc", "summary_book", "author_manual"]);
 export const relationshipGraphRoleScopeSchema = z.enum(["main", "supporting", "all"]);
 export const relationshipGraphModeSchema = z.enum(["global", "focus"]);
 
@@ -94,6 +94,7 @@ export type RelationshipGraphNode = {
   readonly importance: RelationshipEntityImportance;
   readonly roleSummary: string | null;
   readonly faction: string | null;
+  readonly authorNotes?: string | null;
   readonly chapterIds: readonly string[];
   readonly firstChapterOrder: number | null;
   readonly latestChapterOrder: number | null;
@@ -130,6 +131,7 @@ export type RelationshipGraphEdgeStage = {
 
 export type RelationshipGraphEdge = {
   readonly id: string;
+  readonly authorRelationshipId?: string;
   readonly sourceId: string;
   readonly targetId: string;
   readonly sourceName: string;
@@ -176,4 +178,3 @@ export type RelationshipGraphResult = {
   readonly truncated: boolean;
   readonly generatedAt: string;
 };
-

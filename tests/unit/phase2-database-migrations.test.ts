@@ -36,6 +36,8 @@ describe("phase 2 database migrations", () => {
       "ai_task_candidates",
       "ai_tasks",
       "arc_ai_summaries",
+      "author_relationship_characters",
+      "author_relationships",
       "book_ai_summaries",
       "chapter_ai_summaries",
       "chapter_ai_summary_chunks",
@@ -63,7 +65,9 @@ describe("phase 2 database migrations", () => {
       { version: 11 },
       { version: 12 },
       { version: 15 },
-      { version: 17 }
+      { version: 17 },
+      { version: 18 },
+      { version: 19 }
     ]);
     expect(db.prepare("PRAGMA table_info(import_jobs)").all().find((row) => row.name === "project_id")).toMatchObject({ notnull: 0 });
     expect(db.prepare("PRAGMA table_info(ai_task_candidates)").all().find((row) => row.name === "metadata_json")).toMatchObject({
@@ -97,7 +101,55 @@ describe("phase 2 database migrations", () => {
     runMigrations(db);
     runMigrations(db);
 
-    expect(db.prepare("SELECT COUNT(*) AS count FROM schema_migrations").get()).toEqual({ count: 14 });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM schema_migrations").get()).toEqual({ count: 16 });
+
+    db.close();
+  });
+
+  it("creates author relationship tables for manual graph data", () => {
+    const db = createDatabase(createTempDbPath());
+
+    runMigrations(db);
+
+    const tables = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('author_relationship_characters', 'author_relationships')")
+      .all()
+      .map((row) => row.name);
+
+    expect(tables.sort()).toEqual(["author_relationship_characters", "author_relationships"]);
+
+    const characterColumns = db.prepare("PRAGMA table_info(author_relationship_characters)").all().map((row) => row.name);
+    expect(characterColumns).toEqual(
+      expect.arrayContaining([
+        "id",
+        "project_id",
+        "name",
+        "normalized_name",
+        "aliases_json",
+        "entity_kind",
+        "importance",
+        "role_summary",
+        "faction",
+        "notes",
+        "created_at",
+        "updated_at"
+      ])
+    );
+
+    const relationColumns = db.prepare("PRAGMA table_info(author_relationships)").all().map((row) => row.name);
+    expect(relationColumns).toEqual(
+      expect.arrayContaining([
+        "id",
+        "project_id",
+        "source_character_id",
+        "target_character_id",
+        "source_to_target_label",
+        "target_to_source_label",
+        "normalized_relation_key",
+        "created_at",
+        "updated_at"
+      ])
+    );
 
     db.close();
   });
@@ -183,7 +235,7 @@ describe("phase 2 database migrations", () => {
     expect(db.prepare("SELECT COUNT(*) AS count FROM arc_ai_summaries").get()).toEqual({ count: 0 });
     expect(db.prepare("SELECT COUNT(*) AS count FROM book_ai_summaries").get()).toEqual({ count: 0 });
     expect(db.prepare("SELECT COUNT(*) AS count FROM summary_jobs").get()).toEqual({ count: 0 });
-    expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").get()).toEqual({ version: 17 });
+    expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").get()).toEqual({ version: 19 });
 
     db.close();
   });
@@ -241,7 +293,7 @@ describe("phase 2 database migrations", () => {
       change_summary: "旧版校对结果已失效，请重新生成。",
       metadata_json: null
     });
-    expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").get()).toEqual({ version: 17 });
+    expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").get()).toEqual({ version: 19 });
 
     db.close();
   });

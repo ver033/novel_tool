@@ -57,7 +57,39 @@ describe("character relationship graph page wiring", () => {
     expect(filters).toContain("最低置信度");
   });
 
-  it("uses a text-only Sigma graph canvas and evidence inspector", () => {
+  it("keeps author-defined relationship editing separate from AI graph loading", () => {
+    const page = readSource("src/renderer/relationship-graph/CharacterRelationshipGraphPage.tsx");
+    const filters = readSource("src/renderer/relationship-graph/RelationshipGraphFilters.tsx");
+    const authorControls = readSource("src/renderer/relationship-graph/AuthorRelationshipControls.tsx");
+    const load = readSource("src/renderer/relationship-graph/relationship-graph-load.ts");
+
+    expect(page).toContain('useState<RelationshipGraphSourceMode>("ai")');
+    expect(page).toContain("relationship-graph-view-toolbar");
+    expect(page).toContain("图谱视图");
+    expect(page).toContain("AI 分析图谱");
+    expect(page).toContain("作者设定图谱");
+    expect(page).toContain("requestAuthorRelationshipGraph(api, projectId, requestState)");
+    expect(page).toContain("api.authorRelationship?.createCharacter");
+    expect(page).toContain("api.authorRelationship?.updateCharacter");
+    expect(page).toContain("api.authorRelationship?.createRelationship");
+    expect(page).toContain("api.authorRelationship?.deleteCharacter");
+    expect(page).toContain("api.authorRelationship?.deleteRelationship");
+    expect(page).toContain("graph?.edges.some((edge) => edge.id === id)");
+    expect(page).toContain("Boolean(selectedNode || selectedEdge)");
+    expect(page).toContain('graphSource={graphSource}');
+    expect(page).toContain('graphSource === "ai" ? <RelationshipGraphLegend /> : null');
+    expect(page).toContain('graphSource === "ai" ? (');
+    expect(filters).not.toContain("作者手工");
+    expect(filters).not.toContain("图谱来源");
+    expect(authorControls).toContain("relationship-author-actions");
+    expect(authorControls).toContain("author-relationship-popover");
+    expect(authorControls).toContain("添加关系");
+    expect(authorControls).toContain("删除人物");
+    expect(authorControls).toContain("edge.authorRelationshipId ?? edge.id");
+    expect(load).toContain("api.authorRelationship?.getGraph");
+  });
+
+  it("uses a text-only Sigma graph canvas and separates AI evidence from author setting fields", () => {
     const canvas = readSource("src/renderer/relationship-graph/RelationshipGraphCanvas.tsx");
     const inspector = readSource("src/renderer/relationship-graph/RelationshipGraphInspector.tsx");
     const sigmaGraph = readSource("src/renderer/relationship-graph/SigmaRelationshipGraph.tsx");
@@ -71,6 +103,12 @@ describe("character relationship graph page wiring", () => {
     expect(canvas).not.toContain("avatar");
     expect(inspector).toContain("证据来源");
     expect(inspector).toContain("打开原文");
+    expect(inspector).toContain("作者设定");
+    expect(inspector).toContain("别名 / 称呼");
+    expect(inspector).toContain("身份定位");
+    expect(inspector).toContain("所属阵营");
+    expect(inspector).toContain("作者备注");
+    expect(inspector).toContain("保存设定");
   });
 
   it("opens source chapters from graph evidence through App navigation", () => {

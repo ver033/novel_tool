@@ -1,4 +1,5 @@
 import type { z } from "zod";
+import type { RelationshipEntityImportance, RelationshipEntityKind } from "./relationship-graph";
 import type {
   aiCreateTaskInputSchema,
   aiCreateChatSessionInputSchema,
@@ -17,6 +18,12 @@ import type {
   aiSaveCandidateToScratchpadInputSchema,
   aiSendChatMessageStreamInputSchema,
   aiUpdateTaskInputSchema,
+  authorRelationshipCreateCharacterInputSchema,
+  authorRelationshipCreateRelationshipInputSchema,
+  authorRelationshipDeleteCharacterInputSchema,
+  authorRelationshipDeleteRelationshipInputSchema,
+  authorRelationshipGetGraphInputSchema,
+  authorRelationshipUpdateCharacterInputSchema,
   chapterCreateInputSchema,
   chapterCreateSnapshotInputSchema,
   chapterDeleteInputSchema,
@@ -124,6 +131,39 @@ export type ScratchNoteRecord = {
   readonly sourceTaskId: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;
+};
+
+export type AuthorRelationshipCharacterRecord = {
+  readonly id: string;
+  readonly projectId: string;
+  readonly name: string;
+  readonly normalizedName: string;
+  readonly aliases: readonly string[];
+  readonly entityKind: RelationshipEntityKind;
+  readonly importance: RelationshipEntityImportance;
+  readonly roleSummary: string | null;
+  readonly faction: string | null;
+  readonly notes: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+};
+
+export type AuthorRelationshipRecord = {
+  readonly id: string;
+  readonly projectId: string;
+  readonly sourceCharacterId: string;
+  readonly targetCharacterId: string;
+  readonly sourceToTargetLabel: string;
+  readonly targetToSourceLabel: string | null;
+  readonly normalizedRelationKey: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+};
+
+export type AuthorRelationshipCreateResult = {
+  readonly relationship: AuthorRelationshipRecord;
+  readonly sourceCharacter: AuthorRelationshipCharacterRecord;
+  readonly targetCharacter: AuthorRelationshipCharacterRecord;
 };
 
 export type AiChatAction =
@@ -369,6 +409,12 @@ export type SummaryClearAndRetryBookCacheInput = z.input<typeof summaryClearAndR
 export type RelationshipGraphGetInput = z.input<typeof relationshipGraphGetInputSchema>;
 export type RelationshipGraphStatusInput = z.input<typeof relationshipGraphStatusInputSchema>;
 export type RelationshipGraphSourceStatusInput = z.input<typeof relationshipGraphSourceStatusInputSchema>;
+export type AuthorRelationshipGetGraphInput = z.input<typeof authorRelationshipGetGraphInputSchema>;
+export type AuthorRelationshipCreateCharacterInput = z.input<typeof authorRelationshipCreateCharacterInputSchema>;
+export type AuthorRelationshipUpdateCharacterInput = z.input<typeof authorRelationshipUpdateCharacterInputSchema>;
+export type AuthorRelationshipCreateRelationshipInput = z.input<typeof authorRelationshipCreateRelationshipInputSchema>;
+export type AuthorRelationshipDeleteCharacterInput = z.input<typeof authorRelationshipDeleteCharacterInputSchema>;
+export type AuthorRelationshipDeleteRelationshipInput = z.input<typeof authorRelationshipDeleteRelationshipInputSchema>;
 export type { RelationshipGraphResult, RelationshipGraphSourceStatus };
 export type SummaryIndexPausedReason = "ai_not_configured" | "foreground_ai_active" | "background_disabled" | null;
 export type SummaryChapterCacheState = SummaryStatus | "missing" | "queued" | "running" | "cancelled";
@@ -561,6 +607,14 @@ export const ipcChannels = {
   relationshipGraph: {
     getGraph: "novelTool:relationshipGraph:getGraph",
     getSourceStatus: "novelTool:relationshipGraph:getSourceStatus"
+  },
+  authorRelationship: {
+    getGraph: "novelTool:authorRelationship:getGraph",
+    createCharacter: "novelTool:authorRelationship:createCharacter",
+    updateCharacter: "novelTool:authorRelationship:updateCharacter",
+    createRelationship: "novelTool:authorRelationship:createRelationship",
+    deleteCharacter: "novelTool:authorRelationship:deleteCharacter",
+    deleteRelationship: "novelTool:authorRelationship:deleteRelationship"
   },
   scratch: {
     list: "novelTool:scratch:list",
