@@ -1882,6 +1882,58 @@ describe("summary index status and rebuild controls", () => {
     db.close();
   });
 
+  it("keeps later arc failures visible when the arc source hash includes the prior character ledger", () => {
+    const db = createDb();
+    const { chapterRepo, summaryRepo } = seedProject(db);
+    const chapterContents = Array.from({ length: 21 }, (_value, index) => `第${index + 1}章正文`.repeat(160));
+    for (const [index, content] of chapterContents.entries()) {
+      const order = index + 1;
+      createChapterAtOrder(chapterRepo, `chapter_${order}`, `第${order}章`, index, content);
+      upsertReadyChapterSummary(summaryRepo, {
+        chapterId: `chapter_${order}`,
+        title: `第${order}章`,
+        order,
+        content
+      });
+    }
+    const firstArcSourceHash = computeSourceHash(chapterContents.slice(0, 20).map((content) => computeChapterContentHash(content)));
+    summaryRepo.upsertArcSummary({
+      id: "arc_ready_1_20",
+      projectId: "project_1",
+      arcKey: "auto:001-020",
+      chapterFrom: 1,
+      chapterTo: 20,
+      sourceHash: firstArcSourceHash,
+      summary: "第1-20章阶段摘要已完成。",
+      structured: arcPayloadWithRelationshipGraph(),
+      status: "ready",
+      error: null,
+      createdAt,
+      updatedAt: "2026-05-01T00:12:00.000Z"
+    });
+    const service = new SummaryService(summaryRepo, chapterRepo);
+
+    service.rebuildProjectIndex("project_1", "2026-05-01T00:13:00.000Z");
+    const queuedArc = summaryRepo
+      .listSummaryJobs("project_1")
+      .find((job) => job.jobType === "arc_summary" && job.targetId === "auto:021-021");
+    expect(queuedArc?.sourceHash).toBeTruthy();
+    expect(queuedArc?.sourceHash).not.toBe(computeSourceHash([computeChapterContentHash(chapterContents[20])]));
+    const running = summaryRepo.claimNextSummaryJob("project_1", "2026-05-01T00:14:00.000Z", { chapterCacheBuildOrder: "front_to_back" });
+    expect(running?.jobType).toBe("arc_summary");
+    expect(running?.targetId).toBe("auto:021-021");
+    summaryRepo.failSummaryJob(running?.id ?? queuedArc?.id ?? "", "阶段摘要结构无效", null, "2026-05-01T00:15:00.000Z");
+
+    const status = service.getIndexStatus("project_1", "2026-05-01T00:16:00.000Z");
+
+    expect(status.failedJobCount).toBe(1);
+    expect(status.recentFailedJobs[0]).toMatchObject({
+      label: "阶段摘要（第21章）",
+      error: "阶段摘要结构无效"
+    });
+    db.close();
+  });
+
   it("describes truncated arc summary failures as stage summary output problems", () => {
     const db = createDb();
     const { chapterRepo, summaryRepo } = seedProject(db);

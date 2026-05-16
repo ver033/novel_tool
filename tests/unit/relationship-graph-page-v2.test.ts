@@ -92,9 +92,14 @@ describe("relationship graph page v2 renderer wiring", () => {
     const component = readSource("src/renderer/relationship-graph/SigmaRelationshipGraph.tsx");
 
     expect(page).toContain('layoutMode={graphSource === "author" ? "manual" : "auto"}');
+    expect(page).toContain("handleAuthorNodePositionChange");
+    expect(page).toContain("api.authorRelationship?.updateCharacterLayout");
+    expect(canvas).toContain('graphSource?: "ai" | "author"');
+    expect(canvas).toContain("onNodePositionChange");
     expect(canvas).toContain('layoutMode?: "auto" | "manual"');
     expect(canvas).toContain("layoutMode={layoutMode}");
     expect(component).toContain('type RelationshipGraphLayoutMode = "auto" | "manual"');
+    expect(component).toContain("onNodePositionChangeRef");
     expect(component).toContain("buildManualSeedPositions");
     expect(component).toContain("prunePositionCache");
     expect(component).toContain('layoutMode === "manual"');
@@ -110,6 +115,14 @@ describe("relationship graph page v2 renderer wiring", () => {
     expect(component).not.toContain("sigma.getCamera().setState({ x: 0, y: 0, angle: 0, ratio: 1 })");
     expect(component).not.toContain('layoutMode === "manual") {\n      sigma.getCamera().animatedReset');
     expect(component).not.toContain("positionCache.current.clear();\n      lastLayoutDataKey.current = layoutDataKey;");
+  });
+
+  it("shows author-specific empty graph copy instead of AI cache instructions", () => {
+    const canvas = readSource("src/renderer/relationship-graph/RelationshipGraphCanvas.tsx");
+
+    expect(canvas).toContain("作者还没有录入人物关系");
+    expect(canvas).toContain("添加人物和关系后，这里会显示作者设定图谱。");
+    expect(canvas).toContain("阶段摘要和全书摘要完成后，这里会显示人物与关系变化。");
   });
 
   it("animates into ForceAtlas2 positions and briefly settles the graph after drag", () => {

@@ -621,6 +621,19 @@ export const authorRelationshipUpdateCharacterInputSchema = z
     notes: z.string().trim().max(1000).nullable().optional()
   })
   .strict();
+const authorRelationshipLayoutPositionSchema = z
+  .object({
+    x: z.number().finite().min(-100000).max(100000),
+    y: z.number().finite().min(-100000).max(100000)
+  })
+  .strict();
+export const authorRelationshipUpdateCharacterLayoutInputSchema = z
+  .object({
+    projectId: idSchema,
+    characterId: idSchema,
+    layoutPosition: authorRelationshipLayoutPositionSchema.nullable()
+  })
+  .strict();
 export const authorRelationshipCreateRelationshipInputSchema = z
   .object({
     projectId: idSchema,

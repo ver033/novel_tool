@@ -27,6 +27,7 @@ import type {
   AuthorRelationshipDeleteRelationshipInput,
   AuthorRelationshipGetGraphInput,
   AuthorRelationshipUpdateCharacterInput,
+  AuthorRelationshipUpdateCharacterLayoutInput,
   ChapterCreateInput,
   ChapterCreateSnapshotInput,
   ChapterDeleteInput,
@@ -142,6 +143,7 @@ export type NovelToolApi = {
     readonly getGraph: (input: AuthorRelationshipGetGraphInput) => Promise<unknown>;
     readonly createCharacter: (input: AuthorRelationshipCreateCharacterInput) => Promise<unknown>;
     readonly updateCharacter: (input: AuthorRelationshipUpdateCharacterInput) => Promise<unknown>;
+    readonly updateCharacterLayout: (input: AuthorRelationshipUpdateCharacterLayoutInput) => Promise<unknown>;
     readonly createRelationship: (input: AuthorRelationshipCreateRelationshipInput) => Promise<unknown>;
     readonly deleteCharacter: (input: AuthorRelationshipDeleteCharacterInput) => Promise<unknown>;
     readonly deleteRelationship: (input: AuthorRelationshipDeleteRelationshipInput) => Promise<unknown>;
@@ -253,6 +255,8 @@ export const novelToolApi: NovelToolApi = Object.freeze({
     getGraph: (input: AuthorRelationshipGetGraphInput) => ipcRenderer.invoke(ipcChannels.authorRelationship.getGraph, input),
     createCharacter: (input: AuthorRelationshipCreateCharacterInput) => ipcRenderer.invoke(ipcChannels.authorRelationship.createCharacter, input),
     updateCharacter: (input: AuthorRelationshipUpdateCharacterInput) => ipcRenderer.invoke(ipcChannels.authorRelationship.updateCharacter, input),
+    updateCharacterLayout: (input: AuthorRelationshipUpdateCharacterLayoutInput) =>
+      ipcRenderer.invoke(ipcChannels.authorRelationship.updateCharacterLayout, input),
     createRelationship: (input: AuthorRelationshipCreateRelationshipInput) => ipcRenderer.invoke(ipcChannels.authorRelationship.createRelationship, input),
     deleteCharacter: (input: AuthorRelationshipDeleteCharacterInput) => ipcRenderer.invoke(ipcChannels.authorRelationship.deleteCharacter, input),
     deleteRelationship: (input: AuthorRelationshipDeleteRelationshipInput) => ipcRenderer.invoke(ipcChannels.authorRelationship.deleteRelationship, input)

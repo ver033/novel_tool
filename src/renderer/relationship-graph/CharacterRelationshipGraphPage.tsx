@@ -258,6 +258,20 @@ export function CharacterRelationshipGraphPage({
     [api, projectId, requestState]
   );
 
+  const handleAuthorNodePositionChange = useCallback(
+    (characterId: string, layoutPosition: { readonly x: number; readonly y: number }) => {
+      if (graphSource !== "author" || !projectId) {
+        return;
+      }
+      void Promise.resolve(api.authorRelationship?.updateCharacterLayout({ projectId, characterId, layoutPosition })).catch((reason: unknown) => {
+        if (mountedRef.current) {
+          setError(reason instanceof Error ? reason.message : String(reason));
+        }
+      });
+    },
+    [api, graphSource, projectId]
+  );
+
   const handleResetDisplaySettings = useCallback(() => {
     setDisplaySettings(defaultRelationshipGraphDisplaySettings);
   }, []);
@@ -367,10 +381,12 @@ export function CharacterRelationshipGraphPage({
               edges={graph?.edges ?? []}
               error={error}
               focusNodeId={focusNodeId}
+              graphSource={graphSource}
               layoutMode={graphSource === "author" ? "manual" : "auto"}
               loading={loading}
               nodes={graph?.nodes ?? []}
               selectedId={selectedId}
+              onNodePositionChange={graphSource === "author" ? handleAuthorNodePositionChange : undefined}
               onSelect={handleGraphSelect}
             />
             <RelationshipGraphStatusBar

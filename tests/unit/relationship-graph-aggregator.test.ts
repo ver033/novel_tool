@@ -273,4 +273,45 @@ describe("SummaryRelationshipGraphAggregator", () => {
     });
     db.close();
   });
+
+  it("reports failed arc and book summary jobs as relationship graph source failures", () => {
+    const db = createDb();
+    const chapterRepo = new ChapterRepository(db);
+    const summaryRepo = new SummaryRepository(db);
+    createChapter(chapterRepo, "chapter_1", "第1章", 0);
+    const arcJob = summaryRepo.enqueueSummaryJob({
+      projectId: "project_1",
+      jobType: "arc_summary",
+      targetId: "auto:001-001",
+      sourceHash: "arc_hash",
+      priority: 6,
+      now
+    });
+    const runningArc = summaryRepo.claimNextSummaryJob("project_1", "2026-05-01T00:01:00.000Z");
+    summaryRepo.failSummaryJob(runningArc?.id ?? arcJob.id, "阶段摘要结构无效", null, "2026-05-01T00:02:00.000Z");
+    const bookJob = summaryRepo.enqueueSummaryJob({
+      projectId: "project_1",
+      jobType: "book_summary",
+      targetId: null,
+      sourceHash: "book_hash",
+      priority: 4,
+      now: "2026-05-01T00:03:00.000Z"
+    });
+    const runningBook = summaryRepo.claimNextSummaryJob("project_1", "2026-05-01T00:04:00.000Z");
+    summaryRepo.failSummaryJob(runningBook?.id ?? bookJob.id, "全书摘要被截断", null, "2026-05-01T00:05:00.000Z");
+
+    const status = new SummaryRelationshipGraphAggregator(summaryRepo, chapterRepo).getSourceStatus("project_1");
+
+    expect(status).toMatchObject({
+      state: "failed",
+      arcSummary: {
+        failed: 1
+      },
+      bookSummary: {
+        failed: true
+      },
+      latestFailure: "全书摘要被截断"
+    });
+    db.close();
+  });
 });

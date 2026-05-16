@@ -1,5 +1,5 @@
 import { createId } from "../../shared/ids";
-import type { RelationshipEntityImportance, RelationshipEntityKind } from "../../shared/relationship-graph";
+import type { RelationshipEntityImportance, RelationshipEntityKind, RelationshipGraphPosition } from "../../shared/relationship-graph";
 import type { SqliteDatabase } from "../database";
 
 export type AuthorRelationshipCharacterRecord = {
@@ -13,6 +13,7 @@ export type AuthorRelationshipCharacterRecord = {
   readonly roleSummary: string | null;
   readonly faction: string | null;
   readonly notes: string | null;
+  readonly layoutPosition: RelationshipGraphPosition | null;
   readonly createdAt: string;
   readonly updatedAt: string;
 };
@@ -54,6 +55,12 @@ export type AuthorRelationshipCharacterUpdateInput = {
   readonly notes?: string | null;
 };
 
+export type AuthorRelationshipCharacterLayoutUpdateInput = {
+  readonly projectId: string;
+  readonly characterId: string;
+  readonly layoutPosition: RelationshipGraphPosition | null;
+};
+
 export type AuthorRelationshipCreateResult = {
   readonly relationship: AuthorRelationshipRecord;
   readonly sourceCharacter: AuthorRelationshipCharacterRecord;
@@ -71,6 +78,8 @@ type AuthorRelationshipCharacterRow = {
   readonly role_summary: string | null;
   readonly faction: string | null;
   readonly notes: string | null;
+  readonly layout_x: number | null;
+  readonly layout_y: number | null;
   readonly created_at: string;
   readonly updated_at: string;
 };
@@ -157,6 +166,16 @@ function relationshipEntityImportance(value: string): RelationshipEntityImportan
   return "supporting";
 }
 
+function layoutPositionFromRow(row: AuthorRelationshipCharacterRow): RelationshipGraphPosition | null {
+  if (typeof row.layout_x !== "number" || typeof row.layout_y !== "number") {
+    return null;
+  }
+  if (!Number.isFinite(row.layout_x) || !Number.isFinite(row.layout_y)) {
+    return null;
+  }
+  return { x: row.layout_x, y: row.layout_y };
+}
+
 function mapCharacter(row: AuthorRelationshipCharacterRow): AuthorRelationshipCharacterRecord {
   return {
     id: row.id,
@@ -169,6 +188,7 @@ function mapCharacter(row: AuthorRelationshipCharacterRow): AuthorRelationshipCh
     roleSummary: row.role_summary,
     faction: row.faction,
     notes: row.notes,
+    layoutPosition: layoutPositionFromRow(row),
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -266,6 +286,29 @@ export class AuthorRelationshipRepository {
         input.projectId,
         input.characterId
       );
+
+    if (result.changes === 0) {
+      throw new Error("作者人物不存在。");
+    }
+    return this.findCharacterById(input.projectId, input.characterId);
+  }
+
+  updateCharacterLayout(input: AuthorRelationshipCharacterLayoutUpdateInput): AuthorRelationshipCharacterRecord {
+    const x = input.layoutPosition?.x ?? null;
+    const y = input.layoutPosition?.y ?? null;
+    if ((x !== null && !Number.isFinite(x)) || (y !== null && !Number.isFinite(y))) {
+      throw new Error("人物位置无效。");
+    }
+    const updatedAt = nowIso();
+    const result = this.db
+      .prepare(
+        `UPDATE author_relationship_characters
+         SET layout_x = ?,
+             layout_y = ?,
+             updated_at = ?
+         WHERE project_id = ? AND id = ?`
+      )
+      .run(x, y, updatedAt, input.projectId, input.characterId);
 
     if (result.changes === 0) {
       throw new Error("作者人物不存在。");

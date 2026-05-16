@@ -112,4 +112,25 @@ describe("AuthorRelationshipGraphService", () => {
 
     db.close();
   });
+
+  it("persists author character layout positions for manual graph dragging", () => {
+    const db = createDb();
+    seedProject(db);
+    const repo = new AuthorRelationshipRepository(db);
+    const character = repo.createCharacter({ projectId: "project_1", name: "白嘉轩" });
+
+    repo.updateCharacterLayout({
+      projectId: "project_1",
+      characterId: character.id,
+      layoutPosition: { x: 128.5, y: -64.25 }
+    });
+
+    const graph = new AuthorRelationshipGraphService(new AuthorRelationshipRepository(db)).getGraph({ projectId: "project_1" });
+
+    expect(graph.nodes.find((node) => node.id === character.id)).toMatchObject({
+      name: "白嘉轩",
+      layoutPosition: { x: 128.5, y: -64.25 }
+    });
+    db.close();
+  });
 });

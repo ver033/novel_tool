@@ -86,6 +86,11 @@ export type RelationshipGraphDimensionSummary = {
   readonly averageConfidence: number;
 };
 
+export type RelationshipGraphPosition = {
+  readonly x: number;
+  readonly y: number;
+};
+
 export type RelationshipGraphNode = {
   readonly id: string;
   readonly name: string;
@@ -103,6 +108,7 @@ export type RelationshipGraphNode = {
   readonly averageConfidence: number;
   readonly averageIntensity: number;
   readonly score: number;
+  readonly layoutPosition?: RelationshipGraphPosition | null;
 };
 
 export type RelationshipGraphEdgeStage = {

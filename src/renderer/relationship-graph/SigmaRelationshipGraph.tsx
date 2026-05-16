@@ -37,6 +37,7 @@ type SigmaRelationshipGraphProps = {
   readonly focusNodeId?: string | null;
   readonly onSelectNode: (id: string) => void;
   readonly onSelectEdge: (id: string) => void;
+  readonly onNodePositionChange?: (nodeId: string, position: RelationshipGraphPosition) => void;
 };
 
 type RelationshipGraphLayoutMode = "auto" | "manual";
@@ -376,23 +377,50 @@ function roundPosition(value: number): number {
   return Math.round(value * 1000) / 1000;
 }
 
+function layoutPositionFromNode(node: RelationshipGraphNode): RelationshipGraphPosition | null {
+  const position = node.layoutPosition;
+  if (!position || !Number.isFinite(position.x) || !Number.isFinite(position.y)) {
+    return null;
+  }
+  return {
+    x: roundPosition(position.x),
+    y: roundPosition(position.y)
+  };
+}
+
 function buildManualSeedPositions(nodes: readonly RelationshipGraphNode[]): Map<string, RelationshipGraphPosition> {
   const positions = new Map<string, RelationshipGraphPosition>();
   if (nodes.length === 0) {
     return positions;
   }
+  nodes.forEach((node) => {
+    const position = layoutPositionFromNode(node);
+    if (position) {
+      positions.set(node.id, position);
+    }
+  });
   if (nodes.length === 1) {
+    if (positions.has(nodes[0].id)) {
+      return positions;
+    }
     positions.set(nodes[0].id, { x: 0, y: 0 });
     return positions;
   }
   if (nodes.length === 2) {
-    positions.set(nodes[0].id, { x: -220, y: 0 });
-    positions.set(nodes[1].id, { x: 220, y: 0 });
+    if (!positions.has(nodes[0].id)) {
+      positions.set(nodes[0].id, { x: -220, y: 0 });
+    }
+    if (!positions.has(nodes[1].id)) {
+      positions.set(nodes[1].id, { x: 220, y: 0 });
+    }
     return positions;
   }
 
   const radius = 190 + Math.min(8, nodes.length) * 14;
   nodes.forEach((node, index) => {
+    if (positions.has(node.id)) {
+      return;
+    }
     const angle = -Math.PI / 2 + (Math.PI * 2 * index) / nodes.length;
     positions.set(node.id, {
       x: roundPosition(Math.cos(angle) * radius),
@@ -444,7 +472,11 @@ function buildLayoutDataKey(
   focusNodeId: string | null | undefined
 ): string {
   const nodeKey = nodes
-    .map((node) => `${node.id}:${node.relationCount}:${Math.round(node.score * 100)}`)
+    .map((node) => {
+      const position = layoutPositionFromNode(node);
+      const positionKey = position ? `${position.x}:${position.y}` : "auto";
+      return `${node.id}:${node.relationCount}:${Math.round(node.score * 100)}:${positionKey}`;
+    })
     .sort()
     .join("|");
   const edgeKey = edges
@@ -685,7 +717,8 @@ function SigmaGraphController({
   selectedId,
   focusNodeId,
   onSelectNode,
-  onSelectEdge
+  onSelectEdge,
+  onNodePositionChange
 }: SigmaRelationshipGraphProps) {
   const sigma = useSigma<SigmaNodeAttributes, SigmaEdgeAttributes>();
   const loadGraph = useLoadGraph<SigmaNodeAttributes, SigmaEdgeAttributes>();
@@ -695,6 +728,7 @@ function SigmaGraphController({
   const lastLayoutDataKey = useRef<string | null>(null);
   const onSelectNodeRef = useRef(onSelectNode);
   const onSelectEdgeRef = useRef(onSelectEdge);
+  const onNodePositionChangeRef = useRef(onNodePositionChange);
   const cancelAnimationRef = useRef<(() => void) | null>(null);
   const draggedNodeRef = useRef<string | null>(null);
   const dragStartRef = useRef<RelationshipGraphPosition | null>(null);
@@ -740,6 +774,10 @@ function SigmaGraphController({
   useEffect(() => {
     onSelectEdgeRef.current = onSelectEdge;
   }, [onSelectEdge]);
+
+  useEffect(() => {
+    onNodePositionChangeRef.current = onNodePositionChange;
+  }, [onNodePositionChange]);
 
   const skipSettlingLayout = layoutMode === "manual";
   const layoutDataKey = useMemo(() => buildLayoutDataKey(nodes, edges, focusNodeId), [edges, focusNodeId, nodes]);
@@ -898,10 +936,12 @@ function SigmaGraphController({
       if (activeGraph.hasNode(draggedNode)) {
         activeGraph.setNodeAttribute(draggedNode, "dragging", false);
         activeGraph.setNodeAttribute(draggedNode, "fixed", false);
-        positionCache.current.set(draggedNode, {
-          x: activeGraph.getNodeAttribute(draggedNode, "x"),
-          y: activeGraph.getNodeAttribute(draggedNode, "y")
-        });
+        const nextPosition = {
+          x: roundPosition(activeGraph.getNodeAttribute(draggedNode, "x")),
+          y: roundPosition(activeGraph.getNodeAttribute(draggedNode, "y"))
+        };
+        positionCache.current.set(draggedNode, nextPosition);
+        onNodePositionChangeRef.current?.(draggedNode, nextPosition);
       }
       sigma.refresh();
       if (!skipSettlingLayout) {

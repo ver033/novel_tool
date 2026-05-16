@@ -24,6 +24,7 @@ import type {
   authorRelationshipDeleteRelationshipInputSchema,
   authorRelationshipGetGraphInputSchema,
   authorRelationshipUpdateCharacterInputSchema,
+  authorRelationshipUpdateCharacterLayoutInputSchema,
   chapterCreateInputSchema,
   chapterCreateSnapshotInputSchema,
   chapterDeleteInputSchema,
@@ -80,7 +81,7 @@ import type {
   writingWordEventSourceSchema
 } from "./schemas";
 import type { ProofreadIssue } from "./proofread";
-import type { RelationshipGraphResult, RelationshipGraphSourceStatus } from "./relationship-graph";
+import type { RelationshipGraphPosition, RelationshipGraphResult, RelationshipGraphSourceStatus } from "./relationship-graph";
 import type { WritingContextPlanMetadata } from "./ai-candidate-metadata";
 import type { ArcAiSummaryPayload, BookAiSummaryPayload, ChapterAiSummaryChunkPayload, ChapterAiSummaryPayload, SummaryJobStatus, SummaryJobType, SummaryStatus } from "./summary-index";
 
@@ -153,6 +154,7 @@ export type AuthorRelationshipCharacterRecord = {
   readonly roleSummary: string | null;
   readonly faction: string | null;
   readonly notes: string | null;
+  readonly layoutPosition: RelationshipGraphPosition | null;
   readonly createdAt: string;
   readonly updatedAt: string;
 };
@@ -547,6 +549,7 @@ export type RelationshipGraphSourceStatusInput = z.input<typeof relationshipGrap
 export type AuthorRelationshipGetGraphInput = z.input<typeof authorRelationshipGetGraphInputSchema>;
 export type AuthorRelationshipCreateCharacterInput = z.input<typeof authorRelationshipCreateCharacterInputSchema>;
 export type AuthorRelationshipUpdateCharacterInput = z.input<typeof authorRelationshipUpdateCharacterInputSchema>;
+export type AuthorRelationshipUpdateCharacterLayoutInput = z.input<typeof authorRelationshipUpdateCharacterLayoutInputSchema>;
 export type AuthorRelationshipCreateRelationshipInput = z.input<typeof authorRelationshipCreateRelationshipInputSchema>;
 export type AuthorRelationshipDeleteCharacterInput = z.input<typeof authorRelationshipDeleteCharacterInputSchema>;
 export type AuthorRelationshipDeleteRelationshipInput = z.input<typeof authorRelationshipDeleteRelationshipInputSchema>;
@@ -747,6 +750,7 @@ export const ipcChannels = {
     getGraph: "novelTool:authorRelationship:getGraph",
     createCharacter: "novelTool:authorRelationship:createCharacter",
     updateCharacter: "novelTool:authorRelationship:updateCharacter",
+    updateCharacterLayout: "novelTool:authorRelationship:updateCharacterLayout",
     createRelationship: "novelTool:authorRelationship:createRelationship",
     deleteCharacter: "novelTool:authorRelationship:deleteCharacter",
     deleteRelationship: "novelTool:authorRelationship:deleteRelationship"

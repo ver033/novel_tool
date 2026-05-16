@@ -225,7 +225,8 @@ export class AuthorRelationshipGraphService {
       relationCount,
       averageConfidence: 1,
       averageIntensity: relationCount > 0 ? 0.55 : 0,
-      score: roundMetric(1 + relationCount * 8)
+      score: roundMetric(1 + relationCount * 8),
+      layoutPosition: character.layoutPosition
     };
   }
 
