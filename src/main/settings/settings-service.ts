@@ -1,6 +1,7 @@
 import { SettingsRepository } from "../db/repositories/settings-repo";
 import type {
   AiProviderSettingsState,
+  CacheSettings,
   EditorSettings,
   OpenRouterModelSummary,
   SettingsListModelsInput,
@@ -15,6 +16,7 @@ const EDITOR_SETTINGS_KEY = "editor";
 const AI_PROVIDER_SETTINGS_KEY = "aiProvider";
 const PROJECT_PATH_SETTINGS_KEY = "projectPath";
 const TASK_PROMPT_PRESETS_SETTINGS_KEY = "taskPromptPresets";
+const CACHE_SETTINGS_KEY = "cache";
 export const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 export const OPENROUTER_CONNECTION_TEST_MODEL = "openrouter/auto";
 
@@ -31,6 +33,10 @@ const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
   theme: "light",
   ruledPaper: true,
   ruledPaperIntensity: "standard"
+};
+
+const DEFAULT_CACHE_SETTINGS: CacheSettings = {
+  chapterCacheBuildOrder: "latest_first"
 };
 
 export type SecretStore = {
@@ -139,6 +145,13 @@ function normalizeTaskPromptPresets(presets: readonly TaskPromptPreset[]): TaskP
   });
 }
 
+function normalizeCacheSettings(settings: Partial<CacheSettings> | null): CacheSettings {
+  return {
+    ...DEFAULT_CACHE_SETTINGS,
+    ...settings
+  };
+}
+
 function taskTypeLabel(taskType: TaskType): string {
   return {
     polish: "润色",
@@ -164,6 +177,7 @@ export class SettingsService {
 
   getSettings(): SettingsState {
     const savedEditor = this.settingsRepo.getJson<Partial<EditorSettings>>(EDITOR_SETTINGS_KEY);
+    const savedCache = this.settingsRepo.getJson<Partial<CacheSettings>>(CACHE_SETTINGS_KEY);
     return {
       editor: {
         ...DEFAULT_EDITOR_SETTINGS,
@@ -171,7 +185,8 @@ export class SettingsService {
       },
       aiProvider: sanitizeAiProvider(this.getStoredAiProviderSettings()),
       projectPath: this.settingsRepo.getJson<string>(PROJECT_PATH_SETTINGS_KEY),
-      taskPromptPresets: this.listTaskPromptPresets()
+      taskPromptPresets: this.listTaskPromptPresets(),
+      cache: normalizeCacheSettings(savedCache)
     };
   }
 
@@ -204,6 +219,13 @@ export class SettingsService {
 
     if (input.taskPromptPresets !== undefined) {
       this.settingsRepo.setJson(TASK_PROMPT_PRESETS_SETTINGS_KEY, normalizeTaskPromptPresets(input.taskPromptPresets));
+    }
+
+    if (input.cache) {
+      this.settingsRepo.setJson(CACHE_SETTINGS_KEY, normalizeCacheSettings({
+        ...this.getSettings().cache,
+        ...input.cache
+      }));
     }
 
     return this.getSettings();

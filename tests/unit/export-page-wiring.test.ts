@@ -16,13 +16,19 @@ describe("TXT export page wiring", () => {
     const preload = readSource("src/preload/api.ts");
 
     expect(types).toContain("ExportTxtInput");
+    expect(types).toContain("ExportShareableProjectCopyInput");
     expect(types).toContain("novelTool:export:selectTxtFilePath");
     expect(types).toContain("novelTool:export:exportTxt");
+    expect(types).toContain("novelTool:export:selectShareableProjectFilePath");
+    expect(types).toContain("novelTool:export:exportShareableProjectCopy");
     expect(schemas).toContain("exportTxtInputSchema");
+    expect(schemas).toContain("exportShareableProjectCopyInputSchema");
     expect(registerIpc).toContain("registerExportIpc");
     expect(preload).toContain("readonly export");
     expect(preload).toContain("selectTxtFilePath");
     expect(preload).toContain("exportTxt");
+    expect(preload).toContain("selectShareableProjectFilePath");
+    expect(preload).toContain("exportShareableProjectCopy");
   });
 
   it("keeps export as a project-level writing action with its own real page", () => {

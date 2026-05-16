@@ -10,8 +10,19 @@ type Line = {
   readonly number: number;
 };
 
-const headingPattern =
-  /^(?:第[零〇一二三四五六七八九十百千万\d]+[章节回卷部集][\s　、:：.-]*.*|卷[零〇一二三四五六七八九十百千万\d]+[\s　、:：.-]*.*|第[零〇一二三四五六七八九十百千万\d]+卷[\s　、:：.-]*.*|序章|楔子|番外(?:[\s　、:：.-].*)?|后记)$/;
+const chapterNumberPattern = String.raw`[零〇一二三四五六七八九十百千万\d]+(?:[\s　]+[零〇一二三四五六七八九十百千万\d]+)*`;
+const chapterHeadingMarkerPattern = String.raw`第[\s　]*${chapterNumberPattern}[\s　]*[章节回卷部集]`;
+const volumeHeadingMarkerPattern = String.raw`卷[\s　]*${chapterNumberPattern}`;
+const numberedVolumeHeadingMarkerPattern = String.raw`第[\s　]*${chapterNumberPattern}[\s　]*卷`;
+const headingPattern = new RegExp(
+  String.raw`^(?:${chapterHeadingMarkerPattern}[\s　、:：.-]*.*|${volumeHeadingMarkerPattern}[\s　、:：.-]*.*|${numberedVolumeHeadingMarkerPattern}[\s　、:：.-]*.*|序章|楔子|番外(?:[\s　、:：.-].*)?|后记)$`
+);
+const headingMarkerPattern = new RegExp(
+  String.raw`^(${chapterHeadingMarkerPattern}|${volumeHeadingMarkerPattern}|${numberedVolumeHeadingMarkerPattern}|序章|楔子|番外|后记)`
+);
+const wordCountOnlyHeadingPattern = new RegExp(
+  String.raw`^(?:${chapterHeadingMarkerPattern}|${volumeHeadingMarkerPattern})[\s　、:：.-]*[0-9零〇一二三四五六七八九十百千万,.，]+\s*字(?:\s*[Pp]\d+.*)?$`
+);
 
 export function normalizeTxtContent(content: string): string {
   return content
@@ -27,7 +38,7 @@ export function normalizeTxtContent(content: string): string {
 function createChapter(title: string, lines: readonly Line[], order: number): ImportPreviewChapter {
   const text = normalizeTxtContent(lines.map((line) => line.text).join("\n"));
   return {
-    title: title.trim() || "正文",
+    title: normalizeChapterTitle(title),
     text,
     order,
     wordCount: countWritingUnits(text),
@@ -49,13 +60,27 @@ function isChapterHeading(line: string): boolean {
   return trimmed.length <= 80 && headingPattern.test(trimmed);
 }
 
+function normalizeHeadingMarker(marker: string): string {
+  return marker.replace(/[\s　]+/g, "");
+}
+
+function normalizeChapterTitle(title: string): string {
+  const trimmed = title.trim();
+  const match = trimmed.match(headingMarkerPattern);
+  if (!match) {
+    return trimmed || "正文";
+  }
+  return `${normalizeHeadingMarker(match[1])}${trimmed.slice(match[1].length)}`.trim();
+}
+
 function getHeadingMarker(line: string): string | null {
   const trimmed = line.trim();
-  return trimmed.match(/^(第[零〇一二三四五六七八九十百千万\d]+[章节回卷部集]|卷[零〇一二三四五六七八九十百千万\d]+|序章|楔子|番外|后记)/)?.[1] ?? null;
+  const marker = trimmed.match(headingMarkerPattern)?.[1] ?? null;
+  return marker ? normalizeHeadingMarker(marker) : null;
 }
 
 function isWordCountOnlyHeading(line: string): boolean {
-  return /^(?:第[零〇一二三四五六七八九十百千万\d]+[章节回卷部集]|卷[零〇一二三四五六七八九十百千万\d]+)[\s　、:：.-]*[0-9零〇一二三四五六七八九十百千万,.，]+\s*字(?:\s*[Pp]\d+.*)?$/.test(line.trim());
+  return wordCountOnlyHeadingPattern.test(line.trim());
 }
 
 export function detectTxtChapters(content: string): ImportPreviewChapter[] {

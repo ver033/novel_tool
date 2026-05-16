@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -118,6 +118,29 @@ describe("local project file flow", () => {
 
     expect(() => projectService.openProjectFile({ filePath: created.project.rootPath! })).toThrow("项目文件不存在");
     expect(existsSync(projectPath)).toBe(false);
+
+    db.close();
+  });
+
+  it("notifies runtime caches when replacing the active project database", () => {
+    const { db, dir } = createProjectFileServices();
+    const closedProjectIds: string[] = [];
+    const projectService = trackProjectService(
+      new ProjectService(new ProjectRepository(db), {
+        onActiveProjectDatabaseClosed(projectId) {
+          closedProjectIds.push(projectId);
+        }
+      })
+    );
+    const projectPath = join(dir, "原项目.noveltool");
+    const created = projectService.createProject({ name: "原项目", rootPath: projectPath });
+    const duplicatePath = join(dir, "旧导出副本.noveltool");
+    copyFileSync(projectPath, duplicatePath);
+
+    const openedDuplicate = projectService.openProjectFile({ filePath: duplicatePath });
+
+    expect(openedDuplicate.project.id).toBe(created.project.id);
+    expect(closedProjectIds).toEqual([created.project.id]);
 
     db.close();
   });

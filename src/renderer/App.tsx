@@ -7,17 +7,19 @@ import type { SidebarTab, TaskType } from "./layout/RightUtilitySidebar";
 import { ExportPage } from "./routes/ExportPage";
 import { ImportWizardPage } from "./routes/ImportWizardPage";
 import { NewProjectPage } from "./routes/NewProjectPage";
+import { CharacterRelationshipGraphPage } from "./relationship-graph/CharacterRelationshipGraphPage";
 import { SettingsPage, type SettingsCategory } from "./routes/SettingsPage";
 import { WelcomePage } from "./routes/WelcomePage";
+import { WritingGoalsPage } from "./routes/WritingGoalsPage";
 import { WritingPage } from "./routes/WritingPage";
 import type { AiChatDraftSeed } from "./sidebar/chat-draft";
 import { useAppStore } from "./state/app-store";
 import type { ImportConfirmResult, ProjectCreateInput, SelectionSnapshot, TaskPromptPreset } from "../main/shared/types";
 
-type Page = "welcome" | "writing" | "settings" | "import" | "export" | "newProject";
+type Page = "welcome" | "writing" | "relationshipGraph" | "writingGoals" | "settings" | "import" | "export" | "newProject";
 type ImportReturnPage = "welcome" | "writing";
 type ExportReturnPage = "welcome" | "writing";
-type SettingsReturnPage = "welcome" | "writing";
+type SettingsReturnPage = "welcome" | "writing" | "relationshipGraph" | "writingGoals";
 
 export function App() {
   const [page, setPage] = useState<Page>("welcome");
@@ -67,6 +69,19 @@ export function App() {
     setSidebarOpen(false);
     setPage("writing");
   }, []);
+  const openRelationshipGraph = useCallback(() => {
+    setSidebarOpen(false);
+    setPage("relationshipGraph");
+  }, []);
+  const openWritingGoals = useCallback(() => {
+    setSidebarOpen(false);
+    setPage("writingGoals");
+  }, []);
+  const openWritingAtChapter = useCallback((chapterId: string) => {
+    appStore.selectChapter(chapterId);
+    setSidebarOpen(false);
+    setPage("writing");
+  }, [appStore]);
   const openWelcome = useCallback(() => {
     setWelcomeNotice(null);
     void appStore.refreshRecentProjects();
@@ -76,7 +91,7 @@ export function App() {
     if (category) {
       setSettingsCategory(category);
     }
-    setSettingsReturnPage(page === "writing" ? "writing" : "welcome");
+    setSettingsReturnPage(page === "writing" || page === "relationshipGraph" || page === "writingGoals" ? page : "welcome");
     setPage("settings");
   }, [page]);
   const returnFromSettings = useCallback(() => {
@@ -305,7 +320,7 @@ export function App() {
       <AppShell>
         <SettingsPage
           activeCategory={settingsCategory}
-          currentProject={settingsReturnPage === "writing" ? appStore.currentProject : null}
+          currentProject={settingsReturnPage === "welcome" ? null : appStore.currentProject}
           onCategoryChange={setSettingsCategory}
           onClose={returnFromSettings}
           onWelcome={returnFromSettings}
@@ -356,6 +371,35 @@ export function App() {
     );
   }
 
+  if (page === "relationshipGraph") {
+    return (
+      <AppShell>
+        <CharacterRelationshipGraphPage
+          currentProject={appStore.currentProject}
+          onOpenChapter={openWritingAtChapter}
+          onOpenSettings={() => openSettings()}
+          onOpenWriting={openWriting}
+          onOpenWritingGoals={openWritingGoals}
+          onWelcome={openWelcome}
+        />
+      </AppShell>
+    );
+  }
+
+  if (page === "writingGoals") {
+    return (
+      <AppShell>
+        <WritingGoalsPage
+          currentProject={appStore.currentProject}
+          onOpenRelationshipGraph={openRelationshipGraph}
+          onOpenSettings={() => openSettings()}
+          onOpenWriting={openWriting}
+          onWelcome={openWelcome}
+        />
+      </AppShell>
+    );
+  }
+
   if (page === "writing") {
     return (
       <AppShell>
@@ -387,6 +431,8 @@ export function App() {
           onOpenFloatingAiChat={openFloatingAiChat}
           onOpenFloatingPanel={openFloatingPanel}
           onOpenFloatingScratchpad={openFloatingScratchpad}
+          onOpenRelationshipGraph={openRelationshipGraph}
+          onOpenWritingGoals={openWritingGoals}
           onOpenScratchpad={openScratchpad}
           onRaiseFloatingPanel={raiseFloatingPanel}
           onResetAllFloatingPanels={resetAllFloatingPanels}

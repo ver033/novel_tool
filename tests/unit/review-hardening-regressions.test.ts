@@ -28,6 +28,7 @@ describe("review hardening regressions", () => {
     expect(main).toContain("createRendererContentSecurityPolicy");
     expect(main).toContain("\"script-src 'self' 'unsafe-inline'\"");
     expect(main).toContain("\"script-src 'self'\"");
+    expect(main).toContain("\"worker-src 'self' blob:\"");
     expect(rendererHtml).not.toContain("Content-Security-Policy");
   });
 

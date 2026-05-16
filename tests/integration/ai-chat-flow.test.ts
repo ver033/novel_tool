@@ -1436,7 +1436,7 @@ describe("AI chat flow", () => {
     const { project, initialChapter } = projectService.createProject({ name: "雨夜" });
     const repo = chapterRepo(project.id);
     repo.rename(initialChapter.id, "第1章 雨夜", new Date().toISOString());
-    repo.saveContent(
+    const firstContent = repo.saveContent(
       initialChapter.id,
       emptyChapterContent,
       "第一章不应被旧链路读取的原始正文。".repeat(1200),
@@ -1453,7 +1453,7 @@ describe("AI chat flow", () => {
     });
     const summaries = summaryRepo(project.id);
     [
-      { chapter: initialChapter, title: "第1章 雨夜", ordinal: 1, short: "林远雨夜回城。", long: "林远在雨夜回到旧城，发现异常。" },
+      { chapter: firstContent, title: "第1章 雨夜", ordinal: 1, short: "林远雨夜回城。", long: "林远在雨夜回到旧城，发现异常。" },
       { chapter: second, title: "第2章 旧信", ordinal: 2, short: "旧信提供新线索。", long: "旧信让林远确认失踪故人仍有线索可追。" }
     ].forEach((item) => {
       summaries.upsertChapterSummary({
@@ -1470,7 +1470,7 @@ describe("AI chat flow", () => {
         status: "ready",
         error: null,
         createdAt: "2026-05-01T00:00:00.000Z",
-        updatedAt: "2026-05-01T00:00:00.000Z"
+        updatedAt: item.chapter.contentUpdatedAt ?? item.chapter.updatedAt
       });
     });
     const aiTaskService = new AiTaskService(
@@ -1713,7 +1713,15 @@ describe("AI chat flow", () => {
     const { project, initialChapter } = projectService.createProject({ name: "雨夜" });
     const repo = chapterRepo(project.id);
     repo.rename(initialChapter.id, "第1章 雨夜", new Date().toISOString());
-    repo.saveContent(initialChapter.id, emptyChapterContent, "第一章角色原文不应进入工具结果。", 20, 0, "2026-05-01", new Date().toISOString());
+    const firstContent = repo.saveContent(
+      initialChapter.id,
+      emptyChapterContent,
+      "第一章角色原文不应进入工具结果。",
+      20,
+      0,
+      "2026-05-01",
+      new Date().toISOString()
+    );
     const second = createChapter(repo, {
       projectId: project.id,
       title: "第2章 旧信",
@@ -1722,7 +1730,7 @@ describe("AI chat flow", () => {
     });
     const summaries = summaryRepo(project.id);
     [
-      { chapter: initialChapter, title: "第1章 雨夜", ordinal: 1, character: "林远", state: "谨慎回城" },
+      { chapter: firstContent, title: "第1章 雨夜", ordinal: 1, character: "林远", state: "谨慎回城" },
       { chapter: second, title: "第2章 旧信", ordinal: 2, character: "沈青", state: "因旧信线索开始动摇" }
     ].forEach((item) => {
       const structured = createChapterSummaryPayload({
@@ -1756,7 +1764,7 @@ describe("AI chat flow", () => {
         status: "ready",
         error: null,
         createdAt: "2026-05-01T00:00:00.000Z",
-        updatedAt: "2026-05-01T00:00:00.000Z"
+        updatedAt: item.chapter.contentUpdatedAt ?? item.chapter.updatedAt
       });
     });
     const session = chatRepo(project.id).getOrCreateDefaultSession(project.id);

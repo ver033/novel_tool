@@ -153,7 +153,8 @@ export async function applyAiCandidateToEditor({
     contentJson,
     plainText,
     wordCount: countWritingUnits(plainText),
-    expectedUpdatedAt: savedVersion?.projectId === task.projectId && savedVersion.chapterId === task.chapterId ? savedVersion.updatedAt ?? undefined : undefined
+    expectedUpdatedAt: savedVersion?.projectId === task.projectId && savedVersion.chapterId === task.chapterId ? savedVersion.updatedAt ?? undefined : undefined,
+    saveSource: "ai_apply"
   })) as ChapterContent | undefined;
   if (savedContent) {
     onContentSaved?.(savedContent);

@@ -1,4 +1,5 @@
 import type { z } from "zod";
+import type { RelationshipEntityImportance, RelationshipEntityKind } from "./relationship-graph";
 import type {
   aiCreateTaskInputSchema,
   aiCreateChatSessionInputSchema,
@@ -17,6 +18,12 @@ import type {
   aiSaveCandidateToScratchpadInputSchema,
   aiSendChatMessageStreamInputSchema,
   aiUpdateTaskInputSchema,
+  authorRelationshipCreateCharacterInputSchema,
+  authorRelationshipCreateRelationshipInputSchema,
+  authorRelationshipDeleteCharacterInputSchema,
+  authorRelationshipDeleteRelationshipInputSchema,
+  authorRelationshipGetGraphInputSchema,
+  authorRelationshipUpdateCharacterInputSchema,
   chapterCreateInputSchema,
   chapterCreateSnapshotInputSchema,
   chapterDeleteInputSchema,
@@ -25,8 +32,11 @@ import type {
   chapterRenameInputSchema,
   chapterSaveContentInputSchema,
   chapterUpdateTargetWordCountInputSchema,
+  chapterCacheBuildOrderSchema,
   editorSettingsSchema,
+  exportSelectShareableProjectFilePathInputSchema,
   exportSelectTxtFilePathInputSchema,
+  exportShareableProjectCopyInputSchema,
   exportTxtInputSchema,
   importConfirmTxtInputSchema,
   importPreviewTxtInputSchema,
@@ -38,6 +48,9 @@ import type {
   projectRenameInputSchema,
   projectSelectSavePathInputSchema,
   projectSuggestFilePathInputSchema,
+  relationshipGraphGetInputSchema,
+  relationshipGraphSourceStatusInputSchema,
+  relationshipGraphStatusInputSchema,
   scratchCreateInputSchema,
   scratchDeleteInputSchema,
   scratchListInputSchema,
@@ -46,16 +59,30 @@ import type {
   settingsListModelsInputSchema,
   settingsTestConnectionInputSchema,
   summaryCancelCurrentJobInputSchema,
+  summaryClearAndRetryArcCacheInputSchema,
+  summaryClearAndRetryBookCacheInputSchema,
   summaryClearAndRetryChapterCacheInputSchema,
+  summaryGetArcCacheInputSchema,
+  summaryGetBookCacheInputSchema,
   summaryGetChapterCacheInputSchema,
   summaryIndexStatusInputSchema,
   summaryListCacheEntriesInputSchema,
   summaryRebuildProjectIndexInputSchema,
-  taskPromptPresetSchema
+  taskPromptPresetSchema,
+  writingGoalCreateInputSchema,
+  writingGoalDayDetailInputSchema,
+  writingGoalListDailyStatsInputSchema,
+  writingGoalOverviewInputSchema,
+  writingGoalStatusInputSchema,
+  writingGoalStatusSchema,
+  writingGoalTypeSchema,
+  writingGoalUpdateInputSchema,
+  writingWordEventSourceSchema
 } from "./schemas";
 import type { ProofreadIssue } from "./proofread";
+import type { RelationshipGraphResult, RelationshipGraphSourceStatus } from "./relationship-graph";
 import type { WritingContextPlanMetadata } from "./ai-candidate-metadata";
-import type { ChapterAiSummaryChunkPayload, ChapterAiSummaryPayload, SummaryJobStatus, SummaryJobType, SummaryStatus } from "./summary-index";
+import type { ArcAiSummaryPayload, BookAiSummaryPayload, ChapterAiSummaryChunkPayload, ChapterAiSummaryPayload, SummaryJobStatus, SummaryJobType, SummaryStatus } from "./summary-index";
 
 export type TaskType = "polish" | "expand" | "proofread" | "continue";
 export type PromptPresetTaskType = "polish" | "expand" | "continue";
@@ -113,6 +140,39 @@ export type ScratchNoteRecord = {
   readonly sourceTaskId: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;
+};
+
+export type AuthorRelationshipCharacterRecord = {
+  readonly id: string;
+  readonly projectId: string;
+  readonly name: string;
+  readonly normalizedName: string;
+  readonly aliases: readonly string[];
+  readonly entityKind: RelationshipEntityKind;
+  readonly importance: RelationshipEntityImportance;
+  readonly roleSummary: string | null;
+  readonly faction: string | null;
+  readonly notes: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+};
+
+export type AuthorRelationshipRecord = {
+  readonly id: string;
+  readonly projectId: string;
+  readonly sourceCharacterId: string;
+  readonly targetCharacterId: string;
+  readonly sourceToTargetLabel: string;
+  readonly targetToSourceLabel: string | null;
+  readonly normalizedRelationKey: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+};
+
+export type AuthorRelationshipCreateResult = {
+  readonly relationship: AuthorRelationshipRecord;
+  readonly sourceCharacter: AuthorRelationshipCharacterRecord;
+  readonly targetCharacter: AuthorRelationshipCharacterRecord;
 };
 
 export type AiChatAction =
@@ -258,7 +318,131 @@ export type ChapterSnapshot = {
   readonly createdAt: string;
 };
 
+export type WritingGoalStatus = z.output<typeof writingGoalStatusSchema>;
+export type WritingGoalType = z.output<typeof writingGoalTypeSchema>;
+export type WritingWordEventSource = z.output<typeof writingWordEventSourceSchema>;
+
+export type WritingGoalRecord = {
+  readonly id: string;
+  readonly projectId: string;
+  readonly name: string;
+  readonly goalType: WritingGoalType;
+  readonly targetWordCount: number;
+  readonly baselineWordCount: number;
+  readonly startDate: string;
+  readonly deadlineDate: string;
+  readonly activeWeekdays: readonly number[];
+  readonly restDates: readonly string[];
+  readonly status: WritingGoalStatus;
+  readonly completedAt: string | null;
+  readonly archivedAt: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+};
+
+export type WritingWordEventRecord = {
+  readonly id: string;
+  readonly projectId: string;
+  readonly goalId: string | null;
+  readonly chapterId: string | null;
+  readonly chapterTitle: string | null;
+  readonly chapterSortOrder: number | null;
+  readonly localDate: string;
+  readonly deltaWords: number;
+  readonly addedWords: number;
+  readonly deletedWords: number;
+  readonly previousWordCount: number;
+  readonly nextWordCount: number;
+  readonly previousProjectWordCount: number;
+  readonly nextProjectWordCount: number;
+  readonly source: WritingWordEventSource;
+  readonly createdAt: string;
+};
+
+export type WritingDailyStat = {
+  readonly projectId: string;
+  readonly localDate: string;
+  readonly addedWords: number;
+  readonly deletedWords: number;
+  readonly netWords: number;
+  readonly eventCount: number;
+  readonly startingTotalWordCount: number;
+  readonly endingTotalWordCount: number;
+  readonly firstWriteAt: string | null;
+  readonly lastWriteAt: string | null;
+  readonly updatedAt: string;
+};
+
+export type WritingDailyPlan = {
+  readonly goalId: string;
+  readonly projectId: string;
+  readonly localDate: string;
+  readonly plannedWords: number;
+  readonly isWritingDay: boolean;
+  readonly isRestDay: boolean;
+  readonly generatedAt: string;
+  readonly updatedAt: string;
+};
+
+export type WritingCalendarDay = {
+  readonly localDate: string;
+  readonly plannedWords: number;
+  readonly netWords: number;
+  readonly addedWords: number;
+  readonly deletedWords: number;
+  readonly eventCount: number;
+  readonly isWritingDay: boolean;
+  readonly isRestDay: boolean;
+  readonly status: "no-data" | "rest" | "missed" | "partial" | "done" | "over" | "deadline" | "system-adjusted";
+};
+
+export type WritingGoalOverview = {
+  readonly projectId: string;
+  readonly currentTotalWordCount: number;
+  readonly goal: WritingGoalRecord | null;
+  readonly progressWords: number;
+  readonly remainingWords: number;
+  readonly completionRatio: number;
+  readonly today: {
+    readonly localDate: string;
+    readonly plannedWords: number;
+    readonly netWords: number;
+    readonly addedWords: number;
+    readonly deletedWords: number;
+    readonly remainingTodayWords: number;
+  };
+  readonly remainingWritingDays: number;
+  readonly requiredPerDay: number;
+  readonly futureRequiredPerDay: number;
+  readonly paceStatus: "no_goal" | "ahead" | "on_track" | "behind" | "completed" | "overdue" | "paused";
+  readonly estimatedCompletionDate: string | null;
+  readonly recentStats: readonly WritingDailyStat[];
+  readonly calendarDays: readonly WritingCalendarDay[];
+  readonly warning: string | null;
+};
+
+export type WritingDayDetail = {
+  readonly projectId: string;
+  readonly localDate: string;
+  readonly plan: WritingDailyPlan | null;
+  readonly stat: WritingDailyStat | null;
+  readonly events: readonly WritingWordEventRecord[];
+  readonly chapterSummaries: readonly {
+    readonly chapterId: string | null;
+    readonly chapterTitle: string;
+    readonly addedWords: number;
+    readonly deletedWords: number;
+    readonly netWords: number;
+    readonly eventCount: number;
+    readonly sources: readonly WritingWordEventSource[];
+  }[];
+};
+
 export type EditorSettings = Required<z.output<typeof editorSettingsSchema>>;
+export type ChapterCacheBuildOrder = z.output<typeof chapterCacheBuildOrderSchema>;
+export type CacheSettings = {
+  readonly chapterCacheBuildOrder: ChapterCacheBuildOrder;
+};
 export type AiProviderSettingsState = Omit<z.output<typeof aiProviderSettingsSchema>, "apiKey"> & {
   readonly apiKeyConfigured: boolean;
 };
@@ -267,6 +451,7 @@ export type SettingsState = {
   readonly aiProvider: AiProviderSettingsState | null;
   readonly projectPath: string | null;
   readonly taskPromptPresets: readonly TaskPromptPreset[];
+  readonly cache: CacheSettings;
 };
 
 export type TaskPromptPreset = z.output<typeof taskPromptPresetSchema>;
@@ -293,6 +478,12 @@ export type ChapterGetContentInput = z.input<typeof chapterGetContentInputSchema
 export type ChapterSaveContentInput = z.input<typeof chapterSaveContentInputSchema>;
 export type ChapterCreateSnapshotInput = z.input<typeof chapterCreateSnapshotInputSchema>;
 export type ChapterUpdateTargetWordCountInput = z.input<typeof chapterUpdateTargetWordCountInputSchema>;
+export type WritingGoalOverviewInput = z.input<typeof writingGoalOverviewInputSchema>;
+export type WritingGoalCreateInput = z.input<typeof writingGoalCreateInputSchema>;
+export type WritingGoalUpdateInput = z.input<typeof writingGoalUpdateInputSchema>;
+export type WritingGoalStatusInput = z.input<typeof writingGoalStatusInputSchema>;
+export type WritingGoalListDailyStatsInput = z.input<typeof writingGoalListDailyStatsInputSchema>;
+export type WritingGoalDayDetailInput = z.input<typeof writingGoalDayDetailInputSchema>;
 export type SettingsSaveInput = z.input<typeof settingsSaveInputSchema>;
 export type SettingsTestConnectionInput = z.input<typeof settingsTestConnectionInputSchema>;
 export type SettingsListModelsInput = z.input<typeof settingsListModelsInputSchema>;
@@ -328,12 +519,38 @@ export type ExportTxtResult = {
   readonly wordCount: number;
   readonly exportedAt: string;
 };
+export type ExportSelectShareableProjectFilePathInput = z.input<typeof exportSelectShareableProjectFilePathInputSchema>;
+export type ExportShareableProjectCopyInput = z.input<typeof exportShareableProjectCopyInputSchema>;
+export type ExportShareableProjectCopyResult = {
+  readonly filePath: string;
+  readonly exportedAt: string;
+  readonly included: readonly string[];
+  readonly removed: readonly string[];
+  readonly privacyScan: {
+    readonly scannedTableCount: number;
+    readonly scannedValueCount: number;
+  };
+};
 export type SummaryIndexStatusInput = z.input<typeof summaryIndexStatusInputSchema>;
 export type SummaryRebuildProjectIndexInput = z.input<typeof summaryRebuildProjectIndexInputSchema>;
 export type SummaryCancelCurrentJobInput = z.input<typeof summaryCancelCurrentJobInputSchema>;
 export type SummaryListCacheEntriesInput = z.input<typeof summaryListCacheEntriesInputSchema>;
 export type SummaryGetChapterCacheInput = z.input<typeof summaryGetChapterCacheInputSchema>;
 export type SummaryClearAndRetryChapterCacheInput = z.input<typeof summaryClearAndRetryChapterCacheInputSchema>;
+export type SummaryGetArcCacheInput = z.input<typeof summaryGetArcCacheInputSchema>;
+export type SummaryClearAndRetryArcCacheInput = z.input<typeof summaryClearAndRetryArcCacheInputSchema>;
+export type SummaryGetBookCacheInput = z.input<typeof summaryGetBookCacheInputSchema>;
+export type SummaryClearAndRetryBookCacheInput = z.input<typeof summaryClearAndRetryBookCacheInputSchema>;
+export type RelationshipGraphGetInput = z.input<typeof relationshipGraphGetInputSchema>;
+export type RelationshipGraphStatusInput = z.input<typeof relationshipGraphStatusInputSchema>;
+export type RelationshipGraphSourceStatusInput = z.input<typeof relationshipGraphSourceStatusInputSchema>;
+export type AuthorRelationshipGetGraphInput = z.input<typeof authorRelationshipGetGraphInputSchema>;
+export type AuthorRelationshipCreateCharacterInput = z.input<typeof authorRelationshipCreateCharacterInputSchema>;
+export type AuthorRelationshipUpdateCharacterInput = z.input<typeof authorRelationshipUpdateCharacterInputSchema>;
+export type AuthorRelationshipCreateRelationshipInput = z.input<typeof authorRelationshipCreateRelationshipInputSchema>;
+export type AuthorRelationshipDeleteCharacterInput = z.input<typeof authorRelationshipDeleteCharacterInputSchema>;
+export type AuthorRelationshipDeleteRelationshipInput = z.input<typeof authorRelationshipDeleteRelationshipInputSchema>;
+export type { RelationshipGraphResult, RelationshipGraphSourceStatus };
 export type SummaryIndexPausedReason = "ai_not_configured" | "foreground_ai_active" | "background_disabled" | null;
 export type SummaryChapterCacheState = SummaryStatus | "missing" | "queued" | "running" | "cancelled";
 export type SummaryChapterCacheEntry = {
@@ -373,6 +590,54 @@ export type SummaryChapterCacheDetail = SummaryChapterCacheEntry & {
     readonly error: string | null;
     readonly updatedAt: string;
   }[];
+};
+export type SummaryArcCacheState = Exclude<SummaryStatus, "skipped_too_short"> | "missing" | "queued" | "running" | "cancelled";
+export type SummaryArcCacheEntry = {
+  readonly arcKey: string;
+  readonly label: string;
+  readonly chapterFrom: number;
+  readonly chapterTo: number;
+  readonly chapterCount: number;
+  readonly readyChapterCount: number;
+  readonly cacheState: SummaryArcCacheState;
+  readonly summary: string | null;
+  readonly summaryUpdatedAt: string | null;
+  readonly sourceHash: string | null;
+  readonly jobStatus: SummaryJobStatus | null;
+  readonly jobError: string | null;
+  readonly jobFailureCategory: string | null;
+  readonly jobActionHint: string | null;
+  readonly nextRunAt: string | null;
+};
+export type SummaryArcCacheDetail = Omit<SummaryArcCacheEntry, "summary"> & {
+  readonly summary: {
+    readonly summary: string;
+    readonly structured: ArcAiSummaryPayload;
+    readonly status: Exclude<SummaryStatus, "skipped_too_short">;
+    readonly error: string | null;
+    readonly updatedAt: string;
+  } | null;
+};
+export type SummaryBookCacheState = Exclude<SummaryStatus, "skipped_too_short"> | "missing" | "queued" | "running" | "cancelled";
+export type SummaryBookCacheDetail = {
+  readonly cacheState: SummaryBookCacheState;
+  readonly summaryShort: string | null;
+  readonly summaryLong: string | null;
+  readonly summaryUpdatedAt: string | null;
+  readonly sourceHash: string | null;
+  readonly jobStatus: SummaryJobStatus | null;
+  readonly jobError: string | null;
+  readonly jobFailureCategory: string | null;
+  readonly jobActionHint: string | null;
+  readonly nextRunAt: string | null;
+  readonly summary: {
+    readonly summaryShort: string;
+    readonly summaryLong: string;
+    readonly structured: BookAiSummaryPayload;
+    readonly status: Exclude<SummaryStatus, "skipped_too_short">;
+    readonly error: string | null;
+    readonly updatedAt: string;
+  } | null;
 };
 export type SummaryIndexJobDetail = {
   readonly jobId: string;
@@ -467,7 +732,34 @@ export const ipcChannels = {
     cancelCurrentJob: "novelTool:summary:cancelCurrentJob",
     listCacheEntries: "novelTool:summary:listCacheEntries",
     getChapterCache: "novelTool:summary:getChapterCache",
-    clearAndRetryChapterCache: "novelTool:summary:clearAndRetryChapterCache"
+    clearAndRetryChapterCache: "novelTool:summary:clearAndRetryChapterCache",
+    listArcCacheEntries: "novelTool:summary:listArcCacheEntries",
+    getArcCache: "novelTool:summary:getArcCache",
+    clearAndRetryArcCache: "novelTool:summary:clearAndRetryArcCache",
+    getBookCache: "novelTool:summary:getBookCache",
+    clearAndRetryBookCache: "novelTool:summary:clearAndRetryBookCache"
+  },
+  relationshipGraph: {
+    getGraph: "novelTool:relationshipGraph:getGraph",
+    getSourceStatus: "novelTool:relationshipGraph:getSourceStatus"
+  },
+  authorRelationship: {
+    getGraph: "novelTool:authorRelationship:getGraph",
+    createCharacter: "novelTool:authorRelationship:createCharacter",
+    updateCharacter: "novelTool:authorRelationship:updateCharacter",
+    createRelationship: "novelTool:authorRelationship:createRelationship",
+    deleteCharacter: "novelTool:authorRelationship:deleteCharacter",
+    deleteRelationship: "novelTool:authorRelationship:deleteRelationship"
+  },
+  writingGoals: {
+    getOverview: "novelTool:writingGoals:getOverview",
+    createGoal: "novelTool:writingGoals:createGoal",
+    updateGoal: "novelTool:writingGoals:updateGoal",
+    pauseGoal: "novelTool:writingGoals:pauseGoal",
+    resumeGoal: "novelTool:writingGoals:resumeGoal",
+    archiveGoal: "novelTool:writingGoals:archiveGoal",
+    listDailyStats: "novelTool:writingGoals:listDailyStats",
+    getDayDetail: "novelTool:writingGoals:getDayDetail"
   },
   scratch: {
     list: "novelTool:scratch:list",
@@ -483,6 +775,8 @@ export const ipcChannels = {
   },
   export: {
     selectTxtFilePath: "novelTool:export:selectTxtFilePath",
-    exportTxt: "novelTool:export:exportTxt"
+    exportTxt: "novelTool:export:exportTxt",
+    selectShareableProjectFilePath: "novelTool:export:selectShareableProjectFilePath",
+    exportShareableProjectCopy: "novelTool:export:exportShareableProjectCopy"
   }
 } as const;

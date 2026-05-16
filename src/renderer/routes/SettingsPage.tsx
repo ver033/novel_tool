@@ -1,19 +1,28 @@
 import {
   Database,
+  DownloadSimple,
   GearSix,
   Robot,
   Sliders,
+  UploadSimple,
   X
 } from "@phosphor-icons/react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import type { RelationshipGraphResult, RelationshipGraphSourceStatus } from "../../main/shared/relationship-graph";
 import type {
   AiProviderSettingsState,
+  CacheSettings,
+  ChapterCacheBuildOrder,
   EditorSettings,
+  ExportShareableProjectCopyResult,
   OpenRouterModelSummary,
   ProjectRecord,
   SettingsSaveInput,
   SettingsState,
   SettingsTestConnectionInput,
+  SummaryArcCacheDetail,
+  SummaryArcCacheEntry,
+  SummaryBookCacheDetail,
   SummaryChapterCacheDetail,
   SummaryChapterCacheEntry,
   SummaryIndexStatus,
@@ -23,6 +32,7 @@ import { Button } from "../components/Button";
 import { IconButton } from "../components/IconButton";
 import { Input } from "../components/Input";
 import { Textarea } from "../components/Textarea";
+import { RelationshipGraphCachePanel } from "../relationship-graph/RelationshipGraphCachePanel";
 import { getNovelToolApi } from "../state/app-store";
 
 export type SettingsCategory = "通用" | "编辑器" | "AI 服务" | "提示词预设" | "章节索引缓存" | "导入导出" | "备份与数据" | "快捷键";
@@ -44,6 +54,7 @@ type SettingsFormState = {
   readonly aiProvider: EditableAiProviderSettings;
   readonly projectPath: string;
   readonly taskPromptPresets: readonly TaskPromptPreset[];
+  readonly cache: CacheSettings;
 };
 
 type StatusState = {
@@ -61,12 +72,13 @@ type SettingsContentProps = {
   readonly modelOptions: readonly OpenRouterModelSummary[];
   readonly status: StatusState;
   readonly onAiProviderChange: (patch: Partial<EditableAiProviderSettings>) => void;
+  readonly onCacheSettingsChange: (patch: Partial<CacheSettings>) => void;
   readonly onTaskPromptPresetsChange: (taskPromptPresets: readonly TaskPromptPreset[]) => void;
   readonly onTestConnection: () => void;
   readonly onSaveSettings: () => void;
 };
 
-const visibleCategories = ["AI 服务", "提示词预设", "章节索引缓存"] as const satisfies readonly SettingsCategory[];
+const visibleCategories = ["AI 服务", "提示词预设", "章节索引缓存", "导入导出"] as const satisfies readonly SettingsCategory[];
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 
 const taskPromptPresetLabels: Record<TaskPromptPreset["taskType"], string> = {
@@ -86,7 +98,8 @@ type VisibleSettingsCategory = (typeof visibleCategories)[number];
 const categoryIcons: Record<VisibleSettingsCategory, ReactNode> = {
   "AI 服务": <Robot size={20} />,
   提示词预设: <Sliders size={20} />,
-  章节索引缓存: <Database size={20} />
+  章节索引缓存: <Database size={20} />,
+  导入导出: <UploadSimple size={20} />
 };
 
 function isVisibleCategory(category: SettingsCategory): category is VisibleSettingsCategory {
@@ -117,7 +130,10 @@ const defaultForm: SettingsFormState = {
     apiKey: ""
   },
   projectPath: "",
-  taskPromptPresets: []
+  taskPromptPresets: [],
+  cache: {
+    chapterCacheBuildOrder: "latest_first"
+  }
 };
 
 function formatError(reason: unknown): string {
@@ -136,7 +152,8 @@ function formFromSettings(settings: SettingsState): SettingsFormState {
       apiKey: ""
     },
     projectPath: settings.projectPath ?? "",
-    taskPromptPresets: [...settings.taskPromptPresets]
+    taskPromptPresets: [...settings.taskPromptPresets],
+    cache: settings.cache
   };
 }
 
@@ -153,6 +170,7 @@ function buildSaveInput(form: SettingsFormState): SettingsSaveInput {
       ...(apiKey ? { apiKey } : {})
     },
     taskPromptPresets: [...form.taskPromptPresets],
+    cache: form.cache,
     ...(form.projectPath.trim() ? { projectPath: form.projectPath.trim() } : {})
   };
 }
@@ -193,11 +211,11 @@ function formatContextLength(value: number | null): string {
   return `${value.toLocaleString("zh-CN")} tokens`;
 }
 
-function formatCacheState(entry: SummaryChapterCacheEntry | null): string {
+function formatCacheState(entry: Pick<SummaryChapterCacheEntry, "cacheState"> | Pick<SummaryArcCacheEntry, "cacheState"> | Pick<SummaryBookCacheDetail, "cacheState"> | null): string {
   if (!entry) {
     return "未选择";
   }
-  const labels: Record<SummaryChapterCacheEntry["cacheState"], string> = {
+  const labels: Record<SummaryChapterCacheEntry["cacheState"] | SummaryArcCacheEntry["cacheState"] | SummaryBookCacheDetail["cacheState"], string> = {
     ready: "已缓存",
     stale: "过期",
     building: "构建中",
@@ -269,6 +287,104 @@ function canRunChapterCacheAction(entry: SummaryChapterCacheEntry | null): boole
     return false;
   }
   return entry.cacheState === "ready" || entry.cacheState === "stale" || entry.cacheState === "missing" || entry.cacheState === "failed" || entry.cacheState === "cancelled";
+}
+
+function formatArcCacheJobNote(entry: SummaryArcCacheEntry): string | null {
+  if (entry.cacheState !== "ready" && entry.jobError) {
+    const fallback = entry.jobError.length > 140 ? `${entry.jobError.slice(0, 140)}...` : entry.jobError;
+    const reason = entry.jobFailureCategory ?? fallback;
+    return `错误：${reason}${entry.jobActionHint ? `；${entry.jobActionHint}` : ""}`;
+  }
+  if (entry.cacheState !== "ready" && entry.nextRunAt) {
+    return `等待重试：${formatDateTime(entry.nextRunAt)}`;
+  }
+  if (entry.jobStatus === "queued") {
+    return "等待后台处理";
+  }
+  if (entry.jobStatus === "running") {
+    return "当前正在生成阶段摘要";
+  }
+  if (entry.readyChapterCount < entry.chapterCount) {
+    return `等待章节缓存：${entry.readyChapterCount}/${entry.chapterCount}`;
+  }
+  return null;
+}
+
+function getArcCacheActionLabel(entry: SummaryArcCacheEntry | null): string {
+  if (!entry) {
+    return "选择阶段";
+  }
+  const labels: Record<SummaryArcCacheEntry["cacheState"], string> = {
+    ready: "重新生成阶段摘要",
+    stale: "重新生成阶段摘要",
+    building: "正在生成",
+    failed: "重试阶段摘要",
+    missing: "生成阶段摘要",
+    queued: "已排队",
+    running: "正在生成",
+    cancelled: "重试阶段摘要"
+  };
+  return labels[entry.cacheState];
+}
+
+function canRunArcCacheAction(entry: SummaryArcCacheEntry | null): boolean {
+  if (!entry || entry.readyChapterCount <= 0 || entry.readyChapterCount < entry.chapterCount) {
+    return false;
+  }
+  return entry.cacheState === "ready" || entry.cacheState === "stale" || entry.cacheState === "missing" || entry.cacheState === "failed" || entry.cacheState === "cancelled";
+}
+
+function getBookCacheActionLabel(entry: SummaryBookCacheDetail | null): string {
+  if (!entry) {
+    return "生成全书摘要";
+  }
+  const labels: Record<SummaryBookCacheDetail["cacheState"], string> = {
+    ready: "重新生成全书摘要",
+    stale: "重新生成全书摘要",
+    building: "正在生成",
+    failed: "重试全书摘要",
+    missing: "生成全书摘要",
+    queued: "已排队",
+    running: "正在生成",
+    cancelled: "重试全书摘要"
+  };
+  return labels[entry.cacheState];
+}
+
+function canRunBookCacheAction(entry: SummaryBookCacheDetail | null): boolean {
+  if (!entry) {
+    return false;
+  }
+  return entry.cacheState === "ready" || entry.cacheState === "stale" || entry.cacheState === "missing" || entry.cacheState === "failed" || entry.cacheState === "cancelled";
+}
+
+export function formatRelationshipOverviewMetric(
+  indexStatus: SummaryIndexStatus | null,
+  sourceStatus: RelationshipGraphSourceStatus | null
+): { readonly value: string; readonly detail: string } {
+  if (!indexStatus || !sourceStatus) {
+    return { value: "--", detail: "正在读取状态" };
+  }
+  if (indexStatus.totalChapterCount === 0) {
+    return { value: "未开始", detail: "还没有章节" };
+  }
+  if (sourceStatus.state === "ready") {
+    return { value: `${sourceStatus.nodeCount}/${sourceStatus.edgeCount}`, detail: "人物 / 关系" };
+  }
+  if (sourceStatus.state === "failed") {
+    return { value: "失败", detail: sourceStatus.latestFailure ?? "摘要任务失败" };
+  }
+  return {
+    value: sourceStatus.arcSummary.readyForGraph > 0 ? `${sourceStatus.arcSummary.readyForGraph}/${sourceStatus.arcSummary.total}` : "等待",
+    detail: sourceStatus.message
+  };
+}
+
+export function getRelationshipSourceStatusText(sourceStatus: RelationshipGraphSourceStatus | null): string {
+  if (!sourceStatus) {
+    return "正在读取人物关系图来源状态。";
+  }
+  return sourceStatus.message;
 }
 
 function findExactModel(models: readonly OpenRouterModelSummary[], modelName: string): OpenRouterModelSummary | null {
@@ -402,6 +518,16 @@ export function SettingsPage({ activeCategory, currentProject, onCategoryChange,
     }));
   };
 
+  const updateCacheSettings = (patch: Partial<CacheSettings>) => {
+    setForm((current) => ({
+      ...current,
+      cache: {
+        ...current.cache,
+        ...patch
+      }
+    }));
+  };
+
   return (
     <div className="settings-page">
       <header className="settings-top">
@@ -438,11 +564,12 @@ export function SettingsPage({ activeCategory, currentProject, onCategoryChange,
             modelOptions={modelOptions}
             status={status}
             onAiProviderChange={updateAiProvider}
+            onCacheSettingsChange={updateCacheSettings}
             onTaskPromptPresetsChange={updateTaskPromptPresets}
             onSaveSettings={() => void saveSettings()}
             onTestConnection={testConnection}
           />
-          {activeVisibleCategory !== "章节索引缓存" ? (
+          {activeVisibleCategory !== "章节索引缓存" && activeVisibleCategory !== "导入导出" ? (
             <>
               <div className="notice">
                 <span>你的作品和设置仅保存在本地设备，不会默认同步到云端。只有在你主动使用 AI 功能时，相关内容才会发送到所选 AI 服务。</span>
@@ -470,6 +597,7 @@ function SettingsContent({
   modelOptions,
   status,
   onAiProviderChange,
+  onCacheSettingsChange,
   onTaskPromptPresetsChange,
   onSaveSettings,
   onTestConnection
@@ -680,23 +808,339 @@ function SettingsContent({
   }
 
   if (category === "章节索引缓存") {
-    return <SummaryCacheSettingsPane currentProject={currentProject} />;
+    return <SummaryCacheSettingsPane cache={form.cache} currentProject={currentProject} onCacheSettingsChange={onCacheSettingsChange} />;
+  }
+
+  if (category === "导入导出") {
+    return <ShareableProjectExportPane currentProject={currentProject} />;
   }
 
   return null;
 }
 
-type SummaryCacheSettingsPaneProps = {
+type ShareableProjectExportPaneProps = {
   readonly currentProject: ProjectRecord | null;
 };
 
-function SummaryCacheSettingsPane({ currentProject }: SummaryCacheSettingsPaneProps) {
+type SelectedShareableProjectPath = {
+  readonly filePath: string;
+};
+
+type ShareableExportOptions = {
+  readonly includeScratchNotes: boolean;
+  readonly includePromptPresets: boolean;
+  readonly includeSummaryCache: boolean;
+  readonly includeWritingGoalsAndStats: boolean;
+};
+
+const defaultShareableExportOptions: ShareableExportOptions = {
+  includeScratchNotes: false,
+  includePromptPresets: false,
+  includeSummaryCache: true,
+  includeWritingGoalsAndStats: false
+};
+
+const alwaysRemovedShareableItems = ["AI 聊天记录", "AI 改写任务记录", "章节快照", "导入记录", "本机路径", "缓存任务记录"] as const;
+
+function formatSelectedPath(filePath: string | null): string {
+  if (!filePath) {
+    return "尚未选择保存位置";
+  }
+  const parts = filePath.split(/[/\\]/);
+  return parts.length > 2 ? `${parts.at(-2)}/${parts.at(-1)}` : filePath;
+}
+
+function ShareableProjectExportPane({ currentProject }: ShareableProjectExportPaneProps) {
+  const api = useMemo(getNovelToolApi, []);
+  const [options, setOptions] = useState<ShareableExportOptions>(defaultShareableExportOptions);
+  const [filePath, setFilePath] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<ExportShareableProjectCopyResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  function updateOption(key: keyof ShareableExportOptions, value: boolean): void {
+    setOptions((current) => ({ ...current, [key]: value }));
+    setResult(null);
+    setError(null);
+  }
+
+  async function selectShareableProjectPath(): Promise<void> {
+    if (!currentProject) {
+      return;
+    }
+    setError(null);
+    try {
+      const selected = (await api.export.selectShareableProjectFilePath({
+        projectId: currentProject.id,
+        suggestedName: currentProject.name
+      })) as SelectedShareableProjectPath | null;
+      if (selected) {
+        setFilePath(selected.filePath);
+        setResult(null);
+      }
+    } catch (reason) {
+      setError(formatError(reason));
+    }
+  }
+
+  async function exportShareableProjectCopy(): Promise<void> {
+    if (!currentProject || !filePath) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    try {
+      const exported = (await api.export.exportShareableProjectCopy({
+        projectId: currentProject.id,
+        filePath,
+        ...options
+      })) as ExportShareableProjectCopyResult;
+      setResult(exported);
+    } catch (reason) {
+      setError(formatError(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const canExport = Boolean(currentProject && filePath && !busy);
+
+  return (
+    <div className="settings-grid import-export-settings">
+      <div className="settings-card wide shareable-export-card">
+        <div className="settings-card-head">
+          <div>
+            <h3>导出可分享副本</h3>
+            <p className="muted">生成一个新的 .noveltool 文件，只用于分享给他人查看或继续协作。原项目不会被修改。</p>
+          </div>
+          <span className="tag">严格隐私清理</span>
+        </div>
+
+        {!currentProject ? (
+          <div className="empty-inline">请先打开项目，再导出可分享副本。</div>
+        ) : (
+          <>
+            <section className="shareable-export-privacy">
+              <div>
+                <b>始终移除</b>
+                <span>AI 聊天记录、AI 改写任务记录、章节快照和导入记录会始终移除。</span>
+              </div>
+              <div className="shareable-export-chip-list">
+                {alwaysRemovedShareableItems.map((item) => (
+                  <span key={item}>{item}</span>
+                ))}
+              </div>
+            </section>
+
+            <section className="shareable-export-options" aria-label="可分享副本导出内容">
+              <label className="shareable-export-option fixed">
+                <input checked disabled type="checkbox" />
+                <span>
+                  <b>章节正文 / 人物关系设定</b>
+                  <small>项目名称、章节结构、章节正文和作者手工人物关系会保留。</small>
+                </span>
+              </label>
+              <label className={`shareable-export-option ${options.includeSummaryCache ? "active" : ""}`}>
+                <input
+                  checked={options.includeSummaryCache}
+                  onChange={(event) => updateOption("includeSummaryCache", event.target.checked)}
+                  type="checkbox"
+                />
+                <span>
+                  <b>章节索引缓存</b>
+                  <small>保留已生成的章节、阶段、全书摘要；人物关系图会随摘要结果保留。</small>
+                </span>
+              </label>
+              <label className={`shareable-export-option ${options.includeScratchNotes ? "active" : ""}`}>
+                <input
+                  checked={options.includeScratchNotes}
+                  onChange={(event) => updateOption("includeScratchNotes", event.target.checked)}
+                  type="checkbox"
+                />
+                <span>
+                  <b>草稿纸/素材</b>
+                  <small>可能包含私人构思，默认不导出。</small>
+                </span>
+              </label>
+              <label className={`shareable-export-option ${options.includeWritingGoalsAndStats ? "active" : ""}`}>
+                <input
+                  checked={options.includeWritingGoalsAndStats}
+                  onChange={(event) => updateOption("includeWritingGoalsAndStats", event.target.checked)}
+                  type="checkbox"
+                />
+                <span>
+                  <b>写作目标/每日统计</b>
+                  <small>包含每日写作节奏、删改记录和目标计划，默认不导出。</small>
+                </span>
+              </label>
+              <label className={`shareable-export-option ${options.includePromptPresets ? "active" : ""}`}>
+                <input
+                  checked={options.includePromptPresets}
+                  onChange={(event) => updateOption("includePromptPresets", event.target.checked)}
+                  type="checkbox"
+                />
+                <span>
+                  <b>提示词预设</b>
+                  <small>可能包含个人写作习惯，默认不导出。</small>
+                </span>
+              </label>
+            </section>
+
+            <section className="shareable-export-destination">
+              <span title={filePath ?? undefined}>{formatSelectedPath(filePath)}</span>
+              <Button disabled={busy} onClick={() => void selectShareableProjectPath()} type="button" variant="secondary">
+                选择位置
+              </Button>
+            </section>
+
+            <div className="shareable-export-actions">
+              <Button disabled={!canExport} onClick={() => void exportShareableProjectCopy()} type="button" variant="primary">
+                <DownloadSimple size={20} />
+                {busy ? "正在导出" : "导出可分享副本"}
+              </Button>
+              <span className="summary-cache-hint">导出前会复制到临时文件，清理、压缩并扫描通过后才会生成最终副本。</span>
+            </div>
+          </>
+        )}
+
+        {result ? (
+          <div className="shareable-export-result" role="status">
+            <b>可分享副本已生成</b>
+            <span>{formatSelectedPath(result.filePath)}</span>
+            <small>
+              已保留：{result.included.join("、")}；已移除：{result.removed.join("、")}；扫描 {result.privacyScan.scannedValueCount.toLocaleString("zh-CN")} 项。
+            </small>
+          </div>
+        ) : null}
+        {error ? <p className="settings-message error">{error}</p> : null}
+      </div>
+    </div>
+  );
+}
+
+type SummaryCacheSettingsPaneProps = {
+  readonly cache: CacheSettings;
+  readonly currentProject: ProjectRecord | null;
+  readonly onCacheSettingsChange: (patch: Partial<CacheSettings>) => void;
+};
+
+type RelationshipGraphCacheSettingsBlockProps = {
+  readonly currentProject: ProjectRecord | null;
+  readonly refreshToken: number;
+  readonly onSourceStatusChange?: (status: RelationshipGraphSourceStatus | null) => void;
+};
+
+function RelationshipGraphCacheSettingsBlock({ currentProject, refreshToken, onSourceStatusChange }: RelationshipGraphCacheSettingsBlockProps) {
+  const api = useMemo(getNovelToolApi, []);
+  const [graph, setGraph] = useState<RelationshipGraphResult | null>(null);
+  const [sourceStatus, setSourceStatus] = useState<RelationshipGraphSourceStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  async function loadRelationshipGraphSource(): Promise<void> {
+    setLoading(true);
+    setError(null);
+    try {
+      if (!currentProject) {
+        setGraph(null);
+        setSourceStatus(null);
+        onSourceStatusChange?.(null);
+        return;
+      }
+
+      const [status, result] = await Promise.all([
+        api.relationshipGraph.getSourceStatus({ projectId: currentProject.id }) as Promise<RelationshipGraphSourceStatus>,
+        api.relationshipGraph.getGraph({
+          projectId: currentProject.id,
+          chapterCursor: "all",
+          roleScope: "all",
+          mode: "global",
+          hopDepth: 1,
+          minConfidence: 0,
+          includeUncertain: true
+        }) as Promise<RelationshipGraphResult>
+      ]);
+      setSourceStatus(status);
+      onSourceStatusChange?.(status);
+      setGraph(result);
+    } catch (reason) {
+      setError(formatError(reason));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void loadRelationshipGraphSource();
+  }, [currentProject?.id, refreshToken]);
+
+  return (
+    <div className="settings-card wide relationship-cache-settings-card">
+      <div className="settings-card-head">
+        <div>
+          <h3>人物关系图来源</h3>
+          <p className="muted">人物关系图由阶段摘要和全书摘要派生，不再额外维护逐章图谱任务或独立融合任务。</p>
+        </div>
+      </div>
+      {!currentProject ? (
+        <div className="empty-inline">请先打开项目，再查看人物关系图来源。</div>
+      ) : (
+        <>
+          <section className="cache-status-card relationship-cache-detail-card">
+            <div>
+              <h4>当前状态</h4>
+              <p>{getRelationshipSourceStatusText(sourceStatus)}</p>
+            </div>
+            <div className="cache-status-metrics">
+              <span>
+                <b>{sourceStatus?.nodeCount ?? 0}</b>
+                人物
+              </span>
+              <span>
+                <b>{sourceStatus?.edgeCount ?? 0}</b>
+                关系
+              </span>
+              <span>
+                <b>{sourceStatus ? `${sourceStatus.arcSummary.readyForGraph}/${sourceStatus.arcSummary.total}` : "0/0"}</b>
+                阶段图谱
+              </span>
+              <span>
+                <b>{sourceStatus?.arcSummary.missingGraphFields ?? 0}</b>
+                阶段待重试
+              </span>
+              <span>
+                <b>{sourceStatus?.bookSummary.hasRelationshipGraph ? "已生成" : "未生成"}</b>
+                全书图谱
+              </span>
+            </div>
+            <p className="summary-cache-hint">
+              {sourceStatus?.chapterRange ? `图谱覆盖：第 ${sourceStatus.chapterRange.start}-${sourceStatus.chapterRange.end} 章。` : "暂无图谱覆盖信息。"}
+              {sourceStatus?.latestFailure ? ` 最近失败：${sourceStatus.latestFailure}` : ""}
+            </p>
+          </section>
+          <div className="relationship-cache-result-heading">人物关系图结果</div>
+          <RelationshipGraphCachePanel graph={graph} loading={loading} status={sourceStatus} />
+        </>
+      )}
+      {error ? <p className="settings-message error">{error}</p> : null}
+    </div>
+  );
+}
+
+function SummaryCacheSettingsPane({ cache, currentProject, onCacheSettingsChange }: SummaryCacheSettingsPaneProps) {
   const api = useMemo(getNovelToolApi, []);
   const [project, setProject] = useState<ProjectRecord | null>(null);
   const [indexStatus, setIndexStatus] = useState<SummaryIndexStatus | null>(null);
+  const [relationshipOverviewStatus, setRelationshipOverviewStatus] = useState<RelationshipGraphSourceStatus | null>(null);
   const [entries, setEntries] = useState<SummaryChapterCacheEntry[]>([]);
+  const [arcEntries, setArcEntries] = useState<SummaryArcCacheEntry[]>([]);
   const [selectedChapterId, setSelectedChapterId] = useState<string | null>(null);
+  const [selectedArcKey, setSelectedArcKey] = useState<string | null>(null);
   const [detail, setDetail] = useState<SummaryChapterCacheDetail | null>(null);
+  const [arcDetail, setArcDetail] = useState<SummaryArcCacheDetail | null>(null);
+  const [bookDetail, setBookDetail] = useState<SummaryBookCacheDetail | null>(null);
+  const [relationshipRefreshToken, setRelationshipRefreshToken] = useState(0);
   const [loading, setLoading] = useState(true);
   const [actionBusy, setActionBusy] = useState(false);
   const [forceConfirm, setForceConfirm] = useState(false);
@@ -704,6 +1148,7 @@ function SummaryCacheSettingsPane({ currentProject }: SummaryCacheSettingsPanePr
   const [error, setError] = useState<string | null>(null);
 
   const selectedEntry = entries.find((entry) => entry.chapterId === selectedChapterId) ?? entries[0] ?? null;
+  const selectedArcEntry = arcEntries.find((entry) => entry.arcKey === selectedArcKey) ?? arcEntries[0] ?? null;
   const running = Boolean(indexStatus?.runningJobLabel);
   const hasQueuedOrRunning = Boolean(indexStatus && (indexStatus.queuedJobCount > 0 || indexStatus.runningJobLabel));
   const backgroundEnabled = indexStatus?.backgroundEnabled ?? true;
@@ -723,8 +1168,36 @@ function SummaryCacheSettingsPane({ currentProject }: SummaryCacheSettingsPanePr
         2
       )
     : "请选择一个章节查看完整缓存信息。";
+  const fullArcPreview = arcDetail
+    ? JSON.stringify(
+        {
+          阶段: {
+            范围: arcDetail.label,
+            状态: formatCacheState(arcDetail),
+            已覆盖章节: `${arcDetail.readyChapterCount}/${arcDetail.chapterCount}`,
+            更新时间: arcDetail.summary?.updatedAt ?? null
+          },
+          摘要: arcDetail.summary
+        },
+        null,
+        2
+      )
+    : "请选择一个阶段查看完整阶段摘要。";
+  const fullBookPreview = bookDetail
+    ? JSON.stringify(
+        {
+          全书: {
+            状态: formatCacheState(bookDetail),
+            更新时间: bookDetail.summary?.updatedAt ?? null
+          },
+          摘要: bookDetail.summary
+        },
+        null,
+        2
+      )
+    : "当前还没有可预览的全书摘要。";
 
-  async function loadCache(nextSelectedChapterId?: string | null): Promise<void> {
+  async function loadCache(nextSelectedChapterId?: string | null, nextSelectedArcKey?: string | null): Promise<void> {
     setLoading(true);
     setError(null);
     try {
@@ -732,30 +1205,53 @@ function SummaryCacheSettingsPane({ currentProject }: SummaryCacheSettingsPanePr
       if (!currentProject) {
         setEntries([]);
         setIndexStatus(null);
+        setRelationshipOverviewStatus(null);
         setSelectedChapterId(null);
+        setSelectedArcKey(null);
         setDetail(null);
+        setArcDetail(null);
+        setBookDetail(null);
         return;
       }
 
-      const [status, cacheEntries] = await Promise.all([
+      const relationshipGraphSourceStatusPromise = (api.relationshipGraph.getSourceStatus({ projectId: currentProject.id }) as Promise<RelationshipGraphSourceStatus>).catch(() => null);
+      const [status, cacheEntries, nextArcEntries, relationshipGraphSourceStatus] = await Promise.all([
         api.summary.getIndexStatus({ projectId: currentProject.id }) as Promise<SummaryIndexStatus>,
-        api.summary.listCacheEntries({ projectId: currentProject.id }) as Promise<SummaryChapterCacheEntry[]>
+        api.summary.listCacheEntries({ projectId: currentProject.id }) as Promise<SummaryChapterCacheEntry[]>,
+        api.summary.listArcCacheEntries({ projectId: currentProject.id }) as Promise<SummaryArcCacheEntry[]>,
+        relationshipGraphSourceStatusPromise
       ]);
       setIndexStatus(status);
       setEntries([...cacheEntries]);
+      setArcEntries([...nextArcEntries]);
+      setRelationshipOverviewStatus(relationshipGraphSourceStatus);
       const fallbackChapterId = cacheEntries[0]?.chapterId ?? null;
       const chapterId = nextSelectedChapterId && cacheEntries.some((entry) => entry.chapterId === nextSelectedChapterId) ? nextSelectedChapterId : fallbackChapterId;
+      const fallbackArcKey = nextArcEntries[0]?.arcKey ?? null;
+      const arcKey = nextSelectedArcKey && nextArcEntries.some((entry) => entry.arcKey === nextSelectedArcKey) ? nextSelectedArcKey : fallbackArcKey;
       setSelectedChapterId(chapterId);
+      setSelectedArcKey(arcKey);
       if (chapterId) {
         setDetail((await api.summary.getChapterCache({ projectId: currentProject.id, chapterId })) as SummaryChapterCacheDetail);
       } else {
         setDetail(null);
       }
+      if (arcKey) {
+        setArcDetail((await api.summary.getArcCache({ projectId: currentProject.id, arcKey })) as SummaryArcCacheDetail);
+      } else {
+        setArcDetail(null);
+      }
+      setBookDetail((await api.summary.getBookCache({ projectId: currentProject.id })) as SummaryBookCacheDetail);
     } catch (reason) {
       setError(formatError(reason));
     } finally {
       setLoading(false);
     }
+  }
+
+  async function refreshCache(nextSelectedChapterId?: string | null, nextSelectedArcKey?: string | null): Promise<void> {
+    await loadCache(nextSelectedChapterId, nextSelectedArcKey);
+    setRelationshipRefreshToken((value) => value + 1);
   }
 
   useEffect(() => {
@@ -775,6 +1271,19 @@ function SummaryCacheSettingsPane({ currentProject }: SummaryCacheSettingsPanePr
     }
   }
 
+  async function selectArc(arcKey: string): Promise<void> {
+    if (!project) {
+      return;
+    }
+    setSelectedArcKey(arcKey);
+    setError(null);
+    try {
+      setArcDetail((await api.summary.getArcCache({ projectId: project.id, arcKey })) as SummaryArcCacheDetail);
+    } catch (reason) {
+      setError(formatError(reason));
+    }
+  }
+
   async function runAction(action: () => Promise<unknown>, successMessage: string): Promise<void> {
     if (!project) {
       return;
@@ -786,7 +1295,22 @@ function SummaryCacheSettingsPane({ currentProject }: SummaryCacheSettingsPanePr
       await action();
       setMessage(successMessage);
       setForceConfirm(false);
-      await loadCache(selectedChapterId);
+      await refreshCache(selectedChapterId, selectedArcKey);
+    } catch (reason) {
+      setError(formatError(reason));
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  async function saveChapterCacheBuildOrder(chapterCacheBuildOrder: ChapterCacheBuildOrder): Promise<void> {
+    setActionBusy(true);
+    setMessage(null);
+    setError(null);
+    try {
+      const saved = (await api.settings.save({ cache: { chapterCacheBuildOrder } })) as SettingsState;
+      onCacheSettingsChange(saved.cache);
+      setMessage("章节缓存顺序已保存。正在排队的任务会按新顺序继续领取。");
     } catch (reason) {
       setError(formatError(reason));
     } finally {
@@ -795,16 +1319,82 @@ function SummaryCacheSettingsPane({ currentProject }: SummaryCacheSettingsPanePr
   }
 
   const selectedCanRunCacheAction = Boolean(project && canRunChapterCacheAction(selectedEntry));
+  const selectedCanRunArcCacheAction = Boolean(project && canRunArcCacheAction(selectedArcEntry));
+  const selectedCanRunBookCacheAction = Boolean(project && canRunBookCacheAction(bookDetail));
+  const relationshipOverviewMetric = formatRelationshipOverviewMetric(indexStatus, relationshipOverviewStatus);
+  const relationshipNeedsAttention =
+    (relationshipOverviewStatus?.arcSummary.missingGraphFields ?? 0) +
+    (relationshipOverviewStatus?.arcSummary.failed ?? 0) +
+    (relationshipOverviewStatus?.bookSummary.failed ? 1 : 0);
 
   return (
     <div className="settings-grid summary-cache-settings">
+      <div className="settings-card wide cache-system-overview">
+        <div className="settings-card-head">
+          <div>
+            <h3>缓存总览</h3>
+            <p className="muted">先看整体状态，再分别处理章节缓存、阶段摘要和由摘要派生的人物关系图。</p>
+          </div>
+        </div>
+        {!currentProject ? (
+          <div className="empty-inline">请先打开项目，再查看缓存状态。</div>
+        ) : (
+          <div className="cache-system-metrics" aria-label="缓存总览">
+            <span>
+              <b>{indexStatus ? `${indexStatus.readyChapterCount}/${indexStatus.totalChapterCount}` : "--"}</b>
+              章节缓存
+              <small>已缓存 / 总章节</small>
+            </span>
+            <span>
+              <b>{relationshipOverviewMetric.value}</b>
+              人物关系图
+              <small>{relationshipOverviewMetric.detail}</small>
+            </span>
+            <span>
+              <b>{indexStatus?.queuedJobCount ?? 0}</b>
+              排队或运行
+              <small>章节、阶段、全书摘要任务</small>
+            </span>
+            <span>
+              <b>{(indexStatus?.staleChapterCount ?? 0) + (indexStatus?.failedJobCount ?? 0) + relationshipNeedsAttention}</b>
+              需要处理
+              <small>过期、失败或摘要图谱字段缺失</small>
+            </span>
+          </div>
+        )}
+        <div className="cache-schedule-controls" aria-label="章节缓存顺序">
+          <div>
+            <b>章节缓存顺序</b>
+            <small>只影响同优先级的章节缓存领取顺序；新写章节和失败重试仍按优先级处理。</small>
+          </div>
+          <div className="segmented-control">
+            <button
+              className={cache.chapterCacheBuildOrder === "latest_first" ? "active" : ""}
+              disabled={actionBusy}
+              onClick={() => void saveChapterCacheBuildOrder("latest_first")}
+              type="button"
+            >
+              最近章节优先
+            </button>
+            <button
+              className={cache.chapterCacheBuildOrder === "front_to_back" ? "active" : ""}
+              disabled={actionBusy}
+              onClick={() => void saveChapterCacheBuildOrder("front_to_back")}
+              type="button"
+            >
+              从第 1 章开始
+            </button>
+          </div>
+        </div>
+      </div>
+
       <div className="settings-card wide summary-cache-overview">
         <div className="settings-card-head">
           <div>
-            <h3>章节索引缓存</h3>
+            <h3>章节缓存详情</h3>
             <p className="muted">用于全文总结、人物查询、伏笔查询和跨章节问答。这里不手动编辑缓存，只预览完整缓存信息并调度重试。</p>
           </div>
-          <Button variant="ghost" disabled={loading || actionBusy} onClick={() => void loadCache(selectedChapterId)}>
+          <Button variant="ghost" disabled={loading || actionBusy} onClick={() => void refreshCache(selectedChapterId, selectedArcKey)}>
             刷新
           </Button>
         </div>
@@ -904,6 +1494,112 @@ function SummaryCacheSettingsPane({ currentProject }: SummaryCacheSettingsPanePr
         {message ? <p className="settings-message saved">{message}</p> : null}
         {error ? <p className="settings-message error">{error}</p> : null}
       </div>
+
+      <RelationshipGraphCacheSettingsBlock currentProject={currentProject} refreshToken={relationshipRefreshToken} onSourceStatusChange={setRelationshipOverviewStatus} />
+
+      {project ? (
+        <div className="settings-card wide summary-cache-browser summary-book-cache-browser">
+          <div className="summary-cache-detail">
+            <div className="settings-card-head">
+              <div>
+                <h3>全书摘要预览</h3>
+                <p className="muted">
+                  状态：{formatCacheState(bookDetail)}；更新：{formatDateTime(bookDetail?.summaryUpdatedAt ?? null)}
+                </p>
+                {bookDetail?.jobError ? (
+                  <p className="summary-cache-hint">
+                    {bookDetail.jobFailureCategory ?? bookDetail.jobError}
+                    {bookDetail.jobActionHint ? `；${bookDetail.jobActionHint}` : ""}
+                  </p>
+                ) : null}
+              </div>
+              <div className="summary-cache-actions">
+                <Button
+                  variant="secondary"
+                  disabled={!selectedCanRunBookCacheAction || actionBusy}
+                  onClick={() =>
+                    void runAction(
+                      () => api.summary.clearAndRetryBookCache({ projectId: project.id }),
+                      "已重新排队生成全书摘要；章节缓存和阶段摘要不会被清空。"
+                    )
+                  }
+                >
+                  {getBookCacheActionLabel(bookDetail)}
+                </Button>
+                <Button variant="ghost" disabled={loading || actionBusy} onClick={() => void refreshCache(selectedChapterId, selectedArcKey)}>
+                  刷新
+                </Button>
+              </div>
+            </div>
+            <div className="summary-cache-preview-block">
+              <h4>全文短摘要</h4>
+              <p>{bookDetail?.summary?.summaryShort ?? "阶段摘要完成后会自动生成全书摘要。"}</p>
+              {bookDetail?.summary?.summaryLong ? <p className="muted">{bookDetail.summary.summaryLong}</p> : null}
+            </div>
+            <div className="summary-cache-preview-block">
+              <h4>完整全书缓存</h4>
+              <pre className="summary-cache-json">{fullBookPreview}</pre>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {project ? (
+        <div className="settings-card wide summary-cache-browser">
+          <div className="summary-cache-list" aria-label="阶段摘要列表">
+            {arcEntries.length === 0 ? (
+              <div className="empty-inline">章节缓存完成后会自动生成阶段摘要。</div>
+            ) : (
+              arcEntries.map((entry) => (
+                <button
+                  className={selectedArcEntry?.arcKey === entry.arcKey ? "summary-cache-row active" : "summary-cache-row"}
+                  key={entry.arcKey}
+                  onClick={() => void selectArc(entry.arcKey)}
+                  type="button"
+                >
+                  <span>
+                    <b>{entry.label}</b>
+                    <small>{formatArcCacheJobNote(entry) ?? `已覆盖章节 ${entry.readyChapterCount}/${entry.chapterCount}`}</small>
+                  </span>
+                  <em className={`cache-state ${entry.cacheState}`}>{formatCacheState(entry)}</em>
+                </button>
+              ))
+            )}
+          </div>
+          <div className="summary-cache-detail">
+            <div className="settings-card-head">
+              <div>
+                <h3>{selectedArcEntry?.label ?? "未选择阶段"}</h3>
+                <p className="muted">
+                  状态：{formatCacheState(selectedArcEntry)}；更新：{formatDateTime(selectedArcEntry?.summaryUpdatedAt ?? null)}
+                </p>
+                {selectedArcEntry && formatArcCacheJobNote(selectedArcEntry) ? <p className="summary-cache-hint">{formatArcCacheJobNote(selectedArcEntry)}</p> : null}
+              </div>
+              <Button
+                variant="secondary"
+                disabled={!selectedCanRunArcCacheAction || actionBusy}
+                onClick={() =>
+                  selectedArcEntry &&
+                  void runAction(
+                    () => api.summary.clearAndRetryArcCache({ projectId: project.id, arcKey: selectedArcEntry.arcKey }),
+                    "已重新排队生成该阶段摘要；章节缓存不会被清空。"
+                  )
+                }
+              >
+                {getArcCacheActionLabel(selectedArcEntry)}
+              </Button>
+            </div>
+            <div className="summary-cache-preview-block">
+              <h4>阶段摘要</h4>
+              <p>{arcDetail?.summary?.summary ?? "当前阶段还没有可预览的摘要。"}</p>
+            </div>
+            <div className="summary-cache-preview-block">
+              <h4>完整阶段缓存</h4>
+              <pre className="summary-cache-json">{fullArcPreview}</pre>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {project ? (
         <div className="settings-card wide summary-cache-browser">

@@ -1,6 +1,7 @@
 import { SummaryRepository, type SummaryJobRecord } from "../db/repositories/summary-repo";
+import type { ChapterCacheBuildOrder } from "../shared/types";
 import { OpenRouterError } from "./openrouter-error";
-import { SummarySourceChangedError } from "./summary-service";
+import { SummaryDependencyPendingError, SummarySourceChangedError } from "./summary-service";
 
 type SummaryWorkerService = {
   readonly summarizeChapter: (projectId: string, chapterId: string, sourceHash: string, now: string, options?: { readonly signal?: AbortSignal }) => Promise<unknown>;
@@ -34,6 +35,7 @@ export type SummaryWorkerDeps = {
   readonly summaryService: SummaryWorkerService;
   readonly isForegroundAiActive: () => boolean;
   readonly ensureAiConfigured: () => Promise<void>;
+  readonly chapterCacheBuildOrder?: () => ChapterCacheBuildOrder;
 };
 
 function addMinutes(iso: string, minutes: number): string {
@@ -92,7 +94,8 @@ export class SummaryWorker {
       return { status: "paused_foreground_ai" };
     }
 
-    if (!this.deps.summaryRepo.peekNextSummaryJob(projectId, now)) {
+    const claimOptions = { chapterCacheBuildOrder: this.deps.chapterCacheBuildOrder?.() ?? "latest_first" };
+    if (!this.deps.summaryRepo.peekNextSummaryJob(projectId, now, claimOptions)) {
       return { status: "idle" };
     }
 
@@ -105,7 +108,7 @@ export class SummaryWorker {
       };
     }
 
-    const job = this.deps.summaryRepo.claimNextSummaryJob(projectId, now);
+    const job = this.deps.summaryRepo.claimNextSummaryJob(projectId, now, claimOptions);
     if (!job) {
       return { status: "idle" };
     }
@@ -137,6 +140,15 @@ export class SummaryWorker {
         return {
           status: "completed",
           jobId: job.id
+        };
+      }
+      if (error instanceof SummaryDependencyPendingError) {
+        const nextRunAt = addMinutes(now, error.delayMinutes);
+        this.deps.summaryRepo.deferSummaryJob(job.id, formatError(error), nextRunAt, now);
+        return {
+          status: "retry_scheduled",
+          jobId: job.id,
+          nextRunAt
         };
       }
       const retryPlan = retryPlanFor(error);

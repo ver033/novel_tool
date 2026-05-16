@@ -240,6 +240,27 @@ describe("editor writing experience optimizations", () => {
     expect(css).toContain(".editor-context-menu");
   });
 
+  it("keeps selection and context menus visible at full-document and bottom-edge selections", () => {
+    const writingPage = readSource("src/renderer/routes/WritingPage.tsx");
+    const bubbleMenu = readSource("src/renderer/editor/SelectionBubbleMenu.tsx");
+    const contextMenu = readSource("src/renderer/layout/EditorContextMenu.tsx");
+    const css = readSource("src/renderer/styles/globals.css");
+
+    expect(bubbleMenu).toContain("createSelectionFloatingAnchor");
+    expect(bubbleMenu).toContain("appendTo={() => document.body}");
+    expect(bubbleMenu).toContain('strategy: "fixed"');
+    expect(bubbleMenu).toContain("scrollTarget:");
+    expect(bubbleMenu).toContain('editor.view.dom.closest(".editor-scroll")');
+    expect(bubbleMenu).toContain('data-dropdown-side={dropdownSide}');
+    expect(writingPage).toContain("editor?.state.selection");
+    expect(writingPage).toContain("editor?.state.doc.textBetween");
+    expect(writingPage).not.toContain("window.getSelection()?.toString().trim()");
+    expect(contextMenu).toContain("clampEditorContextMenuPosition");
+    expect(contextMenu).toContain("useLayoutEffect");
+    expect(css).toContain('.bubble-menu[data-dropdown-side="top"] .bubble-dropdown');
+    expect(css).toContain('.bubble-menu[data-dropdown-side="top"] .link-editor-popover');
+  });
+
   it("keeps floating panels in viewport coordinates and below the top bar when side panels are present or resized", () => {
     const app = readSource("src/renderer/App.tsx");
     const css = readSource("src/renderer/styles/globals.css");
@@ -330,5 +351,19 @@ describe("editor writing experience optimizations", () => {
 
     expect(css).toContain(".tiptap-manuscript p.is-editor-empty:first-child::before");
     expect(css).not.toContain(".tiptap-manuscript p.is-empty::before");
+  });
+
+  it("keeps writing workflow intact after adding the relationship graph module", () => {
+    const writingPage = readSource("src/renderer/routes/WritingPage.tsx");
+    const app = readSource("src/renderer/App.tsx");
+
+    expect(writingPage).toContain("flushBeforeNavigation");
+    expect(writingPage).toContain("onOpenAiChat");
+    expect(writingPage).toContain("onOpenFloatingAiChat");
+    expect(writingPage).toContain("RightUtilitySidebar");
+    expect(writingPage).toContain("FloatingWorkspaceLayer");
+    expect(writingPage).toContain("EditorContextMenu");
+    expect(app).toContain("setSidebarOpen(true)");
+    expect(app).toContain('setSidebarTab("chat")');
   });
 });

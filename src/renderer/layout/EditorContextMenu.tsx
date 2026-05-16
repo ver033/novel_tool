@@ -1,3 +1,6 @@
+import { useLayoutEffect, useRef, useState } from "react";
+import { clampEditorContextMenuPosition, type FloatingMenuPosition } from "./floating-menu-position";
+
 type EditorContextMenuMode = "surface" | "selection";
 
 export type EditorContextMenuState = {
@@ -45,8 +48,33 @@ export function EditorContextMenu({
   x,
   y
 }: EditorContextMenuProps) {
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const [position, setPosition] = useState<FloatingMenuPosition>({ left: x, top: y });
+
+  useLayoutEffect(() => {
+    function updatePosition(): void {
+      const menuElement = menuRef.current;
+      if (!menuElement) {
+        return;
+      }
+
+      const menuRect = menuElement.getBoundingClientRect();
+      setPosition(
+        clampEditorContextMenuPosition(
+          { x, y },
+          { height: menuRect.height, width: menuRect.width },
+          { height: window.innerHeight, width: window.innerWidth }
+        )
+      );
+    }
+
+    updatePosition();
+    window.addEventListener("resize", updatePosition);
+    return () => window.removeEventListener("resize", updatePosition);
+  }, [x, y]);
+
   return (
-    <div className="editor-context-menu" role="menu" style={{ left: x, top: y }}>
+    <div className="editor-context-menu" ref={menuRef} role="menu" style={{ left: position.left, top: position.top }}>
       {mode === "selection" ? (
         <>
           <button onClick={onPolishSelection} role="menuitem" type="button">润色选中内容</button>

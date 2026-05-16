@@ -12,7 +12,12 @@ import {
   type SummaryJobType,
   type SummaryStatus
 } from "../../shared/summary-index";
+import type { ChapterCacheBuildOrder } from "../../shared/types";
 import type { SqliteDatabase } from "../database";
+
+export type ClaimSummaryJobOptions = {
+  readonly chapterCacheBuildOrder?: ChapterCacheBuildOrder;
+};
 
 type ChapterSummaryRow = {
   readonly id: string;
@@ -503,6 +508,13 @@ export class SummaryRepository {
     ).map(mapArcSummary);
   }
 
+  getArcSummary(projectId: string, arcKey: string): ArcAiSummaryRecord | null {
+    const row = this.db
+      .prepare("SELECT * FROM arc_ai_summaries WHERE project_id = ? AND arc_key = ?")
+      .get(projectId, arcKey) as ArcSummaryRow | undefined;
+    return row ? mapArcSummary(row) : null;
+  }
+
   upsertArcSummary(input: UpsertArcSummaryInput): ArcAiSummaryRecord {
     this.db
       .prepare(
@@ -562,6 +574,41 @@ export class SummaryRepository {
     transaction();
   }
 
+  deleteArcSummaryAndBookCache(projectId: string, arcKey: string): void {
+    const transaction = this.db.transaction(() => {
+      this.db.prepare("DELETE FROM arc_ai_summaries WHERE project_id = ? AND arc_key = ?").run(projectId, arcKey);
+      this.db.prepare("DELETE FROM book_ai_summaries WHERE project_id = ?").run(projectId);
+      this.db
+        .prepare(
+          `DELETE FROM summary_jobs
+           WHERE project_id = ?
+             AND status != 'running'
+             AND ((job_type = 'arc_summary' AND target_id = ?) OR job_type = 'book_summary')`
+        )
+        .run(projectId, arcKey);
+    });
+    transaction();
+  }
+
+  deleteBookSummaryCache(projectId: string): void {
+    const transaction = this.db.transaction(() => {
+      this.db.prepare("DELETE FROM book_ai_summaries WHERE project_id = ?").run(projectId);
+      this.db.prepare("DELETE FROM summary_jobs WHERE project_id = ? AND job_type = 'book_summary' AND status != 'running'").run(projectId);
+    });
+    transaction();
+  }
+
+  clearProjectIndexCache(projectId: string): void {
+    const transaction = this.db.transaction(() => {
+      this.db.prepare("DELETE FROM chapter_ai_summary_chunks WHERE project_id = ?").run(projectId);
+      this.db.prepare("DELETE FROM chapter_ai_summaries WHERE project_id = ?").run(projectId);
+      this.db.prepare("DELETE FROM arc_ai_summaries WHERE project_id = ?").run(projectId);
+      this.db.prepare("DELETE FROM book_ai_summaries WHERE project_id = ?").run(projectId);
+      this.db.prepare("DELETE FROM summary_jobs WHERE project_id = ?").run(projectId);
+    });
+    transaction();
+  }
+
   upsertBookSummary(input: UpsertBookSummaryInput): BookAiSummaryRecord {
     this.db
       .prepare(
@@ -608,7 +655,7 @@ export class SummaryRepository {
       )
       .get(input.projectId, input.jobType, ...target.params) as SummaryJobRow | undefined;
 
-    if (existing?.status === "running") {
+    if (existing?.status === "running" && existing.source_hash === input.sourceHash) {
       return mapSummaryJob(existing);
     }
 
@@ -678,8 +725,8 @@ export class SummaryRepository {
     return job;
   }
 
-  claimNextSummaryJob(projectId: string, now: string): SummaryJobRecord | null {
-    const row = this.findNextRunnableJobRow(projectId, now);
+  claimNextSummaryJob(projectId: string, now: string, options: ClaimSummaryJobOptions = {}): SummaryJobRecord | null {
+    const row = this.findNextRunnableJobRow(projectId, now, options);
     if (!row) {
       return null;
     }
@@ -694,8 +741,8 @@ export class SummaryRepository {
     return this.getJobById(row.id);
   }
 
-  peekNextSummaryJob(projectId: string, now: string): SummaryJobRecord | null {
-    const row = this.findNextRunnableJobRow(projectId, now);
+  peekNextSummaryJob(projectId: string, now: string, options: ClaimSummaryJobOptions = {}): SummaryJobRecord | null {
+    const row = this.findNextRunnableJobRow(projectId, now, options);
     return row ? mapSummaryJob(row) : null;
   }
 
@@ -727,6 +774,19 @@ export class SummaryRepository {
     return Boolean(row);
   }
 
+  hasPendingNormalSummaryJobs(projectId: string, _now: string): boolean {
+    const row = this.db
+      .prepare(
+        `SELECT 1 AS found
+         FROM summary_jobs
+         WHERE project_id = ?
+           AND status IN ('queued', 'running')
+         LIMIT 1`
+      )
+      .get(projectId) as { readonly found: number } | undefined;
+    return Boolean(row);
+  }
+
   completeSummaryJob(jobId: string, now: string): void {
     this.db
       .prepare("UPDATE summary_jobs SET status = 'completed', finished_at = ?, updated_at = ? WHERE id = ?")
@@ -737,6 +797,22 @@ export class SummaryRepository {
     this.db
       .prepare("UPDATE summary_jobs SET status = 'failed', error = ?, next_run_at = ?, finished_at = ?, updated_at = ? WHERE id = ?")
       .run(error, nextRunAt, now, now, jobId);
+  }
+
+  deferSummaryJob(jobId: string, error: string, nextRunAt: string, now: string): void {
+    this.db
+      .prepare(
+        `UPDATE summary_jobs
+         SET status = 'queued',
+             error = ?,
+             next_run_at = ?,
+             started_at = NULL,
+             finished_at = NULL,
+             attempt_count = CASE WHEN attempt_count > 0 THEN attempt_count - 1 ELSE 0 END,
+             updated_at = ?
+         WHERE id = ?`
+      )
+      .run(error, nextRunAt, now, jobId);
   }
 
   cancelSummaryJob(jobId: string, error: string, now: string): void {
@@ -782,7 +858,8 @@ export class SummaryRepository {
     return row ? mapSummaryJob(row) : null;
   }
 
-  private findNextRunnableJobRow(projectId: string, now: string): SummaryJobRow | null {
+  private findNextRunnableJobRow(projectId: string, now: string, options: ClaimSummaryJobOptions = {}): SummaryJobRow | null {
+    const chapterCacheBuildOrder = options.chapterCacheBuildOrder ?? "latest_first";
     const row = this.db
       .prepare(
         `SELECT summary_jobs.*
@@ -790,15 +867,29 @@ export class SummaryRepository {
          LEFT JOIN chapters ON summary_jobs.job_type = 'chapter_summary'
           AND summary_jobs.target_id = chapters.id
           AND summary_jobs.project_id = chapters.project_id
-         WHERE summary_jobs.project_id = ? AND summary_jobs.status = 'queued' AND (summary_jobs.next_run_at IS NULL OR summary_jobs.next_run_at <= ?)
+         WHERE summary_jobs.project_id = ?
+           AND summary_jobs.status = 'queued'
+           AND (summary_jobs.next_run_at IS NULL OR summary_jobs.next_run_at <= ?)
          ORDER BY
            summary_jobs.priority DESC,
-           CASE WHEN summary_jobs.job_type = 'chapter_summary' THEN COALESCE(chapters.sort_order, -1) ELSE -1 END DESC,
+           CASE
+             WHEN summary_jobs.job_type = 'arc_summary' AND summary_jobs.target_id LIKE 'auto:%-%'
+               THEN CAST(substr(substr(summary_jobs.target_id, 6), 1, instr(substr(summary_jobs.target_id, 6), '-') - 1) AS INTEGER)
+             ELSE 2147483647
+           END ASC,
+           CASE
+             WHEN summary_jobs.job_type = 'chapter_summary' AND ? = 'latest_first' THEN COALESCE(chapters.sort_order, -1)
+             ELSE -1
+           END DESC,
+           CASE
+             WHEN summary_jobs.job_type = 'chapter_summary' AND ? = 'front_to_back' THEN COALESCE(chapters.sort_order, 2147483647)
+             ELSE 2147483647
+           END ASC,
            summary_jobs.created_at ASC,
            summary_jobs.rowid ASC
          LIMIT 1`
       )
-      .get(projectId, now) as SummaryJobRow | undefined;
+      .get(projectId, now, chapterCacheBuildOrder, chapterCacheBuildOrder) as SummaryJobRow | undefined;
     return row ?? null;
   }
 }

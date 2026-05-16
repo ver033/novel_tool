@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 import { applyImportPreviewOperations, detectTxtChapters, normalizeTxtContent } from "../../src/main/import/chapter-detector";
+import { readTxtFile } from "../../src/main/import/txt-reader";
+
+const bailuyuanTxtPath = resolve(process.cwd(), "../test_novel/《白鹿原》全集.txt");
 
 describe("TXT chapter detector", () => {
   it("normalizes line endings, BOM, repeated blank lines, and full-width spaces", () => {
@@ -29,6 +34,23 @@ describe("TXT chapter detector", () => {
     expect(detected.map((chapter) => chapter.title)).toEqual(["序章", "第一章 归途", "第12章 夜谈", "卷一 少年", "第一卷 山河旧梦", "番外 雪夜", "后记"]);
     expect(detected[1].text).toContain("他终于回到了村口。");
     expect(detected.every((chapter, index) => chapter.order === index)).toBe(true);
+  });
+
+  it("detects spaced chapter number headings from legacy TXT files", () => {
+    const detected = detectTxtChapters(`
+第一章
+这里是第一章正文。
+
+第 二 章
+这里是第二章正文。
+
+ 第三章
+这里是第三章正文。
+`);
+
+    expect(detected.map((chapter) => chapter.title)).toEqual(["第一章", "第二章", "第三章"]);
+    expect(detected[0].text).toBe("这里是第一章正文。");
+    expect(detected[1].text).toBe("这里是第二章正文。");
   });
 
   it("falls back to a single chapter when no heading is detected", () => {
@@ -88,5 +110,35 @@ describe("TXT chapter detector", () => {
 
     const redetected = applyImportPreviewOperations(adjusted, [{ type: "redetect" }]);
     expect(redetected.map((chapter) => chapter.title)).toEqual(["正文"]);
+  });
+});
+
+describe.skipIf(!existsSync(bailuyuanTxtPath))("TXT chapter detector against local 白鹿原 fixture", () => {
+  it("keeps the first twenty chapter headings separated", () => {
+    const { text } = readTxtFile(bailuyuanTxtPath);
+    const detected = detectTxtChapters(text);
+
+    expect(detected.slice(0, 20).map((chapter) => chapter.title)).toEqual([
+      "第一章",
+      "第二章",
+      "第三章",
+      "第四章",
+      "第五章",
+      "第六章",
+      "第七章",
+      "第八章",
+      "第九章",
+      "第十章",
+      "第十一章",
+      "第十二章",
+      "第十三章",
+      "第十四章",
+      "第十五章",
+      "第十六章",
+      "第十七章",
+      "第十八章",
+      "第十九章",
+      "第二十章"
+    ]);
   });
 });

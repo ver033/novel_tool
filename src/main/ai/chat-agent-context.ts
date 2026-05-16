@@ -19,6 +19,7 @@ import {
   type BookSummaryCoverage
 } from "../shared/summary-index";
 import type { ChapterContent, ChapterSummary } from "../shared/types";
+import { getChapterSummaryCacheState, isFreshReadyChapterSummary, isFreshSkippedTooShortChapterSummary } from "./chapter-summary-freshness";
 
 const CHAT_AGENT_CONTEXT_RESERVE_TOKENS = 500;
 
@@ -176,15 +177,16 @@ function buildComputedCoverage(chapters: readonly ChapterSummary[], summaries: r
 
   for (const chapter of chapters) {
     const summary = byChapterId.get(chapter.id);
-    if (!summary) {
+    const cacheState = getChapterSummaryCacheState(summary, chapter);
+    if (cacheState === "missing") {
       missingChapterIds.push(formatChapterCoverageLabel(chapter.sortOrder + 1, chapter.title));
       continue;
     }
-    if (summary.status === "ready") {
+    if (cacheState === "ready") {
       indexedChapterCount += 1;
       continue;
     }
-    if (summary.status === "skipped_too_short") {
+    if (cacheState === "skipped_too_short") {
       skippedTooShortChapterIds.push(formatChapterCoverageLabel(chapter.sortOrder + 1, chapter.title));
       continue;
     }
@@ -251,7 +253,11 @@ function buildBookSummaryIndexText(input: {
     );
   }
 
-  const readyChapters = input.chapterSummaries.filter((summary) => summary.status === "ready");
+  const chapterById = new Map(input.chapters.map((chapter) => [chapter.id, chapter]));
+  const readyChapters = input.chapterSummaries.filter((summary) => {
+    const chapter = chapterById.get(summary.chapterId);
+    return Boolean(chapter && isFreshReadyChapterSummary(summary, chapter));
+  });
   if (readyChapters.length > 0) {
     sections.push(
       "章节索引：",
@@ -441,11 +447,11 @@ function resolveFocusedSummaryIndexContext(
   for (const chapter of selectedChapters) {
     const summary = summaryByChapterId.get(chapter.id);
     const label = formatChapterCoverageLabel(chapter.sortOrder + 1, chapter.title);
-    if (summary?.status === "ready") {
+    if (isFreshReadyChapterSummary(summary, chapter)) {
       readySummaries.push(summary);
       continue;
     }
-    if (summary?.status === "skipped_too_short") {
+    if (isFreshSkippedTooShortChapterSummary(summary, chapter)) {
       skippedLabels.push(label);
       continue;
     }
@@ -609,11 +615,11 @@ function resolveChapterRangeSummaryIndexContext(
   let skippedTooShortChapterCount = 0;
   for (const chapter of rangeChapters) {
     const summary = summaryByChapterId.get(chapter.id);
-    if (summary?.status === "ready") {
+    if (isFreshReadyChapterSummary(summary, chapter)) {
       readySummaries.push(summary);
       continue;
     }
-    if (summary?.status === "skipped_too_short") {
+    if (isFreshSkippedTooShortChapterSummary(summary, chapter)) {
       skippedTooShortChapterCount += 1;
       skippedTooShortChapterLabels.push(formatChapterCoverageLabel(chapter.sortOrder + 1, chapter.title));
       continue;

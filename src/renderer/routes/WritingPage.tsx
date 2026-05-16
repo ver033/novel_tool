@@ -13,6 +13,7 @@ import { EditorContextMenu, type EditorContextMenuState } from "../layout/Editor
 import { FloatingWorkspaceLayer } from "../layout/FloatingWorkspaceLayer";
 import type { FloatingPanelGeometry, FloatingPanelKind, FloatingPanelState } from "../layout/floating-panel-state";
 import { LeftChapterTree, type ChapterAuxiliaryInfo } from "../layout/LeftChapterTree";
+import { ProjectModuleRail, type ProjectModule } from "../layout/ProjectModuleRail";
 import { RightUtilitySidebar, type SidebarTab, type TaskType } from "../layout/RightUtilitySidebar";
 import { outlineStorageKey } from "../sidebar/OutlinePanel";
 import type { AiChatDraftSeed } from "../sidebar/chat-draft";
@@ -250,6 +251,8 @@ type WritingPageProps = {
   readonly onOpenFloatingAiChat: () => void;
   readonly onOpenFloatingPanel: (kind: FloatingPanelKind, chapterId?: string | null, scratchNoteId?: string | null) => void;
   readonly onOpenFloatingScratchpad: (chapterId?: string | null, scratchNoteId?: string | null) => void;
+  readonly onOpenRelationshipGraph: () => void;
+  readonly onOpenWritingGoals: () => void;
   readonly onOpenScratchpad: () => void;
   readonly onRaiseFloatingPanel: (panelId: string) => void;
   readonly onResetAllFloatingPanels: () => void;
@@ -296,6 +299,8 @@ export function WritingPage({
   onOpenFloatingAiChat,
   onOpenFloatingPanel,
   onOpenFloatingScratchpad,
+  onOpenRelationshipGraph,
+  onOpenWritingGoals,
   onOpenScratchpad,
   onRaiseFloatingPanel,
   onResetAllFloatingPanels,
@@ -581,6 +586,10 @@ export function WritingPage({
   );
   const handleExport = useCallback(() => flushBeforeNavigation(onExport), [flushBeforeNavigation, onExport]);
   const handleImport = useCallback(() => flushBeforeNavigation(onImport), [flushBeforeNavigation, onImport]);
+  const handleOpenRelationshipGraph = useCallback(
+    () => flushBeforeNavigation(onOpenRelationshipGraph),
+    [flushBeforeNavigation, onOpenRelationshipGraph]
+  );
   const handleWelcome = useCallback(() => {
     setConfirmWelcomeOpen(true);
   }, []);
@@ -592,6 +601,22 @@ export function WritingPage({
     flushBeforeNavigation(onWelcome);
   }, [flushBeforeNavigation, onWelcome]);
   const handleSettings = useCallback((category?: SettingsCategory) => flushBeforeNavigation(() => onSettings(category)), [flushBeforeNavigation, onSettings]);
+  const handleModuleNavigate = useCallback(
+    (module: ProjectModule) => {
+      if (module === "relationshipGraph") {
+        handleOpenRelationshipGraph();
+        return;
+      }
+      if (module === "goals") {
+        flushBeforeNavigation(onOpenWritingGoals);
+        return;
+      }
+      if (module === "settings") {
+        handleSettings();
+      }
+    },
+    [flushBeforeNavigation, handleOpenRelationshipGraph, handleSettings, onOpenWritingGoals]
+  );
   const handleFocusModeToggle = useCallback(() => {
     setFocusMode((current) => !current);
     setSearchValue("");
@@ -626,14 +651,15 @@ export function WritingPage({
         return;
       }
       event.preventDefault();
-      const hasSelection = Boolean(window.getSelection()?.toString().trim());
+      const selection = editor?.state.selection;
+      const hasSelection = Boolean(selection && !selection.empty && editor?.state.doc.textBetween(selection.from, selection.to).trim());
       setEditorContextMenu({
         mode: hasSelection ? "selection" : "surface",
-        x: Math.max(12, Math.min(event.clientX, window.innerWidth - 260)),
-        y: Math.max(12, Math.min(event.clientY, window.innerHeight - 420))
+        x: event.clientX,
+        y: event.clientY
       });
     },
-    []
+    [editor]
   );
   const selectionSnapshotFromEditor = useCallback(() => {
     if (!editor || !activeChapterId) {
@@ -878,6 +904,7 @@ export function WritingPage({
           chapterListHidden && !focusMode ? "chapter-hidden" : ""
         } ${editorUsesFullWidth ? "full-width-editor" : ""} ${editorThemeClass}`}
       >
+        {!focusMode ? <ProjectModuleRail activeModule="writing" onNavigate={handleModuleNavigate} /> : null}
         <PanelGroup
           className="workspace-shell-panels"
           defaultLayout={chapterLayout.defaultLayout}

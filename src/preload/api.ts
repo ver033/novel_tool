@@ -21,6 +21,12 @@ import type {
   AiStreamErrorEvent,
   AiStreamReasoningEvent,
   AiUpdateTaskInput,
+  AuthorRelationshipCreateCharacterInput,
+  AuthorRelationshipCreateRelationshipInput,
+  AuthorRelationshipDeleteCharacterInput,
+  AuthorRelationshipDeleteRelationshipInput,
+  AuthorRelationshipGetGraphInput,
+  AuthorRelationshipUpdateCharacterInput,
   ChapterCreateInput,
   ChapterCreateSnapshotInput,
   ChapterDeleteInput,
@@ -29,7 +35,9 @@ import type {
   ChapterRenameInput,
   ChapterSaveContentInput,
   ChapterUpdateTargetWordCountInput,
+  ExportSelectShareableProjectFilePathInput,
   ExportSelectTxtFilePathInput,
+  ExportShareableProjectCopyInput,
   ExportTxtInput,
   ImportConfirmTxtInput,
   ImportPreviewTxtInput,
@@ -41,6 +49,8 @@ import type {
   ProjectRenameInput,
   ProjectSelectSavePathInput,
   ProjectSuggestFilePathInput,
+  RelationshipGraphGetInput,
+  RelationshipGraphSourceStatusInput,
   ScratchCreateInput,
   ScratchDeleteInput,
   ScratchListInput,
@@ -49,11 +59,21 @@ import type {
   SettingsSaveInput,
   SettingsTestConnectionInput,
   SummaryCancelCurrentJobInput,
+  SummaryClearAndRetryArcCacheInput,
+  SummaryClearAndRetryBookCacheInput,
   SummaryClearAndRetryChapterCacheInput,
+  SummaryGetArcCacheInput,
+  SummaryGetBookCacheInput,
   SummaryGetChapterCacheInput,
   SummaryIndexStatusInput,
   SummaryListCacheEntriesInput,
-  SummaryRebuildProjectIndexInput
+  SummaryRebuildProjectIndexInput,
+  WritingGoalCreateInput,
+  WritingGoalDayDetailInput,
+  WritingGoalListDailyStatsInput,
+  WritingGoalOverviewInput,
+  WritingGoalStatusInput,
+  WritingGoalUpdateInput
 } from "../main/shared/types";
 import { ipcChannels } from "../main/shared/types";
 
@@ -108,6 +128,33 @@ export type NovelToolApi = {
     readonly listCacheEntries: (input: SummaryListCacheEntriesInput) => Promise<unknown>;
     readonly getChapterCache: (input: SummaryGetChapterCacheInput) => Promise<unknown>;
     readonly clearAndRetryChapterCache: (input: SummaryClearAndRetryChapterCacheInput) => Promise<unknown>;
+    readonly listArcCacheEntries: (input: SummaryListCacheEntriesInput) => Promise<unknown>;
+    readonly getArcCache: (input: SummaryGetArcCacheInput) => Promise<unknown>;
+    readonly clearAndRetryArcCache: (input: SummaryClearAndRetryArcCacheInput) => Promise<unknown>;
+    readonly getBookCache: (input: SummaryGetBookCacheInput) => Promise<unknown>;
+    readonly clearAndRetryBookCache: (input: SummaryClearAndRetryBookCacheInput) => Promise<unknown>;
+  };
+  readonly relationshipGraph: {
+    readonly getGraph: (input: RelationshipGraphGetInput) => Promise<unknown>;
+    readonly getSourceStatus: (input: RelationshipGraphSourceStatusInput) => Promise<unknown>;
+  };
+  readonly authorRelationship: {
+    readonly getGraph: (input: AuthorRelationshipGetGraphInput) => Promise<unknown>;
+    readonly createCharacter: (input: AuthorRelationshipCreateCharacterInput) => Promise<unknown>;
+    readonly updateCharacter: (input: AuthorRelationshipUpdateCharacterInput) => Promise<unknown>;
+    readonly createRelationship: (input: AuthorRelationshipCreateRelationshipInput) => Promise<unknown>;
+    readonly deleteCharacter: (input: AuthorRelationshipDeleteCharacterInput) => Promise<unknown>;
+    readonly deleteRelationship: (input: AuthorRelationshipDeleteRelationshipInput) => Promise<unknown>;
+  };
+  readonly writingGoals: {
+    readonly getOverview: (input: WritingGoalOverviewInput) => Promise<unknown>;
+    readonly createGoal: (input: WritingGoalCreateInput) => Promise<unknown>;
+    readonly updateGoal: (input: WritingGoalUpdateInput) => Promise<unknown>;
+    readonly pauseGoal: (input: WritingGoalStatusInput) => Promise<unknown>;
+    readonly resumeGoal: (input: WritingGoalStatusInput) => Promise<unknown>;
+    readonly archiveGoal: (input: WritingGoalStatusInput) => Promise<unknown>;
+    readonly listDailyStats: (input: WritingGoalListDailyStatsInput) => Promise<unknown>;
+    readonly getDayDetail: (input: WritingGoalDayDetailInput) => Promise<unknown>;
   };
   readonly ai: {
     readonly createTask: (input: AiCreateTaskInput) => Promise<unknown>;
@@ -144,6 +191,8 @@ export type NovelToolApi = {
   readonly export: {
     readonly selectTxtFilePath: (input: ExportSelectTxtFilePathInput) => Promise<unknown>;
     readonly exportTxt: (input: ExportTxtInput) => Promise<unknown>;
+    readonly selectShareableProjectFilePath: (input: ExportSelectShareableProjectFilePathInput) => Promise<unknown>;
+    readonly exportShareableProjectCopy: (input: ExportShareableProjectCopyInput) => Promise<unknown>;
   };
 };
 
@@ -189,7 +238,34 @@ export const novelToolApi: NovelToolApi = Object.freeze({
     cancelCurrentJob: (input: SummaryCancelCurrentJobInput) => ipcRenderer.invoke(ipcChannels.summary.cancelCurrentJob, input),
     listCacheEntries: (input: SummaryListCacheEntriesInput) => ipcRenderer.invoke(ipcChannels.summary.listCacheEntries, input),
     getChapterCache: (input: SummaryGetChapterCacheInput) => ipcRenderer.invoke(ipcChannels.summary.getChapterCache, input),
-    clearAndRetryChapterCache: (input: SummaryClearAndRetryChapterCacheInput) => ipcRenderer.invoke(ipcChannels.summary.clearAndRetryChapterCache, input)
+    clearAndRetryChapterCache: (input: SummaryClearAndRetryChapterCacheInput) => ipcRenderer.invoke(ipcChannels.summary.clearAndRetryChapterCache, input),
+    listArcCacheEntries: (input: SummaryListCacheEntriesInput) => ipcRenderer.invoke(ipcChannels.summary.listArcCacheEntries, input),
+    getArcCache: (input: SummaryGetArcCacheInput) => ipcRenderer.invoke(ipcChannels.summary.getArcCache, input),
+    clearAndRetryArcCache: (input: SummaryClearAndRetryArcCacheInput) => ipcRenderer.invoke(ipcChannels.summary.clearAndRetryArcCache, input),
+    getBookCache: (input: SummaryGetBookCacheInput) => ipcRenderer.invoke(ipcChannels.summary.getBookCache, input),
+    clearAndRetryBookCache: (input: SummaryClearAndRetryBookCacheInput) => ipcRenderer.invoke(ipcChannels.summary.clearAndRetryBookCache, input)
+  }),
+  relationshipGraph: Object.freeze({
+    getGraph: (input: RelationshipGraphGetInput) => ipcRenderer.invoke(ipcChannels.relationshipGraph.getGraph, input),
+    getSourceStatus: (input: RelationshipGraphSourceStatusInput) => ipcRenderer.invoke(ipcChannels.relationshipGraph.getSourceStatus, input)
+  }),
+  authorRelationship: Object.freeze({
+    getGraph: (input: AuthorRelationshipGetGraphInput) => ipcRenderer.invoke(ipcChannels.authorRelationship.getGraph, input),
+    createCharacter: (input: AuthorRelationshipCreateCharacterInput) => ipcRenderer.invoke(ipcChannels.authorRelationship.createCharacter, input),
+    updateCharacter: (input: AuthorRelationshipUpdateCharacterInput) => ipcRenderer.invoke(ipcChannels.authorRelationship.updateCharacter, input),
+    createRelationship: (input: AuthorRelationshipCreateRelationshipInput) => ipcRenderer.invoke(ipcChannels.authorRelationship.createRelationship, input),
+    deleteCharacter: (input: AuthorRelationshipDeleteCharacterInput) => ipcRenderer.invoke(ipcChannels.authorRelationship.deleteCharacter, input),
+    deleteRelationship: (input: AuthorRelationshipDeleteRelationshipInput) => ipcRenderer.invoke(ipcChannels.authorRelationship.deleteRelationship, input)
+  }),
+  writingGoals: Object.freeze({
+    getOverview: (input: WritingGoalOverviewInput) => ipcRenderer.invoke(ipcChannels.writingGoals.getOverview, input),
+    createGoal: (input: WritingGoalCreateInput) => ipcRenderer.invoke(ipcChannels.writingGoals.createGoal, input),
+    updateGoal: (input: WritingGoalUpdateInput) => ipcRenderer.invoke(ipcChannels.writingGoals.updateGoal, input),
+    pauseGoal: (input: WritingGoalStatusInput) => ipcRenderer.invoke(ipcChannels.writingGoals.pauseGoal, input),
+    resumeGoal: (input: WritingGoalStatusInput) => ipcRenderer.invoke(ipcChannels.writingGoals.resumeGoal, input),
+    archiveGoal: (input: WritingGoalStatusInput) => ipcRenderer.invoke(ipcChannels.writingGoals.archiveGoal, input),
+    listDailyStats: (input: WritingGoalListDailyStatsInput) => ipcRenderer.invoke(ipcChannels.writingGoals.listDailyStats, input),
+    getDayDetail: (input: WritingGoalDayDetailInput) => ipcRenderer.invoke(ipcChannels.writingGoals.getDayDetail, input)
   }),
   ai: Object.freeze({
     createTask: (input: AiCreateTaskInput) => ipcRenderer.invoke(ipcChannels.ai.createTask, input),
@@ -263,6 +339,9 @@ export const novelToolApi: NovelToolApi = Object.freeze({
   }),
   export: Object.freeze({
     selectTxtFilePath: (input: ExportSelectTxtFilePathInput) => ipcRenderer.invoke(ipcChannels.export.selectTxtFilePath, input),
-    exportTxt: (input: ExportTxtInput) => ipcRenderer.invoke(ipcChannels.export.exportTxt, input)
+    exportTxt: (input: ExportTxtInput) => ipcRenderer.invoke(ipcChannels.export.exportTxt, input),
+    selectShareableProjectFilePath: (input: ExportSelectShareableProjectFilePathInput) =>
+      ipcRenderer.invoke(ipcChannels.export.selectShareableProjectFilePath, input),
+    exportShareableProjectCopy: (input: ExportShareableProjectCopyInput) => ipcRenderer.invoke(ipcChannels.export.exportShareableProjectCopy, input)
   })
 });

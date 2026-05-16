@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildArcIndexSummaryMessages,
+  buildBookIndexSummaryMessages,
   buildChapterChunkIndexSummaryMessages,
   buildChapterChunkMergeSummaryMessages,
   buildChapterIndexSummaryMessages,
@@ -10,7 +12,13 @@ import { estimateMessagesTokens } from "../../src/main/ai/token-estimator";
 import { getTokenBudget } from "../../src/main/ai/token-budget";
 import type { AiChatGenerationInput } from "../../src/main/ai/ai-task-service";
 import type { ChapterAiSummaryPayload, ContinuityCheckResult } from "../../src/main/shared/summary-index";
-import { chapterChunkIndexPayload, chapterIndexPayloadV2, chapterIndexPayloadV3Lite } from "../helpers/summary-index-fixtures";
+import {
+  arcIndexPayloadV2,
+  bookIndexPayloadV2,
+  chapterChunkIndexPayload,
+  chapterIndexPayloadV2,
+  chapterIndexPayloadV3Lite
+} from "../helpers/summary-index-fixtures";
 
 function createInput(patch: Partial<AiChatGenerationInput> = {}): AiChatGenerationInput {
   return {
@@ -403,6 +411,9 @@ describe("OpenRouter persistent summary index generation", () => {
     expect(joined).toContain("“二-Lite”只允许用于章节片段缓存");
     expect(joined).toContain("场景推进最多 5 项");
     expect(joined).toContain("8000 字章节");
+    expect(joined).not.toContain("索引原料");
+    expect(joined).not.toContain("时间线事件");
+    expect(joined).not.toContain("未来大纲");
     expect(joined).not.toContain("空间与行动逻辑");
     expect(joined).not.toContain("限制与否定事实");
     expect(joined).not.toContain("适合回答的问题");
@@ -481,7 +492,7 @@ describe("OpenRouter persistent summary index generation", () => {
       plainText: "林远回到了故乡。"
     });
 
-    expect(requests[0].maxCompletionTokens).toBeLessThanOrEqual(12_000);
+    expect(requests[0].maxCompletionTokens).toBeLessThanOrEqual(24_000);
   });
 
   it("rejects irrecoverable persistent chapter summary JSON instead of accepting empty index data", async () => {
@@ -553,6 +564,8 @@ describe("OpenRouter persistent summary index generation", () => {
     expect(chunkPrompt).toContain("只能记录当前片段中出现的信息");
     expect(chunkPrompt).toContain("不得根据其他片段、常识或猜测补全");
     expect(mergePrompt).toContain("不得遗漏片段缓存中明确出现的重要内容");
+    expect(chunkPrompt).not.toContain("索引原料");
+    expect(mergePrompt).not.toContain("索引原料");
     expect(chunkPrompt).toContain('"缓存版本": "二-Lite"');
     expect(mergePrompt).toContain('"缓存版本": "三-Lite"');
     expect(mergePrompt).toContain("不得沿用片段缓存的“二-Lite”");
@@ -687,6 +700,294 @@ describe("OpenRouter persistent summary index generation", () => {
     expect(prompt).toContain("结构化索引");
     expect(prompt).toContain("第3章短摘要。");
     expect(prompt).not.toContain("章节正文");
+  });
+
+  it("builds compact arc prompts without embedding full chapter structured JSON", () => {
+    const oversizedDetail = "阶段摘要不应该携带完整章节结构。".repeat(260);
+    const structured = chapterIndexPayloadV2({
+      oneLine: "萧炎测试失利。",
+      synopsis: "萧炎在测试中失利，萧薰儿仍然维护他。",
+      detail: oversizedDetail
+    });
+    const messages = buildArcIndexSummaryMessages({
+      arcKey: "auto:001-019",
+      chapterFrom: 1,
+      chapterTo: 19,
+      chapters: Array.from({ length: 19 }, (_, index) => ({
+        chapterId: `chapter_${index + 1}`,
+        title: `第${index + 1}章`,
+        ordinal: index + 1,
+        summaryShort: `第${index + 1}章短摘要。`,
+        summaryLong: oversizedDetail,
+        structured
+      }))
+    });
+
+    const prompt = messages.map((message) => message.content).join("\n");
+
+    expect(prompt).toContain("阶段聚合卡片");
+    expect(prompt).toContain("人物图谱不得为避免截断而省略");
+    expect(prompt).not.toContain("结构化索引：");
+    expect(prompt).not.toContain("场景列表");
+    expect(prompt).not.toContain("空间与行动逻辑");
+    expect(prompt.length).toBeLessThan(45_000);
+  });
+
+  it("builds book prompts without asking the model to output the relationship graph", () => {
+    const messages = buildBookIndexSummaryMessages({
+      arcs: [
+        {
+          arcKey: "auto:001-020",
+          chapterFrom: 1,
+          chapterTo: 20,
+          summary: "第1到20章阶段摘要。",
+          structured: {
+            ...arcIndexPayloadV2(),
+            人物图谱: {
+              版本: "summary-relationship-v1",
+              阶段范围: { 起始章节号: 1, 结束章节号: 20, 起始章节标题: "第1章", 结束章节标题: "第20章" },
+              人物归一: [
+                {
+                  canonicalName: "白嘉轩",
+                  displayName: "白嘉轩",
+                  aliases: ["族长"],
+                  mentionForms: ["主角"],
+                  roleHints: ["族长"],
+                  firstSeenChapter: 1,
+                  lastSeenChapter: 20,
+                  importance: "major",
+                  confidence: 0.9,
+                  evidence: [{ chapterNumber: 1, text: "白嘉轩回到祠堂", reason: "姓名明确出现" }]
+                }
+              ],
+              称谓待确认: [],
+              基础关系: [],
+              剧情关系: [],
+              阶段关系摘要: "白嘉轩是阶段核心人物。",
+              质量提示: []
+            }
+          }
+        }
+      ],
+      coverage: {
+        totalChapterCount: 20,
+        indexedChapterCount: 20,
+        staleChapterIds: [],
+        missingChapterIds: [],
+        skippedTooShortChapterIds: []
+      }
+    });
+    const prompt = messages.map((message) => message.content).join("\n");
+
+    expect(prompt).toContain("不要输出“人物关系图谱”");
+    expect(prompt).toContain("人物关系图谱会由系统根据阶段摘要中的“人物图谱”完整合成");
+    expect(prompt).toContain("人物关系线索");
+    expect(prompt).not.toContain('"人物关系图谱":');
+    expect(prompt).not.toContain('"人物归一":');
+  });
+
+  it("fills authoritative arc coverage fields before validating model JSON", async () => {
+    const partialArcPayload = {
+      ...arcIndexPayloadV2(),
+      阶段信息: {
+        起始章节: 99,
+        覆盖章节: [],
+        覆盖限制: []
+      }
+    };
+    const generator = new OpenRouterChatGenerator({} as never);
+    Object.assign(generator as unknown as { createClient: () => Promise<unknown> }, {
+      createClient: async () => ({
+        chatBudget: getTokenBudget("chat", 16_384),
+        contextLength: 16_384,
+        modelName: "summary/model",
+        client: {
+          streamChatCompletion: async () => ({
+            content: JSON.stringify(partialArcPayload),
+            reasoning: "",
+            truncated: false,
+            toolCalls: []
+          })
+        }
+      })
+    });
+
+    const result = await generator.summarizeArcForIndex({
+      arcKey: "auto:001-020",
+      chapterFrom: 1,
+      chapterTo: 20,
+      chapters: Array.from({ length: 20 }, (_, index) => ({
+        chapterId: `chapter_${index + 1}`,
+        title: `第${index + 1}章`,
+        ordinal: index + 1,
+        summaryShort: `第${index + 1}章短摘要。`,
+        summaryLong: `第${index + 1}章长摘要。`,
+        structured: chapterIndexPayloadV2()
+      }))
+    });
+
+    expect(result.阶段信息).toMatchObject({
+      起始章节: 1,
+      结束章节: 20,
+      覆盖章节: Array.from({ length: 20 }, (_, index) => index + 1)
+    });
+  });
+
+  it("normalizes recoverable arc relationship graph fields before schema validation", async () => {
+    const recoverableArcPayload = {
+      ...arcIndexPayloadV2(),
+      人物图谱: {
+        版本: "summary-relationship-v1",
+        阶段范围: {
+          起始章节号: 1,
+          结束章节号: 20
+        },
+        人物归一: [
+          {
+            canonicalName: "方承业",
+            displayName: "方承业",
+            aliases: ["主角"],
+            mentionForms: ["我", "主角"],
+            roleHints: ["学生"],
+            firstSeenChapter: 1,
+            lastSeenChapter: 20,
+            importance: "major",
+            evidence: [{ text: "主角方承业进入学校。", reason: "姓名和主角身份同场出现" }]
+          }
+        ],
+        称谓待确认: [],
+        基础关系: [
+          {
+            source: "方承业",
+            target: "吕曼华",
+            label: "师生",
+            category: "基础关系",
+            polarity: "neutral",
+            directed: false,
+            stable: true,
+            firstSeenChapter: 3,
+            lastSeenChapter: 12,
+            evidence: [{ text: "体育老师吕曼华叫住方承业。", reason: "教师身份和学生互动明确" }]
+          }
+        ],
+        剧情关系: [],
+        阶段关系摘要: "方承业与吕曼华形成师生关系。",
+        质量提示: []
+      }
+    };
+    const generator = new OpenRouterChatGenerator({} as never);
+    Object.assign(generator as unknown as { createClient: () => Promise<unknown> }, {
+      createClient: async () => ({
+        chatBudget: getTokenBudget("chat", 16_384),
+        contextLength: 16_384,
+        modelName: "summary/model",
+        client: {
+          streamChatCompletion: async () => ({
+            content: JSON.stringify(recoverableArcPayload),
+            reasoning: "",
+            truncated: false,
+            toolCalls: []
+          })
+        }
+      })
+    });
+
+    const result = await generator.summarizeArcForIndex({
+      arcKey: "auto:001-020",
+      chapterFrom: 1,
+      chapterTo: 20,
+      chapters: Array.from({ length: 20 }, (_, index) => ({
+        chapterId: `chapter_${index + 1}`,
+        title: `第${index + 1}章`,
+        ordinal: index + 1,
+        summaryShort: `第${index + 1}章短摘要。`,
+        summaryLong: `第${index + 1}章长摘要。`,
+        structured: chapterIndexPayloadV2()
+      }))
+    });
+
+    expect(result.人物图谱?.人物归一[0]).toMatchObject({
+      canonicalName: "方承业",
+      confidence: 0.6,
+      evidence: [{ chapterNumber: 1 }]
+    });
+    expect(result.人物图谱?.基础关系[0]).toMatchObject({
+      label: "师生",
+      confidence: 0.6,
+      evidence: [{ chapterNumber: 3 }]
+    });
+  });
+
+  it("fills authoritative book coverage fields before validating model JSON", async () => {
+    const partialBookPayload = {
+      ...bookIndexPayloadV2(),
+      全书信息: {
+        覆盖阶段: [],
+        覆盖章节范围: "模型随意写的范围",
+        总章节数: 0,
+        过期章节: [],
+        缺失章节: [],
+        过短跳过章节: [],
+        覆盖限制: []
+      }
+    };
+    const requests: Array<{ readonly responseFormat?: { readonly type: string } }> = [];
+    const generator = new OpenRouterChatGenerator({} as never);
+    Object.assign(generator as unknown as { createClient: () => Promise<unknown> }, {
+      createClient: async () => ({
+        chatBudget: getTokenBudget("chat", 16_384),
+        contextLength: 16_384,
+        modelName: "summary/model",
+        client: {
+          streamChatCompletion: async (request: { readonly responseFormat?: { readonly type: string } }) => {
+            requests.push(request);
+            return {
+              content: JSON.stringify(partialBookPayload),
+              reasoning: "",
+              truncated: false,
+              toolCalls: []
+            };
+          }
+        }
+      })
+    });
+
+    const result = await generator.summarizeBookForIndex({
+      arcs: [
+        {
+          arcKey: "auto:001-020",
+          chapterFrom: 1,
+          chapterTo: 20,
+          summary: "第1到20章摘要。",
+          structured: arcIndexPayloadV2()
+        },
+        {
+          arcKey: "auto:041-048",
+          chapterFrom: 41,
+          chapterTo: 48,
+          summary: "第41到48章摘要。",
+          structured: arcIndexPayloadV2()
+        }
+      ],
+      coverage: {
+        totalChapterCount: 48,
+        indexedChapterCount: 43,
+        staleChapterIds: ["chapter_2"],
+        missingChapterIds: ["chapter_7"],
+        skippedTooShortChapterIds: ["chapter_12"]
+      }
+    });
+
+    expect(result.全书信息).toMatchObject({
+      覆盖阶段: ["第1-20章", "第41-48章"],
+      覆盖章节范围: "第1-48章",
+      总章节数: 48,
+      已索引章节数: 43,
+      过期章节: ["chapter_2"],
+      缺失章节: ["chapter_7"],
+      过短跳过章节: ["chapter_12"]
+    });
+    expect(requests[0].responseFormat).toEqual({ type: "json_object" });
   });
 
   it("streams and parses continuity check JSON", async () => {

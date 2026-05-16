@@ -1,4 +1,9 @@
 import { z } from "zod";
+import {
+  relationshipEntityImportanceSchema,
+  relationshipEntityKindSchema,
+  relationshipGraphGetInputSchema as relationshipGraphGetInputBaseSchema
+} from "./relationship-graph";
 
 const nonEmptyString = z.string().trim().min(1);
 const idSchema = nonEmptyString.max(128);
@@ -119,7 +124,8 @@ export const chapterSaveContentInputSchema = z
     contentJson: tiptapJsonSchema,
     plainText: z.string().max(MAX_CHAPTER_PLAIN_TEXT_CHARS),
     wordCount: z.number().int().nonnegative().optional(),
-    expectedUpdatedAt: nonEmptyString.optional()
+    expectedUpdatedAt: nonEmptyString.optional(),
+    saveSource: z.enum(["manual", "ai_apply", "system"]).optional()
   })
   .strict();
 
@@ -136,6 +142,81 @@ export const chapterCreateSnapshotInputSchema = z
     projectId: optionalIdSchema,
     chapterId: idSchema,
     reason: nonEmptyString.max(120)
+  })
+  .strict();
+
+const localDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+
+export const writingGoalStatusSchema = z.enum(["active", "paused", "completed", "archived"]);
+export const writingGoalTypeSchema = z.enum(["total_words", "added_words"]);
+export const writingWordEventSourceSchema = z.enum(["manual", "ai_apply", "chapter_delete", "system"]);
+
+export const writingGoalOverviewInputSchema = z
+  .object({
+    projectId: idSchema,
+    today: localDateSchema.optional()
+  })
+  .strict();
+
+export const writingGoalCreateInputSchema = z
+  .object({
+    projectId: idSchema,
+    name: nonEmptyString.max(80).optional(),
+    goalType: writingGoalTypeSchema,
+    targetWordCount: z.number().int().min(100).max(50_000_000),
+    startDate: localDateSchema,
+    deadlineDate: localDateSchema,
+    activeWeekdays: z.array(z.number().int().min(0).max(6)).min(1).max(7),
+    restDates: z.array(localDateSchema).max(366).optional()
+  })
+  .strict()
+  .refine((value) => value.deadlineDate >= value.startDate, {
+    message: "deadlineDate must be greater than or equal to startDate",
+    path: ["deadlineDate"]
+  });
+
+export const writingGoalUpdateInputSchema = z
+  .object({
+    projectId: idSchema,
+    goalId: idSchema,
+    patch: z
+      .object({
+        name: nonEmptyString.max(80).optional(),
+        targetWordCount: z.number().int().min(100).max(50_000_000).optional(),
+        deadlineDate: localDateSchema.optional(),
+        activeWeekdays: z.array(z.number().int().min(0).max(6)).min(1).max(7).optional(),
+        restDates: z.array(localDateSchema).max(366).optional()
+      })
+      .strict()
+      .refine((value) => Object.keys(value).length > 0, {
+        message: "patch must include at least one field"
+      })
+  })
+  .strict();
+
+export const writingGoalStatusInputSchema = z
+  .object({
+    projectId: idSchema,
+    goalId: idSchema
+  })
+  .strict();
+
+export const writingGoalListDailyStatsInputSchema = z
+  .object({
+    projectId: idSchema,
+    from: localDateSchema,
+    to: localDateSchema
+  })
+  .strict()
+  .refine((value) => value.to >= value.from, {
+    message: "to must be greater than or equal to from",
+    path: ["to"]
+  });
+
+export const writingGoalDayDetailInputSchema = z
+  .object({
+    projectId: idSchema,
+    date: localDateSchema
   })
   .strict();
 
@@ -188,15 +269,24 @@ export const taskPromptPresetSchema = z
   })
   .strict();
 
+export const chapterCacheBuildOrderSchema = z.enum(["latest_first", "front_to_back"]);
+
+export const cacheSettingsSchema = z
+  .object({
+    chapterCacheBuildOrder: chapterCacheBuildOrderSchema.optional()
+  })
+  .strict();
+
 export const settingsSaveInputSchema = z
   .object({
     editor: editorSettingsSchema.optional(),
     aiProvider: aiProviderSettingsSchema.optional(),
     projectPath: z.string().trim().min(1).optional(),
-    taskPromptPresets: z.array(taskPromptPresetSchema).max(100).optional()
+    taskPromptPresets: z.array(taskPromptPresetSchema).max(100).optional(),
+    cache: cacheSettingsSchema.optional()
   })
   .strict()
-  .refine((value) => Boolean(value.editor ?? value.aiProvider ?? value.projectPath ?? value.taskPromptPresets), {
+  .refine((value) => Boolean(value.editor ?? value.aiProvider ?? value.projectPath ?? value.taskPromptPresets ?? value.cache), {
     message: "at least one settings section is required"
   });
 
@@ -449,6 +539,24 @@ export const exportTxtInputSchema = z
   })
   .strict();
 
+export const exportSelectShareableProjectFilePathInputSchema = z
+  .object({
+    projectId: idSchema,
+    suggestedName: nonEmptyString.max(120).optional()
+  })
+  .strict();
+
+export const exportShareableProjectCopyInputSchema = z
+  .object({
+    projectId: idSchema,
+    filePath: nonEmptyString.max(4096),
+    includeScratchNotes: z.boolean(),
+    includePromptPresets: z.boolean(),
+    includeSummaryCache: z.boolean(),
+    includeWritingGoalsAndStats: z.boolean()
+  })
+  .strict();
+
 export const summaryIndexStatusInputSchema = z
   .object({
     projectId: idSchema
@@ -468,6 +576,72 @@ export const summaryGetChapterCacheInputSchema = summaryIndexStatusInputSchema
   })
   .strict();
 export const summaryClearAndRetryChapterCacheInputSchema = summaryGetChapterCacheInputSchema;
+export const summaryGetArcCacheInputSchema = summaryIndexStatusInputSchema
+  .extend({
+    arcKey: idSchema
+  })
+  .strict();
+export const summaryClearAndRetryArcCacheInputSchema = summaryGetArcCacheInputSchema;
+export const summaryGetBookCacheInputSchema = summaryIndexStatusInputSchema;
+export const summaryClearAndRetryBookCacheInputSchema = summaryGetBookCacheInputSchema;
+
+export const relationshipGraphGetInputSchema = z
+  .object(relationshipGraphGetInputBaseSchema.shape)
+  .strict()
+  .refine((value) => !value.chapterFrom || !value.chapterTo || value.chapterFrom <= value.chapterTo, {
+    message: "chapterFrom must be less than or equal to chapterTo",
+    path: ["chapterFrom"]
+  });
+
+export const relationshipGraphStatusInputSchema = z
+  .object({
+    projectId: idSchema
+  })
+  .strict();
+
+export const relationshipGraphSourceStatusInputSchema = relationshipGraphStatusInputSchema;
+
+export const authorRelationshipGetGraphInputSchema = relationshipGraphGetInputSchema;
+export const authorRelationshipCreateCharacterInputSchema = z
+  .object({
+    projectId: idSchema,
+    name: nonEmptyString.max(80)
+  })
+  .strict();
+export const authorRelationshipUpdateCharacterInputSchema = z
+  .object({
+    projectId: idSchema,
+    characterId: idSchema,
+    name: nonEmptyString.max(80),
+    aliases: z.array(z.string().trim().min(1).max(80)).max(20),
+    entityKind: relationshipEntityKindSchema,
+    importance: relationshipEntityImportanceSchema,
+    roleSummary: z.string().trim().max(300).nullable().optional(),
+    faction: z.string().trim().max(120).nullable().optional(),
+    notes: z.string().trim().max(1000).nullable().optional()
+  })
+  .strict();
+export const authorRelationshipCreateRelationshipInputSchema = z
+  .object({
+    projectId: idSchema,
+    sourceCharacterName: nonEmptyString.max(80),
+    targetCharacterName: nonEmptyString.max(80),
+    sourceToTargetLabel: nonEmptyString.max(120),
+    targetToSourceLabel: z.string().trim().max(120).nullable().optional()
+  })
+  .strict();
+export const authorRelationshipDeleteCharacterInputSchema = z
+  .object({
+    projectId: idSchema,
+    characterId: idSchema
+  })
+  .strict();
+export const authorRelationshipDeleteRelationshipInputSchema = z
+  .object({
+    projectId: idSchema,
+    relationshipId: idSchema
+  })
+  .strict();
 
 export class IpcPayloadValidationError extends Error {
   constructor(readonly issues: z.ZodIssue[]) {

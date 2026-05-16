@@ -2,6 +2,7 @@ import { emptyChapterContent } from "./default-content";
 import { ChapterRepository } from "../db/repositories/chapter-repo";
 import { createId } from "../shared/ids";
 import { countWritingUnits } from "../shared/text";
+import type { WritingGoalRecordDeltaInput } from "../writing-goals/writing-goal-service";
 import type {
   ChapterContent,
   ChapterCreateInput,
@@ -32,8 +33,15 @@ export type SummaryIndexInvalidator = {
   readonly markChapterContentChanged: (input: SummaryIndexInvalidationInput) => void;
 };
 
+export type WritingGoalDeltaRecorder = {
+  readonly recordWordDelta: (input: WritingGoalRecordDeltaInput) => void;
+};
+
+type WritingGoalDeltaRecorderResolver = (projectId: string) => WritingGoalDeltaRecorder;
+
 type ChapterServiceOptions = {
   readonly summaryIndexInvalidator?: SummaryIndexInvalidator;
+  readonly writingGoalRecorder?: WritingGoalDeltaRecorder | WritingGoalDeltaRecorderResolver;
 };
 
 function nowIso(): string {
@@ -73,10 +81,17 @@ function assertChapterBelongsToProject(content: ChapterContent, projectId?: stri
 export class ChapterService {
   private readonly resolveChapterRepo: ChapterRepositoryResolver;
   private readonly summaryIndexInvalidator?: SummaryIndexInvalidator;
+  private readonly resolveWritingGoalRecorder?: WritingGoalDeltaRecorderResolver;
 
   constructor(chapterRepo: ChapterRepository | ChapterRepositoryResolver, options: ChapterServiceOptions = {}) {
     this.resolveChapterRepo = typeof chapterRepo === "function" ? chapterRepo : () => chapterRepo;
     this.summaryIndexInvalidator = options.summaryIndexInvalidator;
+    const writingGoalRecorder = options.writingGoalRecorder;
+    if (typeof writingGoalRecorder === "function") {
+      this.resolveWritingGoalRecorder = writingGoalRecorder as WritingGoalDeltaRecorderResolver;
+    } else if (writingGoalRecorder) {
+      this.resolveWritingGoalRecorder = () => writingGoalRecorder;
+    }
   }
 
   listChapters(input: ChapterListInput): ChapterSummary[] {
@@ -123,7 +138,20 @@ export class ChapterService {
       throw new Error("Chapter not found");
     }
     assertChapterBelongsToProject(content, input.projectId);
+    const previousProjectWordCount = chapterRepo.getProjectWordCount(content.projectId);
     chapterRepo.delete(input.chapterId);
+    this.recordWritingGoalDelta({
+      projectId: content.projectId,
+      chapterId: null,
+      chapterTitle: content.title,
+      chapterSortOrder: content.sortOrder,
+      previousWordCount: content.wordCount,
+      nextWordCount: 0,
+      previousProjectWordCount,
+      nextProjectWordCount: previousProjectWordCount - content.wordCount,
+      source: "chapter_delete",
+      now: nowIso()
+    });
   }
 
   getContent(input: ChapterGetContentInput): ChapterContent {
@@ -177,6 +205,22 @@ export class ChapterService {
       }
     }
 
+    if (wordCountDelta !== 0) {
+      const nextProjectWordCount = chapterRepo.getProjectWordCount(saved.projectId);
+      this.recordWritingGoalDelta({
+        projectId: saved.projectId,
+        chapterId: saved.id,
+        chapterTitle: saved.title,
+        chapterSortOrder: saved.sortOrder,
+        previousWordCount: previousContent.wordCount,
+        nextWordCount: saved.wordCount,
+        previousProjectWordCount: nextProjectWordCount - wordCountDelta,
+        nextProjectWordCount,
+        source: input.saveSource ?? "manual",
+        now: updatedAt
+      });
+    }
+
     return saved;
   }
 
@@ -200,5 +244,13 @@ export class ChapterService {
       reason: input.reason,
       createdAt: nowIso()
     });
+  }
+
+  private recordWritingGoalDelta(input: WritingGoalRecordDeltaInput): void {
+    try {
+      this.resolveWritingGoalRecorder?.(input.projectId).recordWordDelta(input);
+    } catch (reason) {
+      console.warn("Failed to record writing goal word delta", reason);
+    }
   }
 }

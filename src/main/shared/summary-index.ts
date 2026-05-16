@@ -3,7 +3,12 @@ import { z } from "zod";
 
 export const summaryStatusSchema = z.enum(["ready", "stale", "building", "failed", "skipped_too_short"]);
 export const summaryJobStatusSchema = z.enum(["queued", "running", "completed", "failed", "cancelled", "skipped"]);
-export const summaryJobTypeSchema = z.enum(["chapter_summary", "arc_summary", "book_summary", "rebuild_project_index"]);
+export const summaryJobTypeSchema = z.enum([
+  "chapter_summary",
+  "arc_summary",
+  "book_summary",
+  "rebuild_project_index"
+]);
 
 function stringifyStructuredValue(value: unknown): string {
   if (value === null || value === undefined) {
@@ -507,7 +512,7 @@ const characterKnowledgeIndexSchema = z
   })
   .strip();
 
-const relationshipIndexSchema = z
+const relationDynamicSchema = z
   .object({
     关系双方: arrayOf(nonEmptyStringSchema),
     关系类型: nonEmptyStringSchema,
@@ -643,9 +648,14 @@ const unresolvedQuestionIndexSchema = z
   .strip();
 
 const generatedEnglishPattern = /[A-Za-z]/u;
+const machineReadableGraphContainerKeys = new Set(["人物图谱", "人物关系图谱"]);
 
 function addEnglishKeyIssues(value: unknown, ctx: z.RefinementCtx, path: readonly (string | number)[] = []): void {
   if (typeof value === "string") {
+    return;
+  }
+
+  if (path.some((segment) => typeof segment === "string" && machineReadableGraphContainerKeys.has(segment))) {
     return;
   }
 
@@ -706,7 +716,7 @@ export const chapterAiSummaryPayloadV2Schema = z
     关键事件: arrayOf(keyEventIndexSchema),
     人物状态: arrayOf(characterStateIndexSchema),
     人物认知边界: arrayOf(characterKnowledgeIndexSchema),
-    关系动态: arrayOf(relationshipIndexSchema),
+    关系动态: arrayOf(relationDynamicSchema),
     时间与地点: timePlaceIndexSchema,
     空间与行动逻辑: arrayOf(spatialActionIndexSchema),
     道具状态: arrayOf(itemStateIndexSchema),
@@ -798,6 +808,110 @@ const foreshadowingLiteSchema = z
   })
   .strip();
 
+const indexMaterialConfidenceSchema = z
+  .preprocess((value) => {
+    if (value === null || value === undefined) {
+      return undefined;
+    }
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value > 1 && value <= 100 ? value / 100 : value;
+    }
+    const text = normalizeTextValue(value);
+    if (!text) {
+      return undefined;
+    }
+    if (text === "高") {
+      return 0.9;
+    }
+    if (text === "中") {
+      return 0.7;
+    }
+    if (text === "低") {
+      return 0.4;
+    }
+    const parsed = Number.parseFloat(text.replace("%", ""));
+    if (Number.isFinite(parsed)) {
+      return text.includes("%") || parsed > 1 ? parsed / 100 : parsed;
+    }
+    return value;
+  }, z.number().min(0).max(1).optional());
+
+const indexMaterialSceneNodeSchema = z
+  .object({
+    序号: positiveIntegerSchema.optional(),
+    标题: nonEmptyStringSchema.optional(),
+    类型: nonEmptyStringSchema.optional(),
+    出场人物: arrayOf(nonEmptyStringSchema).optional(),
+    地点: nonEmptyStringSchema.optional(),
+    场景目标: nonEmptyStringSchema.optional(),
+    核心冲突: nonEmptyStringSchema.optional(),
+    结果: nonEmptyStringSchema.optional(),
+    情绪变化: nonEmptyStringSchema.optional(),
+    功能: nonEmptyStringSchema.optional(),
+    证据短句: evidenceQuotesSchema.optional()
+  })
+  .passthrough();
+
+const indexMaterialTimelineEventSchema = z
+  .object({
+    事件: nonEmptyStringSchema.optional(),
+    叙事顺序: positiveIntegerSchema.optional(),
+    故事内时间: nonEmptyStringSchema.optional(),
+    相对时间锚点: nonEmptyStringSchema.optional(),
+    参与人物: arrayOf(nonEmptyStringSchema).optional(),
+    地点: nonEmptyStringSchema.optional(),
+    因果前置: arrayOf(nonEmptyStringSchema).optional(),
+    结果影响: arrayOf(nonEmptyStringSchema).optional(),
+    置信度: indexMaterialConfidenceSchema,
+    证据短句: evidenceQuotesSchema.optional()
+  })
+  .passthrough();
+
+const indexMaterialEntitySchema = z
+  .object({
+    名称: nonEmptyStringSchema.optional(),
+    别名: arrayOf(nonEmptyStringSchema).optional(),
+    类型: nonEmptyStringSchema.optional(),
+    本章状态: nonEmptyStringSchema.optional(),
+    新增信息: arrayOf(nonEmptyStringSchema).optional(),
+    关联人物: arrayOf(nonEmptyStringSchema).optional(),
+    证据短句: evidenceQuotesSchema.optional()
+  })
+  .passthrough();
+
+const indexMaterialAtomicFactSchema = z
+  .object({
+    主体: nonEmptyStringSchema.optional(),
+    类型: nonEmptyStringSchema.optional(),
+    属性: nonEmptyStringSchema.optional(),
+    值: nonEmptyStringSchema.optional(),
+    生效范围: nonEmptyStringSchema.optional(),
+    确定性: nonEmptyStringSchema.optional(),
+    证据短句: evidenceQuotesSchema.optional()
+  })
+  .passthrough();
+
+const indexMaterialStructureMarkerSchema = z
+  .object({
+    章节位置: nonEmptyStringSchema.optional(),
+    叙事功能: arrayOf(nonEmptyStringSchema).optional(),
+    节奏: nonEmptyStringSchema.optional(),
+    情绪走向: nonEmptyStringSchema.optional(),
+    视角: nonEmptyStringSchema.optional(),
+    备注: nonEmptyStringSchema.optional()
+  })
+  .passthrough();
+
+export const chapterIndexMaterialSchema = z
+  .object({
+    场景节点: arrayOf(indexMaterialSceneNodeSchema).optional(),
+    时间线事件: arrayOf(indexMaterialTimelineEventSchema).optional(),
+    通用实体: arrayOf(indexMaterialEntitySchema).optional(),
+    原子事实: arrayOf(indexMaterialAtomicFactSchema).optional(),
+    结构标记: indexMaterialStructureMarkerSchema.optional()
+  })
+  .passthrough();
+
 export const chapterAiSummaryPayloadV3LiteSchema = z
   .object({
     章节信息: z
@@ -827,6 +941,7 @@ export const chapterAiSummaryPayloadV3LiteSchema = z
     人物状态: arrayOf(characterStateLiteSchema),
     人物认知边界: arrayOf(characterKnowledgeLiteSchema),
     关系变化: arrayOf(nonEmptyStringSchema),
+    索引原料: chapterIndexMaterialSchema.optional(),
     时间地点: timePlaceLiteSchema,
     道具设定变化: arrayOf(nonEmptyStringSchema),
     伏笔与线索: arrayOf(foreshadowingLiteSchema),
@@ -874,7 +989,7 @@ const chapterAiSummaryChunkPayloadV1Schema = z
     关键事件: arrayOf(keyEventIndexSchema),
     人物状态: arrayOf(characterStateIndexSchema),
     人物认知边界: arrayOf(characterKnowledgeIndexSchema),
-    关系动态: arrayOf(relationshipIndexSchema),
+    关系动态: arrayOf(relationDynamicSchema),
     时间与地点: timePlaceIndexSchema,
     空间与行动逻辑: arrayOf(spatialActionIndexSchema),
     道具状态: arrayOf(itemStateIndexSchema),
@@ -920,6 +1035,7 @@ const chapterAiSummaryChunkPayloadV2LiteSchema = z
     人物状态: arrayOf(characterStateLiteSchema),
     人物认知边界: arrayOf(characterKnowledgeLiteSchema),
     关系变化: arrayOf(nonEmptyStringSchema),
+    索引原料: chapterIndexMaterialSchema.optional(),
     时间地点: timePlaceLiteSchema,
     道具设定变化: arrayOf(nonEmptyStringSchema),
     伏笔与线索: arrayOf(foreshadowingLiteSchema),
@@ -937,6 +1053,185 @@ export const chapterAiSummaryChunkPayloadSchema = z.preprocess(
   normalizeChapterChunkVersionDrift,
   z.union([chapterAiSummaryChunkPayloadV2LiteSchema, chapterAiSummaryChunkPayloadV1Schema])
 );
+
+const graphConfidenceSchema = z.number().min(0).max(1);
+const graphImportanceSchema = z.enum(["major", "supporting", "minor", "unknown"]);
+const graphPolaritySchema = z.enum(["positive", "negative", "neutral", "mixed", "unknown"]);
+const graphCategorySchema = z.enum(["基础关系", "剧情关系", "阵营关系", "情感关系", "冲突关系", "社会关系", "其他"]);
+
+const graphEvidenceSchema = z
+  .object({
+    chapterNumber: positiveIntegerSchema,
+    text: textSchema,
+    reason: textSchema
+  })
+  .strip();
+
+export const arcAmbiguousReferenceSchema = z
+  .object({
+    mention: nonEmptyStringSchema,
+    candidates: arrayOf(nonEmptyStringSchema),
+    chapterNumber: positiveIntegerSchema,
+    reason: nonEmptyStringSchema,
+    recommendedAction: z.enum(["keep_separate", "needs_later_context", "manual_review"])
+  })
+  .strip();
+
+export const arcGraphQualityIssueSchema = z
+  .object({
+    level: z.enum(["info", "warning", "error"]).default("warning"),
+    message: nonEmptyStringSchema,
+    chapterNumber: positiveIntegerSchema.optional()
+  })
+  .strip();
+
+export const arcCharacterIdentitySchema = z
+  .object({
+    canonicalName: nonEmptyStringSchema,
+    displayName: nonEmptyStringSchema,
+    aliases: arrayOf(nonEmptyStringSchema),
+    mentionForms: arrayOf(nonEmptyStringSchema),
+    roleHints: arrayOf(nonEmptyStringSchema),
+    firstSeenChapter: positiveIntegerSchema,
+    lastSeenChapter: positiveIntegerSchema,
+    importance: graphImportanceSchema,
+    confidence: graphConfidenceSchema,
+    evidence: z.array(graphEvidenceSchema).max(5)
+  })
+  .strip();
+
+export const arcCharacterRelationSchema = z
+  .object({
+    source: nonEmptyStringSchema,
+    target: nonEmptyStringSchema,
+    label: nonEmptyStringSchema,
+    category: graphCategorySchema,
+    polarity: graphPolaritySchema,
+    directed: z.boolean(),
+    stable: z.boolean(),
+    firstSeenChapter: positiveIntegerSchema,
+    lastSeenChapter: positiveIntegerSchema,
+    confidence: graphConfidenceSchema,
+    evidence: z.array(graphEvidenceSchema).max(5)
+  })
+  .strip();
+
+export const arcCharacterGraphSchema = z
+  .object({
+    版本: z.literal("summary-relationship-v1"),
+    阶段范围: z
+      .object({
+        起始章节号: positiveIntegerSchema,
+        结束章节号: positiveIntegerSchema,
+        起始章节标题: textSchema.optional(),
+        结束章节标题: textSchema.optional()
+      })
+      .strip(),
+    人物归一: z.array(arcCharacterIdentitySchema),
+    称谓待确认: z.array(arcAmbiguousReferenceSchema).default([]),
+    基础关系: z.array(arcCharacterRelationSchema),
+    剧情关系: z.array(arcCharacterRelationSchema),
+    阶段关系摘要: textSchema,
+    质量提示: z.array(arcGraphQualityIssueSchema).default([])
+  })
+  .strip();
+
+export const bookGraphCharacterSchema = z
+  .object({
+    id: nonEmptyStringSchema,
+    name: nonEmptyStringSchema,
+    aliases: arrayOf(nonEmptyStringSchema),
+    mentionForms: arrayOf(nonEmptyStringSchema),
+    roleHints: arrayOf(nonEmptyStringSchema),
+    importance: graphImportanceSchema,
+    firstSeenChapter: positiveIntegerSchema,
+    lastSeenChapter: positiveIntegerSchema,
+    chapterActivity: z.array(
+      z
+        .object({
+          chapterNumber: positiveIntegerSchema,
+          weight: z.number().min(0),
+          relationEventCount: nonnegativeIntegerSchema
+        })
+        .strip()
+    ),
+    confidence: graphConfidenceSchema,
+    sourceArcRanges: z.array(
+      z
+        .object({
+          start: positiveIntegerSchema,
+          end: positiveIntegerSchema
+        })
+        .strip()
+    )
+  })
+  .strip();
+
+export const bookGraphRelationSchema = z
+  .object({
+    id: nonEmptyStringSchema,
+    sourceId: nonEmptyStringSchema,
+    targetId: nonEmptyStringSchema,
+    primaryLabel: nonEmptyStringSchema,
+    category: graphCategorySchema,
+    polarity: graphPolaritySchema,
+    directed: z.boolean(),
+    stable: z.boolean(),
+    labels: z.array(
+      z
+        .object({
+          label: nonEmptyStringSchema,
+          firstSeenChapter: positiveIntegerSchema,
+          lastSeenChapter: positiveIntegerSchema,
+          confidence: graphConfidenceSchema
+        })
+        .strip()
+    ),
+    evidence: z.array(
+      z
+        .object({
+          chapterNumber: positiveIntegerSchema,
+          arcRange: nonEmptyStringSchema,
+          text: textSchema,
+          reason: textSchema
+        })
+        .strip()
+    )
+  })
+  .strip();
+
+export const bookGraphArcIndexSchema = z
+  .object({
+    arcKey: nonEmptyStringSchema,
+    startChapter: positiveIntegerSchema,
+    endChapter: positiveIntegerSchema,
+    characterIds: arrayOf(nonEmptyStringSchema),
+    relationIds: arrayOf(nonEmptyStringSchema)
+  })
+  .strip();
+
+export const bookRelationshipGraphSchema = z
+  .object({
+    版本: z.literal("summary-relationship-v1"),
+    生成来源: z
+      .object({
+        arcSummaryIds: arrayOf(nonEmptyStringSchema),
+        chapterRange: z
+          .object({
+            start: positiveIntegerSchema,
+            end: positiveIntegerSchema
+          })
+          .strip()
+      })
+      .strip(),
+    人物: z.array(bookGraphCharacterSchema),
+    关系: z.array(bookGraphRelationSchema),
+    阶段索引: z.array(bookGraphArcIndexSchema),
+    未确认称谓: z.array(arcAmbiguousReferenceSchema).default([]),
+    图谱摘要: textSchema,
+    质量提示: z.array(arcGraphQualityIssueSchema).default([])
+  })
+  .strip();
 
 export const arcAiSummaryPayloadSchema = z
   .object({
@@ -972,7 +1267,8 @@ export const arcAiSummaryPayloadSchema = z
     连续性风险: arrayOf(nonEmptyStringSchema),
     可核对事实: arrayOf(nonEmptyStringSchema),
     不可丢失信息: arrayOf(nonEmptyStringSchema),
-    适合回答的问题: arrayOf(nonEmptyStringSchema)
+    适合回答的问题: arrayOf(nonEmptyStringSchema),
+    人物图谱: arcCharacterGraphSchema.optional()
   })
   .strip()
   .superRefine((payload, ctx) => {
@@ -1010,7 +1306,8 @@ export const bookAiSummaryPayloadSchema = z
     连续性风险: arrayOf(nonEmptyStringSchema),
     可核对事实: arrayOf(nonEmptyStringSchema),
     不可丢失信息: arrayOf(nonEmptyStringSchema),
-    适合回答的问题: arrayOf(nonEmptyStringSchema)
+    适合回答的问题: arrayOf(nonEmptyStringSchema),
+    人物关系图谱: bookRelationshipGraphSchema.optional()
   })
   .strip()
   .superRefine((payload, ctx) => {

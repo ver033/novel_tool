@@ -48,6 +48,16 @@ export type ArcIndexSummaryInput = {
   readonly arcKey: string;
   readonly chapterFrom: number;
   readonly chapterTo: number;
+  readonly priorCharacterLedger?: readonly {
+    readonly canonicalName: string;
+    readonly aliases: readonly string[];
+    readonly mentionForms: readonly string[];
+    readonly roleHints: readonly string[];
+    readonly firstSeenChapter: number;
+    readonly lastSeenChapter: number;
+    readonly importance: "major" | "supporting" | "minor" | "unknown";
+  }[];
+  readonly priorCharacterLedgerHash?: string;
   readonly chapters: readonly ArcIndexSummaryChapter[];
 };
 
@@ -137,9 +147,203 @@ const ARC_JSON_CONTRACT = [
   '  "连续性风险": ["连续性风险"],',
   '  "可核对事实": ["可核对事实"],',
   '  "不可丢失信息": ["不可丢失信息"],',
-  '  "适合回答的问题": ["适合回答的问题"]',
+  '  "适合回答的问题": ["适合回答的问题"],',
+  '  "人物图谱": {"版本": "summary-relationship-v1", "阶段范围": {"起始章节号": 1, "结束章节号": 10, "起始章节标题": "标题", "结束章节标题": "标题"}, "人物归一": [{"canonicalName": "人物姓名", "displayName": "人物姓名", "aliases": [], "mentionForms": [], "roleHints": [], "firstSeenChapter": 1, "lastSeenChapter": 10, "importance": "major", "confidence": 0.8, "evidence": [{"chapterNumber": 1, "text": "证据短句", "reason": "判断理由"}]}], "称谓待确认": [{"mention": "母亲/主角/我等无法确认指向的称谓", "candidates": [], "chapterNumber": 1, "reason": "无法确认原因", "recommendedAction": "needs_later_context"}], "基础关系": [{"source": "人物A", "target": "人物B", "label": "母子/师生/同门等正文决定的稳定关系", "category": "基础关系", "polarity": "neutral", "directed": false, "stable": true, "firstSeenChapter": 1, "lastSeenChapter": 10, "confidence": 0.8, "evidence": [{"chapterNumber": 1, "text": "证据短句", "reason": "判断理由"}]}], "剧情关系": [{"source": "人物A", "target": "人物B", "label": "保护/背叛/竞争等剧情关系", "category": "剧情关系", "polarity": "mixed", "directed": false, "stable": false, "firstSeenChapter": 1, "lastSeenChapter": 10, "confidence": 0.8, "evidence": [{"chapterNumber": 1, "text": "证据短句", "reason": "判断理由"}]}], "阶段关系摘要": "阶段内人物与关系变化摘要", "质量提示": []}',
   "}"
 ].join("\n");
+
+const ARC_SUMMARY_LONG_LIMIT = 420;
+const ARC_STRUCTURED_TEXT_LIMIT = 120;
+const ARC_STRUCTURED_LIST_LIMIT = 4;
+const ARC_STRUCTURED_RECORD_LIMIT = 5;
+const EMPTY_ARC_TEXT_VALUES = new Set(["", "无", "暂无", "没有", "未明确", "不详", "未知", "null", "undefined"]);
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function stringifyArcPromptValue(value: unknown): string {
+  if (value === null || value === undefined) {
+    return "";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => stringifyArcPromptValue(item)).filter(Boolean).join("；");
+  }
+  if (isPlainRecord(value)) {
+    return Object.entries(value)
+      .map(([key, item]) => {
+        const text = stringifyArcPromptValue(item);
+        return text ? `${key}：${text}` : "";
+      })
+      .filter(Boolean)
+      .join("；");
+  }
+  return String(value);
+}
+
+function compactArcText(value: unknown, limit = ARC_STRUCTURED_TEXT_LIMIT): string {
+  const text = stringifyArcPromptValue(value).replace(/\s+/g, " ").trim();
+  if (!text || EMPTY_ARC_TEXT_VALUES.has(text)) {
+    return "";
+  }
+  return text.length > limit ? `${text.slice(0, Math.max(0, limit - 3))}...` : text;
+}
+
+function compactArcStringList(value: unknown, limit = ARC_STRUCTURED_LIST_LIMIT, textLimit = ARC_STRUCTURED_TEXT_LIMIT): string[] {
+  const values = Array.isArray(value) ? value : value === null || value === undefined ? [] : [value];
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const item of values) {
+    const text = compactArcText(item, textLimit);
+    if (!text || seen.has(text)) {
+      continue;
+    }
+    seen.add(text);
+    result.push(text);
+    if (result.length >= limit) {
+      break;
+    }
+  }
+  return result;
+}
+
+function compactArcRecord(value: unknown, keys: readonly string[], textLimit = ARC_STRUCTURED_TEXT_LIMIT): Record<string, unknown> | null {
+  if (!isPlainRecord(value)) {
+    return null;
+  }
+  const result: Record<string, unknown> = {};
+  for (const key of keys) {
+    const raw = value[key];
+    if (raw === undefined || raw === null) {
+      continue;
+    }
+    const compacted = Array.isArray(raw) ? compactArcStringList(raw, ARC_STRUCTURED_LIST_LIMIT, textLimit) : compactArcText(raw, textLimit);
+    if (Array.isArray(compacted) ? compacted.length > 0 : Boolean(compacted)) {
+      result[key] = compacted;
+    }
+  }
+  return Object.keys(result).length > 0 ? result : null;
+}
+
+function compactArcRecordList(value: unknown, keys: readonly string[], limit = ARC_STRUCTURED_RECORD_LIMIT, textLimit = ARC_STRUCTURED_TEXT_LIMIT): unknown[] {
+  if (!Array.isArray(value)) {
+    const record = compactArcRecord(value, keys, textLimit);
+    return record ? [record] : compactArcStringList(value, limit, textLimit);
+  }
+  const records: unknown[] = [];
+  for (const item of value) {
+    const compacted = compactArcRecord(item, keys, textLimit);
+    if (compacted) {
+      records.push(compacted);
+    } else {
+      const text = compactArcText(item, textLimit);
+      if (text) {
+        records.push(text);
+      }
+    }
+    if (records.length >= limit) {
+      break;
+    }
+  }
+  return records;
+}
+
+function setArcCardValue(target: Record<string, unknown>, key: string, value: unknown): void {
+  if (Array.isArray(value)) {
+    if (value.length > 0) {
+      target[key] = value;
+    }
+    return;
+  }
+  if (isPlainRecord(value)) {
+    if (Object.keys(value).length > 0) {
+      target[key] = value;
+    }
+    return;
+  }
+  if (typeof value === "string" && value) {
+    target[key] = value;
+  }
+}
+
+function compactArcRelationshipEvents(structured: Record<string, unknown>): unknown[] {
+  const source = structured.关系变化 ?? structured.关系动态;
+  return compactArcRecordList(
+    source,
+    ["主体", "客体", "主维度", "基础关系", "剧情关系", "关系双方", "关系类型", "本章变化", "变化原因", "是否需要后文承接"],
+    6,
+    100
+  );
+}
+
+function compactChapterForArcPrompt(chapter: ArcIndexSummaryChapter): Record<string, unknown> {
+  const structured = chapter.structured as unknown as Record<string, unknown>;
+  const purpose = isPlainRecord(structured.章节作用) ? structured.章节作用 : isPlainRecord(structured.本章功能) ? structured.本章功能 : null;
+  const card: Record<string, unknown> = {
+    章节: `第${chapter.ordinal}章 ${chapter.title}`,
+    摘要: {
+      短摘要: compactArcText(chapter.summaryShort || structured.短摘要 || structured.一句话摘要, 160),
+      长摘要: compactArcText(chapter.summaryLong || structured.详细梗概, ARC_SUMMARY_LONG_LIMIT)
+    }
+  };
+  setArcCardValue(card, "章节作用", compactArcRecord(purpose, ["剧情作用", "人物作用", "后文作用", "剧情功能", "情绪功能", "结构作用", "对后文的作用"], 100));
+  setArcCardValue(card, "关键事件", compactArcRecordList(structured.关键事件, ["事件", "涉及人物", "时间地点", "结果", "事件结果", "后续影响"], 4, 110));
+  setArcCardValue(card, "人物状态", compactArcRecordList(structured.人物状态, ["人物", "本章变化", "本章结束状态", "行动", "目标或动机", "动机", "目标", "新获得信息", "仍不知道的信息", "关系变化"], 5, 100));
+  setArcCardValue(card, "人物认知", compactArcRecordList(structured.人物认知边界, ["人物", "认知变化", "已经知道", "新得知", "仍不知道", "尚不知道", "误解或风险", "误以为"], 4, 100));
+  setArcCardValue(card, "关系变化", compactArcRelationshipEvents(structured));
+  setArcCardValue(card, "伏笔线索", compactArcRecordList(structured.伏笔与线索, ["线索", "类型", "状态", "本章状态", "指向或意义", "可能指向"], 4, 100));
+  setArcCardValue(card, "道具设定", compactArcRecordList(structured.道具设定变化 ?? structured.道具状态 ?? structured.设定与规则, ["道具", "设定项", "本章信息", "状态变化", "剧情作用", "是否影响后文"], 5, 100));
+  setArcCardValue(card, "时间地点", compactArcRecord(structured.时间地点 ?? structured.时间与地点, ["本章时间", "时间跨度", "主要地点", "时间线索", "地点移动", "可能风险", "可能的时间线风险"], 100));
+  setArcCardValue(card, "因果链", compactArcRecordList(structured.因果链, ["原因", "结果", "中间动作", "是否充分", "缺口说明"], 4, 100));
+  setArcCardValue(card, "连续性风险", compactArcStringList(structured.连续性风险, 5, 120));
+  setArcCardValue(card, "未解决问题", compactArcStringList(structured.未解决问题, 5, 120));
+  setArcCardValue(card, "可核对事实", compactArcStringList(structured.可核对事实, 6, 120));
+  setArcCardValue(card, "不可丢失信息", compactArcStringList(structured.不可丢失信息, 6, 120));
+  setArcCardValue(card, "不确定项", compactArcStringList(structured.不确定项, 4, 120));
+  return card;
+}
+
+function compactArcForBookPrompt(arc: BookIndexSummaryArc): Record<string, unknown> {
+  const structured = arc.structured as unknown as Record<string, unknown>;
+  const graph = isPlainRecord(structured.人物图谱) ? structured.人物图谱 : null;
+  const card: Record<string, unknown> = {
+    阶段键: arc.arcKey,
+    章节范围: `第${arc.chapterFrom}-${arc.chapterTo}章`,
+    阶段摘要: compactArcText(arc.summary, 360)
+  };
+  setArcCardValue(card, "阶段一句话摘要", compactArcText(structured.阶段一句话摘要, 160));
+  setArcCardValue(card, "阶段详细梗概", compactArcText(structured.阶段详细梗概, 560));
+  setArcCardValue(card, "主线推进", compactArcStringList(structured.主线推进, 8, 140));
+  setArcCardValue(card, "人物线变化", compactArcStringList(structured.人物线变化, 8, 140));
+  setArcCardValue(card, "人物认知变化", compactArcStringList(structured.人物认知变化, 6, 140));
+  setArcCardValue(card, "关系线变化", compactArcStringList(structured.关系线变化, 8, 140));
+  setArcCardValue(card, "伏笔线变化", compactArcStringList(structured.伏笔线变化, 8, 140));
+  setArcCardValue(card, "道具线变化", compactArcStringList(structured.道具线变化, 6, 140));
+  setArcCardValue(card, "设定变化", compactArcStringList(structured.设定变化, 6, 140));
+  setArcCardValue(card, "时间地点推进", compactArcStringList(structured.时间地点推进, 6, 140));
+  setArcCardValue(card, "重要因果链", compactArcStringList(structured.重要因果链, 8, 160));
+  setArcCardValue(card, "未解决问题", compactArcStringList(structured.未解决问题, 8, 140));
+  setArcCardValue(card, "连续性风险", compactArcStringList(structured.连续性风险, 8, 140));
+  setArcCardValue(card, "可核对事实", compactArcStringList(structured.可核对事实, 10, 140));
+  setArcCardValue(card, "不可丢失信息", compactArcStringList(structured.不可丢失信息, 10, 140));
+  if (graph) {
+    setArcCardValue(card, "人物关系线索", {
+      人物数量: Array.isArray(graph.人物归一) ? graph.人物归一.length : 0,
+      基础关系数量: Array.isArray(graph.基础关系) ? graph.基础关系.length : 0,
+      剧情关系数量: Array.isArray(graph.剧情关系) ? graph.剧情关系.length : 0,
+      阶段关系摘要: compactArcText(graph.阶段关系摘要, 240),
+      称谓待确认: compactArcRecordList(graph.称谓待确认, ["mention", "candidates", "chapterNumber", "reason", "recommendedAction"], 8, 120),
+      质量提示: compactArcRecordList(graph.质量提示, ["level", "message", "chapterNumber"], 5, 120)
+    });
+  }
+  return card;
+}
 
 const BOOK_JSON_CONTRACT = [
   "{",
@@ -205,6 +409,7 @@ export function buildChapterIndexSummaryMessages(input: ChapterIndexSummaryInput
         "6. 控制输出规模：场景推进最多 5 项；关键事件、人物状态、人物认知边界、伏笔与线索、可核对事实、不可丢失信息各最多 8 项；连续性风险最多 6 项；每项证据短句最多 1 条。",
         "7. 8000 字章节的 JSON 总长度应尽量控制在 15000 个中文字符以内；不要输出完整场景表，不要机械重复同一事实。",
         "8. 优先保留影响后文连续性、人物状态、人物认知、伏笔、道具状态、设定规则和因果链的高价值信息。",
+        "9. 章节缓存只记录章节事实，不生成独立人物关系图谱；人物关系图谱会在阶段摘要和全书摘要阶段根据这些事实统一归纳。",
         "章节正文：",
         input.plainText.trim() || "（本章暂无正文）"
       ].join("\n")
@@ -239,6 +444,7 @@ export function buildChapterChunkIndexSummaryMessages(input: ChapterChunkIndexSu
         CHAPTER_CHUNK_JSON_CONTRACT,
         "控制输出规模：片段关键事件、人物状态、人物认知边界、可核对事实、不可丢失信息各最多 5 项；伏笔与线索、连续性风险各最多 4 项；每项证据短句最多 1 条。不要为了填字段重复同一事实。",
         "必须把当前片段内明确出现的空间移动、行动起止、限制条件、否定事实和不能成立的信息压缩进“道具设定变化”“可核对事实”或“连续性风险”；没有原文依据时用空数组，不要照抄示例占位。",
+        "片段缓存只记录片段事实，不生成独立人物关系图谱；称呼、身份、亲属关系等人物线索应写入人物状态、关系变化或可核对事实，供阶段摘要统一归纳。",
         "片段正文：",
         input.plainText.trim() || "（本片段暂无正文）"
       ].join("\n")
@@ -257,6 +463,7 @@ export function buildChapterChunkMergeSummaryMessages(input: ChapterChunkMergeSu
         "如果多个片段出现同一人物、道具、伏笔或关系，必须合并为连续变化，而不是重复罗列。",
         "不得遗漏片段缓存中明确出现的重要内容。",
         "必须保留场景顺序、人物状态变化、人物认知边界、伏笔、道具设定变化、可核对事实、连续性风险和未解决问题。",
+        "同一人物、道具、伏笔、称谓和关系变化要合并去重；如果片段里出现称呼、亲属关系或身份关系，应保留在人物状态、关系变化或可核对事实里。",
         "合并时要提炼，不要机械拼接全部片段缓存；同一人物、道具、伏笔、关系和事实必须合并去重。",
         "控制输出规模：场景推进最多 6 项；关键事件、人物状态、人物认知边界、伏笔与线索、可核对事实、不可丢失信息各最多 10 项；连续性风险最多 8 项；每项证据短句最多 1 条。",
         "合并输出是完整章节缓存，不是片段缓存；“章节信息.缓存版本”必须是“三-Lite”，不得沿用片段缓存的“二-Lite”。",
@@ -288,6 +495,8 @@ export function buildChapterChunkMergeSummaryMessages(input: ChapterChunkMergeSu
 }
 
 export function buildArcIndexSummaryMessages(input: ArcIndexSummaryInput): OpenRouterMessage[] {
+  const priorCharacterLedger = input.priorCharacterLedger ?? [];
+  const priorCharacterLedgerHash = input.priorCharacterLedgerHash ?? "none";
   return [
     {
       role: "system",
@@ -296,7 +505,16 @@ export function buildArcIndexSummaryMessages(input: ArcIndexSummaryInput): OpenR
         "任务是把连续章节的长期索引缓存聚合成中文阶段缓存。",
         "按时间和因果顺序整理；不加入原缓存没有的信息。",
         "必须保留主线推进、人物线变化、人物认知变化、关系线变化、伏笔线变化、道具线变化、设定变化、可核对事实、连续性风险和未解决问题。",
-        "所有 JSON 键名必须使用简体中文；非证据字符串不得使用英文说明，但可以保留原缓存中的英文/缩写/编号/常用混写词。",
+        "必须生成“人物图谱”：根据本阶段章节事实统一归纳人物、称谓、别名、基础关系和剧情关系。人物图谱必须只使用阶段内提供的章节缓存，不得发明人物或关系。",
+        "人物归一优先真实姓名；同一人物的人名、别名、身份称呼、亲属称谓、叙事代称要尽量合并，例如妈妈/母亲/妈/娘、我/主角/主人公、校长/某某校长。无法确认指向时写入“称谓待确认”，不要强行合并。",
+        "如果输入提供“前序人物名册”，必须优先用它统一人物规范名和别名；例如后续章节只写妈妈、母亲、校长、师父时，应尽量对照前序人物名册判断是否指向已有角色。",
+        "“基础关系”记录相对稳定的身份/血缘/婚姻/师生/同门/上下级/同学/同事/邻里等关系；“剧情关系”记录本阶段情节中的合作、保护、冲突、隐瞒、交易、背叛、救助、威胁等关系。具体 label 由正文决定。",
+        "人物图谱里的 category 只能使用：基础关系、剧情关系、阵营关系、情感关系、冲突关系、社会关系、其他。",
+        "输入会提供每章阶段聚合卡片，不包含完整章节结构；输出必须做阶段级归纳，不要逐章机械复述。",
+        "普通摘要字段需要克制：阶段详细梗概控制在 500 字以内；非人物图谱数组尽量控制在 5 条以内、每条不超过 60 字，避免把每章所有细节全部展开。",
+        "人物图谱不得为避免截断而省略会影响人物关系判断的人物、称谓、别名、基础关系或关键剧情关系；如果内容很多，优先精炼证据文字，每个人物/关系保留最关键证据。",
+        "普通摘要 JSON 键名必须使用简体中文；人物图谱内部是机器可读字段，必须严格使用字段格式示例中的英文字段名，例如 canonicalName、firstSeenChapter、confidence、chapterNumber，不得翻译、改名或省略。",
+        "非证据字符串不得使用英文说明，但可以保留原缓存中的英文/缩写/编号/常用混写词。",
         "输出 JSON，且只能输出 JSON。"
       ].join("\n")
     },
@@ -305,16 +523,17 @@ export function buildArcIndexSummaryMessages(input: ArcIndexSummaryInput): OpenR
       content: [
         `阶段键：${input.arcKey}`,
         `章节范围：第${input.chapterFrom}-${input.chapterTo}章`,
+        `前序人物名册哈希：${priorCharacterLedgerHash}`,
+        "前序人物名册：",
+        priorCharacterLedger.length > 0 ? JSON.stringify(priorCharacterLedger) : "[]",
         "JSON 字段格式：",
         ARC_JSON_CONTRACT,
-        "章节摘要：",
+        "阶段聚合卡片：",
         input.chapters
           .map((chapter) =>
             [
               `[第${chapter.ordinal}章 ${chapter.title}]`,
-              `短摘要：${chapter.summaryShort}`,
-              `长摘要：${chapter.summaryLong}`,
-              `结构化索引：${JSON.stringify(chapter.structured)}`
+              JSON.stringify(compactChapterForArcPrompt(chapter))
             ].join("\n")
           )
           .join("\n\n")
@@ -331,8 +550,11 @@ export function buildBookIndexSummaryMessages(input: BookIndexSummaryInput): Ope
         "你是中文长篇小说的全书摘要助手。",
         "任务是根据阶段缓存生成中文全书缓存。",
         "概括主线剧情、主要人物线、关系变化、人物认知线、关键冲突、伏笔线、道具线、世界规则、时间地点结构和未解决问题；不编造没有出现的内容。",
+        "全书摘要只输出叙事、人物线、关系线、伏笔、设定、风险和问题等摘要字段；不要输出“人物关系图谱”。",
+        "人物关系图谱会由系统根据阶段摘要中的“人物图谱”完整合成，避免模型输出超长图谱 JSON 被截断。",
         "如果阶段缓存存在缺失或过期信息，必须记录在“全书信息.覆盖限制”中。",
-        "所有 JSON 键名必须使用简体中文；非证据字符串不得使用英文说明，但可以保留原缓存中的英文/缩写/编号/常用混写词。",
+        "所有 JSON 键名必须使用简体中文，且必须严格符合字段格式示例；不得添加字段格式示例以外的顶层字段。",
+        "非证据字符串不得使用英文说明，但可以保留原缓存中的英文/缩写/编号/常用混写词。",
         "输出 JSON，且只能输出 JSON。"
       ].join("\n")
     },
@@ -348,7 +570,7 @@ export function buildBookIndexSummaryMessages(input: BookIndexSummaryInput): Ope
             [
               `[${arc.arcKey} 第${arc.chapterFrom}-${arc.chapterTo}章]`,
               arc.summary,
-              `结构化索引：${JSON.stringify(arc.structured)}`
+              `阶段聚合卡片：${JSON.stringify(compactArcForBookPrompt(arc))}`
             ].join("\n")
           )
           .join("\n\n")

@@ -1,0 +1,291 @@
+import { LinkSimple, Plus, Trash, X } from "@phosphor-icons/react";
+import { useMemo, useState } from "react";
+import type { RelationshipGraphEdge, RelationshipGraphNode } from "../../main/shared/relationship-graph";
+
+type CreateRelationshipInput = {
+  readonly sourceCharacterName: string;
+  readonly targetCharacterName: string;
+  readonly sourceToTargetLabel: string;
+  readonly targetToSourceLabel: string | null;
+};
+
+type AuthorRelationshipControlsProps = {
+  readonly edges: readonly RelationshipGraphEdge[];
+  readonly loading: boolean;
+  readonly nodes: readonly RelationshipGraphNode[];
+  readonly selectedNodeName: string | null;
+  readonly onCreateCharacter: (name: string) => Promise<void>;
+  readonly onCreateRelationship: (input: CreateRelationshipInput) => Promise<void>;
+  readonly onDeleteCharacter: (characterId: string) => Promise<void>;
+  readonly onDeleteRelationship: (relationshipId: string) => Promise<void>;
+};
+
+function sortedNodes(nodes: readonly RelationshipGraphNode[]): RelationshipGraphNode[] {
+  return [...nodes].sort((left, right) => right.relationCount - left.relationCount || left.name.localeCompare(right.name, "zh-CN"));
+}
+
+function recentEdges(edges: readonly RelationshipGraphEdge[]): RelationshipGraphEdge[] {
+  return [...edges]
+    .sort((left, right) => right.evidenceCount - left.evidenceCount || left.sourceName.localeCompare(right.sourceName, "zh-CN"))
+    .slice(0, 6);
+}
+
+export function AuthorRelationshipControls({
+  edges,
+  loading,
+  nodes,
+  selectedNodeName,
+  onCreateCharacter,
+  onCreateRelationship,
+  onDeleteCharacter,
+  onDeleteRelationship
+}: AuthorRelationshipControlsProps) {
+  const [characterName, setCharacterName] = useState("");
+  const [sourceName, setSourceName] = useState("");
+  const [targetName, setTargetName] = useState("");
+  const [forwardLabel, setForwardLabel] = useState("");
+  const [reverseLabel, setReverseLabel] = useState("");
+  const [activePanel, setActivePanel] = useState<"character" | "relationship" | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
+  const characterOptions = useMemo(() => sortedNodes(nodes), [nodes]);
+  const relationshipOptions = useMemo(() => recentEdges(edges), [edges]);
+  const submitting = loading || busy;
+
+  function openRelationshipPanel(): void {
+    setActivePanel("relationship");
+    setLocalError(null);
+    if (selectedNodeName) {
+      setSourceName(selectedNodeName);
+    }
+  }
+
+  function closePanel(): void {
+    setActivePanel(null);
+    setLocalError(null);
+  }
+
+  async function runAction(action: () => Promise<void>): Promise<void> {
+    setBusy(true);
+    setLocalError(null);
+    try {
+      await action();
+    } catch (error) {
+      setLocalError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="author-relationship-controls">
+      <div className="relationship-author-actions">
+        <button
+          className={`relationship-primary-action ${activePanel === "character" ? "active" : ""}`}
+          disabled={submitting}
+          onClick={() => {
+            setActivePanel("character");
+            setLocalError(null);
+          }}
+          type="button"
+        >
+          <Plus size={15} weight="bold" />
+          添加人物
+        </button>
+        <button
+          className={`relationship-primary-action secondary ${activePanel === "relationship" ? "active" : ""}`}
+          disabled={submitting}
+          onClick={openRelationshipPanel}
+          type="button"
+        >
+          <LinkSimple size={15} weight="bold" />
+          添加关系
+        </button>
+        <span>{selectedNodeName ? `当前人物：${selectedNodeName}` : "选中人物后，可直接从此人物建立关系"}</span>
+      </div>
+
+      {activePanel ? (
+        <div className="author-relationship-popover" role="dialog" aria-label={activePanel === "character" ? "添加人物" : "添加关系"}>
+          <div className="author-relationship-popover-head">
+            <div>
+              <b>{activePanel === "character" ? "添加人物" : "添加人物关系"}</b>
+              <span>{activePanel === "character" ? "写到新角色时先把名字放进图里。" : "选择两个人，再填写这条关系在线上的名称。"}</span>
+            </div>
+            <button aria-label="关闭" className="relationship-panel-icon-button" onClick={closePanel} title="关闭" type="button">
+              <X size={15} />
+            </button>
+          </div>
+
+          {activePanel === "character" ? (
+            <form
+              className="author-relationship-form compact"
+              onSubmit={(event) => {
+                event.preventDefault();
+                const name = characterName.trim();
+                if (!name) {
+                  return;
+                }
+                void runAction(async () => {
+                  await onCreateCharacter(name);
+                  setCharacterName("");
+                  setActivePanel(null);
+                });
+              }}
+            >
+              <label className="relationship-filter-label" htmlFor="author-character-name">
+                人物名
+              </label>
+              <div className="author-relationship-inline">
+                <input
+                  autoFocus
+                  className="relationship-filter-input"
+                  id="author-character-name"
+                  onChange={(event) => setCharacterName(event.target.value)}
+                  placeholder="例如：白嘉轩"
+                  value={characterName}
+                />
+                <button className="relationship-primary-action" disabled={submitting || !characterName.trim()} type="submit">
+                  添加
+                </button>
+              </div>
+            </form>
+          ) : (
+            <form
+              className="author-relationship-form relationship-builder"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (!sourceName.trim() || !targetName.trim() || !forwardLabel.trim()) {
+                  return;
+                }
+                void runAction(async () => {
+                  await onCreateRelationship({
+                    sourceCharacterName: sourceName,
+                    targetCharacterName: targetName,
+                    sourceToTargetLabel: forwardLabel,
+                    targetToSourceLabel: reverseLabel.trim() || null
+                  });
+                  setSourceName(selectedNodeName ?? "");
+                  setTargetName("");
+                  setForwardLabel("");
+                  setReverseLabel("");
+                  setActivePanel(null);
+                });
+              }}
+            >
+              <datalist id="author-character-options">
+                {characterOptions.map((node) => (
+                  <option key={node.id} value={node.name} />
+                ))}
+              </datalist>
+              <div className="author-relationship-pair">
+                <label>
+                  <span>人物 A</span>
+                  <input
+                    autoFocus={!selectedNodeName}
+                    className="relationship-filter-input"
+                    list="author-character-options"
+                    onChange={(event) => setSourceName(event.target.value)}
+                    placeholder="人物 A"
+                    value={sourceName}
+                  />
+                </label>
+                <label>
+                  <span>人物 B</span>
+                  <input
+                    autoFocus={Boolean(selectedNodeName)}
+                    className="relationship-filter-input"
+                    list="author-character-options"
+                    onChange={(event) => setTargetName(event.target.value)}
+                    placeholder="人物 B"
+                    value={targetName}
+                  />
+                </label>
+              </div>
+              <div className="author-relationship-pair">
+                <label>
+                  <span>A 对 B</span>
+                  <input
+                    className="relationship-filter-input"
+                    onChange={(event) => setForwardLabel(event.target.value)}
+                    placeholder="父亲、师生、盟友"
+                    value={forwardLabel}
+                  />
+                </label>
+                <label>
+                  <span>B 对 A</span>
+                  <input
+                    className="relationship-filter-input"
+                    onChange={(event) => setReverseLabel(event.target.value)}
+                    placeholder="可选"
+                    value={reverseLabel}
+                  />
+                </label>
+              </div>
+              <button
+                className="relationship-primary-action full"
+                disabled={submitting || !sourceName.trim() || !targetName.trim() || !forwardLabel.trim()}
+                type="submit"
+              >
+                添加关系
+              </button>
+            </form>
+          )}
+
+          {localError ? <p className="author-relationship-error">{localError}</p> : null}
+
+          <section className="author-relationship-list compact">
+            <div className="relationship-section-head">
+              <h3>{activePanel === "character" ? "已有人物" : "已有关系"}</h3>
+              <span>{activePanel === "character" ? nodes.length : edges.length}</span>
+            </div>
+            {activePanel === "character" ? (
+              characterOptions.length ? (
+                characterOptions.slice(0, 6).map((node) => (
+                  <div className="author-relationship-list-row" key={node.id}>
+                    <button className="author-relationship-name-button" title={node.name} type="button">
+                      {node.name}
+                    </button>
+                    <span>{node.relationCount}</span>
+                    <button
+                      aria-label={`删除${node.name}`}
+                      className="relationship-panel-icon-button subtle-danger"
+                      disabled={submitting}
+                      onClick={() => void runAction(() => onDeleteCharacter(node.id))}
+                      title="删除人物"
+                      type="button"
+                    >
+                      <Trash size={15} />
+                    </button>
+                  </div>
+                ))
+              ) : (
+                <p className="muted">暂无人物。</p>
+              )
+            ) : relationshipOptions.length ? (
+              relationshipOptions.map((edge) => (
+                <div className="author-relationship-list-row relation" key={edge.id}>
+                  <button className="author-relationship-name-button" title={`${edge.sourceName} - ${edge.targetName}`} type="button">
+                    {edge.sourceName} / {edge.targetName}
+                  </button>
+                  <span>{edge.baseRelationLabel}</span>
+                  <button
+                    aria-label={`删除${edge.sourceName}与${edge.targetName}的关系`}
+                    className="relationship-panel-icon-button subtle-danger"
+                    disabled={submitting}
+                    onClick={() => void runAction(() => onDeleteRelationship(edge.authorRelationshipId ?? edge.id))}
+                    title="删除关系"
+                    type="button"
+                  >
+                    <Trash size={15} />
+                  </button>
+                </div>
+              ))
+            ) : (
+              <p className="muted">暂无关系。</p>
+            )}
+          </section>
+        </div>
+      ) : null}
+    </div>
+  );
+}

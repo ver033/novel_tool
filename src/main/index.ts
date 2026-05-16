@@ -7,6 +7,8 @@ import { handleWindowsSquirrelStartupEvent } from "./windows-squirrel-startup";
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
 declare const MAIN_WINDOW_VITE_NAME: string;
 
+let mainWindowRef: BrowserWindow | null = null;
+
 function createRendererContentSecurityPolicy(isDev: boolean): string {
   return [
     "default-src 'self'",
@@ -14,6 +16,7 @@ function createRendererContentSecurityPolicy(isDev: boolean): string {
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob:",
     "font-src 'self'",
+    "worker-src 'self' blob:",
     "connect-src 'self' http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*",
     "object-src 'none'",
     "base-uri 'none'",
@@ -68,6 +71,12 @@ function createMainWindow(): void {
       sandbox: true
     }
   });
+  mainWindowRef = mainWindow;
+  mainWindow.on("closed", () => {
+    if (mainWindowRef === mainWindow) {
+      mainWindowRef = null;
+    }
+  });
   installMainWindowSecurity(mainWindow);
 
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
@@ -80,6 +89,10 @@ function createMainWindow(): void {
 }
 
 if (!handleWindowsSquirrelStartupEvent({ quit: () => app.quit() })) {
+  if (process.env.NODE_ENV === "test" && process.env.NOVEL_TOOL_E2E_USER_DATA_DIR) {
+    app.setPath("userData", process.env.NOVEL_TOOL_E2E_USER_DATA_DIR);
+  }
+
   app.whenReady().then(() => {
     initializeMainLogger(app.getPath("userData"));
     installMainProcessErrorHandlers();

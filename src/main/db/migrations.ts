@@ -13,6 +13,13 @@ function tableHasColumn(db: SqliteDatabase, tableName: string, columnName: strin
     .some((row) => row.name === columnName);
 }
 
+function tableExists(db: SqliteDatabase, tableName: string): boolean {
+  const row = db.prepare("SELECT 1 AS found FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1").get(tableName) as
+    | { readonly found: number }
+    | undefined;
+  return Boolean(row);
+}
+
 const migrations: readonly Migration[] = [
   {
     version: 1,
@@ -405,7 +412,285 @@ const migrations: readonly Migration[] = [
       }
       db.exec("UPDATE chapters SET content_updated_at = updated_at WHERE content_updated_at IS NULL;");
     }
-  }
+  },
+  {
+    version: 15,
+    name: "summary_jobs",
+    up(db) {
+      if (!tableExists(db, "summary_jobs")) {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS summary_jobs (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            job_type TEXT NOT NULL CHECK (job_type IN ('chapter_summary', 'arc_summary', 'book_summary', 'rebuild_project_index')),
+            target_id TEXT,
+            source_hash TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'completed', 'failed', 'cancelled', 'skipped')),
+            priority INTEGER NOT NULL DEFAULT 0,
+            attempt_count INTEGER NOT NULL DEFAULT 0,
+            next_run_at TEXT,
+            error TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            started_at TEXT,
+            finished_at TEXT,
+            FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+          );
+
+          CREATE INDEX IF NOT EXISTS idx_summary_jobs_project_status_priority
+            ON summary_jobs(project_id, status, priority, created_at);
+        `);
+        return;
+      }
+      db.exec("PRAGMA foreign_keys = OFF;");
+      db.exec(`
+        CREATE TABLE summary_jobs_new (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          job_type TEXT NOT NULL CHECK (job_type IN ('chapter_summary', 'arc_summary', 'book_summary', 'rebuild_project_index')),
+          target_id TEXT,
+          source_hash TEXT NOT NULL,
+          status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'completed', 'failed', 'cancelled', 'skipped')),
+          priority INTEGER NOT NULL DEFAULT 0,
+          attempt_count INTEGER NOT NULL DEFAULT 0,
+          next_run_at TEXT,
+          error TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          started_at TEXT,
+          finished_at TEXT,
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+
+        INSERT INTO summary_jobs_new
+          (id, project_id, job_type, target_id, source_hash, status, priority, attempt_count,
+           next_run_at, error, created_at, updated_at, started_at, finished_at)
+        SELECT
+          id, project_id, job_type, target_id, source_hash, status, priority, attempt_count,
+          next_run_at, error, created_at, updated_at, started_at, finished_at
+        FROM summary_jobs
+        WHERE job_type IN ('chapter_summary', 'arc_summary', 'book_summary', 'rebuild_project_index');
+
+        DROP TABLE summary_jobs;
+        ALTER TABLE summary_jobs_new RENAME TO summary_jobs;
+
+        CREATE INDEX IF NOT EXISTS idx_summary_jobs_project_status_priority
+          ON summary_jobs(project_id, status, priority, created_at);
+      `);
+      db.exec("PRAGMA foreign_keys = ON;");
+    }
+  },
+  {
+    version: 17,
+    name: "remove_obsolete_relationship_indexes",
+    up(db) {
+      if (tableExists(db, "summary_jobs")) {
+        db.exec("PRAGMA foreign_keys = OFF;");
+        db.exec(`
+          CREATE TABLE summary_jobs_new (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            job_type TEXT NOT NULL CHECK (job_type IN ('chapter_summary', 'arc_summary', 'book_summary', 'rebuild_project_index')),
+            target_id TEXT,
+            source_hash TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'completed', 'failed', 'cancelled', 'skipped')),
+            priority INTEGER NOT NULL DEFAULT 0,
+            attempt_count INTEGER NOT NULL DEFAULT 0,
+            next_run_at TEXT,
+            error TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            started_at TEXT,
+            finished_at TEXT,
+            FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+          );
+
+          INSERT INTO summary_jobs_new
+            (id, project_id, job_type, target_id, source_hash, status, priority, attempt_count,
+             next_run_at, error, created_at, updated_at, started_at, finished_at)
+          SELECT
+            id, project_id, job_type, target_id, source_hash, status, priority, attempt_count,
+            next_run_at, error, created_at, updated_at, started_at, finished_at
+          FROM summary_jobs
+          WHERE job_type IN ('chapter_summary', 'arc_summary', 'book_summary', 'rebuild_project_index');
+
+          DROP TABLE summary_jobs;
+          ALTER TABLE summary_jobs_new RENAME TO summary_jobs;
+
+          CREATE INDEX IF NOT EXISTS idx_summary_jobs_project_status_priority
+            ON summary_jobs(project_id, status, priority, created_at);
+        `);
+        db.exec("PRAGMA foreign_keys = ON;");
+      }
+      db.exec(`
+        DROP TABLE IF EXISTS relationship_identity_overrides;
+        DROP TABLE IF EXISTS relationship_inferred_relations;
+        DROP TABLE IF EXISTS relationship_identity_cluster_members;
+        DROP TABLE IF EXISTS relationship_identity_clusters;
+        DROP TABLE IF EXISTS relationship_identity_resolution_runs;
+        DROP TABLE IF EXISTS relationship_mentions;
+        DROP TABLE IF EXISTS relationship_entities;
+        DROP TABLE IF EXISTS relationship_index_jobs;
+        DROP TABLE IF EXISTS relationship_index_chapters;
+      `);
+    }
+  },
+  {
+    version: 18,
+    name: "author_relationship_layer",
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS author_relationship_characters (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          normalized_name TEXT NOT NULL,
+          aliases_json TEXT NOT NULL DEFAULT '[]',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(project_id, normalized_name),
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_author_relationship_characters_project_updated
+          ON author_relationship_characters(project_id, updated_at);
+
+        CREATE TABLE IF NOT EXISTS author_relationships (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          source_character_id TEXT NOT NULL,
+          target_character_id TEXT NOT NULL,
+          source_to_target_label TEXT NOT NULL,
+          target_to_source_label TEXT,
+          normalized_relation_key TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          CHECK (source_character_id <> target_character_id),
+          UNIQUE(project_id, normalized_relation_key),
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+          FOREIGN KEY (source_character_id) REFERENCES author_relationship_characters(id) ON DELETE CASCADE,
+          FOREIGN KEY (target_character_id) REFERENCES author_relationship_characters(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_author_relationships_project_updated
+          ON author_relationships(project_id, updated_at);
+      `);
+    }
+  },
+  {
+    version: 19,
+    name: "author_relationship_character_metadata",
+    up(db) {
+      const columns = db.prepare("PRAGMA table_info(author_relationship_characters)").all() as { name: string }[];
+      const columnNames = new Set(columns.map((column) => column.name));
+      if (!columnNames.has("entity_kind")) {
+        db.exec("ALTER TABLE author_relationship_characters ADD COLUMN entity_kind TEXT NOT NULL DEFAULT 'person';");
+      }
+      if (!columnNames.has("importance")) {
+        db.exec("ALTER TABLE author_relationship_characters ADD COLUMN importance TEXT NOT NULL DEFAULT 'supporting';");
+      }
+      if (!columnNames.has("role_summary")) {
+        db.exec("ALTER TABLE author_relationship_characters ADD COLUMN role_summary TEXT;");
+      }
+      if (!columnNames.has("faction")) {
+        db.exec("ALTER TABLE author_relationship_characters ADD COLUMN faction TEXT;");
+      }
+      if (!columnNames.has("notes")) {
+        db.exec("ALTER TABLE author_relationship_characters ADD COLUMN notes TEXT;");
+      }
+    }
+  },
+  {
+    version: 20,
+    name: "writing_goals_and_statistics",
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS writing_goals (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          goal_type TEXT NOT NULL CHECK (goal_type IN ('total_words', 'added_words')),
+          target_word_count INTEGER NOT NULL,
+          baseline_word_count INTEGER NOT NULL,
+          start_date TEXT NOT NULL,
+          deadline_date TEXT NOT NULL,
+          active_weekdays_json TEXT NOT NULL,
+          rest_dates_json TEXT NOT NULL DEFAULT '[]',
+          status TEXT NOT NULL CHECK (status IN ('active', 'paused', 'completed', 'archived')),
+          completed_at TEXT,
+          archived_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_writing_goals_project_status
+          ON writing_goals(project_id, status, updated_at);
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_writing_goals_one_open_goal
+          ON writing_goals(project_id)
+          WHERE status IN ('active', 'paused');
+
+        CREATE TABLE IF NOT EXISTS writing_word_events (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          goal_id TEXT,
+          chapter_id TEXT,
+          chapter_title TEXT,
+          chapter_sort_order INTEGER,
+          local_date TEXT NOT NULL,
+          delta_words INTEGER NOT NULL,
+          added_words INTEGER NOT NULL,
+          deleted_words INTEGER NOT NULL,
+          previous_word_count INTEGER NOT NULL,
+          next_word_count INTEGER NOT NULL,
+          previous_project_word_count INTEGER NOT NULL,
+          next_project_word_count INTEGER NOT NULL,
+          source TEXT NOT NULL CHECK (source IN ('manual', 'ai_apply', 'chapter_delete', 'system')),
+          created_at TEXT NOT NULL,
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+          FOREIGN KEY (goal_id) REFERENCES writing_goals(id) ON DELETE SET NULL,
+          FOREIGN KEY (chapter_id) REFERENCES chapters(id) ON DELETE SET NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_writing_word_events_project_date
+          ON writing_word_events(project_id, local_date, created_at);
+
+        CREATE TABLE IF NOT EXISTS writing_daily_stats (
+          project_id TEXT NOT NULL,
+          local_date TEXT NOT NULL,
+          added_words INTEGER NOT NULL DEFAULT 0,
+          deleted_words INTEGER NOT NULL DEFAULT 0,
+          net_words INTEGER NOT NULL DEFAULT 0,
+          event_count INTEGER NOT NULL DEFAULT 0,
+          starting_total_word_count INTEGER NOT NULL DEFAULT 0,
+          ending_total_word_count INTEGER NOT NULL DEFAULT 0,
+          first_write_at TEXT,
+          last_write_at TEXT,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (project_id, local_date),
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS writing_goal_daily_plans (
+          goal_id TEXT NOT NULL,
+          project_id TEXT NOT NULL,
+          local_date TEXT NOT NULL,
+          planned_words INTEGER NOT NULL DEFAULT 0,
+          is_writing_day INTEGER NOT NULL DEFAULT 1,
+          is_rest_day INTEGER NOT NULL DEFAULT 0,
+          generated_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (goal_id, local_date),
+          FOREIGN KEY (goal_id) REFERENCES writing_goals(id) ON DELETE CASCADE,
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_writing_goal_daily_plans_project_date
+          ON writing_goal_daily_plans(project_id, local_date);
+      `);
+    }
+  },
 ];
 
 export function runMigrations(db: SqliteDatabase): void {

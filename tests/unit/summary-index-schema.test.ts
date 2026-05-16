@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   bookAiSummaryPayloadSchema,
+  chapterAiSummaryChunkPayloadSchema,
   chapterAiSummaryPayloadSchema,
   computeChapterContentHash,
   computeSourceHash,
@@ -10,6 +11,7 @@ import {
   getChapterSummaryShortText,
   isChapterAiSummaryPayloadV3Lite,
   summaryJobStatusSchema,
+  summaryJobTypeSchema,
   summaryStatusSchema,
   type ChapterAiSummaryPayloadV2
 } from "../../src/main/shared/summary-index";
@@ -303,6 +305,11 @@ const validChapterIndexPayloadV3Lite = {
 };
 
 describe("summary index schemas", () => {
+  it("rejects removed relationship jobs and unknown job types", () => {
+    expect(() => summaryJobTypeSchema.parse("relationship_original_text_upgrade")).toThrow();
+    expect(() => summaryJobTypeSchema.parse("relationship_index_job")).toThrow();
+  });
+
   it("rejects legacy V1 structured chapter summary payloads", () => {
     expect(() =>
       chapterAiSummaryPayloadSchema.parse({
@@ -327,6 +334,149 @@ describe("summary index schemas", () => {
     expect(getChapterSummaryShortText(parsed)).toBe(validChapterIndexPayloadV3Lite.一句话摘要);
     expect(getChapterSummaryLongText(parsed)).toBe(validChapterIndexPayloadV3Lite.详细梗概);
     expect(JSON.stringify(parsed).length).toBeLessThan(JSON.stringify(validChapterIndexPayloadV2).length / 2);
+  });
+
+  it("keeps future-facing index material inside the V3 Lite chapter cache payload", () => {
+    const payload = JSON.parse(JSON.stringify(validChapterIndexPayloadV3Lite));
+    payload.索引原料 = {
+      场景节点: [
+        {
+          序号: 1,
+          标题: "测试广场",
+          类型: "公开测试",
+          出场人物: ["萧炎", "萧薰儿"],
+          地点: "萧家测试广场",
+          场景目标: "公布斗气测试结果",
+          核心冲突: "萧炎测试结果低微并遭到嘲笑",
+          结果: "萧炎处境被公开化",
+          情绪变化: "从强忍平静转为苦涩自嘲",
+          功能: "建立开局低谷",
+          证据短句: ["斗之力，三段"],
+          后续可用: "可用于大纲场景卡"
+        }
+      ],
+      时间线事件: [
+        {
+          事件: "萧炎斗气测试结果被公布",
+          叙事顺序: 1,
+          故事内时间: "未明确",
+          相对时间锚点: "测试期间",
+          参与人物: ["萧炎"],
+          地点: "萧家测试广场",
+          因果前置: ["家族进行斗气测试"],
+          结果影响: ["萧炎被公开评价为低级"],
+          置信度: 0.9,
+          证据短句: ["斗之力，三段"]
+        }
+      ],
+      通用实体: [
+        {
+          名称: "测验魔石碑",
+          别名: ["魔石碑"],
+          类型: "道具",
+          本章状态: "显示萧炎斗之力三段",
+          新增信息: ["用于测试斗气等级"],
+          关联人物: ["萧炎"],
+          证据短句: ["测验魔石碑"]
+        }
+      ],
+      原子事实: [
+        {
+          主体: "萧炎",
+          类型: "人物状态",
+          属性: "斗气测试结果",
+          值: "斗之力三段",
+          生效范围: "本章测试期间",
+          确定性: "确定",
+          证据短句: ["斗之力，三段"]
+        }
+      ],
+      结构标记: {
+        章节位置: "开局",
+        叙事功能: ["建立困境", "埋下修为异常悬念"],
+        节奏: "压迫",
+        情绪走向: "受辱",
+        视角: "第三人称",
+        备注: "供后续大纲、时间线和资料库复用"
+      },
+      未来扩展字段: "保留"
+    };
+
+    const parsed = chapterAiSummaryPayloadSchema.parse(payload);
+
+    expect((parsed as typeof payload).索引原料).toEqual(payload.索引原料);
+  });
+
+  it("keeps future-facing index material inside V2 Lite chapter chunk caches", () => {
+    const payload = {
+      片段信息: {
+        章节序号: 1,
+        章节标题: "第1章 陨落的天才",
+        片段序号: 1,
+        片段总数: 2,
+        正文覆盖: "片段",
+        缓存类型: "章节片段缓存",
+        缓存版本: "二-Lite",
+        语言: "简体中文"
+      },
+      片段摘要: "本片段记录萧炎测试失利后的处境变化。",
+      关键事件: [
+        {
+          事件: "萧炎测试结果被公布",
+          涉及人物: ["萧炎"],
+          时间地点: "萧家测试广场",
+          结果: "众人得知萧炎斗气低微",
+          后续影响: "加重萧炎低谷处境",
+          证据短句: ["斗之力，三段"]
+        }
+      ],
+      人物状态: [
+        {
+          人物: "萧炎",
+          本章变化: "承受嘲讽",
+          行动: ["参加测试"],
+          目标或动机: "保持尊严",
+          新获得信息: ["测试结果被公开"],
+          仍不知道的信息: ["修为跌落原因"],
+          关系变化: ["与族人距离加深"],
+          证据短句: ["斗之力，三段"]
+        }
+      ],
+      人物认知边界: [
+        {
+          人物: "萧炎",
+          认知变化: "得知众人轻视仍在",
+          仍不知道: ["修为跌落原因"],
+          误解或风险: [],
+          证据短句: ["斗之力，三段"]
+        }
+      ],
+      关系变化: ["萧炎与族人的距离加深"],
+      时间地点: {
+        本章时间: "未明确",
+        主要地点: ["萧家测试广场"],
+        时间线索: ["测试期间"],
+        地点移动: [],
+        可能风险: []
+      },
+      道具设定变化: ["测验魔石碑用于公开斗气等级"],
+      伏笔与线索: [],
+      可核对事实: ["萧炎测试结果为斗之力三段"],
+      连续性风险: [],
+      未解决问题: [],
+      索引原料: {
+        场景节点: [{ 序号: 1, 标题: "测试广场", 类型: "公开测试", 出场人物: ["萧炎"], 地点: "萧家测试广场", 证据短句: ["斗之力，三段"] }],
+        时间线事件: [{ 事件: "萧炎测试结果被公布", 叙事顺序: 1, 参与人物: ["萧炎"], 证据短句: ["斗之力，三段"] }],
+        通用实体: [{ 名称: "测验魔石碑", 类型: "道具", 证据短句: ["测验魔石碑"] }],
+        原子事实: [{ 主体: "萧炎", 类型: "人物状态", 属性: "斗气测试结果", 值: "斗之力三段", 证据短句: ["斗之力，三段"] }],
+        结构标记: { 章节位置: "开局", 叙事功能: ["建立困境"] }
+      },
+      不可丢失信息: ["萧炎测试结果为斗之力三段"]
+    };
+
+    const parsed = chapterAiSummaryChunkPayloadSchema.parse(payload);
+
+    expect((parsed as typeof payload).索引原料).toEqual(payload.索引原料);
   });
 
   it("normalizes V3 Lite chapter indexes when the model keeps the previous version label", () => {

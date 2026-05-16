@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { resolveChatAgentContext, type ResolvedChatAgentContext, type SummaryIndexFocus } from "./chat-agent-context";
 import { chatAgentScopeSchema, type ChatAgentContext, type ChatAgentPlan, type ChatAgentScope } from "./chat-agent-types";
+import { isFreshReadyChapterSummary, isFreshSkippedTooShortChapterSummary } from "./chapter-summary-freshness";
 import { parseChatScopeReference } from "./chat-reference-parser";
 import type { ContinuityCheckInput } from "./summary-prompts";
 import type { OpenRouterToolDefinition } from "./openrouter-client";
@@ -745,7 +746,7 @@ function hasCompleteReadySummaryCoverage(runtime: ChatAgentToolRuntime, scope: C
   const summaryByChapterId = new Map(runtime.summaryRepo.listChapterSummaries(runtime.projectId).map((summary) => [summary.chapterId, summary]));
   return rangeChapters.every((chapter) => {
     const summary = summaryByChapterId.get(chapter.id);
-    return summary?.status === "ready" || summary?.status === "skipped_too_short";
+    return isFreshReadyChapterSummary(summary, chapter) || isFreshSkippedTooShortChapterSummary(summary, chapter);
   });
 }
 
@@ -889,13 +890,15 @@ async function executeReadSelection(runtime: ChatAgentToolRuntime, argumentsJson
 function resolveContinuityScope(
   runtime: ChatAgentToolRuntime,
   scope: Exclude<ChatAgentScope, { readonly type: "selection" }>
-): readonly { readonly id: string; readonly title: string; readonly ordinal: number }[] {
+): readonly { readonly id: string; readonly title: string; readonly ordinal: number; readonly updatedAt: string; readonly contentUpdatedAt?: string }[] {
   const chapters = runtime.chapterRepo.listByProject(runtime.projectId);
   if (scope.type === "all_chapters") {
     return chapters.map((chapter, index) => ({
       id: chapter.id,
       title: chapter.title,
-      ordinal: index + 1
+      ordinal: index + 1,
+      updatedAt: chapter.updatedAt,
+      contentUpdatedAt: chapter.contentUpdatedAt
     }));
   }
   if (scope.type === "current_chapter") {
@@ -907,14 +910,14 @@ function resolveContinuityScope(
     if (!chapter) {
       throw new Error("当前章节不在项目中，请重新打开章节后再试。");
     }
-    return [{ id: chapter.id, title: chapter.title, ordinal: index + 1 }];
+    return [{ id: chapter.id, title: chapter.title, ordinal: index + 1, updatedAt: chapter.updatedAt, contentUpdatedAt: chapter.contentUpdatedAt }];
   }
   if (scope.type === "chapter") {
     const chapter = chapters[scope.ordinal - 1] ?? null;
     if (!chapter) {
       throw new Error(`找不到第${scope.ordinal}章，无法进行连续性检查。`);
     }
-    return [{ id: chapter.id, title: chapter.title, ordinal: scope.ordinal }];
+    return [{ id: chapter.id, title: chapter.title, ordinal: scope.ordinal, updatedAt: chapter.updatedAt, contentUpdatedAt: chapter.contentUpdatedAt }];
   }
   if (scope.to > chapters.length) {
     throw new Error(`找不到第${scope.to}章，当前项目只有 ${chapters.length} 章。`);
@@ -922,7 +925,9 @@ function resolveContinuityScope(
   return chapters.slice(scope.from - 1, scope.to).map((chapter, index) => ({
     id: chapter.id,
     title: chapter.title,
-    ordinal: scope.from + index
+    ordinal: scope.from + index,
+    updatedAt: chapter.updatedAt,
+    contentUpdatedAt: chapter.contentUpdatedAt
   }));
 }
 
@@ -938,7 +943,7 @@ async function executeCheckContinuity(runtime: ChatAgentToolRuntime, argumentsJs
   const args = parseCheckContinuityArgs(argumentsJson);
   const chapters = resolveContinuityScope(runtime, args.scope);
   const summaryByChapterId = new Map(runtime.summaryRepo.listChapterSummaries(runtime.projectId).map((summary) => [summary.chapterId, summary]));
-  const missing = chapters.filter((chapter) => summaryByChapterId.get(chapter.id)?.status !== "ready");
+  const missing = chapters.filter((chapter) => !isFreshReadyChapterSummary(summaryByChapterId.get(chapter.id), chapter));
   if (missing.length > 0) {
     throw new Error(`连续性检查需要章节摘要索引，以下章节缺失或过期：${missing.map((chapter) => `第${chapter.ordinal}章 ${chapter.title}`).join("、")}。`);
   }
@@ -947,7 +952,7 @@ async function executeCheckContinuity(runtime: ChatAgentToolRuntime, argumentsJs
     question: args.question?.trim() || runtime.userMessage,
     chapters: chapters.map((chapter) => {
       const summary = summaryByChapterId.get(chapter.id);
-      if (!summary || summary.status !== "ready") {
+      if (!isFreshReadyChapterSummary(summary, chapter)) {
         throw new Error(`第${chapter.ordinal}章摘要索引不可用。`);
       }
       return {
