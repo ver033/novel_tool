@@ -39,6 +39,12 @@ import type {
   exportSelectTxtFilePathInputSchema,
   exportShareableProjectCopyInputSchema,
   exportTxtInputSchema,
+  externalBookSyncCancelScanInputSchema,
+  externalBookSyncForgetSourceInputSchema,
+  externalBookSyncPreviewCandidateInputSchema,
+  externalBookSyncScanInputSchema,
+  externalBookSyncSendToAiInputSchema,
+  externalBookSyncStatusInputSchema,
   importConfirmTxtInputSchema,
   importPreviewTxtInputSchema,
   importUpdatePreviewInputSchema,
@@ -267,6 +273,90 @@ export type ImportPreview = {
   readonly chapters: readonly ImportPreviewChapter[];
   readonly createdAt: string;
   readonly updatedAt: string;
+};
+
+export type ExternalBookSyncSource = {
+  readonly id: string;
+  readonly projectId: string;
+  readonly bookFilePath: string;
+  readonly displayName: string;
+  readonly lastKnownSize: number;
+  readonly lastModifiedAt: string | null;
+  readonly lastContentHash: string | null;
+  readonly lastScanAt: string;
+  readonly confirmedAt: string | null;
+};
+
+export type ExternalBookMissingChapter = ImportPreviewChapter & {
+  readonly ordinal: number | null;
+  readonly key: string;
+};
+
+export type ExternalBookComparisonResult = {
+  readonly currentLatestOrdinal: number | null;
+  readonly currentChapterCount: number;
+  readonly externalLatestOrdinal: number | null;
+  readonly externalChapterCount: number;
+  readonly missingChapters: readonly ExternalBookMissingChapter[];
+  readonly warnings: readonly string[];
+};
+
+export type ExternalBookSyncCandidateConfidence = "high" | "medium" | "low";
+
+export type ExternalBookSyncCandidate = {
+  readonly id: string;
+  readonly projectId: string;
+  readonly filePath: string;
+  readonly fileName: string;
+  readonly size: number;
+  readonly modifiedAt: string | null;
+  readonly contentHash: string;
+  readonly encoding: string;
+  readonly confidence: ExternalBookSyncCandidateConfidence;
+  readonly reasons: readonly string[];
+  readonly warnings: readonly string[];
+  readonly detectedChapterCount: number;
+  readonly comparison: ExternalBookComparisonResult;
+};
+
+export type ExternalBookSyncStatus = {
+  readonly projectId: string;
+  readonly sources: readonly ExternalBookSyncSource[];
+};
+
+export type ExternalBookScanProgress = {
+  readonly phase: "scanning";
+  readonly currentRoot: string | null;
+  readonly checkedDirectories: number;
+  readonly checkedFiles: number;
+  readonly candidatesFound: number;
+  readonly skippedErrors: number;
+  readonly elapsedMs: number;
+};
+
+export type ExternalBookSyncScanResult = {
+  readonly requestId: string;
+  readonly projectId: string;
+  readonly candidates: readonly ExternalBookSyncCandidate[];
+  readonly scan: {
+    readonly files: readonly { readonly path: string; readonly size: number; readonly modifiedAt: string | null }[];
+    readonly checkedDirectories: number;
+    readonly checkedFiles: number;
+    readonly skippedErrors: number;
+    readonly timedOut: boolean;
+    readonly cancelled: boolean;
+    readonly elapsedMs: number;
+  } | null;
+  readonly warnings: readonly string[];
+  readonly searchedRoots: readonly string[];
+  readonly completedAt: string;
+};
+
+export type ExternalBookSyncSendResult = {
+  readonly sessionId: string;
+  readonly sessionTitle: string;
+  readonly sentMessageCount: number;
+  readonly sentChapterCount: number;
 };
 
 export type ImportConfirmResult = {
@@ -513,6 +603,12 @@ export type ScratchDeleteInput = z.input<typeof scratchDeleteInputSchema>;
 export type ImportPreviewTxtInput = z.input<typeof importPreviewTxtInputSchema>;
 export type ImportUpdatePreviewInput = z.input<typeof importUpdatePreviewInputSchema>;
 export type ImportConfirmTxtInput = z.input<typeof importConfirmTxtInputSchema>;
+export type ExternalBookSyncStatusInput = z.input<typeof externalBookSyncStatusInputSchema>;
+export type ExternalBookSyncScanInput = z.input<typeof externalBookSyncScanInputSchema>;
+export type ExternalBookSyncCancelScanInput = z.input<typeof externalBookSyncCancelScanInputSchema>;
+export type ExternalBookSyncPreviewCandidateInput = z.input<typeof externalBookSyncPreviewCandidateInputSchema>;
+export type ExternalBookSyncSendToAiInput = z.input<typeof externalBookSyncSendToAiInputSchema>;
+export type ExternalBookSyncForgetSourceInput = z.input<typeof externalBookSyncForgetSourceInputSchema>;
 export type ExportSelectTxtFilePathInput = z.input<typeof exportSelectTxtFilePathInputSchema>;
 export type ExportTxtInput = z.input<typeof exportTxtInputSchema>;
 export type ExportTxtResult = {
@@ -776,6 +872,18 @@ export const ipcChannels = {
     previewTxt: "novelTool:import:previewTxt",
     updatePreview: "novelTool:import:updatePreview",
     confirmTxtImport: "novelTool:import:confirmTxtImport"
+  },
+  externalBookSync: {
+    getStatus: "novelTool:externalBookSync:getStatus",
+    scan: "novelTool:externalBookSync:scan",
+    cancelScan: "novelTool:externalBookSync:cancelScan",
+    selectDirectory: "novelTool:externalBookSync:selectDirectory",
+    previewCandidate: "novelTool:externalBookSync:previewCandidate",
+    sendMissingChaptersToAi: "novelTool:externalBookSync:sendMissingChaptersToAi",
+    forgetSource: "novelTool:externalBookSync:forgetSource",
+    scanProgress: "novelTool:externalBookSync:scanProgress",
+    scanDone: "novelTool:externalBookSync:scanDone",
+    scanError: "novelTool:externalBookSync:scanError"
   },
   export: {
     selectTxtFilePath: "novelTool:export:selectTxtFilePath",

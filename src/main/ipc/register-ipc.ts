@@ -24,6 +24,8 @@ import { SettingsRepository } from "../db/repositories/settings-repo";
 import { SummaryRepository } from "../db/repositories/summary-repo";
 import { WritingGoalRepository } from "../db/repositories/writing-goal-repo";
 import { ShareableProjectExporter } from "../export/shareable-project-exporter";
+import { ExternalBookSourceStore } from "../external-book-sync/book-source-store";
+import { ExternalBookSyncService } from "../external-book-sync/external-book-sync-service";
 import { TxtExporter } from "../export/txt-exporter";
 import { TxtImporter } from "../import/txt-importer";
 import { ProjectService } from "../project/project-service";
@@ -52,6 +54,7 @@ import type { z } from "zod";
 import { registerAiIpc } from "./ai-ipc";
 import { registerAuthorRelationshipIpc } from "./author-relationship-ipc";
 import { registerChapterIpc } from "./chapter-ipc";
+import { registerExternalBookSyncIpc } from "./external-book-sync-ipc";
 import { registerExportIpc } from "./export-ipc";
 import { registerImportIpc } from "./import-ipc";
 import { registerProjectIpc } from "./project-ipc";
@@ -273,6 +276,19 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
     const txtImporter = new TxtImporter(importJobRepo, projectRepo, projectService);
     const txtExporter = new TxtExporter(resolveChapterRepo);
     const shareableProjectExporter = new ShareableProjectExporter((projectId) => resolveProjectDb(projectId));
+    const externalBookSyncService = new ExternalBookSyncService({
+      sourceStore: new ExternalBookSourceStore(settingsRepo),
+      resolveChapterRepo,
+      projectRepo,
+      aiSender: {
+        createChatSession(input) {
+          return aiTaskService.createChatSession(input);
+        },
+        async sendChatMessage(input) {
+          await aiTaskService.sendChatMessageStream(input);
+        }
+      }
+    });
     const summaryWorkerInterval = setInterval(() => {
       const currentProject = projectService.getRuntimeActiveProject();
       if (!currentProject?.rootPath) {
@@ -485,6 +501,7 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
     );
     registerScratchIpc((projectId) => new ScratchNoteRepository(resolveProjectDb(projectId)));
     registerImportIpc(txtImporter);
+    registerExternalBookSyncIpc(externalBookSyncService);
     registerExportIpc(txtExporter, shareableProjectExporter);
     registerSettingsIpc(settingsService);
     registered = true;

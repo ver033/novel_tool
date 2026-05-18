@@ -40,6 +40,17 @@ import type {
   ExportSelectTxtFilePathInput,
   ExportShareableProjectCopyInput,
   ExportTxtInput,
+  ExternalBookScanProgress,
+  ExternalBookSyncCancelScanInput,
+  ExternalBookSyncCandidate,
+  ExternalBookSyncForgetSourceInput,
+  ExternalBookSyncPreviewCandidateInput,
+  ExternalBookSyncScanInput,
+  ExternalBookSyncScanResult,
+  ExternalBookSyncSendResult,
+  ExternalBookSyncSendToAiInput,
+  ExternalBookSyncStatus,
+  ExternalBookSyncStatusInput,
   ImportConfirmTxtInput,
   ImportPreviewTxtInput,
   ImportUpdatePreviewInput,
@@ -84,6 +95,21 @@ type AiStreamHandlers = {
   readonly onContext?: (event: AiStreamContextEvent) => void;
   readonly onDone?: (event: AiStreamDoneEvent) => void;
   readonly onError?: (event: AiStreamErrorEvent) => void;
+};
+
+type ExternalBookSyncScanProgressEvent = ExternalBookScanProgress & {
+  readonly requestId: string;
+};
+
+type ExternalBookSyncScanErrorEvent = {
+  readonly requestId: string;
+  readonly error: string;
+};
+
+type ExternalBookSyncScanHandlers = {
+  readonly onProgress?: (event: ExternalBookSyncScanProgressEvent) => void;
+  readonly onDone?: (event: ExternalBookSyncScanResult) => void;
+  readonly onError?: (event: ExternalBookSyncScanErrorEvent) => void;
 };
 
 export type NovelToolApi = {
@@ -189,6 +215,16 @@ export type NovelToolApi = {
     readonly previewTxt: (input: ImportPreviewTxtInput) => Promise<unknown>;
     readonly updatePreview: (input: ImportUpdatePreviewInput) => Promise<unknown>;
     readonly confirmTxtImport: (input: ImportConfirmTxtInput) => Promise<unknown>;
+  };
+  readonly externalBookSync: {
+    readonly getStatus: (input: ExternalBookSyncStatusInput) => Promise<ExternalBookSyncStatus>;
+    readonly scan: (input: ExternalBookSyncScanInput) => Promise<ExternalBookSyncScanResult>;
+    readonly cancelScan: (input: ExternalBookSyncCancelScanInput) => Promise<unknown>;
+    readonly selectDirectory: () => Promise<{ readonly directoryPath: string } | null>;
+    readonly previewCandidate: (input: ExternalBookSyncPreviewCandidateInput) => Promise<ExternalBookSyncCandidate>;
+    readonly sendMissingChaptersToAi: (input: ExternalBookSyncSendToAiInput) => Promise<ExternalBookSyncSendResult>;
+    readonly forgetSource: (input: ExternalBookSyncForgetSourceInput) => Promise<unknown>;
+    readonly subscribeScan: (requestId: string, handlers: ExternalBookSyncScanHandlers) => () => void;
   };
   readonly export: {
     readonly selectTxtFilePath: (input: ExportSelectTxtFilePathInput) => Promise<unknown>;
@@ -340,6 +376,40 @@ export const novelToolApi: NovelToolApi = Object.freeze({
     previewTxt: (input: ImportPreviewTxtInput) => ipcRenderer.invoke(ipcChannels.import.previewTxt, input),
     updatePreview: (input: ImportUpdatePreviewInput) => ipcRenderer.invoke(ipcChannels.import.updatePreview, input),
     confirmTxtImport: (input: ImportConfirmTxtInput) => ipcRenderer.invoke(ipcChannels.import.confirmTxtImport, input)
+  }),
+  externalBookSync: Object.freeze({
+    getStatus: (input: ExternalBookSyncStatusInput) => ipcRenderer.invoke(ipcChannels.externalBookSync.getStatus, input),
+    scan: (input: ExternalBookSyncScanInput) => ipcRenderer.invoke(ipcChannels.externalBookSync.scan, input),
+    cancelScan: (input: ExternalBookSyncCancelScanInput) => ipcRenderer.invoke(ipcChannels.externalBookSync.cancelScan, input),
+    selectDirectory: () => ipcRenderer.invoke(ipcChannels.externalBookSync.selectDirectory),
+    previewCandidate: (input: ExternalBookSyncPreviewCandidateInput) => ipcRenderer.invoke(ipcChannels.externalBookSync.previewCandidate, input),
+    sendMissingChaptersToAi: (input: ExternalBookSyncSendToAiInput) => ipcRenderer.invoke(ipcChannels.externalBookSync.sendMissingChaptersToAi, input),
+    forgetSource: (input: ExternalBookSyncForgetSourceInput) => ipcRenderer.invoke(ipcChannels.externalBookSync.forgetSource, input),
+    subscribeScan: (requestId: string, handlers: ExternalBookSyncScanHandlers) => {
+      const onProgress = (_event: IpcRendererEvent, payload: ExternalBookSyncScanProgressEvent) => {
+        if (payload.requestId === requestId) {
+          handlers.onProgress?.(payload);
+        }
+      };
+      const onDone = (_event: IpcRendererEvent, payload: ExternalBookSyncScanResult) => {
+        if (payload.requestId === requestId) {
+          handlers.onDone?.(payload);
+        }
+      };
+      const onError = (_event: IpcRendererEvent, payload: ExternalBookSyncScanErrorEvent) => {
+        if (payload.requestId === requestId) {
+          handlers.onError?.(payload);
+        }
+      };
+      ipcRenderer.on(ipcChannels.externalBookSync.scanProgress, onProgress);
+      ipcRenderer.on(ipcChannels.externalBookSync.scanDone, onDone);
+      ipcRenderer.on(ipcChannels.externalBookSync.scanError, onError);
+      return () => {
+        ipcRenderer.off(ipcChannels.externalBookSync.scanProgress, onProgress);
+        ipcRenderer.off(ipcChannels.externalBookSync.scanDone, onDone);
+        ipcRenderer.off(ipcChannels.externalBookSync.scanError, onError);
+      };
+    }
   }),
   export: Object.freeze({
     selectTxtFilePath: (input: ExportSelectTxtFilePathInput) => ipcRenderer.invoke(ipcChannels.export.selectTxtFilePath, input),

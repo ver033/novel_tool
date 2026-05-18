@@ -66,6 +66,31 @@ describe("summary index preload and IPC wiring", () => {
     expect(registerIpc).toMatch(/ipcChannels\.summary\.clearAndRetryBookCache[\s\S]*createValidatedIpcHandler/);
   });
 
+  it("exposes external Book sync scan and AI-send APIs through validated IPC", () => {
+    const types = readSource("src/main/shared/types.ts");
+    const schemas = readSource("src/main/shared/schemas.ts");
+    const preload = readSource("src/preload/api.ts");
+    const registerIpc = readSource("src/main/ipc/register-ipc.ts");
+    const externalIpc = readSource("src/main/ipc/external-book-sync-ipc.ts");
+
+    expect(types).toContain("ExternalBookSyncStatusInput");
+    expect(types).toContain("ExternalBookSyncScanResult");
+    expect(types).toContain('scan: "novelTool:externalBookSync:scan"');
+    expect(types).toContain('sendMissingChaptersToAi: "novelTool:externalBookSync:sendMissingChaptersToAi"');
+    expect(schemas).toContain("externalBookSyncScanInputSchema");
+    expect(schemas).toContain("directoryPath is required for directory scan");
+    expect(preload).toContain("readonly externalBookSync");
+    expect(preload).toContain("subscribeScan: (requestId: string");
+    expect(preload).toContain("ipcChannels.externalBookSync.scanProgress");
+    expect(preload).toContain("sendMissingChaptersToAi: (input: ExternalBookSyncSendToAiInput)");
+    expect(registerIpc).toContain("registerExternalBookSyncIpc(externalBookSyncService)");
+    expect(registerIpc).toContain("new ExternalBookSyncService");
+    expect(externalIpc).toContain("createValidatedIpcHandler(externalBookSyncScanInputSchema");
+    expect(externalIpc).toContain("ipcChannels.externalBookSync.scanDone");
+    expect(externalIpc).toContain("ipcChannels.externalBookSync.scanError");
+    expect(externalIpc).toContain("dialog.showOpenDialog");
+  });
+
   it("recovers stale running summary jobs once when a project becomes active", () => {
     const registerIpc = readSource("src/main/ipc/register-ipc.ts");
 

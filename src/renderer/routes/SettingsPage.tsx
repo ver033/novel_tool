@@ -15,6 +15,12 @@ import type {
   ChapterCacheBuildOrder,
   EditorSettings,
   ExportShareableProjectCopyResult,
+  ExternalBookScanProgress,
+  ExternalBookSyncCandidate,
+  ExternalBookSyncScanResult,
+  ExternalBookSyncSendResult,
+  ExternalBookSyncSource,
+  ExternalBookSyncStatus,
   OpenRouterModelSummary,
   ProjectRecord,
   SettingsSaveInput,
@@ -812,14 +818,35 @@ function SettingsContent({
   }
 
   if (category === "导入导出") {
-    return <ShareableProjectExportPane currentProject={currentProject} />;
+    return <ImportExportSettingsPane currentProject={currentProject} />;
   }
 
   return null;
 }
 
+type ImportExportSettingsPaneProps = {
+  readonly currentProject: ProjectRecord | null;
+};
+
+function ImportExportSettingsPane({ currentProject }: ImportExportSettingsPaneProps) {
+  return (
+    <div className="settings-grid import-export-settings">
+      <ExternalBookSyncPane currentProject={currentProject} />
+      <ShareableProjectExportPane currentProject={currentProject} />
+    </div>
+  );
+}
+
+type ExternalBookSyncPaneProps = {
+  readonly currentProject: ProjectRecord | null;
+};
+
 type ShareableProjectExportPaneProps = {
   readonly currentProject: ProjectRecord | null;
+};
+
+type ExternalBookSyncSelectedDirectory = {
+  readonly directoryPath: string;
 };
 
 type SelectedShareableProjectPath = {
@@ -848,6 +875,295 @@ function formatSelectedPath(filePath: string | null): string {
   }
   const parts = filePath.split(/[/\\]/);
   return parts.length > 2 ? `${parts.at(-2)}/${parts.at(-1)}` : filePath;
+}
+
+function createExternalBookScanRequestId(): string {
+  if (globalThis.crypto?.randomUUID) {
+    return `external_book_scan_${globalThis.crypto.randomUUID()}`;
+  }
+  return `external_book_scan_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes >= 1024 * 1024) {
+    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  }
+  if (bytes >= 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+  return `${bytes} B`;
+}
+
+function formatExternalBookSource(source: ExternalBookSyncSource): string {
+  const confirmed = source.confirmedAt ? `已确认 ${formatDateTime(source.confirmedAt)}` : "未确认";
+  return `${source.displayName} · ${confirmed}`;
+}
+
+function ExternalBookSyncPane({ currentProject }: ExternalBookSyncPaneProps) {
+  const api = useMemo(getNovelToolApi, []);
+  const [status, setStatus] = useState<ExternalBookSyncStatus | null>(null);
+  const [candidates, setCandidates] = useState<ExternalBookSyncCandidate[]>([]);
+  const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null);
+  const [selectedChapterKeys, setSelectedChapterKeys] = useState<Set<string>>(new Set());
+  const [scanProgress, setScanProgress] = useState<(ExternalBookScanProgress & { readonly requestId: string }) | null>(null);
+  const [scanBusy, setScanBusy] = useState(false);
+  const [sendBusy, setSendBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const selectedCandidate = candidates.find((candidate) => candidate.id === selectedCandidateId) ?? candidates[0] ?? null;
+  const selectedChapterCount = selectedCandidate ? selectedCandidate.comparison.missingChapters.filter((chapter) => selectedChapterKeys.has(chapter.key)).length : 0;
+
+  async function loadStatus(): Promise<void> {
+    setError(null);
+    try {
+      if (!currentProject) {
+        setStatus(null);
+        return;
+      }
+      setStatus((await api.externalBookSync.getStatus({ projectId: currentProject.id })) as ExternalBookSyncStatus);
+    } catch (reason) {
+      setError(formatError(reason));
+    }
+  }
+
+  useEffect(() => {
+    setCandidates([]);
+    setSelectedCandidateId(null);
+    setSelectedChapterKeys(new Set());
+    setScanProgress(null);
+    setMessage(null);
+    setError(null);
+    void loadStatus();
+  }, [currentProject?.id]);
+
+  useEffect(() => {
+    if (!selectedCandidate) {
+      setSelectedChapterKeys(new Set());
+      return;
+    }
+    setSelectedChapterKeys(new Set(selectedCandidate.comparison.missingChapters.map((chapter) => chapter.key)));
+  }, [selectedCandidate?.id]);
+
+  function applyScanResult(result: ExternalBookSyncScanResult): void {
+    setCandidates([...result.candidates]);
+    const firstCandidate = result.candidates[0] ?? null;
+    setSelectedCandidateId(firstCandidate?.id ?? null);
+    setMessage(result.candidates.length > 0 ? `找到 ${result.candidates.length} 个候选 .Book 文件。` : "没有找到可同步的 .Book 文件。");
+    if (result.warnings.length > 0) {
+      setError(result.warnings.join("；"));
+    }
+  }
+
+  async function runScan(mode: "quick" | "global" | "directory", directoryPath?: string): Promise<void> {
+    if (!currentProject || scanBusy) {
+      return;
+    }
+    const requestId = createExternalBookScanRequestId();
+    const unsubscribe = api.externalBookSync.subscribeScan(requestId, {
+      onProgress(progress) {
+        setScanProgress(progress);
+      },
+      onDone(result) {
+        applyScanResult(result);
+      },
+      onError(payload) {
+        setError(payload.error);
+      }
+    });
+    setScanBusy(true);
+    setMessage(mode === "directory" ? "正在扫描选择的目录。" : "正在查找项目同名文件夹下的 .Book 文件。");
+    setError(null);
+    setCandidates([]);
+    setSelectedCandidateId(null);
+    try {
+      const result = (await api.externalBookSync.scan({
+        projectId: currentProject.id,
+        requestId,
+        mode,
+        ...(directoryPath ? { directoryPath } : {})
+      })) as ExternalBookSyncScanResult;
+      applyScanResult(result);
+      await loadStatus();
+    } catch (reason) {
+      setError(formatError(reason));
+    } finally {
+      unsubscribe();
+      setScanBusy(false);
+    }
+  }
+
+  async function scanSelectedDirectory(): Promise<void> {
+    setError(null);
+    try {
+      const selected = (await api.externalBookSync.selectDirectory()) as ExternalBookSyncSelectedDirectory | null;
+      if (selected) {
+        await runScan("directory", selected.directoryPath);
+      }
+    } catch (reason) {
+      setError(formatError(reason));
+    }
+  }
+
+  function toggleMissingChapter(key: string, checked: boolean): void {
+    setSelectedChapterKeys((current) => {
+      const next = new Set(current);
+      if (checked) {
+        next.add(key);
+      } else {
+        next.delete(key);
+      }
+      return next;
+    });
+  }
+
+  async function sendSelectedChapters(): Promise<void> {
+    if (!currentProject || !selectedCandidate || selectedChapterCount === 0 || sendBusy) {
+      return;
+    }
+    setSendBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const result = (await api.externalBookSync.sendMissingChaptersToAi({
+        projectId: currentProject.id,
+        candidateId: selectedCandidate.id,
+        chapterKeys: [...selectedChapterKeys]
+      })) as ExternalBookSyncSendResult;
+      setMessage(`已发送 ${result.sentChapterCount} 个缺失章节到 AI 对话「${result.sessionTitle}」。`);
+      await loadStatus();
+    } catch (reason) {
+      setError(formatError(reason));
+    } finally {
+      setSendBusy(false);
+    }
+  }
+
+  async function forgetSource(sourceId: string): Promise<void> {
+    if (!currentProject) {
+      return;
+    }
+    setError(null);
+    try {
+      await api.externalBookSync.forgetSource({ projectId: currentProject.id, sourceId });
+      await loadStatus();
+    } catch (reason) {
+      setError(formatError(reason));
+    }
+  }
+
+  return (
+    <div className="settings-card wide external-book-sync-card">
+      <div className="settings-card-head">
+        <div>
+          <h3>外部 .Book 同步检查</h3>
+          <p className="muted">只读取项目同名文件夹下的 .Book 文件，找出当前项目缺失的章节，并把缺失章节发送给 AI。不会自动改动章节。</p>
+        </div>
+        <span className="tag">原型功能</span>
+      </div>
+
+      {!currentProject ? (
+        <div className="empty-inline">请先打开项目，再检查外部 .Book 文件。</div>
+      ) : (
+        <>
+          <div className="external-book-sync-actions">
+            <Button disabled={scanBusy || sendBusy} onClick={() => void runScan("quick")} type="button" variant="primary">
+              {scanBusy ? "正在查找" : "查找 .Book"}
+            </Button>
+            <Button disabled={scanBusy || sendBusy} onClick={() => void scanSelectedDirectory()} type="button" variant="secondary">
+              选择同步目录
+            </Button>
+            <Button disabled={scanBusy || sendBusy} onClick={() => void runScan("global")} type="button" variant="secondary">
+              全局重新扫描
+            </Button>
+          </div>
+
+          {scanProgress ? (
+            <div className="external-book-sync-progress" role="status">
+              <span>{scanProgress.currentRoot ? `正在扫描：${scanProgress.currentRoot}` : "扫描已完成"}</span>
+              <small>
+                目录 {scanProgress.checkedDirectories.toLocaleString("zh-CN")} · 文件 {scanProgress.checkedFiles.toLocaleString("zh-CN")} · 候选 {scanProgress.candidatesFound}
+              </small>
+            </div>
+          ) : null}
+
+          {status?.sources.length ? (
+            <section className="external-book-sync-sources" aria-label="已确认的外部 Book 来源">
+              <b>已确认来源</b>
+              <div>
+                {status.sources.map((source) => (
+                  <span key={source.id} title={source.bookFilePath}>
+                    {formatExternalBookSource(source)}
+                    <button onClick={() => void forgetSource(source.id)} type="button">
+                      忘记
+                    </button>
+                  </span>
+                ))}
+              </div>
+            </section>
+          ) : null}
+
+          {candidates.length > 0 ? (
+            <section className="external-book-sync-candidates" aria-label="Book 候选文件">
+              <div className="external-book-sync-candidate-list">
+                {candidates.map((candidate) => (
+                  <button
+                    className={`external-book-sync-candidate ${candidate.id === selectedCandidate?.id ? "active" : ""}`}
+                    key={candidate.id}
+                    onClick={() => setSelectedCandidateId(candidate.id)}
+                    type="button"
+                  >
+                    <b>{candidate.fileName}</b>
+                    <small>{candidate.comparison.missingChapters.length} 个缺失章节 · {formatFileSize(candidate.size)}</small>
+                    <span>{candidate.reasons.join("，")}</span>
+                  </button>
+                ))}
+              </div>
+
+              {selectedCandidate ? (
+                <div className="external-book-sync-preview">
+                  <div className="settings-card-head compact">
+                    <div>
+                      <h4>{selectedCandidate.fileName}</h4>
+                      <p className="muted" title={selectedCandidate.filePath}>{selectedCandidate.filePath}</p>
+                    </div>
+                    <span className={`mini-tag ${selectedCandidate.confidence === "high" ? "green" : selectedCandidate.confidence === "medium" ? "orange" : "subtle"}`}>
+                      {selectedCandidate.confidence === "high" ? "高可信" : selectedCandidate.confidence === "medium" ? "需确认" : "低可信"}
+                    </span>
+                  </div>
+                  {selectedCandidate.warnings.length > 0 ? <p className="settings-message warning">{selectedCandidate.warnings.join("；")}</p> : null}
+                  <div className="external-book-sync-chapters">
+                    {selectedCandidate.comparison.missingChapters.map((chapter) => (
+                      <label key={chapter.key}>
+                        <input
+                          checked={selectedChapterKeys.has(chapter.key)}
+                          onChange={(event) => toggleMissingChapter(chapter.key, event.target.checked)}
+                          type="checkbox"
+                        />
+                        <span>
+                          <b>{chapter.title || `第 ${chapter.order + 1} 段`}</b>
+                          <small>{chapter.text.length.toLocaleString("zh-CN")} 字</small>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                  <div className="external-book-sync-send">
+                    <Button disabled={sendBusy || selectedChapterCount === 0} onClick={() => void sendSelectedChapters()} type="button" variant="primary">
+                      {sendBusy ? "正在发送" : `发送 ${selectedChapterCount} 章给 AI`}
+                    </Button>
+                    <span className="summary-cache-hint">发送后只进入 AI 对话，不会自动创建或覆盖章节。</span>
+                  </div>
+                </div>
+              ) : null}
+            </section>
+          ) : null}
+        </>
+      )}
+
+      {message ? <p className="settings-message success">{message}</p> : null}
+      {error ? <p className="settings-message error">{error}</p> : null}
+    </div>
+  );
 }
 
 function ShareableProjectExportPane({ currentProject }: ShareableProjectExportPaneProps) {

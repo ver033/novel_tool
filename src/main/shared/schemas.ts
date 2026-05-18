@@ -523,6 +523,48 @@ export const importConfirmTxtInputSchema = z
   })
   .strict();
 
+export const externalBookSyncStatusInputSchema = z
+  .object({
+    projectId: idSchema
+  })
+  .strict();
+
+export const externalBookSyncScanInputSchema = externalBookSyncStatusInputSchema
+  .extend({
+    requestId: idSchema.optional(),
+    mode: z.enum(["quick", "global", "directory"]),
+    directoryPath: z.string().trim().min(1).max(4096).optional()
+  })
+  .strict()
+  .refine((value) => value.mode !== "directory" || Boolean(value.directoryPath?.trim()), {
+    message: "directoryPath is required for directory scan",
+    path: ["directoryPath"]
+  });
+
+export const externalBookSyncCancelScanInputSchema = z
+  .object({
+    requestId: idSchema
+  })
+  .strict();
+
+export const externalBookSyncPreviewCandidateInputSchema = externalBookSyncStatusInputSchema
+  .extend({
+    candidateId: idSchema
+  })
+  .strict();
+
+export const externalBookSyncSendToAiInputSchema = externalBookSyncPreviewCandidateInputSchema
+  .extend({
+    chapterKeys: z.array(nonEmptyString.max(200)).min(1).max(80)
+  })
+  .strict();
+
+export const externalBookSyncForgetSourceInputSchema = externalBookSyncStatusInputSchema
+  .extend({
+    sourceId: idSchema
+  })
+  .strict();
+
 export const exportSelectTxtFilePathInputSchema = z
   .object({
     projectId: idSchema,

@@ -109,6 +109,13 @@ describe("settings page scope", () => {
     const settings = readSource("src/renderer/routes/SettingsPage.tsx");
 
     expect(settings).toContain("导入导出");
+    expect(settings).toContain("ImportExportSettingsPane");
+    expect(settings).toContain("ExternalBookSyncPane");
+    expect(settings).toContain("外部 .Book 同步检查");
+    expect(settings).toContain("只读取项目同名文件夹下的 .Book 文件");
+    expect(settings).toContain("api.externalBookSync.scan");
+    expect(settings).toContain("api.externalBookSync.sendMissingChaptersToAi");
+    expect(settings).toContain("api.externalBookSync.selectDirectory");
     expect(settings).toContain("ShareableProjectExportPane");
     expect(settings).toContain("导出可分享副本");
     expect(settings).toContain("严格隐私清理");

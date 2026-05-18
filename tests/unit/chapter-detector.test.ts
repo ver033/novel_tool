@@ -1,16 +1,36 @@
-import { describe, expect, it } from "vitest";
-import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { applyImportPreviewOperations, detectTxtChapters, normalizeTxtContent } from "../../src/main/import/chapter-detector";
-import { readTxtFile } from "../../src/main/import/txt-reader";
+import { readTextFile, readTxtFile } from "../../src/main/import/txt-reader";
 
 const bailuyuanTxtPath = resolve(process.cwd(), "../test_novel/《白鹿原》全集.txt");
+const tempDirs: string[] = [];
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 describe("TXT chapter detector", () => {
   it("normalizes line endings, BOM, repeated blank lines, and full-width spaces", () => {
     const normalized = normalizeTxtContent("\uFEFF序章\r\n\r\n\r\n　　风起。\r第二行");
 
     expect(normalized).toBe("序章\n\n风起。\n第二行");
+  });
+
+  it("reads UTF-16LE .Book text files through the shared text reader", () => {
+    const dir = mkdtempSync(join(tmpdir(), "book-reader-"));
+    tempDirs.push(dir);
+    const filePath = join(dir, "{D2342168-CBD2-4FE7-84DA-7D93404C1C47}.Book");
+    writeFileSync(filePath, Buffer.from("\ufeff第一章\r\ntest\r\ntet", "utf16le"));
+
+    const result = readTextFile(filePath, { label: ".Book 文件", maxBytes: 20 * 1024 * 1024 });
+
+    expect(result.text).toBe("第一章\ntest\ntet");
+    expect(result.encoding).toBeTruthy();
   });
 
   it("detects common Chinese novel chapter headings", () => {
