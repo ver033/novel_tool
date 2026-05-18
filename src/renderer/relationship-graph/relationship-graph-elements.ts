@@ -47,7 +47,9 @@ export type RelationshipGraphSigmaEdgeData = {
   readonly baseLabelDirection: "single" | "same_both_ways" | "different_both_ways";
   readonly baseLabelPinned: boolean;
   readonly baseSummary: string | null;
-  readonly edgeType: "line" | "arrow" | "doubleArrow";
+  readonly edgeType: "line" | "arrow" | "doubleArrow" | "curvedArrow";
+  readonly curvature: number | null;
+  readonly manualReciprocalEdge: boolean;
   readonly plotLabel: string;
   readonly plotLabelText: string;
   readonly plotSummary: string;
@@ -85,6 +87,8 @@ export type RelationshipGraphSigmaData = {
   readonly edges: readonly RelationshipGraphSigmaEdgeElement[];
 };
 
+const MANUAL_RECIPROCAL_EDGE_CURVATURE = 0.32;
+
 function roundGraphMetric(value: number): number {
   if (!Number.isFinite(value)) {
     return 0;
@@ -94,6 +98,10 @@ function roundGraphMetric(value: number): number {
 
 function edgeHasUncertainty(edge: RelationshipGraphEdge): boolean {
   return edge.timeline.some((stage) => Boolean(stage.uncertainty?.trim()));
+}
+
+function isAuthorManualEdge(edge: RelationshipGraphEdge): boolean {
+  return Boolean(edge.authorRelationshipId && edge.evidenceSources.includes("author_manual"));
 }
 
 function normalizeGraphLabel(value: string | null | undefined): string {
@@ -202,6 +210,63 @@ function buildForcedBaseLabelIds(
   return visibleEdgeIds;
 }
 
+function buildManualReciprocalRelationshipIds(edges: readonly RelationshipGraphEdge[]): ReadonlySet<string> {
+  const edgeCounts = new Map<string, number>();
+  for (const edge of edges) {
+    if (!isAuthorManualEdge(edge) || !edge.authorRelationshipId) {
+      continue;
+    }
+    edgeCounts.set(edge.authorRelationshipId, (edgeCounts.get(edge.authorRelationshipId) ?? 0) + 1);
+  }
+  return new Set([...edgeCounts].filter(([, count]) => count > 1).map(([relationshipId]) => relationshipId));
+}
+
+function stripReverseAuthorLabel(edge: RelationshipGraphEdge, label: string): RelationshipGraphEdge {
+  return {
+    ...edge,
+    baseRelationLabel: label,
+    baseRelationSourceToTargetLabel: label,
+    baseRelationTargetToSourceLabel: null,
+    timeline: edge.timeline.map((stage) => ({
+      ...stage,
+      baseRelationLabel: label,
+      baseRelationSourceToTargetLabel: label,
+      baseRelationTargetToSourceLabel: null
+    }))
+  };
+}
+
+function expandAuthorManualDirectionalEdges(edges: readonly RelationshipGraphEdge[]): RelationshipGraphEdge[] {
+  return edges.flatMap((edge) => {
+    const targetToSourceLabel = normalizeGraphLabel(edge.baseRelationTargetToSourceLabel);
+    if (!isAuthorManualEdge(edge) || !targetToSourceLabel) {
+      return [edge];
+    }
+
+    const sourceToTargetLabel = normalizeGraphLabel(edge.baseRelationSourceToTargetLabel) || normalizeGraphLabel(edge.baseRelationLabel);
+    const forwardEdge = stripReverseAuthorLabel(
+      {
+        ...edge,
+        id: edge.id.endsWith(":source_to_target") ? edge.id : `${edge.id}:source_to_target`
+      },
+      sourceToTargetLabel
+    );
+    const reverseEdge = stripReverseAuthorLabel(
+      {
+        ...edge,
+        id: edge.id.endsWith(":target_to_source") ? edge.id : `${edge.id}:target_to_source`,
+        sourceId: edge.targetId,
+        targetId: edge.sourceId,
+        sourceName: edge.targetName,
+        targetName: edge.sourceName,
+        direction: "source_to_target"
+      },
+      targetToSourceLabel
+    );
+    return [forwardEdge, reverseEdge];
+  });
+}
+
 function resolveVisibleBaseLabel(
   edge: RelationshipGraphEdge
 ): string {
@@ -265,9 +330,10 @@ export function relationshipGraphToSigmaGraphData(
   options: RelationshipGraphElementOptions = {}
 ): RelationshipGraphSigmaData {
   const nodeIds = new Set(graph.nodes.map((node) => node.id));
-  const validEdges = graph.edges.filter((edge) => nodeIds.has(edge.sourceId) && nodeIds.has(edge.targetId));
+  const validEdges = expandAuthorManualDirectionalEdges(graph.edges.filter((edge) => nodeIds.has(edge.sourceId) && nodeIds.has(edge.targetId)));
   const labelDensity = options.labelDensity ?? "balanced";
   const forcedBaseLabelIds = buildForcedBaseLabelIds(graph.nodes, validEdges, labelDensity);
+  const manualReciprocalRelationshipIds = buildManualReciprocalRelationshipIds(validEdges);
   const nodeElements: RelationshipGraphSigmaNodeElement[] = graph.nodes.map((node) => {
     const position = options.positions?.get(node.id);
     return {
@@ -297,6 +363,7 @@ export function relationshipGraphToSigmaGraphData(
 
   const edgeElements: RelationshipGraphSigmaEdgeElement[] = validEdges.map((edge) => {
     const baseLabelParts = resolveBaseLabelRenderParts(edge);
+    const manualReciprocalEdge = Boolean(edge.authorRelationshipId && manualReciprocalRelationshipIds.has(edge.authorRelationshipId));
     return {
       id: edge.id,
       source: edge.sourceId,
@@ -315,7 +382,9 @@ export function relationshipGraphToSigmaGraphData(
         baseLabelDirection: baseLabelParts.direction,
         baseLabelPinned: forcedBaseLabelIds.has(edge.id),
         baseSummary: edge.baseRelationSummary,
-        edgeType: baseLabelParts.edgeType,
+        edgeType: manualReciprocalEdge ? "curvedArrow" : baseLabelParts.edgeType,
+        curvature: manualReciprocalEdge ? MANUAL_RECIPROCAL_EDGE_CURVATURE : null,
+        manualReciprocalEdge,
         plotLabel: edge.plotRelationLabel,
         plotLabelText: resolveVisiblePlotLabel(edge),
         plotSummary: edge.plotRelationSummary,
