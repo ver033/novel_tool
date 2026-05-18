@@ -1,6 +1,6 @@
 import type { ChapterSummary } from "../shared/types";
 import type { ChapterRepository } from "../db/repositories/chapter-repo";
-import type { ArcAiSummaryRecord, BookAiSummaryRecord, SummaryRepository } from "../db/repositories/summary-repo";
+import type { ArcAiSummaryRecord, BookAiSummaryRecord, SummaryJobRecord, SummaryRepository } from "../db/repositories/summary-repo";
 import type {
   RelationshipDimension,
   RelationshipEntityImportance,
@@ -29,6 +29,7 @@ type SourceSnapshot = {
   readonly chapters: readonly ChapterSummary[];
   readonly arcs: readonly ArcAiSummaryRecord[];
   readonly book: BookAiSummaryRecord | null;
+  readonly jobs: readonly SummaryJobRecord[];
 };
 
 type GraphBuildContext = {
@@ -208,13 +209,46 @@ function stageFromLabelOnly(
   );
 }
 
+function jobIsCoveredByReadyArc(job: SummaryJobRecord, arcs: readonly ArcAiSummaryRecord[]): boolean {
+  if (!job.targetId) {
+    return false;
+  }
+  const arc = arcs.find((candidate) => candidate.arcKey === job.targetId);
+  return Boolean(arc?.status === "ready" && (arc.sourceHash === job.sourceHash || arc.updatedAt >= job.updatedAt));
+}
+
+function jobIsCoveredByReadyBook(job: SummaryJobRecord, book: BookAiSummaryRecord | null): boolean {
+  return Boolean(book?.status === "ready" && (book.sourceHash === job.sourceHash || book.updatedAt >= job.updatedAt));
+}
+
+function currentFailedSummaryJobs(snapshot: SourceSnapshot, jobType: SummaryJobRecord["jobType"]): SummaryJobRecord[] {
+  return snapshot.jobs.filter((job) => {
+    if (job.status !== "failed" || job.jobType !== jobType) {
+      return false;
+    }
+    if (jobType === "arc_summary") {
+      return !jobIsCoveredByReadyArc(job, snapshot.arcs);
+    }
+    if (jobType === "book_summary") {
+      return !jobIsCoveredByReadyBook(job, snapshot.book);
+    }
+    return false;
+  });
+}
+
+function latestFailureFromJobs(jobs: readonly SummaryJobRecord[]): string | null {
+  return [...jobs].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]?.error ?? null;
+}
+
 function sourceStatusFromSnapshot(snapshot: SourceSnapshot): RelationshipGraphSourceStatus {
   const readyArcs = snapshot.arcs.filter((arc) => arc.status === "ready");
   const graphReadyArcs = readyArcs.filter((arc) => Boolean(arc.structured.人物图谱));
   const missingGraphFields = readyArcs.length - graphReadyArcs.length;
-  const failedArcs = snapshot.arcs.filter((arc) => arc.status === "failed").length;
+  const failedArcJobs = currentFailedSummaryJobs(snapshot, "arc_summary");
+  const failedBookJobs = currentFailedSummaryJobs(snapshot, "book_summary");
+  const failedArcs = snapshot.arcs.filter((arc) => arc.status === "failed").length + failedArcJobs.length;
   const bookGraph = snapshot.book?.structured.人物关系图谱;
-  const bookFailed = snapshot.book?.status === "failed";
+  const bookFailed = snapshot.book?.status === "failed" || failedBookJobs.length > 0;
   const range = bookGraph?.生成来源.chapterRange
     ? { start: bookGraph.生成来源.chapterRange.start, end: bookGraph.生成来源.chapterRange.end }
     : graphReadyArcs.length
@@ -239,7 +273,11 @@ function sourceStatusFromSnapshot(snapshot: SourceSnapshot): RelationshipGraphSo
       hasRelationshipGraph: Boolean(bookGraph),
       failed: bookFailed
     },
-    latestFailure: snapshot.book?.error ?? snapshot.arcs.find((arc) => arc.status === "failed")?.error ?? null
+    latestFailure:
+      latestFailureFromJobs([...failedArcJobs, ...failedBookJobs]) ??
+      snapshot.book?.error ??
+      snapshot.arcs.find((arc) => arc.status === "failed")?.error ??
+      null
   } satisfies Omit<RelationshipGraphSourceStatus, "state" | "message">;
 
   if (snapshot.chapters.length === 0) {
@@ -445,7 +483,8 @@ export class SummaryRelationshipGraphAggregator {
     return {
       chapters: this.chapterRepo.listByProject(projectId),
       arcs: this.summaryRepo.listArcSummaries(projectId),
-      book: this.summaryRepo.getLatestBookSummary(projectId)
+      book: this.summaryRepo.getLatestBookSummary(projectId),
+      jobs: this.summaryRepo.listSummaryJobs(projectId)
     };
   }
 

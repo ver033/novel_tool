@@ -691,6 +691,20 @@ const migrations: readonly Migration[] = [
       `);
     }
   },
+  {
+    version: 21,
+    name: "author_relationship_character_layout",
+    up(db) {
+      const columns = db.prepare("PRAGMA table_info(author_relationship_characters)").all() as { name: string }[];
+      const columnNames = new Set(columns.map((column) => column.name));
+      if (!columnNames.has("layout_x")) {
+        db.exec("ALTER TABLE author_relationship_characters ADD COLUMN layout_x REAL;");
+      }
+      if (!columnNames.has("layout_y")) {
+        db.exec("ALTER TABLE author_relationship_characters ADD COLUMN layout_y REAL;");
+      }
+    }
+  },
 ];
 
 export function runMigrations(db: SqliteDatabase): void {

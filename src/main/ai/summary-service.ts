@@ -2305,7 +2305,7 @@ export class SummaryService implements SummaryIndexInvalidator {
       return Boolean(job.targetId && cache.chapterIds.has(job.targetId));
     }
     if (job.jobType === "arc_summary") {
-      return this.isArcSummaryJobRelevantToCurrentIndex(job, cache);
+      return this.isArcSummaryJobRelevantToCurrentIndex(projectId, job, cache);
     }
     if (job.jobType === "book_summary") {
       return this.isBookSummaryJobRelevantToCurrentIndex(projectId, job, cache);
@@ -2313,7 +2313,7 @@ export class SummaryService implements SummaryIndexInvalidator {
     return true;
   }
 
-  private isArcSummaryJobRelevantToCurrentIndex(job: SummaryJobRecord, cache: SummaryJobRelevanceCache): boolean {
+  private isArcSummaryJobRelevantToCurrentIndex(projectId: string, job: SummaryJobRecord, cache: SummaryJobRelevanceCache): boolean {
     if (!job.targetId) {
       return false;
     }
@@ -2343,7 +2343,7 @@ export class SummaryService implements SummaryIndexInvalidator {
       return false;
     }
 
-    return computeSourceHash(readySummaries.map((summary) => summary.contentHash)) === job.sourceHash;
+    return this.computeArcSourceHash(projectId, range.from, readySummaries) === job.sourceHash;
   }
 
   private isBookSummaryJobRelevantToCurrentIndex(projectId: string, job: SummaryJobRecord, cache: SummaryJobRelevanceCache): boolean {

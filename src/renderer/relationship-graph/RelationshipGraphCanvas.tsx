@@ -6,24 +6,28 @@ type RelationshipGraphCanvasProps = {
   readonly nodes: readonly RelationshipGraphNode[];
   readonly edges: readonly RelationshipGraphEdge[];
   readonly displaySettings: RelationshipGraphDisplaySettings;
+  readonly graphSource?: "ai" | "author";
   readonly layoutMode?: "auto" | "manual";
   readonly selectedId: string | null;
   readonly focusNodeId?: string | null;
   readonly loading: boolean;
   readonly error: string | null;
   readonly onSelect: (id: string) => void;
+  readonly onNodePositionChange?: (nodeId: string, position: { readonly x: number; readonly y: number }) => void;
 };
 
 export function RelationshipGraphCanvas({
   nodes,
   edges,
   displaySettings,
+  graphSource = "ai",
   layoutMode = "auto",
   selectedId,
   focusNodeId,
   loading,
   error,
-  onSelect
+  onSelect,
+  onNodePositionChange
 }: RelationshipGraphCanvasProps) {
   if (error) {
     return (
@@ -38,7 +42,7 @@ export function RelationshipGraphCanvas({
     return (
       <section className="relationship-graph-canvas empty" aria-busy="true">
         <h2>正在读取关系图</h2>
-        <p>正在读取阶段摘要和全书摘要中的人物关系图来源。</p>
+        <p>{graphSource === "author" ? "正在读取作者设定图谱。" : "正在读取阶段摘要和全书摘要中的人物关系图来源。"}</p>
       </section>
     );
   }
@@ -46,8 +50,8 @@ export function RelationshipGraphCanvas({
   if (nodes.length === 0) {
     return (
       <section className="relationship-graph-canvas empty">
-        <h2>还没有可展示的人物关系</h2>
-        <p>阶段摘要和全书摘要完成后，这里会显示人物与关系变化。</p>
+        <h2>{graphSource === "author" ? "作者还没有录入人物关系" : "还没有可展示的人物关系"}</h2>
+        <p>{graphSource === "author" ? "添加人物和关系后，这里会显示作者设定图谱。" : "阶段摘要和全书摘要完成后，这里会显示人物与关系变化。"}</p>
       </section>
     );
   }
@@ -75,6 +79,7 @@ export function RelationshipGraphCanvas({
         selectedId={selectedId}
         onSelectEdge={onSelect}
         onSelectNode={onSelect}
+        onNodePositionChange={onNodePositionChange}
       />
       <div className="sr-only relationship-graph-accessible-controls" aria-label="图谱键盘选择">
         {nodes.map((node) => (

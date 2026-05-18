@@ -385,6 +385,9 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
         updateCharacter(input) {
           return repo.updateCharacter(input);
         },
+        updateCharacterLayout(input) {
+          return repo.updateCharacterLayout(input);
+        },
         createRelationship(input) {
           return repo.createRelationship(input);
         },

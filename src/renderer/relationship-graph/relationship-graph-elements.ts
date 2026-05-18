@@ -42,8 +42,12 @@ export type RelationshipGraphSigmaEdgeData = {
   readonly label: string;
   readonly baseLabel: string;
   readonly baseLabelText: string;
+  readonly baseLabelSourceToTargetText: string;
+  readonly baseLabelTargetToSourceText: string;
+  readonly baseLabelDirection: "single" | "same_both_ways" | "different_both_ways";
   readonly baseLabelPinned: boolean;
   readonly baseSummary: string | null;
+  readonly edgeType: "line" | "arrow" | "doubleArrow";
   readonly plotLabel: string;
   readonly plotLabelText: string;
   readonly plotSummary: string;
@@ -208,6 +212,46 @@ function resolveVisibleBaseLabel(
   return compactGraphLabel(baseLabel, 12);
 }
 
+function normalizeComparableLabel(value: string): string {
+  return normalizeGraphLabel(value).toLocaleLowerCase("zh-CN");
+}
+
+function resolveBaseLabelRenderParts(edge: RelationshipGraphEdge): {
+  readonly baseLabelText: string;
+  readonly sourceToTargetText: string;
+  readonly targetToSourceText: string;
+  readonly direction: RelationshipGraphSigmaEdgeData["baseLabelDirection"];
+  readonly edgeType: RelationshipGraphSigmaEdgeData["edgeType"];
+} {
+  const baseLabel = normalizeGraphLabel(edge.baseRelationLabel);
+  const sourceToTargetLabel = normalizeGraphLabel(edge.baseRelationSourceToTargetLabel) || baseLabel;
+  const targetToSourceLabel = normalizeGraphLabel(edge.baseRelationTargetToSourceLabel);
+  const sourceToTargetText = compactGraphLabel(sourceToTargetLabel, 12);
+  const targetToSourceText = compactGraphLabel(targetToSourceLabel, 12);
+
+  if (targetToSourceLabel) {
+    const direction =
+      normalizeComparableLabel(sourceToTargetLabel) === normalizeComparableLabel(targetToSourceLabel)
+        ? "same_both_ways"
+        : "different_both_ways";
+    return {
+      baseLabelText: sourceToTargetText,
+      sourceToTargetText,
+      targetToSourceText,
+      direction,
+      edgeType: "doubleArrow"
+    };
+  }
+
+  return {
+    baseLabelText: resolveVisibleBaseLabel(edge),
+    sourceToTargetText,
+    targetToSourceText: "",
+    direction: "single",
+    edgeType: edge.evidenceSources.includes("author_manual") && edge.direction === "source_to_target" ? "arrow" : "line"
+  };
+}
+
 function resolveVisiblePlotLabel(edge: RelationshipGraphEdge): string {
   const baseLabel = normalizeGraphLabel(edge.baseRelationLabel);
   const plotLabel = normalizeGraphLabel(edge.plotRelationLabel);
@@ -251,45 +295,52 @@ export function relationshipGraphToSigmaGraphData(
     };
   });
 
-  const edgeElements: RelationshipGraphSigmaEdgeElement[] = validEdges.map((edge) => ({
-    id: edge.id,
-    source: edge.sourceId,
-    target: edge.targetId,
-    data: {
+  const edgeElements: RelationshipGraphSigmaEdgeElement[] = validEdges.map((edge) => {
+    const baseLabelParts = resolveBaseLabelRenderParts(edge);
+    return {
       id: edge.id,
       source: edge.sourceId,
       target: edge.targetId,
-      sourceName: edge.sourceName,
-      targetName: edge.targetName,
-      label: edge.baseRelationLabel,
-      baseLabel: edge.baseRelationLabel,
-      baseLabelText: resolveVisibleBaseLabel(edge),
-      baseLabelPinned: forcedBaseLabelIds.has(edge.id),
-      baseSummary: edge.baseRelationSummary,
-      plotLabel: edge.plotRelationLabel,
-      plotLabelText: resolveVisiblePlotLabel(edge),
-      plotSummary: edge.plotRelationSummary,
-      primaryDimension: edge.primaryDimensionName,
-      dimensions: edge.relationshipDimensions.map((dimension) => dimension.name),
-      dimensionDetails: edge.relationshipDimensions.map((dimension) => ({ ...dimension })),
-      semanticMarkers: [...edge.semanticMarkers],
-      direction: edge.direction,
-      polarity: edge.polarity,
-      intensity: roundGraphMetric(edge.intensity),
-      confidence: roundGraphMetric(edge.confidence),
-      weight: roundGraphMetric(edge.weight),
-      evidenceCount: edge.evidenceCount,
-      firstChapterOrder: edge.firstChapterOrder,
-      latestChapterOrder: edge.latestChapterOrder,
-      chapterIds: [...edge.chapterIds],
-      timeline: edge.timeline.map((stage) => ({
-        ...stage,
-        relationshipDimensions: stage.relationshipDimensions.map((dimension) => ({ ...dimension })),
-        semanticMarkers: [...stage.semanticMarkers]
-      })),
-      uncertain: edgeHasUncertainty(edge)
-    }
-  }));
+      data: {
+        id: edge.id,
+        source: edge.sourceId,
+        target: edge.targetId,
+        sourceName: edge.sourceName,
+        targetName: edge.targetName,
+        label: edge.baseRelationLabel,
+        baseLabel: edge.baseRelationLabel,
+        baseLabelText: baseLabelParts.baseLabelText,
+        baseLabelSourceToTargetText: baseLabelParts.sourceToTargetText,
+        baseLabelTargetToSourceText: baseLabelParts.targetToSourceText,
+        baseLabelDirection: baseLabelParts.direction,
+        baseLabelPinned: forcedBaseLabelIds.has(edge.id),
+        baseSummary: edge.baseRelationSummary,
+        edgeType: baseLabelParts.edgeType,
+        plotLabel: edge.plotRelationLabel,
+        plotLabelText: resolveVisiblePlotLabel(edge),
+        plotSummary: edge.plotRelationSummary,
+        primaryDimension: edge.primaryDimensionName,
+        dimensions: edge.relationshipDimensions.map((dimension) => dimension.name),
+        dimensionDetails: edge.relationshipDimensions.map((dimension) => ({ ...dimension })),
+        semanticMarkers: [...edge.semanticMarkers],
+        direction: edge.direction,
+        polarity: edge.polarity,
+        intensity: roundGraphMetric(edge.intensity),
+        confidence: roundGraphMetric(edge.confidence),
+        weight: roundGraphMetric(edge.weight),
+        evidenceCount: edge.evidenceCount,
+        firstChapterOrder: edge.firstChapterOrder,
+        latestChapterOrder: edge.latestChapterOrder,
+        chapterIds: [...edge.chapterIds],
+        timeline: edge.timeline.map((stage) => ({
+          ...stage,
+          relationshipDimensions: stage.relationshipDimensions.map((dimension) => ({ ...dimension })),
+          semanticMarkers: [...stage.semanticMarkers]
+        })),
+        uncertain: edgeHasUncertainty(edge)
+      }
+    };
+  });
 
   return { nodes: nodeElements, edges: edgeElements };
 }

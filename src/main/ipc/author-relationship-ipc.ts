@@ -5,7 +5,8 @@ import {
   authorRelationshipDeleteCharacterInputSchema,
   authorRelationshipDeleteRelationshipInputSchema,
   authorRelationshipGetGraphInputSchema,
-  authorRelationshipUpdateCharacterInputSchema
+  authorRelationshipUpdateCharacterInputSchema,
+  authorRelationshipUpdateCharacterLayoutInputSchema
 } from "../shared/schemas";
 import type {
   AuthorRelationshipCreateCharacterInput,
@@ -13,7 +14,8 @@ import type {
   AuthorRelationshipDeleteCharacterInput,
   AuthorRelationshipDeleteRelationshipInput,
   AuthorRelationshipGetGraphInput,
-  AuthorRelationshipUpdateCharacterInput
+  AuthorRelationshipUpdateCharacterInput,
+  AuthorRelationshipUpdateCharacterLayoutInput
 } from "../shared/types";
 import { ipcChannels } from "../shared/types";
 import { createValidatedIpcHandler } from "./register-ipc";
@@ -22,6 +24,7 @@ export type AuthorRelationshipIpcService = {
   readonly getGraph: (input: AuthorRelationshipGetGraphInput) => unknown;
   readonly createCharacter: (input: AuthorRelationshipCreateCharacterInput) => unknown;
   readonly updateCharacter: (input: AuthorRelationshipUpdateCharacterInput) => unknown;
+  readonly updateCharacterLayout: (input: AuthorRelationshipUpdateCharacterLayoutInput) => unknown;
   readonly createRelationship: (input: AuthorRelationshipCreateRelationshipInput) => unknown;
   readonly deleteCharacter: (input: AuthorRelationshipDeleteCharacterInput) => unknown;
   readonly deleteRelationship: (input: AuthorRelationshipDeleteRelationshipInput) => unknown;
@@ -39,6 +42,12 @@ export function registerAuthorRelationshipIpc(serviceFactory: (projectId: string
   ipcMain.handle(
     ipcChannels.authorRelationship.updateCharacter,
     createValidatedIpcHandler(authorRelationshipUpdateCharacterInputSchema, (input) => serviceFactory(input.projectId).updateCharacter(input))
+  );
+  ipcMain.handle(
+    ipcChannels.authorRelationship.updateCharacterLayout,
+    createValidatedIpcHandler(authorRelationshipUpdateCharacterLayoutInputSchema, (input) =>
+      serviceFactory(input.projectId).updateCharacterLayout(input)
+    )
   );
   ipcMain.handle(
     ipcChannels.authorRelationship.createRelationship,

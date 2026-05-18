@@ -86,6 +86,11 @@ export type RelationshipGraphDimensionSummary = {
   readonly averageConfidence: number;
 };
 
+export type RelationshipGraphPosition = {
+  readonly x: number;
+  readonly y: number;
+};
+
 export type RelationshipGraphNode = {
   readonly id: string;
   readonly name: string;
@@ -103,6 +108,7 @@ export type RelationshipGraphNode = {
   readonly averageConfidence: number;
   readonly averageIntensity: number;
   readonly score: number;
+  readonly layoutPosition?: RelationshipGraphPosition | null;
 };
 
 export type RelationshipGraphEdgeStage = {
@@ -110,6 +116,8 @@ export type RelationshipGraphEdgeStage = {
   readonly chapterTitle: string;
   readonly chapterOrder: number;
   readonly baseRelationLabel: string;
+  readonly baseRelationSourceToTargetLabel?: string | null;
+  readonly baseRelationTargetToSourceLabel?: string | null;
   readonly baseRelationSummary: string | null;
   readonly plotRelationLabel: string;
   readonly plotRelationSummary: string;
@@ -137,6 +145,8 @@ export type RelationshipGraphEdge = {
   readonly sourceName: string;
   readonly targetName: string;
   readonly baseRelationLabel: string;
+  readonly baseRelationSourceToTargetLabel?: string | null;
+  readonly baseRelationTargetToSourceLabel?: string | null;
   readonly baseRelationSummary: string | null;
   readonly plotRelationLabel: string;
   readonly plotRelationSummary: string;

@@ -6,7 +6,14 @@ import forceAtlas2 from "graphology-layout-forceatlas2";
 import FA2LayoutSupervisor from "graphology-layout-forceatlas2/worker";
 import noverlap from "graphology-layout-noverlap";
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import type { EdgeLabelDrawingFunction, NodeHoverDrawingFunction, NodeLabelDrawingFunction } from "sigma/rendering";
+import {
+  EdgeArrowProgram,
+  EdgeDoubleArrowProgram,
+  EdgeLineProgram,
+  type EdgeLabelDrawingFunction,
+  type NodeHoverDrawingFunction,
+  type NodeLabelDrawingFunction
+} from "sigma/rendering";
 import { animateNodes } from "sigma/utils";
 import type { RelationshipGraphEdge, RelationshipGraphNode } from "../../main/shared/relationship-graph";
 import {
@@ -20,6 +27,7 @@ import {
   buildRelationshipHubSeedLayoutPositions,
   shouldUseRelationshipHubSectorLayout
 } from "./relationship-graph-hub-layout";
+import { resolveNodeLabelAnchor, type RelationshipNodeLabelAnchor } from "./relationship-node-label-layout";
 import {
   getRelationshipEdgeLabelBoxes,
   reserveRelationshipEdgeLabelBox,
@@ -37,6 +45,7 @@ type SigmaRelationshipGraphProps = {
   readonly focusNodeId?: string | null;
   readonly onSelectNode: (id: string) => void;
   readonly onSelectEdge: (id: string) => void;
+  readonly onNodePositionChange?: (nodeId: string, position: RelationshipGraphPosition) => void;
 };
 
 type RelationshipGraphLayoutMode = "auto" | "manual";
@@ -67,11 +76,15 @@ type SigmaNodeAttributes = RelationshipGraphSigmaNodeData & {
   hovering: boolean;
   dragging: boolean;
   fixed: boolean;
+  labelAnchorX: RelationshipNodeLabelAnchor["x"];
+  labelAnchorY: RelationshipNodeLabelAnchor["y"];
+  labelTextAlign: CanvasTextAlign;
   zIndex: number;
 };
 
 type SigmaEdgeAttributes = RelationshipGraphSigmaEdgeData & {
   readonly data: RelationshipGraphSigmaEdgeData;
+  type: RelationshipGraphSigmaEdgeData["edgeType"];
   size: number;
   color: string;
   forceLabel: boolean;
@@ -210,6 +223,54 @@ function estimateNodeLabelWidth(label: string, fontSize: number): number {
   return Math.min(220, width + 10);
 }
 
+function labelAnchorFromNodeData(data: Partial<SigmaNodeAttributes>): RelationshipNodeLabelAnchor {
+  const anchorX = data.labelAnchorX === -1 || data.labelAnchorX === 0 || data.labelAnchorX === 1 ? data.labelAnchorX : 1;
+  const anchorY = data.labelAnchorY === -1 || data.labelAnchorY === 0 || data.labelAnchorY === 1 ? data.labelAnchorY : 0;
+  return {
+    x: anchorX,
+    y: anchorY,
+    textAlign: data.labelTextAlign ?? (anchorX < 0 ? "right" : anchorX > 0 ? "left" : "center")
+  };
+}
+
+function nodeLabelPoint(input: {
+  readonly x: number;
+  readonly y: number;
+  readonly size: number;
+  readonly anchor: RelationshipNodeLabelAnchor;
+}): { readonly x: number; readonly y: number } {
+  const padding = input.size + 7;
+  return {
+    x: input.x + input.anchor.x * padding,
+    y: input.y + input.anchor.y * padding
+  };
+}
+
+function nodeLabelBox(input: {
+  readonly x: number;
+  readonly y: number;
+  readonly size: number;
+  readonly label: string;
+  readonly fontSize: number;
+  readonly anchor: RelationshipNodeLabelAnchor;
+}): { readonly x: number; readonly y: number; readonly width: number; readonly height: number } {
+  const width = estimateNodeLabelWidth(input.label, input.fontSize);
+  const height = input.fontSize + 6;
+  const point = nodeLabelPoint(input);
+  const x =
+    input.anchor.textAlign === "right"
+      ? point.x - width
+      : input.anchor.textAlign === "center"
+        ? point.x - width / 2
+        : point.x;
+  return {
+    x,
+    y: point.y - height / 2,
+    width,
+    height
+  };
+}
+
 const drawRelationshipNodeLabel: NodeLabelDrawingFunction<SigmaNodeAttributes, SigmaEdgeAttributes> = (
   context,
   data,
@@ -224,17 +285,24 @@ const drawRelationshipNodeLabel: NodeLabelDrawingFunction<SigmaNodeAttributes, S
   const labelColor: string = settings.labelColor.attribute
     ? (data[settings.labelColor.attribute] as string | undefined) || settings.labelColor.color || "#172033"
     : settings.labelColor.color || "#172033";
-  const x = data.x + data.size + 4;
-  const y = data.y + fontSize / 3;
+  const anchor = labelAnchorFromNodeData(data as Partial<SigmaNodeAttributes>);
+  const point = nodeLabelPoint({
+    x: data.x,
+    y: data.y,
+    size: data.size,
+    anchor
+  });
 
   context.save();
   context.font = `${settings.labelWeight} ${fontSize}px ${settings.labelFont}`;
+  context.textAlign = anchor.textAlign;
+  context.textBaseline = "middle";
   context.lineJoin = "round";
   context.strokeStyle = "rgba(255, 255, 255, 0.88)";
   context.lineWidth = 3.5;
-  context.strokeText(label, x, y);
+  context.strokeText(label, point.x, point.y);
   context.fillStyle = labelColor;
-  context.fillText(label, x, y);
+  context.fillText(label, point.x, point.y);
   context.restore();
 };
 
@@ -294,8 +362,33 @@ const drawRelationshipEdgeLabel: EdgeLabelDrawingFunction<SigmaNodeAttributes, S
 
   const fontSize = settings.edgeLabelSize;
   const edgeKey = String((edgeData as { readonly key?: string }).key ?? label);
+  const relationshipEdgeData = edgeData as Partial<SigmaEdgeAttributes>;
   context.save();
   context.font = `${settings.edgeLabelWeight} ${fontSize}px ${settings.edgeLabelFont}`;
+  const labelColor: string = settings.edgeLabelColor.attribute
+    ? (edgeData[settings.edgeLabelColor.attribute] as string | undefined) || settings.edgeLabelColor.color || "#334155"
+    : settings.edgeLabelColor.color || "#334155";
+  if (
+    relationshipEdgeData.baseLabelDirection === "different_both_ways" &&
+    relationshipEdgeData.baseLabelSourceToTargetText &&
+    relationshipEdgeData.baseLabelTargetToSourceText &&
+    label === relationshipEdgeData.baseLabelText
+  ) {
+    drawBidirectionalRelationshipEdgeLabels(
+      context,
+      sourceData,
+      targetData,
+      {
+        sourceToTargetLabel: relationshipEdgeData.baseLabelSourceToTargetText,
+        targetToSourceLabel: relationshipEdgeData.baseLabelTargetToSourceText,
+        edgeSize: edgeData.size,
+        fontSize,
+        labelColor
+      }
+    );
+    context.restore();
+    return;
+  }
   const availableWidth = Math.min(
     EDGE_LABEL_MAX_WIDTH,
     Math.max(20, length - sourceData.size - targetData.size - fontSize * 2)
@@ -348,9 +441,6 @@ const drawRelationshipEdgeLabel: EdgeLabelDrawingFunction<SigmaNodeAttributes, S
   if (placement.box) {
     reserveRelationshipEdgeLabelBox(context.canvas, placement.box);
   }
-  const labelColor: string = settings.edgeLabelColor.attribute
-    ? (edgeData[settings.edgeLabelColor.attribute] as string | undefined) || settings.edgeLabelColor.color || "#334155"
-    : settings.edgeLabelColor.color || "#334155";
 
   context.translate(placement.x, placement.y);
   context.rotate(placement.angle);
@@ -362,6 +452,95 @@ const drawRelationshipEdgeLabel: EdgeLabelDrawingFunction<SigmaNodeAttributes, S
   context.fillText(visibleLabel, -textWidth / 2, fontSize / 3);
   context.restore();
 };
+
+function drawBidirectionalRelationshipEdgeLabels(
+  context: CanvasRenderingContext2D,
+  sourceData: { readonly x: number; readonly y: number; readonly size: number },
+  targetData: { readonly x: number; readonly y: number; readonly size: number },
+  options: {
+    readonly sourceToTargetLabel: string;
+    readonly targetToSourceLabel: string;
+    readonly edgeSize: number;
+    readonly fontSize: number;
+    readonly labelColor: string;
+  }
+): void {
+  const dx = targetData.x - sourceData.x;
+  const dy = targetData.y - sourceData.y;
+  const length = Math.hypot(dx, dy);
+  const usableLength = length - sourceData.size - targetData.size - options.fontSize * 2;
+  if (usableLength <= 48) {
+    return;
+  }
+
+  const maxLabelWidth = Math.min(EDGE_LABEL_MAX_WIDTH * 0.58, Math.max(24, usableLength * 0.38));
+  const sourceToTargetLabel = ellipsizeCanvasText(context, options.sourceToTargetLabel, maxLabelWidth);
+  const targetToSourceLabel = ellipsizeCanvasText(context, options.targetToSourceLabel, maxLabelWidth);
+  if (!sourceToTargetLabel && !targetToSourceLabel) {
+    return;
+  }
+
+  const unitX = dx / length;
+  const unitY = dy / length;
+  const normalX = -unitY;
+  const normalY = unitX;
+  const offset = Math.max(8, options.edgeSize + options.fontSize * 0.55);
+  const angle = Math.atan2(dy, dx);
+  const readableAngle = angle > Math.PI / 2 || angle < -Math.PI / 2 ? angle + Math.PI : angle;
+
+  drawEdgeLabelAtPoint(context, {
+    text: sourceToTargetLabel,
+    x: sourceData.x + unitX * length * 0.38 + normalX * offset,
+    y: sourceData.y + unitY * length * 0.38 + normalY * offset,
+    angle: readableAngle,
+    fontSize: options.fontSize,
+    labelColor: options.labelColor
+  });
+  drawEdgeLabelAtPoint(context, {
+    text: targetToSourceLabel,
+    x: sourceData.x + unitX * length * 0.62 - normalX * offset,
+    y: sourceData.y + unitY * length * 0.62 - normalY * offset,
+    angle: readableAngle,
+    fontSize: options.fontSize,
+    labelColor: options.labelColor
+  });
+}
+
+function drawEdgeLabelAtPoint(
+  context: CanvasRenderingContext2D,
+  input: {
+    readonly text: string;
+    readonly x: number;
+    readonly y: number;
+    readonly angle: number;
+    readonly fontSize: number;
+    readonly labelColor: string;
+  }
+): void {
+  if (!input.text) {
+    return;
+  }
+  const textWidth = context.measureText(input.text).width;
+  const textHeight = input.fontSize + 6;
+  const box = {
+    x: input.x - textWidth / 2,
+    y: input.y - textHeight / 2,
+    width: textWidth,
+    height: textHeight
+  };
+  reserveRelationshipEdgeLabelBox(context.canvas, box);
+
+  context.save();
+  context.translate(input.x, input.y);
+  context.rotate(input.angle);
+  context.lineJoin = "round";
+  context.strokeStyle = "rgba(255, 253, 243, 0.95)";
+  context.lineWidth = 4;
+  context.fillStyle = input.labelColor;
+  context.strokeText(input.text, -textWidth / 2, input.fontSize / 3);
+  context.fillText(input.text, -textWidth / 2, input.fontSize / 3);
+  context.restore();
+}
 
 function fallbackPosition(index: number, total: number): RelationshipGraphPosition {
   const angle = -Math.PI / 2 + (Math.PI * 2 * index) / Math.max(1, total);
@@ -376,23 +555,50 @@ function roundPosition(value: number): number {
   return Math.round(value * 1000) / 1000;
 }
 
+function layoutPositionFromNode(node: RelationshipGraphNode): RelationshipGraphPosition | null {
+  const position = node.layoutPosition;
+  if (!position || !Number.isFinite(position.x) || !Number.isFinite(position.y)) {
+    return null;
+  }
+  return {
+    x: roundPosition(position.x),
+    y: roundPosition(position.y)
+  };
+}
+
 function buildManualSeedPositions(nodes: readonly RelationshipGraphNode[]): Map<string, RelationshipGraphPosition> {
   const positions = new Map<string, RelationshipGraphPosition>();
   if (nodes.length === 0) {
     return positions;
   }
+  nodes.forEach((node) => {
+    const position = layoutPositionFromNode(node);
+    if (position) {
+      positions.set(node.id, position);
+    }
+  });
   if (nodes.length === 1) {
+    if (positions.has(nodes[0].id)) {
+      return positions;
+    }
     positions.set(nodes[0].id, { x: 0, y: 0 });
     return positions;
   }
   if (nodes.length === 2) {
-    positions.set(nodes[0].id, { x: -220, y: 0 });
-    positions.set(nodes[1].id, { x: 220, y: 0 });
+    if (!positions.has(nodes[0].id)) {
+      positions.set(nodes[0].id, { x: -220, y: 0 });
+    }
+    if (!positions.has(nodes[1].id)) {
+      positions.set(nodes[1].id, { x: 220, y: 0 });
+    }
     return positions;
   }
 
   const radius = 190 + Math.min(8, nodes.length) * 14;
   nodes.forEach((node, index) => {
+    if (positions.has(node.id)) {
+      return;
+    }
     const angle = -Math.PI / 2 + (Math.PI * 2 * index) / nodes.length;
     positions.set(node.id, {
       x: roundPosition(Math.cos(angle) * radius),
@@ -444,7 +650,11 @@ function buildLayoutDataKey(
   focusNodeId: string | null | undefined
 ): string {
   const nodeKey = nodes
-    .map((node) => `${node.id}:${node.relationCount}:${Math.round(node.score * 100)}`)
+    .map((node) => {
+      const position = layoutPositionFromNode(node);
+      const positionKey = position ? `${position.x}:${position.y}` : "auto";
+      return `${node.id}:${node.relationCount}:${Math.round(node.score * 100)}:${positionKey}`;
+    })
     .sort()
     .join("|");
   const edgeKey = edges
@@ -537,6 +747,25 @@ function applyNoverlapLayout(
   });
 }
 
+function updateNodeLabelAnchors(graph: SigmaGraph): void {
+  graph.forEachNode((node, attributes) => {
+    const vectors = graph.neighbors(node).map((neighbor) => {
+      const neighborAttributes = graph.getNodeAttributes(neighbor);
+      return {
+        dx: neighborAttributes.x - attributes.x,
+        dy: neighborAttributes.y - attributes.y,
+        weight: Math.max(1, neighborAttributes.relationCount ?? 1)
+      };
+    });
+    const anchor = resolveNodeLabelAnchor(vectors);
+    graph.mergeNodeAttributes(node, {
+      labelAnchorX: anchor.x,
+      labelAnchorY: anchor.y,
+      labelTextAlign: anchor.textAlign
+    });
+  });
+}
+
 function cacheGraphPositions(graph: SigmaGraph, positionCache: Map<string, RelationshipGraphPosition>): void {
   graph.forEachNode((node, attributes) => {
     positionCache.set(node, { x: attributes.x, y: attributes.y });
@@ -597,6 +826,9 @@ function buildGraph(
       hovering: false,
       dragging: false,
       fixed: false,
+      labelAnchorX: 1,
+      labelAnchorY: 0,
+      labelTextAlign: "left",
       zIndex: 4
     });
   });
@@ -606,6 +838,7 @@ function buildGraph(
       ...edge.data,
       data: edge.data,
       label: edge.data.baseLabelText,
+      type: edge.data.edgeType,
       size: edgeSize(edge.data, config),
       color: edgeColor(edge.data),
       forceLabel: edge.data.baseLabelPinned,
@@ -624,6 +857,7 @@ function buildGraph(
       settings: buildForceAtlas2Settings(graph, config, displaySettings)
     });
     applyNoverlapLayout(graph, config, displaySettings);
+    updateNodeLabelAnchors(graph);
     graph.forEachNode((node, attributes) => {
       const initial = initialPositions.get(node);
       if (!initial) {
@@ -635,6 +869,7 @@ function buildGraph(
       graph.setNodeAttribute(node, "y", initial.y);
     });
   } else if (Object.keys(animationTargets).length === 0) {
+    updateNodeLabelAnchors(graph);
     cacheGraphPositions(graph, positionCache);
   }
 
@@ -685,7 +920,8 @@ function SigmaGraphController({
   selectedId,
   focusNodeId,
   onSelectNode,
-  onSelectEdge
+  onSelectEdge,
+  onNodePositionChange
 }: SigmaRelationshipGraphProps) {
   const sigma = useSigma<SigmaNodeAttributes, SigmaEdgeAttributes>();
   const loadGraph = useLoadGraph<SigmaNodeAttributes, SigmaEdgeAttributes>();
@@ -695,6 +931,7 @@ function SigmaGraphController({
   const lastLayoutDataKey = useRef<string | null>(null);
   const onSelectNodeRef = useRef(onSelectNode);
   const onSelectEdgeRef = useRef(onSelectEdge);
+  const onNodePositionChangeRef = useRef(onNodePositionChange);
   const cancelAnimationRef = useRef<(() => void) | null>(null);
   const draggedNodeRef = useRef<string | null>(null);
   const dragStartRef = useRef<RelationshipGraphPosition | null>(null);
@@ -717,13 +954,14 @@ function SigmaGraphController({
           return;
         }
 
-        const height = NODE_LABEL_BOX_FONT_SIZE + 6;
-        const box = {
-          x: displayData.x + displayData.size + 6,
-          y: displayData.y - height / 2,
-          width: estimateNodeLabelWidth(label, NODE_LABEL_BOX_FONT_SIZE),
-          height
-        };
+        const box = nodeLabelBox({
+          x: displayData.x,
+          y: displayData.y,
+          size: displayData.size,
+          label,
+          fontSize: NODE_LABEL_BOX_FONT_SIZE,
+          anchor: labelAnchorFromNodeData(attributes)
+        });
         canvases.forEach((canvas) => reserveRelationshipEdgeLabelBox(canvas, box));
       });
     };
@@ -740,6 +978,10 @@ function SigmaGraphController({
   useEffect(() => {
     onSelectEdgeRef.current = onSelectEdge;
   }, [onSelectEdge]);
+
+  useEffect(() => {
+    onNodePositionChangeRef.current = onNodePositionChange;
+  }, [onNodePositionChange]);
 
   const skipSettlingLayout = layoutMode === "manual";
   const layoutDataKey = useMemo(() => buildLayoutDataKey(nodes, edges, focusNodeId), [edges, focusNodeId, nodes]);
@@ -776,6 +1018,7 @@ function SigmaGraphController({
     if (!skipSettlingLayout && options.resolveOverlap && !focusNodeId && activeGraph.order > 1) {
       applyNoverlapLayout(activeGraph, graphDensityConfig[resolveGraphDensity(activeGraph.order)], displaySettings);
     }
+    updateNodeLabelAnchors(activeGraph);
     cacheGraphPositions(activeGraph, positionCache.current);
   }, [displaySettings, focusNodeId, sigma, skipSettlingLayout]);
 
@@ -832,6 +1075,7 @@ function SigmaGraphController({
         { duration: 650, easing: "quadraticInOut" },
         () => {
           cancelAnimationRef.current = null;
+          updateNodeLabelAnchors(activeGraph);
           cacheGraphPositions(activeGraph, positionCache.current);
           startSettlingLayout(activeGraph, null, 650);
         }
@@ -857,7 +1101,7 @@ function SigmaGraphController({
     setSettings({
       edgeReducer: (edge, attrs) => {
         const selected = selectedId === edge;
-        const label = selected ? attrs.plotLabelText : attrs.baseLabelText;
+        const label = attrs.baseLabelDirection === "different_both_ways" ? attrs.baseLabelText : selected ? attrs.plotLabelText : attrs.baseLabelText;
         const nextAttrs = { ...attrs };
         nextAttrs.color = attrs.dimmed ? "rgba(148, 163, 184, 0.14)" : attrs.highlighted || selected ? attrs.color : `${attrs.color}cc`;
         nextAttrs.forceLabel = Boolean(label && !attrs.dimmed && (selected || attrs.highlighted || attrs.forceLabel));
@@ -898,10 +1142,13 @@ function SigmaGraphController({
       if (activeGraph.hasNode(draggedNode)) {
         activeGraph.setNodeAttribute(draggedNode, "dragging", false);
         activeGraph.setNodeAttribute(draggedNode, "fixed", false);
-        positionCache.current.set(draggedNode, {
-          x: activeGraph.getNodeAttribute(draggedNode, "x"),
-          y: activeGraph.getNodeAttribute(draggedNode, "y")
-        });
+        updateNodeLabelAnchors(activeGraph);
+        const nextPosition = {
+          x: roundPosition(activeGraph.getNodeAttribute(draggedNode, "x")),
+          y: roundPosition(activeGraph.getNodeAttribute(draggedNode, "y"))
+        };
+        positionCache.current.set(draggedNode, nextPosition);
+        onNodePositionChangeRef.current?.(draggedNode, nextPosition);
       }
       sigma.refresh();
       if (!skipSettlingLayout) {
@@ -972,6 +1219,7 @@ function SigmaGraphController({
         activeGraph.setNodeAttribute(draggedNode, "x", nextPosition.x);
         activeGraph.setNodeAttribute(draggedNode, "y", nextPosition.y);
         positionCache.current.set(draggedNode, nextPosition);
+        updateNodeLabelAnchors(activeGraph);
         sigma.refresh();
       },
       mouseup: finishDragging,
@@ -999,6 +1247,7 @@ export function SigmaRelationshipGraph(props: SigmaRelationshipGraphProps) {
       autoCenter: layoutMode !== "manual",
       autoRescale: layoutMode !== "manual",
       defaultEdgeColor: "#94a3b8",
+      defaultEdgeType: "line",
       defaultDrawEdgeLabel: drawRelationshipEdgeLabel,
       defaultDrawNodeHover: drawRelationshipNodeHover,
       defaultDrawNodeLabel: drawRelationshipNodeLabel,
@@ -1007,6 +1256,11 @@ export function SigmaRelationshipGraph(props: SigmaRelationshipGraphProps) {
       edgeLabelFont: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
       edgeLabelSize: 10,
       edgeLabelWeight: "650",
+      edgeProgramClasses: {
+        arrow: EdgeArrowProgram,
+        doubleArrow: EdgeDoubleArrowProgram,
+        line: EdgeLineProgram
+      },
       enableEdgeEvents: true,
       hideEdgesOnMove: false,
       hideLabelsOnMove: false,
