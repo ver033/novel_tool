@@ -84,6 +84,10 @@ describe("character relationship graph page wiring", () => {
     expect(authorControls).toContain("relationship-author-actions");
     expect(authorControls).toContain("author-relationship-popover");
     expect(authorControls).toContain("添加关系");
+    expect(authorControls).toContain("useState(false)");
+    expect(authorControls).toContain("默认只保存 A 对 B；需要反向关系时再填写 B 对 A。");
+    expect(authorControls).toContain("setSameRelationBothWays(false)");
+    expect(authorControls).toContain("setReverseLabel(\"\")");
     expect(authorControls).toContain("删除人物");
     expect(authorControls).toContain("edge.authorRelationshipId ?? edge.id");
     expect(load).toContain("api.authorRelationship?.getGraph");

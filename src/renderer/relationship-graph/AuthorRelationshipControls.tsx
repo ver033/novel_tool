@@ -18,23 +18,57 @@ function sortedNodes(nodes: readonly RelationshipGraphNode[]): RelationshipGraph
   return [...nodes].sort((left, right) => right.relationCount - left.relationCount || left.name.localeCompare(right.name, "zh-CN"));
 }
 
+function relationshipDirectionOrder(edge: RelationshipGraphEdge): number {
+  return edge.id.endsWith(":source_to_target") ? 0 : edge.id.endsWith(":target_to_source") ? 1 : 0;
+}
+
+function sortRelationshipEdges(left: RelationshipGraphEdge, right: RelationshipGraphEdge): number {
+  return (
+    right.evidenceCount - left.evidenceCount ||
+    relationshipDirectionOrder(left) - relationshipDirectionOrder(right) ||
+    left.sourceName.localeCompare(right.sourceName, "zh-CN")
+  );
+}
+
 function recentEdges(edges: readonly RelationshipGraphEdge[]): RelationshipGraphEdge[] {
-  return [...edges]
-    .sort((left, right) => right.evidenceCount - left.evidenceCount || left.sourceName.localeCompare(right.sourceName, "zh-CN"))
-    .slice(0, 6);
+  const seenRelationshipIds = new Set<string>();
+  const recent: RelationshipGraphEdge[] = [];
+  for (const edge of [...edges].sort(sortRelationshipEdges)) {
+    const relationshipId = edge.authorRelationshipId ?? edge.id;
+    if (seenRelationshipIds.has(relationshipId)) {
+      continue;
+    }
+    seenRelationshipIds.add(relationshipId);
+    recent.push(edge);
+    if (recent.length >= 6) {
+      break;
+    }
+  }
+  return recent;
 }
 
-function normalizeRelationLabel(value: string | null | undefined): string {
-  return value?.replace(/\s+/g, " ").trim() ?? "";
+function siblingEdges(edge: RelationshipGraphEdge, edges: readonly RelationshipGraphEdge[]): RelationshipGraphEdge[] {
+  const relationshipId = edge.authorRelationshipId;
+  if (!relationshipId) {
+    return [edge];
+  }
+  return edges.filter((candidate) => candidate.authorRelationshipId === relationshipId);
 }
 
-function relationshipListLabel(edge: RelationshipGraphEdge): string {
-  const forward = normalizeRelationLabel(edge.baseRelationSourceToTargetLabel) || normalizeRelationLabel(edge.baseRelationLabel);
-  const reverse = normalizeRelationLabel(edge.baseRelationTargetToSourceLabel);
+function relationshipListLabel(edge: RelationshipGraphEdge, edges: readonly RelationshipGraphEdge[]): string {
+  const relatedEdges = siblingEdges(edge, edges).sort(sortRelationshipEdges).slice(0, 2);
+  const forward = normalizeRelationLabel(relatedEdges[0]?.baseRelationSourceToTargetLabel) || normalizeRelationLabel(relatedEdges[0]?.baseRelationLabel);
+  const reverse =
+    normalizeRelationLabel(relatedEdges[0]?.baseRelationTargetToSourceLabel) ||
+    normalizeRelationLabel(relatedEdges.find((candidate) => candidate.id !== relatedEdges[0]?.id)?.baseRelationSourceToTargetLabel);
   if (!reverse || forward.toLocaleLowerCase("zh-CN") === reverse.toLocaleLowerCase("zh-CN")) {
     return forward;
   }
   return `${forward} ↔ ${reverse}`;
+}
+
+function normalizeRelationLabel(value: string | null | undefined): string {
+  return value?.replace(/\s+/g, " ").trim() ?? "";
 }
 
 export function AuthorRelationshipControls({
@@ -52,7 +86,7 @@ export function AuthorRelationshipControls({
   const [targetName, setTargetName] = useState("");
   const [forwardLabel, setForwardLabel] = useState("");
   const [reverseLabel, setReverseLabel] = useState("");
-  const [sameRelationBothWays, setSameRelationBothWays] = useState(true);
+  const [sameRelationBothWays, setSameRelationBothWays] = useState(false);
   const [activePanel, setActivePanel] = useState<"character" | "relationship" | null>(null);
   const [busy, setBusy] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
@@ -63,6 +97,8 @@ export function AuthorRelationshipControls({
   function openRelationshipPanel(): void {
     setActivePanel("relationship");
     setLocalError(null);
+    setSameRelationBothWays(false);
+    setReverseLabel("");
     if (selectedNodeName) {
       setSourceName(selectedNodeName);
     }
@@ -179,7 +215,7 @@ export function AuthorRelationshipControls({
                   setTargetName("");
                   setForwardLabel("");
                   setReverseLabel("");
-                  setSameRelationBothWays(true);
+                  setSameRelationBothWays(false);
                   setActivePanel(null);
                 });
               }}
@@ -222,7 +258,7 @@ export function AuthorRelationshipControls({
                   />
                   <span>相互关系：B 对 A 使用同一名称</span>
                 </label>
-                <p>{sameRelationBothWays ? "适合夫妻、同学、盟友、师生等同一条关系。" : "适合父亲/儿子、老师/学生等分方向关系。"}</p>
+                <p>{sameRelationBothWays ? "勾选后会自动生成反向同名关系。" : "默认只保存 A 对 B；需要反向关系时再填写 B 对 A。"}</p>
               </div>
               <div className={sameRelationBothWays ? "author-relationship-pair single" : "author-relationship-pair"}>
                 <label>
@@ -292,7 +328,7 @@ export function AuthorRelationshipControls({
                   <button className="author-relationship-name-button" title={`${edge.sourceName} - ${edge.targetName}`} type="button">
                     {edge.sourceName} / {edge.targetName}
                   </button>
-                  <span>{relationshipListLabel(edge)}</span>
+                  <span>{relationshipListLabel(edge, edges)}</span>
                   <button
                     aria-label={`删除${edge.sourceName}与${edge.targetName}的关系`}
                     className="relationship-panel-icon-button subtle-danger"
