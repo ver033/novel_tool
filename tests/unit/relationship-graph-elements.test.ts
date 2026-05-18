@@ -240,11 +240,12 @@ describe("relationshipGraphToSigmaGraphData", () => {
     expect(convertedEdge.plotLabelText).not.toMatch(/\n|\r|\t/);
   });
 
-  it("preserves author directional labels separately for double-arrow rendering", () => {
+  it("splits one author relationship with two directional labels into two visual arrow edges", () => {
     const directionalEdges: RelationshipGraphEdge[] = [
       {
         ...edges[0],
-        id: "author_edge_directional",
+        id: "author_relationship:rel_directional",
+        authorRelationshipId: "rel_directional",
         baseRelationLabel: "儿子",
         baseRelationSourceToTargetLabel: "儿子",
         baseRelationTargetToSourceLabel: "母亲",
@@ -262,13 +263,60 @@ describe("relationshipGraphToSigmaGraphData", () => {
     ];
 
     const elements = relationshipGraphToSigmaGraphData({ nodes, edges: directionalEdges });
-    const convertedEdge = elements.edges[0].data;
+    const forwardEdge = elements.edges.find((edge) => edge.source === "node_lin" && edge.target === "node_wu");
+    const reverseEdge = elements.edges.find((edge) => edge.source === "node_wu" && edge.target === "node_lin");
 
-    expect(convertedEdge.baseLabelText).toBe("儿子");
-    expect(convertedEdge.baseLabelSourceToTargetText).toBe("儿子");
-    expect(convertedEdge.baseLabelTargetToSourceText).toBe("母亲");
-    expect(convertedEdge.baseLabelDirection).toBe("different_both_ways");
-    expect(convertedEdge.edgeType).toBe("doubleArrow");
+    expect(elements.edges).toHaveLength(2);
+    expect(forwardEdge?.data.baseLabelText).toBe("儿子");
+    expect(forwardEdge?.data.baseLabelTargetToSourceText).toBe("");
+    expect(forwardEdge?.data.baseLabelDirection).toBe("single");
+    expect(forwardEdge?.data.edgeType).toBe("curvedArrow");
+    expect(forwardEdge?.data.curvature).toBeGreaterThan(0);
+    expect(forwardEdge?.data.manualReciprocalEdge).toBe(true);
+    expect(reverseEdge?.data.baseLabelText).toBe("母亲");
+    expect(reverseEdge?.data.baseLabelTargetToSourceText).toBe("");
+    expect(reverseEdge?.data.baseLabelDirection).toBe("single");
+    expect(reverseEdge?.data.edgeType).toBe("curvedArrow");
+    expect(reverseEdge?.data.curvature).toBeGreaterThan(0);
+    expect(reverseEdge?.data.manualReciprocalEdge).toBe(true);
+  });
+
+  it("marks split reciprocal author relationships for separate visual tracks", () => {
+    const reciprocalEdges: RelationshipGraphEdge[] = [
+      {
+        ...edges[0],
+        id: "author_relationship:rel_1:source_to_target",
+        authorRelationshipId: "rel_1",
+        sourceId: "node_lin",
+        targetId: "node_wu",
+        sourceName: "林砚",
+        targetName: "雾灵",
+        baseRelationLabel: "儿子",
+        baseRelationSourceToTargetLabel: "儿子",
+        baseRelationTargetToSourceLabel: null,
+        evidenceSources: ["author_manual"]
+      },
+      {
+        ...edges[0],
+        id: "author_relationship:rel_1:target_to_source",
+        authorRelationshipId: "rel_1",
+        sourceId: "node_wu",
+        targetId: "node_lin",
+        sourceName: "雾灵",
+        targetName: "林砚",
+        baseRelationLabel: "母亲",
+        baseRelationSourceToTargetLabel: "母亲",
+        baseRelationTargetToSourceLabel: null,
+        evidenceSources: ["author_manual"]
+      }
+    ];
+
+    const elements = relationshipGraphToSigmaGraphData({ nodes, edges: reciprocalEdges });
+
+    expect(elements.edges).toHaveLength(2);
+    expect(elements.edges.map((edge) => edge.data.manualReciprocalEdge)).toEqual([true, true]);
+    expect(elements.edges.map((edge) => edge.data.edgeType)).toEqual(["curvedArrow", "curvedArrow"]);
+    expect(elements.edges.map((edge) => edge.data.curvature)).toEqual([0.32, 0.32]);
   });
 
   it("keeps long-novel base labels available while reserving forced labels for important edges", () => {

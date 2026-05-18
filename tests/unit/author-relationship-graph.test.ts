@@ -75,12 +75,30 @@ describe("AuthorRelationshipGraphService", () => {
       faction: "白家",
       authorNotes: "手工设定：全书核心父权角色。"
     });
-    expect(graph.edges).toHaveLength(1);
+    expect(graph.edges).toHaveLength(2);
+    expect(graph.edges).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: expect.stringContaining("author_relationship:author_relationship_"),
+          authorRelationshipId: expect.stringContaining("author_relationship_"),
+          sourceName: "白嘉轩",
+          targetName: "仙草",
+          baseRelationLabel: "夫妻",
+          plotRelationLabel: ""
+        }),
+        expect.objectContaining({
+          id: expect.stringContaining("author_relationship:author_relationship_"),
+          authorRelationshipId: expect.stringContaining("author_relationship_"),
+          sourceName: "仙草",
+          targetName: "白嘉轩",
+          baseRelationLabel: "夫妻",
+          plotRelationLabel: ""
+        })
+      ])
+    );
     expect(graph.edges[0]).toMatchObject({
       id: expect.stringContaining("author_relationship:author_relationship_"),
       authorRelationshipId: expect.stringContaining("author_relationship_"),
-      sourceName: "白嘉轩",
-      targetName: "仙草",
       baseRelationLabel: "夫妻",
       plotRelationLabel: ""
     });
@@ -113,7 +131,7 @@ describe("AuthorRelationshipGraphService", () => {
     db.close();
   });
 
-  it("keeps directional reverse relationship labels available for bidirectional graph rendering", () => {
+  it("renders reciprocal author labels as separate directed graph edges", () => {
     const db = createDb();
     seedProject(db);
     const repo = new AuthorRelationshipRepository(db);
@@ -128,19 +146,56 @@ describe("AuthorRelationshipGraphService", () => {
 
     const graph = service.getGraph({ projectId: "project_1" });
 
-    expect(graph.edges[0]).toMatchObject({
+    expect(graph.edges).toHaveLength(2);
+    expect(graph.edges).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: expect.stringContaining(":source_to_target"),
+          sourceName: "黑娃",
+          targetName: "鹿三",
+          baseRelationLabel: "儿子",
+          baseRelationSourceToTargetLabel: "儿子",
+          baseRelationTargetToSourceLabel: null,
+          direction: "source_to_target"
+        }),
+        expect.objectContaining({
+          id: expect.stringContaining(":target_to_source"),
+          sourceName: "鹿三",
+          targetName: "黑娃",
+          baseRelationLabel: "父亲",
+          baseRelationSourceToTargetLabel: "父亲",
+          baseRelationTargetToSourceLabel: null,
+          direction: "source_to_target"
+        })
+      ])
+    );
+    const forwardEdge = graph.edges.find((edge) => edge.sourceName === "黑娃" && edge.targetName === "鹿三");
+    const reverseEdge = graph.edges.find((edge) => edge.sourceName === "鹿三" && edge.targetName === "黑娃");
+    expect(forwardEdge).toMatchObject({
       sourceName: "黑娃",
       targetName: "鹿三",
       baseRelationLabel: "儿子",
       baseRelationSourceToTargetLabel: "儿子",
-      baseRelationTargetToSourceLabel: "父亲"
+      baseRelationTargetToSourceLabel: null
     });
-    expect(graph.edges[0]?.baseRelationSummary).toContain("黑娃 → 鹿三：儿子");
-    expect(graph.edges[0]?.baseRelationSummary).toContain("鹿三 → 黑娃：父亲");
-    expect(graph.edges[0]?.timeline[0]).toMatchObject({
+    expect(forwardEdge?.baseRelationSummary).toBe("黑娃 → 鹿三：儿子");
+    expect(forwardEdge?.timeline[0]).toMatchObject({
       baseRelationLabel: "儿子",
       baseRelationSourceToTargetLabel: "儿子",
-      baseRelationTargetToSourceLabel: "父亲"
+      baseRelationTargetToSourceLabel: null
+    });
+    expect(reverseEdge).toMatchObject({
+      sourceName: "鹿三",
+      targetName: "黑娃",
+      baseRelationLabel: "父亲",
+      baseRelationSourceToTargetLabel: "父亲",
+      baseRelationTargetToSourceLabel: null
+    });
+    expect(reverseEdge?.baseRelationSummary).toBe("鹿三 → 黑娃：父亲");
+    expect(reverseEdge?.timeline[0]).toMatchObject({
+      baseRelationLabel: "父亲",
+      baseRelationSourceToTargetLabel: "父亲",
+      baseRelationTargetToSourceLabel: null
     });
 
     db.close();

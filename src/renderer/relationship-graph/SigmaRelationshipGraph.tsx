@@ -1,5 +1,6 @@
 import "@react-sigma/core/lib/style.css";
 import { SigmaContainer, useLoadGraph, useRegisterEvents, useSetSettings, useSigma } from "@react-sigma/core";
+import { EdgeCurvedArrowProgram } from "@sigma/edge-curve";
 import Graph from "graphology";
 import type { GraphOptions } from "graphology-types";
 import forceAtlas2 from "graphology-layout-forceatlas2";
@@ -200,7 +201,8 @@ function nodeSize(relationCount: number, maxRelations: number, config: GraphDens
 }
 
 function edgeSize(edge: RelationshipGraphSigmaEdgeData, config: GraphDensityConfig): number {
-  return config.edgeSizeBase + Math.min(1, Math.max(0, edge.intensity)) * config.edgeSizeRange;
+  const size = config.edgeSizeBase + Math.min(1, Math.max(0, edge.intensity)) * config.edgeSizeRange;
+  return edge.manualReciprocalEdge ? size + 0.35 : size;
 }
 
 function ellipsizeCanvasText(context: CanvasRenderingContext2D, label: string, maxWidth: number): string {
@@ -1103,7 +1105,11 @@ function SigmaGraphController({
         const selected = selectedId === edge;
         const label = attrs.baseLabelDirection === "different_both_ways" ? attrs.baseLabelText : selected ? attrs.plotLabelText : attrs.baseLabelText;
         const nextAttrs = { ...attrs };
-        nextAttrs.color = attrs.dimmed ? "rgba(148, 163, 184, 0.14)" : attrs.highlighted || selected ? attrs.color : `${attrs.color}cc`;
+        nextAttrs.color = attrs.dimmed
+          ? "rgba(148, 163, 184, 0.14)"
+          : attrs.highlighted || selected
+            ? attrs.color
+            : `${attrs.color}cc`;
         nextAttrs.forceLabel = Boolean(label && !attrs.dimmed && (selected || attrs.highlighted || attrs.forceLabel));
         nextAttrs.hidden = false;
         nextAttrs.label = attrs.dimmed ? "" : label;
@@ -1258,6 +1264,7 @@ export function SigmaRelationshipGraph(props: SigmaRelationshipGraphProps) {
       edgeLabelWeight: "650",
       edgeProgramClasses: {
         arrow: EdgeArrowProgram,
+        curvedArrow: EdgeCurvedArrowProgram,
         doubleArrow: EdgeDoubleArrowProgram,
         line: EdgeLineProgram
       },
