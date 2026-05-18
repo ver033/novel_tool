@@ -116,6 +116,8 @@ export type RelationshipGraphEdgeStage = {
   readonly chapterTitle: string;
   readonly chapterOrder: number;
   readonly baseRelationLabel: string;
+  readonly baseRelationSourceToTargetLabel?: string | null;
+  readonly baseRelationTargetToSourceLabel?: string | null;
   readonly baseRelationSummary: string | null;
   readonly plotRelationLabel: string;
   readonly plotRelationSummary: string;
@@ -143,6 +145,8 @@ export type RelationshipGraphEdge = {
   readonly sourceName: string;
   readonly targetName: string;
   readonly baseRelationLabel: string;
+  readonly baseRelationSourceToTargetLabel?: string | null;
+  readonly baseRelationTargetToSourceLabel?: string | null;
   readonly baseRelationSummary: string | null;
   readonly plotRelationLabel: string;
   readonly plotRelationSummary: string;

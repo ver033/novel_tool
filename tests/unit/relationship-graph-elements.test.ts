@@ -240,6 +240,37 @@ describe("relationshipGraphToSigmaGraphData", () => {
     expect(convertedEdge.plotLabelText).not.toMatch(/\n|\r|\t/);
   });
 
+  it("preserves author directional labels separately for double-arrow rendering", () => {
+    const directionalEdges: RelationshipGraphEdge[] = [
+      {
+        ...edges[0],
+        id: "author_edge_directional",
+        baseRelationLabel: "儿子",
+        baseRelationSourceToTargetLabel: "儿子",
+        baseRelationTargetToSourceLabel: "母亲",
+        evidenceSources: ["author_manual"],
+        timeline: [
+          {
+            ...edges[0].timeline[0],
+            baseRelationLabel: "儿子",
+            baseRelationSourceToTargetLabel: "儿子",
+            baseRelationTargetToSourceLabel: "母亲",
+            evidenceSource: "author_manual"
+          }
+        ]
+      }
+    ];
+
+    const elements = relationshipGraphToSigmaGraphData({ nodes, edges: directionalEdges });
+    const convertedEdge = elements.edges[0].data;
+
+    expect(convertedEdge.baseLabelText).toBe("儿子");
+    expect(convertedEdge.baseLabelSourceToTargetText).toBe("儿子");
+    expect(convertedEdge.baseLabelTargetToSourceText).toBe("母亲");
+    expect(convertedEdge.baseLabelDirection).toBe("different_both_ways");
+    expect(convertedEdge.edgeType).toBe("doubleArrow");
+  });
+
   it("keeps long-novel base labels available while reserving forced labels for important edges", () => {
     const manyNodes = Array.from({ length: 48 }, (_, index): RelationshipGraphNode => ({
       ...nodes[2],

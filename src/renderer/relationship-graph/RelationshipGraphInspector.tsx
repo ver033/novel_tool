@@ -79,6 +79,29 @@ function counterpartName(edge: RelationshipGraphEdge, nodeId: string): string {
   return edge.sourceId === nodeId ? edge.targetName : edge.sourceName;
 }
 
+function normalizedRelationLabel(value: string | null | undefined): string {
+  return value?.replace(/\s+/g, " ").trim() ?? "";
+}
+
+function sourceToTargetLabel(edge: RelationshipGraphEdge): string {
+  return normalizedRelationLabel(edge.baseRelationSourceToTargetLabel) || normalizedRelationLabel(edge.baseRelationLabel);
+}
+
+function targetToSourceLabel(edge: RelationshipGraphEdge): string {
+  return normalizedRelationLabel(edge.baseRelationTargetToSourceLabel);
+}
+
+function labelsMatch(left: string, right: string): boolean {
+  return left.toLocaleLowerCase("zh-CN") === right.toLocaleLowerCase("zh-CN");
+}
+
+function relationLabelForNode(edge: RelationshipGraphEdge, nodeId: string): string {
+  if (edge.sourceId === nodeId) {
+    return sourceToTargetLabel(edge);
+  }
+  return targetToSourceLabel(edge) || sourceToTargetLabel(edge);
+}
+
 function edgeScore(edge: RelationshipGraphEdge): number {
   return edge.weight * 1.2 + edge.evidenceCount * 0.8 + edge.intensity + edge.confidence;
 }
@@ -377,7 +400,7 @@ export function RelationshipGraphInspector({
               relatedEdges.map((edge) => (
                 <div key={edge.id} className="relationship-author-relation-row">
                   <b>{counterpartName(edge, selectedNode.id)}</b>
-                  <span>{edge.baseRelationLabel}</span>
+                  <span>{relationLabelForNode(edge, selectedNode.id)}</span>
                   <em>{edge.baseRelationSummary ?? "作者手动录入"}</em>
                 </div>
               ))
@@ -418,6 +441,9 @@ export function RelationshipGraphInspector({
   }
 
   if (graphSource === "author" && selectedEdge) {
+    const forwardLabel = sourceToTargetLabel(selectedEdge);
+    const reverseLabel = targetToSourceLabel(selectedEdge);
+    const sameBothWays = Boolean(reverseLabel && labelsMatch(forwardLabel, reverseLabel));
     return (
       <aside className="relationship-graph-inspector">
         <div className="relationship-inspector-topline">
@@ -434,9 +460,36 @@ export function RelationshipGraphInspector({
         </div>
         <section>
           <h3>关系名称</h3>
-          <p>
-            <b>{selectedEdge.baseRelationLabel}</b>
-          </p>
+          <div className="relationship-author-relation-list">
+            {sameBothWays ? (
+              <div className="relationship-author-relation-row">
+                <b>
+                  {selectedEdge.sourceName} ↔ {selectedEdge.targetName}
+                </b>
+                <span>{forwardLabel}</span>
+                <em>相互关系</em>
+              </div>
+            ) : (
+              <>
+                <div className="relationship-author-relation-row">
+                  <b>
+                    {selectedEdge.sourceName} → {selectedEdge.targetName}
+                  </b>
+                  <span>{forwardLabel}</span>
+                  <em>正向</em>
+                </div>
+                {reverseLabel ? (
+                  <div className="relationship-author-relation-row">
+                    <b>
+                      {selectedEdge.targetName} → {selectedEdge.sourceName}
+                    </b>
+                    <span>{reverseLabel}</span>
+                    <em>反向</em>
+                  </div>
+                ) : null}
+              </>
+            )}
+          </div>
         </section>
         <section>
           <h3>关系说明</h3>

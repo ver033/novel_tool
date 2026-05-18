@@ -113,6 +113,39 @@ describe("AuthorRelationshipGraphService", () => {
     db.close();
   });
 
+  it("keeps directional reverse relationship labels available for bidirectional graph rendering", () => {
+    const db = createDb();
+    seedProject(db);
+    const repo = new AuthorRelationshipRepository(db);
+    repo.createRelationship({
+      projectId: "project_1",
+      sourceCharacterName: "黑娃",
+      targetCharacterName: "鹿三",
+      sourceToTargetLabel: "儿子",
+      targetToSourceLabel: "父亲"
+    });
+    const service = new AuthorRelationshipGraphService(repo);
+
+    const graph = service.getGraph({ projectId: "project_1" });
+
+    expect(graph.edges[0]).toMatchObject({
+      sourceName: "黑娃",
+      targetName: "鹿三",
+      baseRelationLabel: "儿子",
+      baseRelationSourceToTargetLabel: "儿子",
+      baseRelationTargetToSourceLabel: "父亲"
+    });
+    expect(graph.edges[0]?.baseRelationSummary).toContain("黑娃 → 鹿三：儿子");
+    expect(graph.edges[0]?.baseRelationSummary).toContain("鹿三 → 黑娃：父亲");
+    expect(graph.edges[0]?.timeline[0]).toMatchObject({
+      baseRelationLabel: "儿子",
+      baseRelationSourceToTargetLabel: "儿子",
+      baseRelationTargetToSourceLabel: "父亲"
+    });
+
+    db.close();
+  });
+
   it("persists author character layout positions for manual graph dragging", () => {
     const db = createDb();
     seedProject(db);

@@ -242,6 +242,8 @@ export class AuthorRelationshipGraphService {
     const summary = relationship.targetToSourceLabel
       ? `${source.name} → ${target.name}：${relationship.sourceToTargetLabel}；${target.name} → ${source.name}：${relationship.targetToSourceLabel}`
       : `${source.name} → ${target.name}：${relationship.sourceToTargetLabel}`;
+    const sourceToTargetLabel = normalizeText(relationship.sourceToTargetLabel);
+    const targetToSourceLabel = normalizeText(relationship.targetToSourceLabel) || null;
     return {
       id: `author_relationship:${relationship.id}`,
       authorRelationshipId: relationship.id,
@@ -249,7 +251,9 @@ export class AuthorRelationshipGraphService {
       targetId: relationship.targetCharacterId,
       sourceName: source.name,
       targetName: target.name,
-      baseRelationLabel: relationship.sourceToTargetLabel,
+      baseRelationLabel: sourceToTargetLabel,
+      baseRelationSourceToTargetLabel: sourceToTargetLabel,
+      baseRelationTargetToSourceLabel: targetToSourceLabel,
       baseRelationSummary: summary,
       plotRelationLabel: "",
       plotRelationSummary: summary,
@@ -273,7 +277,9 @@ export class AuthorRelationshipGraphService {
           chapterId: `author:manual:${relationship.id}`,
           chapterTitle: "作者手工关系",
           chapterOrder: 1,
-          baseRelationLabel: relationship.sourceToTargetLabel,
+          baseRelationLabel: sourceToTargetLabel,
+          baseRelationSourceToTargetLabel: sourceToTargetLabel,
+          baseRelationTargetToSourceLabel: targetToSourceLabel,
           baseRelationSummary: summary,
           plotRelationLabel: "",
           plotRelationSummary: summary,

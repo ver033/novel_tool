@@ -2354,6 +2354,10 @@ select:focus-visible {
   gap: 10px;
 }
 
+.author-relationship-pair.single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .author-relationship-pair label {
   min-width: 0;
   display: grid;
@@ -2364,6 +2368,22 @@ select:focus-visible {
   color: #64748b;
   font-size: 12px;
   font-weight: 760;
+}
+
+.author-relationship-mutual-row {
+  display: grid;
+  gap: 4px;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  background: #f8fbff;
+  padding: 8px 10px;
+}
+
+.author-relationship-mutual-row p {
+  margin: 0;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .author-relationship-list {

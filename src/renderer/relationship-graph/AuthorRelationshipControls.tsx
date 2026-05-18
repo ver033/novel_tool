@@ -1,13 +1,7 @@
 import { LinkSimple, Plus, Trash, X } from "@phosphor-icons/react";
 import { useMemo, useState } from "react";
 import type { RelationshipGraphEdge, RelationshipGraphNode } from "../../main/shared/relationship-graph";
-
-type CreateRelationshipInput = {
-  readonly sourceCharacterName: string;
-  readonly targetCharacterName: string;
-  readonly sourceToTargetLabel: string;
-  readonly targetToSourceLabel: string | null;
-};
+import { buildAuthorRelationshipCreateInput, type AuthorRelationshipCreateInput } from "./author-relationship-form";
 
 type AuthorRelationshipControlsProps = {
   readonly edges: readonly RelationshipGraphEdge[];
@@ -15,7 +9,7 @@ type AuthorRelationshipControlsProps = {
   readonly nodes: readonly RelationshipGraphNode[];
   readonly selectedNodeName: string | null;
   readonly onCreateCharacter: (name: string) => Promise<void>;
-  readonly onCreateRelationship: (input: CreateRelationshipInput) => Promise<void>;
+  readonly onCreateRelationship: (input: AuthorRelationshipCreateInput) => Promise<void>;
   readonly onDeleteCharacter: (characterId: string) => Promise<void>;
   readonly onDeleteRelationship: (relationshipId: string) => Promise<void>;
 };
@@ -28,6 +22,19 @@ function recentEdges(edges: readonly RelationshipGraphEdge[]): RelationshipGraph
   return [...edges]
     .sort((left, right) => right.evidenceCount - left.evidenceCount || left.sourceName.localeCompare(right.sourceName, "zh-CN"))
     .slice(0, 6);
+}
+
+function normalizeRelationLabel(value: string | null | undefined): string {
+  return value?.replace(/\s+/g, " ").trim() ?? "";
+}
+
+function relationshipListLabel(edge: RelationshipGraphEdge): string {
+  const forward = normalizeRelationLabel(edge.baseRelationSourceToTargetLabel) || normalizeRelationLabel(edge.baseRelationLabel);
+  const reverse = normalizeRelationLabel(edge.baseRelationTargetToSourceLabel);
+  if (!reverse || forward.toLocaleLowerCase("zh-CN") === reverse.toLocaleLowerCase("zh-CN")) {
+    return forward;
+  }
+  return `${forward} ↔ ${reverse}`;
 }
 
 export function AuthorRelationshipControls({
@@ -45,6 +52,7 @@ export function AuthorRelationshipControls({
   const [targetName, setTargetName] = useState("");
   const [forwardLabel, setForwardLabel] = useState("");
   const [reverseLabel, setReverseLabel] = useState("");
+  const [sameRelationBothWays, setSameRelationBothWays] = useState(true);
   const [activePanel, setActivePanel] = useState<"character" | "relationship" | null>(null);
   const [busy, setBusy] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
@@ -158,16 +166,20 @@ export function AuthorRelationshipControls({
                   return;
                 }
                 void runAction(async () => {
-                  await onCreateRelationship({
-                    sourceCharacterName: sourceName,
-                    targetCharacterName: targetName,
-                    sourceToTargetLabel: forwardLabel,
-                    targetToSourceLabel: reverseLabel.trim() || null
-                  });
+                  await onCreateRelationship(
+                    buildAuthorRelationshipCreateInput({
+                      sourceCharacterName: sourceName,
+                      targetCharacterName: targetName,
+                      sourceToTargetLabel: forwardLabel,
+                      targetToSourceLabel: reverseLabel,
+                      sameRelationBothWays
+                    })
+                  );
                   setSourceName(selectedNodeName ?? "");
                   setTargetName("");
                   setForwardLabel("");
                   setReverseLabel("");
+                  setSameRelationBothWays(true);
                   setActivePanel(null);
                 });
               }}
@@ -201,25 +213,38 @@ export function AuthorRelationshipControls({
                   />
                 </label>
               </div>
-              <div className="author-relationship-pair">
+              <div className="author-relationship-mutual-row">
+                <label className="relationship-checkline">
+                  <input
+                    checked={sameRelationBothWays}
+                    onChange={(event) => setSameRelationBothWays(event.target.checked)}
+                    type="checkbox"
+                  />
+                  <span>相互关系：B 对 A 使用同一名称</span>
+                </label>
+                <p>{sameRelationBothWays ? "适合夫妻、同学、盟友、师生等同一条关系。" : "适合父亲/儿子、老师/学生等分方向关系。"}</p>
+              </div>
+              <div className={sameRelationBothWays ? "author-relationship-pair single" : "author-relationship-pair"}>
                 <label>
-                  <span>A 对 B</span>
+                  <span>{sameRelationBothWays ? "关系名称" : "A 对 B"}</span>
                   <input
                     className="relationship-filter-input"
                     onChange={(event) => setForwardLabel(event.target.value)}
-                    placeholder="父亲、师生、盟友"
+                    placeholder={sameRelationBothWays ? "夫妻、同学、盟友、师生" : "父亲、老师、主家"}
                     value={forwardLabel}
                   />
                 </label>
-                <label>
-                  <span>B 对 A</span>
-                  <input
-                    className="relationship-filter-input"
-                    onChange={(event) => setReverseLabel(event.target.value)}
-                    placeholder="可选"
-                    value={reverseLabel}
-                  />
-                </label>
+                {!sameRelationBothWays ? (
+                  <label>
+                    <span>B 对 A</span>
+                    <input
+                      className="relationship-filter-input"
+                      onChange={(event) => setReverseLabel(event.target.value)}
+                      placeholder="儿子、学生、长工"
+                      value={reverseLabel}
+                    />
+                  </label>
+                ) : null}
               </div>
               <button
                 className="relationship-primary-action full"
@@ -267,7 +292,7 @@ export function AuthorRelationshipControls({
                   <button className="author-relationship-name-button" title={`${edge.sourceName} - ${edge.targetName}`} type="button">
                     {edge.sourceName} / {edge.targetName}
                   </button>
-                  <span>{edge.baseRelationLabel}</span>
+                  <span>{relationshipListLabel(edge)}</span>
                   <button
                     aria-label={`删除${edge.sourceName}与${edge.targetName}的关系`}
                     className="relationship-panel-icon-button subtle-danger"
