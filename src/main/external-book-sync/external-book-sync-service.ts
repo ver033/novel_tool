@@ -204,6 +204,20 @@ function defaultRoots(projectRootPath: string | null): string[] {
   return [...roots].filter((root) => root && existsSync(root));
 }
 
+function automaticDiscoveryRoots(projectRootPath: string | null): string[] {
+  const roots = new Set<string>();
+  if (projectRootPath) {
+    roots.add(path.dirname(projectRootPath));
+  }
+  const home = os.homedir();
+  if (home) {
+    roots.add(path.join(home, "Documents"));
+    roots.add(path.join(home, "Desktop"));
+    roots.add(path.join(home, "Downloads"));
+  }
+  return [...roots].filter((root) => root && existsSync(root));
+}
+
 function redactChapterText<T extends { readonly text: string }>(chapter: T): Omit<T, "text"> & { readonly textLength: number } {
   const { text: _text, ...preview } = chapter;
   return {
@@ -298,19 +312,20 @@ export class ExternalBookSyncService {
     });
 
     try {
-      if (this.deps.sourceStore.listSources(input.projectId).length === 0) {
-        return this.completeAutomaticRun(running, "skipped", {
-          candidateCount: 0,
-          sentMessageCount: 0,
-          sentChapterCount: 0,
-          error: null
-        });
-      }
-      const scan = await this.scanProject({
+      const savedSources = this.deps.sourceStore.listSources(input.projectId);
+      const project = savedSources.length === 0 ? this.deps.projectRepo.findById(input.projectId) : null;
+      let scan = await this.scanProject({
         projectId: input.projectId,
         mode: "quick",
-        roots: []
+        roots: savedSources.length > 0 ? [] : automaticDiscoveryRoots(project?.rootPath ?? null)
       });
+      if (savedSources.length === 0 && scan.candidates.length === 0) {
+        scan = await this.scanProject({
+          projectId: input.projectId,
+          mode: "global",
+          roots: defaultRoots(project?.rootPath ?? null)
+        });
+      }
       const candidate = scan.candidates.find((item) => item.comparison.missingChapters.length > 0);
       if (!candidate) {
         return this.completeAutomaticRun(running, "skipped", {

@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import os, { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { emptyChapterContent } from "../../src/main/chapter/default-content";
 import { createDatabase, type SqliteDatabase } from "../../src/main/db/database";
 import { runMigrations } from "../../src/main/db/migrations";
@@ -19,6 +19,7 @@ const tempDirs: string[] = [];
 const databases: SqliteDatabase[] = [];
 
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const db of databases.splice(0)) {
     db.close();
   }
@@ -27,7 +28,7 @@ afterEach(() => {
   }
 });
 
-function createFixture() {
+function createFixture(options: { readonly rootPath?: string | null } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "external-book-sync-"));
   tempDirs.push(dir);
   const db = createDatabase(":memory:");
@@ -39,7 +40,7 @@ function createFixture() {
   const project = projectRepo.create({
     id: createId("project"),
     name: "举足无措",
-    rootPath: join(dir, "举足无措.noveltool"),
+    rootPath: options.rootPath === undefined ? join(dir, "举足无措.noveltool") : options.rootPath,
     createdAt: "2026-05-18T00:00:00.000Z",
     updatedAt: "2026-05-18T00:00:00.000Z"
   });
@@ -163,6 +164,64 @@ describe("ExternalBookSyncService", () => {
     expect(statSync(bookFilePath).mtimeMs).toBe(before.mtimeMs);
     expect(statSync(bookFilePath).size).toBe(before.size);
     expect(readdirSync(projectBookDir)).toEqual(beforeFiles);
+  });
+
+  it("automatically discovers and saves a .Book source on the first startup sync", async () => {
+    const { dir, project, sourceStore, service, sentMessages } = createFixture();
+    const projectBookDir = join(dir, "举足无措");
+    mkdirSync(projectBookDir, { recursive: true });
+    const bookFilePath = join(projectBookDir, "story.Book");
+    writeFileSync(bookFilePath, "第一章\n.Book 里的第一章修订正文。\n\n第二章\n新增正文。", "utf8");
+    const realBookFilePath = realpathSync(bookFilePath);
+
+    const run = await service.runStartupCatchUpSync(project.id, new Date(2026, 4, 19, 7, 10));
+
+    expect(run).toMatchObject({
+      trigger: "startup",
+      scheduledLocalTime: "07:00",
+      status: "completed",
+      candidateCount: 1,
+      sentChapterCount: 1
+    });
+    expect(sourceStore.listSources(project.id)).toMatchObject([
+      {
+        bookFilePath: realBookFilePath,
+        displayName: "story.Book",
+        confirmedAt: expect.any(String)
+      }
+    ]);
+    expect(sentMessages.join("\n")).toContain("缺失章节：第二章");
+    expect(sentMessages.join("\n")).not.toContain(bookFilePath);
+    expect(sentMessages.join("\n")).not.toContain("story.Book");
+  });
+
+  it("falls back to global discovery when first automatic quick discovery finds no source", async () => {
+    const { dir, project, sourceStore, service, sentMessages } = createFixture({ rootPath: null });
+    const fakeHome = join(dir, "home");
+    const projectBookDir = join(fakeHome, "举足无措");
+    mkdirSync(projectBookDir, { recursive: true });
+    vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
+    const bookFilePath = join(projectBookDir, "story.Book");
+    writeFileSync(bookFilePath, "第一章\n.Book 里的第一章修订正文。\n\n第二章\n新增正文。", "utf8");
+    const realBookFilePath = realpathSync(bookFilePath);
+
+    const run = await service.runStartupCatchUpSync(project.id, new Date(2026, 4, 19, 7, 10));
+
+    expect(run).toMatchObject({
+      trigger: "startup",
+      scheduledLocalTime: "07:00",
+      status: "completed",
+      candidateCount: 1,
+      sentChapterCount: 1
+    });
+    expect(sourceStore.listSources(project.id)).toMatchObject([
+      {
+        bookFilePath: realBookFilePath,
+        displayName: "story.Book"
+      }
+    ]);
+    expect(sentMessages.join("\n")).toContain("缺失章节：第二章");
+    expect(sentMessages.join("\n")).not.toContain(bookFilePath);
   });
 
   it("automatically sends missing chapters once for each due sync slot", async () => {
