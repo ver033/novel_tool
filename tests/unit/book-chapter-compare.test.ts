@@ -55,6 +55,18 @@ describe("compareExternalBookChapters", () => {
     expect(result.warnings.some((warning) => warning.includes("重复章节标题"))).toBe(true);
   });
 
+  it("keeps duplicate missing chapter keys unique for selection", () => {
+    const result = compareExternalBookChapters({
+      projectChapters: projectChapters.slice(0, 48),
+      externalChapters: [
+        { title: "第五十章", text: "新章", order: 0, wordCount: 2, lineStart: 1, lineEnd: 2 },
+        { title: "第五十章", text: "重复", order: 1, wordCount: 2, lineStart: 3, lineEnd: 4 }
+      ]
+    });
+
+    expect(new Set(result.missingChapters.map((chapter) => chapter.key)).size).toBe(result.missingChapters.length);
+  });
+
   it("returns no missing chapters when external source is not newer", () => {
     const result = compareExternalBookChapters({
       projectChapters: projectChapters.slice(0, 2),

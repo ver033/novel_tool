@@ -139,6 +139,16 @@ describe("relationship graph page v2 renderer wiring", () => {
     expect(component).toContain("settleTimerRef");
   });
 
+  it("renders reciprocal author relationship edges with Sigma curved arrows so opposite directions do not collapse into one line", () => {
+    const component = readSource("src/renderer/relationship-graph/SigmaRelationshipGraph.tsx");
+
+    expect(component).toContain('import { EdgeCurvedArrowProgram } from "@sigma/edge-curve"');
+    expect(component).toContain("curvedArrow: EdgeCurvedArrowProgram");
+    expect(component).not.toContain("RECIPROCAL_EDGE_OVERLAY_LAYER");
+    expect(component).not.toContain("RECIPROCAL_NATIVE_EDGE_COLOR");
+    expect(component).not.toContain("drawManualReciprocalEdgeOverlay");
+  });
+
   it("renders V2 controls for role scope, chapter cursor, focus mode, status, and dynamic relationship system", () => {
     const page = readSource("src/renderer/relationship-graph/CharacterRelationshipGraphPage.tsx");
     const filters = readSource("src/renderer/relationship-graph/RelationshipGraphFilters.tsx");

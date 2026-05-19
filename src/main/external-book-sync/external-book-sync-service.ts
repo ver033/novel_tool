@@ -22,6 +22,14 @@ const MAX_BOOK_BYTES = 20 * 1024 * 1024;
 export type ExternalBookSyncMode = "quick" | "global" | "directory";
 export type ExternalBookSyncCandidateConfidence = "high" | "medium" | "low";
 
+export type ExternalBookMissingChapterPreview = Omit<ExternalBookMissingChapter, "text"> & {
+  readonly textLength: number;
+};
+
+export type ExternalBookComparisonPreviewResult = Omit<ExternalBookComparisonResult, "missingChapters"> & {
+  readonly missingChapters: readonly ExternalBookMissingChapterPreview[];
+};
+
 export type ExternalBookSyncCandidate = {
   readonly id: string;
   readonly projectId: string;
@@ -35,7 +43,7 @@ export type ExternalBookSyncCandidate = {
   readonly reasons: readonly string[];
   readonly warnings: readonly string[];
   readonly detectedChapterCount: number;
-  readonly comparison: ExternalBookComparisonResult;
+  readonly comparison: ExternalBookComparisonPreviewResult;
 };
 
 export type ExternalBookSyncStatus = {
@@ -88,7 +96,16 @@ function contentHash(text: string): string {
   return createHash("sha256").update(text).digest("hex");
 }
 
-function confidenceForCandidate(comparison: ExternalBookComparisonResult, warnings: readonly string[]): ExternalBookSyncCandidateConfidence {
+type CandidateComparisonStats = Pick<ExternalBookComparisonResult, "currentLatestOrdinal" | "currentChapterCount" | "externalLatestOrdinal"> & {
+  readonly missingChapters: readonly unknown[];
+};
+
+type LoadedExternalBookCandidate = {
+  readonly candidate: ExternalBookSyncCandidate;
+  readonly fullComparison: ExternalBookComparisonResult;
+};
+
+function confidenceForCandidate(comparison: CandidateComparisonStats, warnings: readonly string[]): ExternalBookSyncCandidateConfidence {
   if (comparison.missingChapters.length === 0 || warnings.length > 0 || comparison.externalLatestOrdinal === null) {
     return "low";
   }
@@ -98,7 +115,7 @@ function confidenceForCandidate(comparison: ExternalBookComparisonResult, warnin
   return "medium";
 }
 
-function candidateReasons(comparison: ExternalBookComparisonResult): string[] {
+function candidateReasons(comparison: CandidateComparisonStats): string[] {
   const reasons: string[] = [];
   if (comparison.externalLatestOrdinal !== null) {
     reasons.push(`外部最新章节序号：${comparison.externalLatestOrdinal}`);
@@ -133,9 +150,22 @@ function defaultRoots(projectRootPath: string | null): string[] {
   return [...roots].filter((root) => root && existsSync(root));
 }
 
-function selectedChapters(candidate: ExternalBookSyncCandidate, chapterKeys: readonly string[]): ExternalBookMissingChapter[] {
+function redactComparison(comparison: ExternalBookComparisonResult): ExternalBookComparisonPreviewResult {
+  return {
+    ...comparison,
+    missingChapters: comparison.missingChapters.map((chapter) => {
+      const { text: _text, ...preview } = chapter;
+      return {
+        ...preview,
+        textLength: chapter.text.length
+      };
+    })
+  };
+}
+
+function selectedChapters(comparison: ExternalBookComparisonResult, chapterKeys: readonly string[]): ExternalBookMissingChapter[] {
   const keySet = new Set(chapterKeys);
-  return candidate.comparison.missingChapters.filter((chapter) => keySet.has(chapter.key));
+  return comparison.missingChapters.filter((chapter) => keySet.has(chapter.key));
 }
 
 export class ExternalBookSyncService {
@@ -199,15 +229,20 @@ export class ExternalBookSyncService {
     }
 
     const candidates: ExternalBookSyncCandidate[] = [];
+    for (const [candidateId, candidate] of this.candidatesById) {
+      if (candidate.projectId === input.projectId) {
+        this.candidatesById.delete(candidateId);
+      }
+    }
     for (const filePath of candidatePaths) {
-      const candidate = this.validateCandidate({
+      const loaded = this.loadCandidate({
         projectId: input.projectId,
         projectName: project.name,
         filePath
       });
-      if (candidate) {
-        candidates.push(candidate);
-        this.candidatesById.set(candidate.id, candidate);
+      if (loaded) {
+        candidates.push(loaded.candidate);
+        this.candidatesById.set(loaded.candidate.id, loaded.candidate);
       }
     }
 
@@ -239,8 +274,20 @@ export class ExternalBookSyncService {
     if (!project) {
       throw new Error("项目不存在，无法发送外部章节。");
     }
-    const candidate = this.previewCandidate(input.projectId, input.candidateId);
-    const chapters = selectedChapters(candidate, input.chapterKeys);
+    const cachedCandidate = this.previewCandidate(input.projectId, input.candidateId);
+    const loaded = this.loadCandidate({
+      projectId: input.projectId,
+      projectName: project.name,
+      filePath: cachedCandidate.filePath
+    });
+    if (!loaded) {
+      throw new Error("外部 .Book 候选已不可用，请重新扫描。");
+    }
+    if (loaded.candidate.contentHash !== cachedCandidate.contentHash) {
+      throw new Error("外部 .Book 文件已变化，请重新扫描后再发送。");
+    }
+    const candidate = loaded.candidate;
+    const chapters = selectedChapters(loaded.fullComparison, input.chapterKeys);
     if (chapters.length === 0) {
       throw new Error("没有选择可发送的缺失章节。");
     }
@@ -280,7 +327,7 @@ export class ExternalBookSyncService {
     };
   }
 
-  private validateCandidate(input: { readonly projectId: string; readonly projectName: string; readonly filePath: string }): ExternalBookSyncCandidate | null {
+  private loadCandidate(input: { readonly projectId: string; readonly projectName: string; readonly filePath: string }): LoadedExternalBookCandidate | null {
     if (!isBookFilePath(input.filePath) || !isPathInsideProjectBookFolder(input.filePath, input.projectName)) {
       return null;
     }
@@ -296,10 +343,11 @@ export class ExternalBookSyncService {
     if (chapters.length === 0) {
       return null;
     }
-    const comparison = compareExternalBookChapters({
+    const fullComparison = compareExternalBookChapters({
       projectChapters: this.deps.resolveChapterRepo(input.projectId).listByProject(input.projectId),
       externalChapters: chapters
     });
+    const comparison = redactComparison(fullComparison);
     const warnings = comparison.warnings;
     const candidate: ExternalBookSyncCandidate = {
       id: candidateIdForPath(input.projectId, input.filePath),
@@ -316,6 +364,9 @@ export class ExternalBookSyncService {
       detectedChapterCount: chapters.length,
       comparison
     };
-    return candidate;
+    return {
+      candidate,
+      fullComparison
+    };
   }
 }

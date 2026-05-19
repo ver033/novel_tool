@@ -43,7 +43,7 @@ describe("chapter summary chunk schema and persistence", () => {
   it("creates the chapter summary chunk table and index", () => {
     const db = createDb();
 
-    expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").get()).toEqual({ version: 21 });
+    expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").get()).toEqual({ version: 24 });
     expect(db.prepare("PRAGMA table_info(chapter_ai_summary_chunks)").all().map((row) => row.name)).toEqual(
       expect.arrayContaining(["content_hash", "chunk_index", "chunk_count", "text_start", "text_end", "structured_json", "status"])
     );

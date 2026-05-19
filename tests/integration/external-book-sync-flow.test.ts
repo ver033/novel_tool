@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -101,15 +101,19 @@ describe("ExternalBookSyncService", () => {
 
     expect(result.candidates).toHaveLength(1);
     expect(result.candidates[0].comparison.missingChapters.map((chapter) => chapter.title)).toEqual(["第二章"]);
+    expect("text" in result.candidates[0].comparison.missingChapters[0]).toBe(false);
     expect(chapterRepo.listByProject(project.id)).toHaveLength(1);
     expect(summaryRepo.listSummaryJobs(project.id)).toEqual([]);
   });
 
-  it("sends selected missing chapters to AI as bounded messages", async () => {
+  it("sends selected missing chapters to AI as bounded messages without changing the .Book file", async () => {
     const { dir, project, service, sentMessages } = createFixture();
     const projectBookDir = join(dir, "举足无措");
     mkdirSync(projectBookDir, { recursive: true });
-    writeFileSync(join(projectBookDir, "story.Book"), "第一章\n已有。\n\n第二章\n新增正文。", "utf8");
+    const bookFilePath = join(projectBookDir, "story.Book");
+    writeFileSync(bookFilePath, "第一章\n已有。\n\n第二章\n新增正文。", "utf8");
+    const before = statSync(bookFilePath);
+    const beforeFiles = readdirSync(projectBookDir);
 
     const result = await service.scanProject({
       projectId: project.id,
@@ -129,5 +133,8 @@ describe("ExternalBookSyncService", () => {
     expect(sentMessages.length).toBeGreaterThan(0);
     expect(sentMessages.every((message) => message.length <= 7000)).toBe(true);
     expect(sentMessages.join("\n")).toContain("第二章");
+    expect(statSync(bookFilePath).mtimeMs).toBe(before.mtimeMs);
+    expect(statSync(bookFilePath).size).toBe(before.size);
+    expect(readdirSync(projectBookDir)).toEqual(beforeFiles);
   });
 });

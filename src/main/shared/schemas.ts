@@ -277,6 +277,47 @@ export const cacheSettingsSchema = z
   })
   .strict();
 
+export const usageAnalyticsEventTypeSchema = z.enum(["app_opened", "page_view", "page_active", "feature_used", "error"]);
+export const usageAnalyticsFeatureSchema = z.enum([
+  "app",
+  "welcome",
+  "writing",
+  "relationshipGraph",
+  "writingGoals",
+  "settings",
+  "import",
+  "export",
+  "newProject",
+  "ai_task",
+  "ai_chat",
+  "scratchpad",
+  "summary_cache",
+  "relationship_graph",
+  "external_book_sync",
+  "shareable_export",
+  "txt_import",
+  "txt_export",
+  "error"
+]);
+
+export const usageAnalyticsRecordEventInputSchema = z
+  .object({
+    eventType: usageAnalyticsEventTypeSchema,
+    feature: usageAnalyticsFeatureSchema,
+    durationMs: z.number().int().min(0).max(24 * 60 * 60 * 1000).optional(),
+    occurredAt: nonEmptyString.max(80).optional()
+  })
+  .strict();
+
+export const usageAnalyticsUpdateSettingsInputSchema = z
+  .object({
+    automaticReportsEnabled: z.boolean().optional()
+  })
+  .strict()
+  .refine((value) => value.automaticReportsEnabled !== undefined, {
+    message: "at least one usage analytics setting is required"
+  });
+
 export const settingsSaveInputSchema = z
   .object({
     editor: editorSettingsSchema.optional(),

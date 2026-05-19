@@ -84,7 +84,9 @@ import type {
   writingGoalStatusSchema,
   writingGoalTypeSchema,
   writingGoalUpdateInputSchema,
-  writingWordEventSourceSchema
+  writingWordEventSourceSchema,
+  usageAnalyticsRecordEventInputSchema,
+  usageAnalyticsUpdateSettingsInputSchema
 } from "./schemas";
 import type { ProofreadIssue } from "./proofread";
 import type { RelationshipGraphPosition, RelationshipGraphResult, RelationshipGraphSourceStatus } from "./relationship-graph";
@@ -287,9 +289,10 @@ export type ExternalBookSyncSource = {
   readonly confirmedAt: string | null;
 };
 
-export type ExternalBookMissingChapter = ImportPreviewChapter & {
+export type ExternalBookMissingChapter = Omit<ImportPreviewChapter, "text"> & {
   readonly ordinal: number | null;
   readonly key: string;
+  readonly textLength: number;
 };
 
 export type ExternalBookComparisonResult = {
@@ -579,6 +582,30 @@ export type WritingGoalDayDetailInput = z.input<typeof writingGoalDayDetailInput
 export type SettingsSaveInput = z.input<typeof settingsSaveInputSchema>;
 export type SettingsTestConnectionInput = z.input<typeof settingsTestConnectionInputSchema>;
 export type SettingsListModelsInput = z.input<typeof settingsListModelsInputSchema>;
+export type UsageAnalyticsRecordEventInput = z.input<typeof usageAnalyticsRecordEventInputSchema>;
+export type UsageAnalyticsUpdateSettingsInput = z.input<typeof usageAnalyticsUpdateSettingsInputSchema>;
+export type UsageAnalyticsStatus = {
+  readonly automaticReportsEnabled: boolean;
+  readonly scheduleLocalTimes: readonly string[];
+  readonly reportRangeDays: number;
+  readonly nextScheduledAt: string | null;
+  readonly lastAttemptAt: string | null;
+  readonly lastSuccessAt: string | null;
+  readonly lastError: string | null;
+  readonly latestReportText: string | null;
+};
+export type UsageAnalyticsReportRun = {
+  readonly id: string;
+  readonly trigger: "automatic" | "manual";
+  readonly scheduledSlotKey: string | null;
+  readonly scheduledLocalTime: string | null;
+  readonly status: "running" | "completed" | "failed";
+  readonly snapshotJson: string | null;
+  readonly reportText: string | null;
+  readonly error: string | null;
+  readonly requestedAt: string;
+  readonly completedAt: string | null;
+};
 export type AiCreateTaskInput = z.input<typeof aiCreateTaskInputSchema>;
 export type AiUpdateTaskInput = z.input<typeof aiUpdateTaskInputSchema>;
 export type AiGeneratePreviewStreamInput = z.input<typeof aiGeneratePreviewStreamInputSchema>;
@@ -800,6 +827,12 @@ export const ipcChannels = {
     save: "novelTool:settings:save",
     testConnection: "novelTool:settings:testConnection",
     listModels: "novelTool:settings:listModels"
+  },
+  usageAnalytics: {
+    getStatus: "novelTool:usageAnalytics:getStatus",
+    updateSettings: "novelTool:usageAnalytics:updateSettings",
+    recordEvent: "novelTool:usageAnalytics:recordEvent",
+    sendReportNow: "novelTool:usageAnalytics:sendReportNow"
   },
   ai: {
     createTask: "novelTool:ai:createTask",

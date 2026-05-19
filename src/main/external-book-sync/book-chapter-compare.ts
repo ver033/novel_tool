@@ -30,7 +30,7 @@ function maxOrdinal(titles: readonly string[]): number | null {
 }
 
 function createMissingChapterKey(chapter: ImportPreviewChapter, ordinal: number | null): string {
-  return `book_${ordinal ?? chapter.order}_${normalizeTitle(chapter.title).slice(0, 48)}`;
+  return `book_${ordinal ?? "unknown"}_${chapter.order}_${chapter.lineStart}_${normalizeTitle(chapter.title).slice(0, 48)}`;
 }
 
 function duplicateTitleWarnings(chapters: readonly ImportPreviewChapter[]): string[] {

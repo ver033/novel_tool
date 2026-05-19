@@ -15,6 +15,12 @@ afterEach(() => {
 });
 
 describe("scanBookFiles", () => {
+  it("uses an indexed queue so broad scans avoid repeated array shifts", () => {
+    const source = readFileSync(join(rootDir, "src/main/external-book-sync/filesystem-book-scanner.ts"), "utf8");
+
+    expect(source).not.toContain("queue.shift()");
+  });
+
   it("finds .Book files only under the project-name folder without entering excluded directories", async () => {
     const root = mkdtempSync(join(tmpdir(), "book-scan-"));
     tempDirs.push(root);

@@ -80,6 +80,10 @@ import type {
   SummaryIndexStatusInput,
   SummaryListCacheEntriesInput,
   SummaryRebuildProjectIndexInput,
+  UsageAnalyticsRecordEventInput,
+  UsageAnalyticsReportRun,
+  UsageAnalyticsStatus,
+  UsageAnalyticsUpdateSettingsInput,
   WritingGoalCreateInput,
   WritingGoalDayDetailInput,
   WritingGoalListDailyStatsInput,
@@ -106,9 +110,13 @@ type ExternalBookSyncScanErrorEvent = {
   readonly error: string;
 };
 
+type ExternalBookSyncScanDoneEvent = ExternalBookSyncScanResult & {
+  readonly requestId: string;
+};
+
 type ExternalBookSyncScanHandlers = {
   readonly onProgress?: (event: ExternalBookSyncScanProgressEvent) => void;
-  readonly onDone?: (event: ExternalBookSyncScanResult) => void;
+  readonly onDone?: (event: ExternalBookSyncScanDoneEvent) => void;
   readonly onError?: (event: ExternalBookSyncScanErrorEvent) => void;
 };
 
@@ -147,6 +155,12 @@ export type NovelToolApi = {
     readonly save: (input: SettingsSaveInput) => Promise<unknown>;
     readonly testConnection: (input?: SettingsTestConnectionInput) => Promise<unknown>;
     readonly listModels: (input?: SettingsListModelsInput) => Promise<unknown>;
+  };
+  readonly usageAnalytics: {
+    readonly getStatus: () => Promise<UsageAnalyticsStatus>;
+    readonly updateSettings: (input: UsageAnalyticsUpdateSettingsInput) => Promise<unknown>;
+    readonly recordEvent: (input: UsageAnalyticsRecordEventInput) => Promise<unknown>;
+    readonly sendReportNow: () => Promise<UsageAnalyticsReportRun>;
   };
   readonly summary: {
     readonly getIndexStatus: (input: SummaryIndexStatusInput) => Promise<unknown>;
@@ -269,6 +283,12 @@ export const novelToolApi: NovelToolApi = Object.freeze({
     save: (input: SettingsSaveInput) => ipcRenderer.invoke(ipcChannels.settings.save, input),
     testConnection: (input?: SettingsTestConnectionInput) => ipcRenderer.invoke(ipcChannels.settings.testConnection, input),
     listModels: (input?: SettingsListModelsInput) => ipcRenderer.invoke(ipcChannels.settings.listModels, input)
+  }),
+  usageAnalytics: Object.freeze({
+    getStatus: () => ipcRenderer.invoke(ipcChannels.usageAnalytics.getStatus),
+    updateSettings: (input: UsageAnalyticsUpdateSettingsInput) => ipcRenderer.invoke(ipcChannels.usageAnalytics.updateSettings, input),
+    recordEvent: (input: UsageAnalyticsRecordEventInput) => ipcRenderer.invoke(ipcChannels.usageAnalytics.recordEvent, input),
+    sendReportNow: () => ipcRenderer.invoke(ipcChannels.usageAnalytics.sendReportNow)
   }),
   summary: Object.freeze({
     getIndexStatus: (input: SummaryIndexStatusInput) => ipcRenderer.invoke(ipcChannels.summary.getIndexStatus, input),

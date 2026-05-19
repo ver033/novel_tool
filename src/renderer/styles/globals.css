@@ -6893,6 +6893,52 @@ select:focus-visible {
   font-size: 22px;
 }
 
+.usage-analytics-status-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.usage-analytics-error-card {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  background: #fff7f7;
+  color: #7f1d1d;
+  font-size: 14px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.usage-analytics-error-card b,
+.usage-analytics-error-card p {
+  margin: 0;
+}
+
+.usage-analytics-error-card details {
+  display: grid;
+  gap: 8px;
+}
+
+.usage-analytics-error-card summary {
+  cursor: pointer;
+  color: #991b1b;
+  font-weight: 600;
+}
+
+.usage-analytics-error-card code {
+  display: block;
+  max-height: 160px;
+  overflow: auto;
+  padding: 10px;
+  border-radius: 6px;
+  background: #fff;
+  color: #7f1d1d;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .summary-cache-actions {
   display: flex;
   flex-wrap: wrap;
@@ -7047,6 +7093,10 @@ select:focus-visible {
 }
 
 .import-export-settings {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.experimental-settings {
   grid-template-columns: minmax(0, 1fr);
 }
 

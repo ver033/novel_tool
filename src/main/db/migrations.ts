@@ -705,6 +705,127 @@ const migrations: readonly Migration[] = [
       }
     }
   },
+  {
+    version: 22,
+    name: "usage_analytics",
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS usage_events (
+          id TEXT PRIMARY KEY,
+          event_type TEXT NOT NULL CHECK (event_type IN ('app_opened', 'page_view', 'page_active', 'feature_used', 'error')),
+          feature TEXT NOT NULL,
+          duration_ms INTEGER,
+          occurred_at TEXT NOT NULL,
+          local_date TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_usage_events_local_date
+          ON usage_events(local_date, occurred_at);
+
+        CREATE TABLE IF NOT EXISTS usage_report_runs (
+          id TEXT PRIMARY KEY,
+          trigger_type TEXT NOT NULL CHECK (trigger_type IN ('automatic', 'manual')),
+          scheduled_slot_key TEXT,
+          scheduled_local_time TEXT,
+          status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed')),
+          snapshot_json TEXT,
+          report_text TEXT,
+          error TEXT,
+          requested_at TEXT NOT NULL,
+          completed_at TEXT
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_report_runs_slot
+          ON usage_report_runs(scheduled_slot_key)
+          WHERE scheduled_slot_key IS NOT NULL;
+
+        CREATE INDEX IF NOT EXISTS idx_usage_report_runs_requested
+          ON usage_report_runs(requested_at);
+      `);
+    }
+  },
+  {
+    version: 23,
+    name: "usage_writing_updates",
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS usage_writing_updates (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          project_name TEXT NOT NULL,
+          chapter_id TEXT NOT NULL,
+          chapter_title TEXT NOT NULL,
+          chapter_sort_order INTEGER NOT NULL,
+          source TEXT NOT NULL CHECK (source IN ('manual', 'ai_apply', 'system')),
+          previous_word_count INTEGER NOT NULL,
+          next_word_count INTEGER NOT NULL,
+          word_delta INTEGER NOT NULL,
+          occurred_at TEXT NOT NULL,
+          local_date TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_usage_writing_updates_local_date
+          ON usage_writing_updates(local_date, occurred_at);
+      `);
+    }
+  },
+  {
+    version: 24,
+    name: "usage_analytics_schema_repair",
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS usage_events (
+          id TEXT PRIMARY KEY,
+          event_type TEXT NOT NULL CHECK (event_type IN ('app_opened', 'page_view', 'page_active', 'feature_used', 'error')),
+          feature TEXT NOT NULL,
+          duration_ms INTEGER,
+          occurred_at TEXT NOT NULL,
+          local_date TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_usage_events_local_date
+          ON usage_events(local_date, occurred_at);
+
+        CREATE TABLE IF NOT EXISTS usage_report_runs (
+          id TEXT PRIMARY KEY,
+          trigger_type TEXT NOT NULL CHECK (trigger_type IN ('automatic', 'manual')),
+          scheduled_slot_key TEXT,
+          scheduled_local_time TEXT,
+          status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed')),
+          snapshot_json TEXT,
+          report_text TEXT,
+          error TEXT,
+          requested_at TEXT NOT NULL,
+          completed_at TEXT
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_report_runs_slot
+          ON usage_report_runs(scheduled_slot_key)
+          WHERE scheduled_slot_key IS NOT NULL;
+
+        CREATE INDEX IF NOT EXISTS idx_usage_report_runs_requested
+          ON usage_report_runs(requested_at);
+
+        CREATE TABLE IF NOT EXISTS usage_writing_updates (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          project_name TEXT NOT NULL,
+          chapter_id TEXT NOT NULL,
+          chapter_title TEXT NOT NULL,
+          chapter_sort_order INTEGER NOT NULL,
+          source TEXT NOT NULL CHECK (source IN ('manual', 'ai_apply', 'system')),
+          previous_word_count INTEGER NOT NULL,
+          next_word_count INTEGER NOT NULL,
+          word_delta INTEGER NOT NULL,
+          occurred_at TEXT NOT NULL,
+          local_date TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_usage_writing_updates_local_date
+          ON usage_writing_updates(local_date, occurred_at);
+      `);
+    }
+  },
 ];
 
 export function runMigrations(db: SqliteDatabase): void {

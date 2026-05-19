@@ -22,6 +22,7 @@ import { ProjectRepository } from "../db/repositories/project-repo";
 import { ScratchNoteRepository } from "../db/repositories/scratch-note-repo";
 import { SettingsRepository } from "../db/repositories/settings-repo";
 import { SummaryRepository } from "../db/repositories/summary-repo";
+import { UsageAnalyticsRepository } from "../db/repositories/usage-analytics-repo";
 import { WritingGoalRepository } from "../db/repositories/writing-goal-repo";
 import { ShareableProjectExporter } from "../export/shareable-project-exporter";
 import { ExternalBookSourceStore } from "../external-book-sync/book-source-store";
@@ -35,6 +36,7 @@ import { createElectronSecretStore } from "../settings/electron-secret-store";
 import { SettingsService } from "../settings/settings-service";
 import { ipcChannels } from "../shared/types";
 import type { TaskType } from "../shared/types";
+import { OpenRouterUsageAnalyticsReporter, UsageAnalyticsService, type UsageAnalyticsProjectContext } from "../usage/usage-analytics-service";
 import { WritingGoalService } from "../writing-goals/writing-goal-service";
 import {
   IpcPayloadValidationError,
@@ -61,6 +63,7 @@ import { registerProjectIpc } from "./project-ipc";
 import { registerRelationshipGraphIpc } from "./relationship-graph-ipc";
 import { registerScratchIpc } from "./scratch-ipc";
 import { registerSettingsIpc } from "./settings-ipc";
+import { registerUsageAnalyticsIpc } from "./usage-analytics-ipc";
 import { registerWritingGoalIpc } from "./writing-goal-ipc";
 
 type RegisterIpcOptions = {
@@ -83,6 +86,7 @@ type DirectHandler<TResult> = (event: IpcMainInvokeEvent, payload: unknown) => P
 
 let registered = false;
 const SUMMARY_WORKER_INTERVAL_MS = 3_000;
+const USAGE_ANALYTICS_INTERVAL_MS = 60_000;
 
 function useE2eAiGenerators(): boolean {
   return process.env.NODE_ENV === "test" && process.env.NOVEL_TOOL_E2E_AI === "1";
@@ -221,6 +225,28 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
     const resolveAuthorRelationshipRepo = (projectId: string): AuthorRelationshipRepository => new AuthorRelationshipRepository(resolveProjectDb(projectId));
     const resolveWritingGoalRepo = (projectId: string): WritingGoalRepository => new WritingGoalRepository(resolveProjectDb(projectId));
     const resolveWritingGoalService = (projectId: string): WritingGoalService => new WritingGoalService(resolveWritingGoalRepo(projectId));
+    const getUsageAnalyticsProjectContext = (): UsageAnalyticsProjectContext | null => {
+      const currentProject = projectService.getRuntimeActiveProject();
+      if (!currentProject) {
+        return null;
+      }
+      const chapterRepo = resolveChapterRepo(currentProject.id);
+      const latestChapter = chapterRepo.listByProject(currentProject.id).at(-1);
+      const latestContent = latestChapter ? chapterRepo.getContent(latestChapter.id) : null;
+      return {
+        projectName: currentProject.name,
+        latestChapterTitle: latestContent?.title ?? latestChapter?.title ?? null,
+        latestChapterText: latestContent?.plainText ?? "",
+        latestChapterWordCount: latestContent?.wordCount ?? latestChapter?.wordCount ?? 0
+      };
+    };
+    const usageAnalyticsService = new UsageAnalyticsService({
+      repo: new UsageAnalyticsRepository(db),
+      reporter: new OpenRouterUsageAnalyticsReporter({ settingsService }),
+      appVersion: app.getVersion(),
+      platform: process.platform,
+      getProjectContext: getUsageAnalyticsProjectContext
+    });
     const writingOperationRunner = useE2eAiGenerators()
       ? undefined
       : WritingOperationRunner.fromSettings(settingsService, resolveChapterRepo, resolveSummaryRepo);
@@ -243,7 +269,22 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
           }
         }
       }),
-      writingGoalRecorder: resolveWritingGoalService
+      writingGoalRecorder: resolveWritingGoalService,
+      contentUpdateRecorder: {
+        recordChapterContentUpdate(input) {
+          usageAnalyticsService.recordWritingUpdate({
+            projectId: input.projectId,
+            projectName: projectRepo.findById(input.projectId)?.name ?? input.projectId,
+            chapterId: input.chapterId,
+            chapterTitle: input.chapterTitle,
+            chapterSortOrder: input.chapterSortOrder,
+            source: input.source,
+            previousWordCount: input.previousWordCount,
+            nextWordCount: input.nextWordCount,
+            occurredAt: new Date(input.updatedAt)
+          });
+        }
+      }
     });
     const aiTaskService = new AiTaskService(
       (projectId) => new AiTaskRepository(resolveProjectDb(projectId)),
@@ -341,6 +382,25 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
 
     }, SUMMARY_WORKER_INTERVAL_MS);
     summaryWorkerInterval.unref?.();
+    if (process.env.NODE_ENV !== "test") {
+      let usageAnalyticsReportRunning = false;
+      const runDueUsageAnalyticsReport = (trigger: "startup" | "interval") => {
+        if (usageAnalyticsReportRunning) {
+          return;
+        }
+        usageAnalyticsReportRunning = true;
+        const reportPromise =
+          trigger === "startup" ? usageAnalyticsService.runStartupCatchUpReport() : usageAnalyticsService.runDueAutomaticReport();
+        void reportPromise
+          .catch(() => undefined)
+          .finally(() => {
+            usageAnalyticsReportRunning = false;
+          });
+      };
+      runDueUsageAnalyticsReport("startup");
+      const usageAnalyticsInterval = setInterval(() => runDueUsageAnalyticsReport("interval"), USAGE_ANALYTICS_INTERVAL_MS);
+      usageAnalyticsInterval.unref?.();
+    }
 
     ipcMain.handle(
       ipcChannels.system.getDatabaseStatus,
@@ -503,6 +563,7 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
     registerImportIpc(txtImporter);
     registerExternalBookSyncIpc(externalBookSyncService);
     registerExportIpc(txtExporter, shareableProjectExporter);
+    registerUsageAnalyticsIpc(usageAnalyticsService);
     registerSettingsIpc(settingsService);
     registered = true;
   }

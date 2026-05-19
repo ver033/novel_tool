@@ -37,11 +37,27 @@ export type WritingGoalDeltaRecorder = {
   readonly recordWordDelta: (input: WritingGoalRecordDeltaInput) => void;
 };
 
+export type ChapterContentUpdateRecordInput = {
+  readonly projectId: string;
+  readonly chapterId: string;
+  readonly chapterTitle: string;
+  readonly chapterSortOrder: number;
+  readonly source: "manual" | "ai_apply" | "system";
+  readonly previousWordCount: number;
+  readonly nextWordCount: number;
+  readonly updatedAt: string;
+};
+
+export type ChapterContentUpdateRecorder = {
+  readonly recordChapterContentUpdate: (input: ChapterContentUpdateRecordInput) => void;
+};
+
 type WritingGoalDeltaRecorderResolver = (projectId: string) => WritingGoalDeltaRecorder;
 
 type ChapterServiceOptions = {
   readonly summaryIndexInvalidator?: SummaryIndexInvalidator;
   readonly writingGoalRecorder?: WritingGoalDeltaRecorder | WritingGoalDeltaRecorderResolver;
+  readonly contentUpdateRecorder?: ChapterContentUpdateRecorder;
 };
 
 function nowIso(): string {
@@ -82,10 +98,12 @@ export class ChapterService {
   private readonly resolveChapterRepo: ChapterRepositoryResolver;
   private readonly summaryIndexInvalidator?: SummaryIndexInvalidator;
   private readonly resolveWritingGoalRecorder?: WritingGoalDeltaRecorderResolver;
+  private readonly contentUpdateRecorder?: ChapterContentUpdateRecorder;
 
   constructor(chapterRepo: ChapterRepository | ChapterRepositoryResolver, options: ChapterServiceOptions = {}) {
     this.resolveChapterRepo = typeof chapterRepo === "function" ? chapterRepo : () => chapterRepo;
     this.summaryIndexInvalidator = options.summaryIndexInvalidator;
+    this.contentUpdateRecorder = options.contentUpdateRecorder;
     const writingGoalRecorder = options.writingGoalRecorder;
     if (typeof writingGoalRecorder === "function") {
       this.resolveWritingGoalRecorder = writingGoalRecorder as WritingGoalDeltaRecorderResolver;
@@ -190,6 +208,16 @@ export class ChapterService {
     );
 
     if (previousContent.plainText !== saved.plainText) {
+      this.recordChapterContentUpdate({
+        projectId: saved.projectId,
+        chapterId: saved.id,
+        chapterTitle: saved.title,
+        chapterSortOrder: saved.sortOrder,
+        source: input.saveSource ?? "manual",
+        previousWordCount: previousContent.wordCount,
+        nextWordCount: saved.wordCount,
+        updatedAt
+      });
       try {
         this.summaryIndexInvalidator?.markChapterContentChanged({
           projectId: saved.projectId,
@@ -251,6 +279,14 @@ export class ChapterService {
       this.resolveWritingGoalRecorder?.(input.projectId).recordWordDelta(input);
     } catch (reason) {
       console.warn("Failed to record writing goal word delta", reason);
+    }
+  }
+
+  private recordChapterContentUpdate(input: ChapterContentUpdateRecordInput): void {
+    try {
+      this.contentUpdateRecorder?.recordChapterContentUpdate(input);
+    } catch (reason) {
+      console.warn("Failed to record chapter content update for usage analytics", reason);
     }
   }
 }

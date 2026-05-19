@@ -91,7 +91,9 @@ export async function scanBookFiles(input: ScanBookFilesInput): Promise<BookFile
     });
   };
 
-  while (queue.length > 0) {
+  let queueIndex = 0;
+
+  while (queueIndex < queue.length) {
     if (input.signal.aborted) {
       break;
     }
@@ -100,10 +102,8 @@ export async function scanBookFiles(input: ScanBookFilesInput): Promise<BookFile
       break;
     }
 
-    const entry = queue.shift();
-    if (!entry) {
-      break;
-    }
+    const entry = queue[queueIndex];
+    queueIndex += 1;
     checkedDirectories += 1;
     if (shouldEmitProgress(checkedDirectories, checkedFiles)) {
       emitProgress(entry.currentRoot);
