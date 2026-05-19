@@ -1050,6 +1050,16 @@ function formatExternalBookSource(source: ExternalBookSyncSource): string {
   return `${source.displayName} · ${confirmed}`;
 }
 
+function formatExternalBookSearchMode(mode: ExternalBookSyncStatus["search"]["mode"]): string {
+  if (mode === "global") {
+    return "全局搜索";
+  }
+  if (mode === "directory") {
+    return "指定目录搜索";
+  }
+  return "快速搜索";
+}
+
 function ExternalBookSyncPane({ currentProject }: ExternalBookSyncPaneProps) {
   const api = useMemo(getNovelToolApi, []);
   const [status, setStatus] = useState<ExternalBookSyncStatus | null>(null);
@@ -1072,8 +1082,11 @@ function ExternalBookSyncPane({ currentProject }: ExternalBookSyncPaneProps) {
     setActiveScanRequestIdState(requestId);
   }
 
-  async function loadStatus(): Promise<void> {
-    setError(null);
+  async function loadStatus(options: { readonly clearError?: boolean } = {}): Promise<void> {
+    const shouldSurfaceError = options.clearError ?? true;
+    if (shouldSurfaceError) {
+      setError(null);
+    }
     try {
       if (!currentProject) {
         setStatus(null);
@@ -1081,7 +1094,9 @@ function ExternalBookSyncPane({ currentProject }: ExternalBookSyncPaneProps) {
       }
       setStatus((await api.externalBookSync.getStatus({ projectId: currentProject.id })) as ExternalBookSyncStatus);
     } catch (reason) {
-      setError(formatError(reason));
+      if (shouldSurfaceError) {
+        setError(formatError(reason));
+      }
     }
   }
 
@@ -1100,6 +1115,17 @@ function ExternalBookSyncPane({ currentProject }: ExternalBookSyncPaneProps) {
     setError(null);
     void loadStatus();
   }, [currentProject?.id]);
+
+  useEffect(() => {
+    if (!currentProject) {
+      return;
+    }
+    const intervalId = window.setInterval(
+      () => void loadStatus({ clearError: false }),
+      status?.search.isRunning ? 1000 : 5000
+    );
+    return () => window.clearInterval(intervalId);
+  }, [currentProject?.id, status?.search.isRunning]);
 
   useEffect(() => {
     return () => {
@@ -1268,26 +1294,36 @@ function ExternalBookSyncPane({ currentProject }: ExternalBookSyncPaneProps) {
         <span className="tag">原型功能</span>
       </div>
 
-      {!currentProject ? (
-        <div className="empty-inline">请先打开项目，再检查外部 .Book 文件。</div>
-      ) : (
-        <>
-          <div className="external-book-sync-actions">
-            <Button disabled={scanBusy || sendBusy} onClick={() => void runScan("quick")} type="button" variant="primary">
-              {scanBusy ? "正在查找" : "查找 .Book"}
-            </Button>
-            <Button disabled={scanBusy || sendBusy} onClick={() => void scanSelectedDirectory()} type="button" variant="secondary">
-              选择检查目录
-            </Button>
-            <Button disabled={scanBusy || sendBusy} onClick={() => void runScan("global")} type="button" variant="secondary">
-              全局重新扫描
-            </Button>
-            {scanBusy && activeScanRequestId ? (
-              <Button disabled={sendBusy} onClick={() => void cancelActiveScan()} type="button" variant="ghost">
-                停止扫描
+        {!currentProject ? (
+          <div className="empty-inline">请先打开项目，再检查外部 .Book 文件。</div>
+        ) : (
+          <>
+            <div className="external-book-sync-actions">
+              <Button disabled={scanBusy || sendBusy} onClick={() => void runScan("quick")} type="button" variant="primary">
+                {scanBusy ? "正在查找" : "查找 .Book"}
               </Button>
-            ) : null}
-          </div>
+              <Button disabled={scanBusy || sendBusy} onClick={() => void scanSelectedDirectory()} type="button" variant="secondary">
+                选择检查目录
+              </Button>
+              <Button disabled={scanBusy || sendBusy} onClick={() => void runScan("global")} type="button" variant="secondary">
+                全局重新扫描
+              </Button>
+              {scanBusy && activeScanRequestId ? (
+                <Button disabled={sendBusy} onClick={() => void cancelActiveScan()} type="button" variant="ghost">
+                  停止扫描
+                </Button>
+              ) : null}
+            </div>
+
+          {status?.search.isRunning && !scanBusy ? (
+            <div className="external-book-sync-progress" role="status">
+              <span>{status.search.trigger === "manual" ? "正在搜索 .Book" : "正在自动搜索 .Book"}</span>
+              <small>
+                {formatExternalBookSearchMode(status.search.mode)}
+                {status.search.startedAt ? ` · 开始 ${formatDateTime(status.search.startedAt)}` : ""}
+              </small>
+            </div>
+          ) : null}
 
           {scanProgress ? (
             <div className="external-book-sync-progress" role="status">
@@ -1301,14 +1337,20 @@ function ExternalBookSyncPane({ currentProject }: ExternalBookSyncPaneProps) {
           {status?.sources.length ? (
             <section className="external-book-sync-sources" aria-label="已确认的外部 Book 来源">
               <b>已确认来源</b>
-              <div>
+              <div className="external-book-sync-source-list">
                 {status.sources.map((source) => (
-                  <span key={source.id} title={source.bookFilePath}>
-                    {formatExternalBookSource(source)}
-                    <button onClick={() => void forgetSource(source.id)} type="button">
-                      忘记
-                    </button>
-                  </span>
+                  <div className="external-book-sync-source-item" key={source.id}>
+                    <div className="external-book-sync-source-summary">
+                      <span>{formatExternalBookSource(source)}</span>
+                      <button onClick={() => void forgetSource(source.id)} type="button">
+                        忘记
+                      </button>
+                    </div>
+                    <details>
+                      <summary>查看保存路径</summary>
+                      <code className="external-book-sync-source-path">{source.bookFilePath}</code>
+                    </details>
+                  </div>
                 ))}
               </div>
             </section>

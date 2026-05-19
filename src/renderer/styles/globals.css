@@ -7143,23 +7143,56 @@ select:focus-visible {
   font-size: 14px;
 }
 
-.external-book-sync-sources div {
+.external-book-sync-source-list {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
 }
 
-.external-book-sync-sources span {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
+.external-book-sync-source-item {
+  display: grid;
+  gap: 6px;
   max-width: 100%;
-  padding: 5px 8px;
+  padding: 8px 10px;
   border: 1px solid #dbeafe;
-  border-radius: 999px;
+  border-radius: 8px;
   background: #fff;
   color: #334155;
   font-size: 12px;
+}
+
+.external-book-sync-source-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.external-book-sync-source-summary span,
+.external-book-sync-source-path {
+  overflow-wrap: anywhere;
+}
+
+.external-book-sync-source-item details {
+  display: grid;
+  gap: 4px;
+}
+
+.external-book-sync-source-item summary {
+  color: #2563eb;
+  cursor: pointer;
+  font-weight: 720;
+}
+
+.external-book-sync-source-path {
+  display: block;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #475569;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  line-height: 1.5;
+  white-space: normal;
 }
 
 .external-book-sync-sources button {

@@ -25,6 +25,7 @@ import type {
   authorRelationshipGetGraphInputSchema,
   authorRelationshipUpdateCharacterInputSchema,
   authorRelationshipUpdateCharacterLayoutInputSchema,
+  authorRelationshipUpdateRelationshipInputSchema,
   chapterCreateInputSchema,
   chapterCreateSnapshotInputSchema,
   chapterDeleteInputSchema,
@@ -330,6 +331,12 @@ export type ExternalBookSyncCandidate = {
 export type ExternalBookSyncStatus = {
   readonly projectId: string;
   readonly sources: readonly ExternalBookSyncSource[];
+  readonly search: {
+    readonly isRunning: boolean;
+    readonly mode: "quick" | "global" | "directory" | null;
+    readonly trigger: "manual" | "scheduled" | "startup" | null;
+    readonly startedAt: string | null;
+  };
 };
 
 export type ExternalBookScanProgress = {
@@ -679,6 +686,7 @@ export type AuthorRelationshipCreateCharacterInput = z.input<typeof authorRelati
 export type AuthorRelationshipUpdateCharacterInput = z.input<typeof authorRelationshipUpdateCharacterInputSchema>;
 export type AuthorRelationshipUpdateCharacterLayoutInput = z.input<typeof authorRelationshipUpdateCharacterLayoutInputSchema>;
 export type AuthorRelationshipCreateRelationshipInput = z.input<typeof authorRelationshipCreateRelationshipInputSchema>;
+export type AuthorRelationshipUpdateRelationshipInput = z.input<typeof authorRelationshipUpdateRelationshipInputSchema>;
 export type AuthorRelationshipDeleteCharacterInput = z.input<typeof authorRelationshipDeleteCharacterInputSchema>;
 export type AuthorRelationshipDeleteRelationshipInput = z.input<typeof authorRelationshipDeleteRelationshipInputSchema>;
 export type { RelationshipGraphResult, RelationshipGraphSourceStatus };
@@ -886,6 +894,7 @@ export const ipcChannels = {
     updateCharacter: "novelTool:authorRelationship:updateCharacter",
     updateCharacterLayout: "novelTool:authorRelationship:updateCharacterLayout",
     createRelationship: "novelTool:authorRelationship:createRelationship",
+    updateRelationship: "novelTool:authorRelationship:updateRelationship",
     deleteCharacter: "novelTool:authorRelationship:deleteCharacter",
     deleteRelationship: "novelTool:authorRelationship:deleteRelationship"
   },

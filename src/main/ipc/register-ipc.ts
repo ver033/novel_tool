@@ -501,6 +501,9 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
         createRelationship(input) {
           return repo.createRelationship(input);
         },
+        updateRelationship(input) {
+          return repo.updateRelationship(input);
+        },
         deleteCharacter(input) {
           repo.deleteCharacter(input);
           return { ok: true };

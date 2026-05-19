@@ -224,6 +224,63 @@ describe("ExternalBookSyncService", () => {
     expect(sentMessages.join("\n")).not.toContain(bookFilePath);
   });
 
+  it("retries automatic startup discovery while no .Book source has been saved", async () => {
+    const { dir, project, sourceStore, service, sentMessages } = createFixture({ rootPath: null });
+    const fakeHome = join(dir, "home");
+    mkdirSync(join(fakeHome, "Documents"), { recursive: true });
+    mkdirSync(join(fakeHome, "Desktop"), { recursive: true });
+    mkdirSync(join(fakeHome, "Downloads"), { recursive: true });
+    vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
+    const firstRun = await service.runStartupCatchUpSync(project.id, new Date(2026, 4, 19, 7, 10));
+
+    const projectBookDir = join(fakeHome, "Documents", "举足无措");
+    mkdirSync(projectBookDir, { recursive: true });
+    const bookFilePath = join(projectBookDir, "story.Book");
+    writeFileSync(bookFilePath, "第一章\n.Book 里的第一章修订正文。\n\n第二章\n新增正文。", "utf8");
+    const realBookFilePath = realpathSync(bookFilePath);
+    const secondRun = await service.runStartupCatchUpSync(project.id, new Date(2026, 4, 19, 7, 20));
+
+    expect(firstRun).toMatchObject({ trigger: "startup", scheduledLocalTime: "07:00", status: "skipped", candidateCount: 0 });
+    expect(secondRun).toMatchObject({ trigger: "startup", scheduledLocalTime: "07:00", status: "completed", candidateCount: 1, sentChapterCount: 1 });
+    expect(sourceStore.listSources(project.id)).toMatchObject([
+      {
+        bookFilePath: realBookFilePath,
+        displayName: "story.Book"
+      }
+    ]);
+    expect(sentMessages.join("\n")).toContain("缺失章节：第二章");
+  });
+
+  it("reports active .Book search status while scanning", async () => {
+    const { dir, project, service } = createFixture();
+    const projectBookDir = join(dir, "举足无措");
+    mkdirSync(projectBookDir, { recursive: true });
+    const statusSnapshots: ReturnType<typeof service.getStatus>["search"][] = [];
+
+    await service.scanProject(
+      {
+        projectId: project.id,
+        mode: "directory",
+        directoryPath: dir,
+        roots: [dir],
+        timeBudgetMs: 10_000
+      },
+      {
+        onProgress() {
+          statusSnapshots.push(service.getStatus(project.id).search);
+        }
+      }
+    );
+
+    expect(statusSnapshots).toContainEqual(expect.objectContaining({ isRunning: true, mode: "directory" }));
+    expect(service.getStatus(project.id).search).toEqual({
+      isRunning: false,
+      mode: null,
+      trigger: null,
+      startedAt: null
+    });
+  });
+
   it("automatically sends missing chapters once for each due sync slot", async () => {
     const { dir, project, service, sentMessages } = createFixture();
     const projectBookDir = join(dir, "举足无措");

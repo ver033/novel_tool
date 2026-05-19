@@ -79,6 +79,10 @@ describe("settings page scope", () => {
     expect(settings).toContain("<h3>同步检查</h3>");
     expect(settings).not.toContain("外部 .Book 同步检查");
     expect(settings).not.toContain("只读取项目同名文件夹下的 .Book 文件");
+    expect(settings).toContain("查看保存路径");
+    expect(settings).toContain("{source.bookFilePath}");
+    expect(settings).toContain("status?.search.isRunning");
+    expect(settings).toContain("正在自动搜索 .Book");
     expect(settings).toContain("选择检查目录");
     expect(settings).not.toContain("选择同步目录");
     expect(settings).toContain("api.externalBookSync.scan");

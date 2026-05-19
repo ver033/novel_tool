@@ -114,6 +114,74 @@ describe("AuthorRelationshipRepository", () => {
     db.close();
   });
 
+  it("resolves author relationship endpoints through existing character aliases", () => {
+    const db = createDb();
+    seedProject(db);
+    const repo = new AuthorRelationshipRepository(db);
+    const character = repo.createCharacter({ projectId: "project_1", name: "白嘉轩" });
+    repo.updateCharacter({
+      projectId: "project_1",
+      characterId: character.id,
+      name: "白嘉轩",
+      aliases: ["族长"],
+      entityKind: "person",
+      importance: "main"
+    });
+
+    const relationship = repo.createRelationship({
+      projectId: "project_1",
+      sourceCharacterName: "族长",
+      targetCharacterName: "黑娃",
+      sourceToTargetLabel: "族长与晚辈"
+    });
+
+    expect(relationship.sourceCharacter.id).toBe(character.id);
+    expect(relationship.sourceCharacter.name).toBe("白嘉轩");
+    expect(repo.listCharacters("project_1").map((item) => item.name)).toEqual(expect.arrayContaining(["白嘉轩", "黑娃"]));
+    expect(repo.listCharacters("project_1").map((item) => item.name)).not.toContain("族长");
+
+    db.close();
+  });
+
+  it("rejects author aliases that collide with another character name or alias", () => {
+    const db = createDb();
+    seedProject(db);
+    const repo = new AuthorRelationshipRepository(db);
+    const bai = repo.createCharacter({ projectId: "project_1", name: "白嘉轩" });
+    const hei = repo.createCharacter({ projectId: "project_1", name: "黑娃" });
+    repo.updateCharacter({
+      projectId: "project_1",
+      characterId: bai.id,
+      name: "白嘉轩",
+      aliases: ["族长"],
+      entityKind: "person",
+      importance: "main"
+    });
+
+    expect(() =>
+      repo.updateCharacter({
+        projectId: "project_1",
+        characterId: hei.id,
+        name: "黑娃",
+        aliases: ["族长"],
+        entityKind: "person",
+        importance: "supporting"
+      })
+    ).toThrow("作者人物别名已存在。");
+    expect(() =>
+      repo.updateCharacter({
+        projectId: "project_1",
+        characterId: hei.id,
+        name: "族长",
+        aliases: [],
+        entityKind: "person",
+        importance: "supporting"
+      })
+    ).toThrow("作者人物名称与已有别名冲突。");
+
+    db.close();
+  });
+
   it("rejects relationships that point to the same normalized character", () => {
     const db = createDb();
     seedProject(db);
@@ -153,6 +221,33 @@ describe("AuthorRelationshipRepository", () => {
         targetToSourceLabel: "父子"
       })
     ).toThrow("这条作者关系已经存在。");
+
+    db.close();
+  });
+
+  it("updates author relationship labels without recreating the relationship", () => {
+    const db = createDb();
+    seedProject(db);
+    const repo = new AuthorRelationshipRepository(db);
+    const created = repo.createRelationship({
+      projectId: "project_1",
+      sourceCharacterName: "鹿三",
+      targetCharacterName: "黑娃",
+      sourceToTargetLabel: "父子",
+      targetToSourceLabel: "儿子与父亲"
+    }).relationship;
+
+    const updated = repo.updateRelationship({
+      projectId: "project_1",
+      relationshipId: created.id,
+      sourceToTargetLabel: "父亲",
+      targetToSourceLabel: "儿子"
+    });
+
+    expect(updated.id).toBe(created.id);
+    expect(updated.sourceToTargetLabel).toBe("父亲");
+    expect(updated.targetToSourceLabel).toBe("儿子");
+    expect(repo.listRelationships("project_1")).toHaveLength(1);
 
     db.close();
   });

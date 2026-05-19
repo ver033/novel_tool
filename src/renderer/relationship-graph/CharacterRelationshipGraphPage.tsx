@@ -429,6 +429,14 @@ export function CharacterRelationshipGraphPage({
                     })
                   )
                 }
+                onUpdateAuthorRelationship={(input) =>
+                  runAuthorMutation(() =>
+                    api.authorRelationship?.updateRelationship({
+                      projectId: projectId ?? "",
+                      ...input
+                    })
+                  )
+                }
               />
             </div>
           ) : null}

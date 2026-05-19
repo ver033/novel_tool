@@ -726,6 +726,14 @@ export const authorRelationshipCreateRelationshipInputSchema = z
     targetToSourceLabel: z.string().trim().max(120).nullable().optional()
   })
   .strict();
+export const authorRelationshipUpdateRelationshipInputSchema = z
+  .object({
+    projectId: idSchema,
+    relationshipId: idSchema,
+    sourceToTargetLabel: nonEmptyString.max(120),
+    targetToSourceLabel: z.string().trim().max(120).nullable().optional()
+  })
+  .strict();
 export const authorRelationshipDeleteCharacterInputSchema = z
   .object({
     projectId: idSchema,

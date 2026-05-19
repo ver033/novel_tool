@@ -28,6 +28,7 @@ import type {
   AuthorRelationshipGetGraphInput,
   AuthorRelationshipUpdateCharacterInput,
   AuthorRelationshipUpdateCharacterLayoutInput,
+  AuthorRelationshipUpdateRelationshipInput,
   ChapterCreateInput,
   ChapterCreateSnapshotInput,
   ChapterDeleteInput,
@@ -185,6 +186,7 @@ export type NovelToolApi = {
     readonly updateCharacter: (input: AuthorRelationshipUpdateCharacterInput) => Promise<unknown>;
     readonly updateCharacterLayout: (input: AuthorRelationshipUpdateCharacterLayoutInput) => Promise<unknown>;
     readonly createRelationship: (input: AuthorRelationshipCreateRelationshipInput) => Promise<unknown>;
+    readonly updateRelationship: (input: AuthorRelationshipUpdateRelationshipInput) => Promise<unknown>;
     readonly deleteCharacter: (input: AuthorRelationshipDeleteCharacterInput) => Promise<unknown>;
     readonly deleteRelationship: (input: AuthorRelationshipDeleteRelationshipInput) => Promise<unknown>;
   };
@@ -314,6 +316,7 @@ export const novelToolApi: NovelToolApi = Object.freeze({
     updateCharacterLayout: (input: AuthorRelationshipUpdateCharacterLayoutInput) =>
       ipcRenderer.invoke(ipcChannels.authorRelationship.updateCharacterLayout, input),
     createRelationship: (input: AuthorRelationshipCreateRelationshipInput) => ipcRenderer.invoke(ipcChannels.authorRelationship.createRelationship, input),
+    updateRelationship: (input: AuthorRelationshipUpdateRelationshipInput) => ipcRenderer.invoke(ipcChannels.authorRelationship.updateRelationship, input),
     deleteCharacter: (input: AuthorRelationshipDeleteCharacterInput) => ipcRenderer.invoke(ipcChannels.authorRelationship.deleteCharacter, input),
     deleteRelationship: (input: AuthorRelationshipDeleteRelationshipInput) => ipcRenderer.invoke(ipcChannels.authorRelationship.deleteRelationship, input)
   }),

@@ -32,6 +32,7 @@ const MAX_BOOK_BYTES = 20 * 1024 * 1024;
 const AUTOMATIC_SYNC_SCHEDULE_LOCAL_TIMES = ["07:00", "11:00", "23:00"] as const;
 
 export type ExternalBookSyncMode = "quick" | "global" | "directory";
+export type ExternalBookSyncSearchTrigger = ExternalBookSyncAutomaticTrigger | "manual";
 
 export type ExternalBookMissingChapterPreview = Omit<ExternalBookMissingChapter, "text"> & {
   readonly textLength: number;
@@ -64,6 +65,14 @@ export type ExternalBookSyncCandidate = {
 export type ExternalBookSyncStatus = {
   readonly projectId: string;
   readonly sources: readonly ExternalBookSyncSource[];
+  readonly search: ExternalBookSyncSearchStatus;
+};
+
+export type ExternalBookSyncSearchStatus = {
+  readonly isRunning: boolean;
+  readonly mode: ExternalBookSyncMode | null;
+  readonly trigger: ExternalBookSyncSearchTrigger | null;
+  readonly startedAt: string | null;
 };
 
 export type ExternalBookSyncScanInput = {
@@ -72,6 +81,7 @@ export type ExternalBookSyncScanInput = {
   readonly directoryPath?: string;
   readonly roots?: readonly string[];
   readonly timeBudgetMs?: number;
+  readonly searchTrigger?: ExternalBookSyncSearchTrigger;
 };
 
 export type ExternalBookSyncScanResult = {
@@ -169,6 +179,13 @@ type LoadedExternalBookCandidate = {
   readonly fullComparison: ExternalBookComparisonResult;
 };
 
+type ActiveExternalBookSearch = {
+  readonly projectId: string;
+  readonly mode: ExternalBookSyncMode;
+  readonly trigger: ExternalBookSyncSearchTrigger;
+  readonly startedAt: string;
+};
+
 function candidateReasons(comparison: CandidateComparisonStats): string[] {
   const reasons: string[] = [];
   if (comparison.externalLatestOrdinal !== null) {
@@ -241,13 +258,15 @@ function selectedChapters(comparison: ExternalBookComparisonResult, chapterKeys:
 
 export class ExternalBookSyncService {
   private readonly candidatesById = new Map<string, ExternalBookSyncCandidate>();
+  private readonly activeSearchesById = new Map<string, ActiveExternalBookSearch>();
 
   constructor(private readonly deps: ExternalBookSyncServiceDeps) {}
 
   getStatus(projectId: string): ExternalBookSyncStatus {
     return {
       projectId,
-      sources: this.deps.sourceStore.listSources(projectId)
+      sources: this.deps.sourceStore.listSources(projectId),
+      search: this.getActiveSearchStatus(projectId)
     };
   }
 
@@ -262,6 +281,41 @@ export class ExternalBookSyncService {
   forgetSource(projectId: string, sourceId: string): { readonly ok: true } {
     this.deps.sourceStore.forgetSource(projectId, sourceId);
     return { ok: true };
+  }
+
+  private getActiveSearchStatus(projectId: string): ExternalBookSyncSearchStatus {
+    const activeSearch = [...this.activeSearchesById.values()].find((search) => search.projectId === projectId);
+    if (!activeSearch) {
+      return {
+        isRunning: false,
+        mode: null,
+        trigger: null,
+        startedAt: null
+      };
+    }
+    return {
+      isRunning: true,
+      mode: activeSearch.mode,
+      trigger: activeSearch.trigger,
+      startedAt: activeSearch.startedAt
+    };
+  }
+
+  private beginSearch(input: {
+    readonly projectId: string;
+    readonly mode: ExternalBookSyncMode;
+    readonly trigger: ExternalBookSyncSearchTrigger;
+  }): () => void {
+    const searchId = createId("external_book_search");
+    this.activeSearchesById.set(searchId, {
+      projectId: input.projectId,
+      mode: input.mode,
+      trigger: input.trigger,
+      startedAt: new Date().toISOString()
+    });
+    return () => {
+      this.activeSearchesById.delete(searchId);
+    };
   }
 
   private rememberCandidateSource(candidate: ExternalBookSyncCandidate, scannedAt: string): void {
@@ -280,6 +334,9 @@ export class ExternalBookSyncService {
   }
 
   hasDueAutomaticSync(projectId: string, now = new Date()): boolean {
+    if (this.deps.sourceStore.listSources(projectId).length === 0) {
+      return true;
+    }
     const dueSlot = latestDueSyncSlot(now);
     return !this.deps.automationStore.getRunBySlot(projectId, scheduledSyncSlotKey(dueSlot.slotDate, dueSlot.localTime));
   }
@@ -292,7 +349,9 @@ export class ExternalBookSyncService {
     const now = input.now ?? new Date();
     const dueSlot = latestDueSyncSlot(now);
     const slotKey = scheduledSyncSlotKey(dueSlot.slotDate, dueSlot.localTime);
-    if (this.deps.automationStore.getRunBySlot(input.projectId, slotKey)) {
+    const savedSourcesBeforeRun = this.deps.sourceStore.listSources(input.projectId);
+    const shouldRetryStartupDiscovery = input.trigger === "startup" && savedSourcesBeforeRun.length === 0;
+    if (!shouldRetryStartupDiscovery && this.deps.automationStore.getRunBySlot(input.projectId, slotKey)) {
       return null;
     }
 
@@ -312,18 +371,20 @@ export class ExternalBookSyncService {
     });
 
     try {
-      const savedSources = this.deps.sourceStore.listSources(input.projectId);
+      const savedSources = savedSourcesBeforeRun;
       const project = savedSources.length === 0 ? this.deps.projectRepo.findById(input.projectId) : null;
       let scan = await this.scanProject({
         projectId: input.projectId,
         mode: "quick",
-        roots: savedSources.length > 0 ? [] : automaticDiscoveryRoots(project?.rootPath ?? null)
+        roots: savedSources.length > 0 ? [] : automaticDiscoveryRoots(project?.rootPath ?? null),
+        searchTrigger: input.trigger
       });
       if (savedSources.length === 0 && scan.candidates.length === 0) {
         scan = await this.scanProject({
           projectId: input.projectId,
           mode: "global",
-          roots: defaultRoots(project?.rootPath ?? null)
+          roots: defaultRoots(project?.rootPath ?? null),
+          searchTrigger: input.trigger
         });
       }
       const candidate = scan.candidates.find((item) => item.comparison.missingChapters.length > 0);
@@ -383,77 +444,86 @@ export class ExternalBookSyncService {
     if (!project) {
       throw new Error("项目不存在，无法检查外部 .Book。");
     }
-
-    const warnings: string[] = [];
-    const candidatePaths = new Set<string>();
-    for (const source of this.deps.sourceStore.listSources(input.projectId)) {
-      candidatePaths.add(source.bookFilePath);
-    }
-
-    const shouldSearchIndex = input.mode !== "directory" && (input.mode === "global" || candidatePaths.size === 0);
-    const indexResult = shouldSearchIndex ? await searchWindowsIndexForBookFiles({ projectName: project.name, timeoutMs: WINDOWS_INDEX_TIMEOUT_MS }) : null;
-    if (indexResult?.status === "failed") {
-      warnings.push(`Windows Search 查询失败：${indexResult.error}`);
-    }
-    for (const filePath of indexResult?.files ?? []) {
-      candidatePaths.add(filePath);
-    }
-
-    const roots = input.roots ?? (input.directoryPath ? [input.directoryPath] : defaultRoots(project.rootPath));
-    const shouldScanFileSystem = input.mode === "global" || input.mode === "directory" || candidatePaths.size === 0;
-    const scan = shouldScanFileSystem
-      ? await scanBookFiles({
-          projectName: project.name,
-          roots,
-          timeBudgetMs: input.timeBudgetMs ?? DEFAULT_SCAN_BUDGET_MS,
-          signal: handlers.signal ?? new AbortController().signal,
-          onProgress: handlers.onProgress
-        })
-      : null;
-    for (const file of scan?.files ?? []) {
-      candidatePaths.add(file.path);
-    }
-
-    const candidates: ExternalBookSyncCandidate[] = [];
-    const completedAt = new Date().toISOString();
-    for (const [candidateId, candidate] of this.candidatesById) {
-      if (candidate.projectId === input.projectId) {
-        this.candidatesById.delete(candidateId);
-      }
-    }
-    for (const filePath of candidatePaths) {
-      const loaded = this.loadCandidate({
-        projectId: input.projectId,
-        projectName: project.name,
-        filePath
-      });
-      if (loaded) {
-        candidates.push(loaded.candidate);
-        this.rememberCandidateSource(loaded.candidate, completedAt);
-        this.candidatesById.set(loaded.candidate.id, loaded.candidate);
-      }
-    }
-
-    candidates.sort((a, b) => {
-      return (
-        b.comparison.missingChapters.length - a.comparison.missingChapters.length ||
-        b.detectedChapterCount - a.detectedChapterCount ||
-        a.fileName.localeCompare(b.fileName, "zh-CN")
-      );
+    const finishSearch = this.beginSearch({
+      projectId: input.projectId,
+      mode: input.mode,
+      trigger: input.searchTrigger ?? "manual"
     });
 
-    if (candidates.length === 0) {
-      warnings.push("没有在项目同名文件夹下找到可用的 .Book 文件。");
-    }
+    try {
+      const warnings: string[] = [];
+      const candidatePaths = new Set<string>();
+      for (const source of this.deps.sourceStore.listSources(input.projectId)) {
+        candidatePaths.add(source.bookFilePath);
+      }
 
-    return {
-      projectId: input.projectId,
-      candidates,
-      scan,
-      warnings,
-      searchedRoots: roots,
-      completedAt
-    };
+      const shouldSearchIndex = input.mode !== "directory" && (input.mode === "global" || candidatePaths.size === 0);
+      const indexResult = shouldSearchIndex ? await searchWindowsIndexForBookFiles({ projectName: project.name, timeoutMs: WINDOWS_INDEX_TIMEOUT_MS }) : null;
+      if (indexResult?.status === "failed") {
+        warnings.push(`Windows Search 查询失败：${indexResult.error}`);
+      }
+      for (const filePath of indexResult?.files ?? []) {
+        candidatePaths.add(filePath);
+      }
+
+      const roots = input.roots ?? (input.directoryPath ? [input.directoryPath] : defaultRoots(project.rootPath));
+      const shouldScanFileSystem = input.mode === "global" || input.mode === "directory" || candidatePaths.size === 0;
+      const scan = shouldScanFileSystem
+        ? await scanBookFiles({
+            projectName: project.name,
+            roots,
+            timeBudgetMs: input.timeBudgetMs ?? DEFAULT_SCAN_BUDGET_MS,
+            signal: handlers.signal ?? new AbortController().signal,
+            onProgress: handlers.onProgress
+          })
+        : null;
+      for (const file of scan?.files ?? []) {
+        candidatePaths.add(file.path);
+      }
+
+      const candidates: ExternalBookSyncCandidate[] = [];
+      const completedAt = new Date().toISOString();
+      for (const [candidateId, candidate] of this.candidatesById) {
+        if (candidate.projectId === input.projectId) {
+          this.candidatesById.delete(candidateId);
+        }
+      }
+      for (const filePath of candidatePaths) {
+        const loaded = this.loadCandidate({
+          projectId: input.projectId,
+          projectName: project.name,
+          filePath
+        });
+        if (loaded) {
+          candidates.push(loaded.candidate);
+          this.rememberCandidateSource(loaded.candidate, completedAt);
+          this.candidatesById.set(loaded.candidate.id, loaded.candidate);
+        }
+      }
+
+      candidates.sort((a, b) => {
+        return (
+          b.comparison.missingChapters.length - a.comparison.missingChapters.length ||
+          b.detectedChapterCount - a.detectedChapterCount ||
+          a.fileName.localeCompare(b.fileName, "zh-CN")
+        );
+      });
+
+      if (candidates.length === 0) {
+        warnings.push("没有在项目同名文件夹下找到可用的 .Book 文件。");
+      }
+
+      return {
+        projectId: input.projectId,
+        candidates,
+        scan,
+        warnings,
+        searchedRoots: roots,
+        completedAt
+      };
+    } finally {
+      finishSearch();
+    }
   }
 
   async sendMissingChaptersToAi(input: {

@@ -9,6 +9,7 @@ import {
   parseIpcPayload,
   authorRelationshipUpdateCharacterInputSchema,
   authorRelationshipUpdateCharacterLayoutInputSchema,
+  authorRelationshipUpdateRelationshipInputSchema,
   relationshipGraphGetInputSchema,
   relationshipGraphSourceStatusInputSchema
 } from "../../src/main/shared/schemas";
@@ -146,6 +147,14 @@ describe("relationship graph IPC wiring", () => {
         layoutPosition: { x: 120.5, y: -40 }
       })
     ).toMatchObject({ layoutPosition: { x: 120.5, y: -40 } });
+    expect(
+      parseIpcPayload(authorRelationshipUpdateRelationshipInputSchema, {
+        projectId: "project_1",
+        relationshipId: "author_relationship_1",
+        sourceToTargetLabel: "父亲",
+        targetToSourceLabel: "儿子"
+      })
+    ).toMatchObject({ relationshipId: "author_relationship_1", sourceToTargetLabel: "父亲", targetToSourceLabel: "儿子" });
 
     expect(sharedTypes).toContain("authorRelationship");
     expect(sharedTypes).toContain('getGraph: "novelTool:authorRelationship:getGraph"');
@@ -153,6 +162,7 @@ describe("relationship graph IPC wiring", () => {
     expect(sharedTypes).toContain('updateCharacter: "novelTool:authorRelationship:updateCharacter"');
     expect(sharedTypes).toContain('updateCharacterLayout: "novelTool:authorRelationship:updateCharacterLayout"');
     expect(sharedTypes).toContain('createRelationship: "novelTool:authorRelationship:createRelationship"');
+    expect(sharedTypes).toContain('updateRelationship: "novelTool:authorRelationship:updateRelationship"');
     expect(sharedTypes).toContain('deleteCharacter: "novelTool:authorRelationship:deleteCharacter"');
     expect(sharedTypes).toContain('deleteRelationship: "novelTool:authorRelationship:deleteRelationship"');
     expect(preload).toContain("readonly authorRelationship");
@@ -161,6 +171,7 @@ describe("relationship graph IPC wiring", () => {
     expect(preload).toContain("updateCharacter: (input: AuthorRelationshipUpdateCharacterInput)");
     expect(preload).toContain("updateCharacterLayout: (input: AuthorRelationshipUpdateCharacterLayoutInput)");
     expect(preload).toContain("createRelationship: (input: AuthorRelationshipCreateRelationshipInput)");
+    expect(preload).toContain("updateRelationship: (input: AuthorRelationshipUpdateRelationshipInput)");
     expect(preload).toContain("deleteCharacter: (input: AuthorRelationshipDeleteCharacterInput)");
     expect(preload).toContain("deleteRelationship: (input: AuthorRelationshipDeleteRelationshipInput)");
     expect(registerIpc).toContain("registerAuthorRelationshipIpc");
@@ -168,6 +179,7 @@ describe("relationship graph IPC wiring", () => {
     expect(authorIpc).toContain("ipcChannels.authorRelationship.getGraph");
     expect(authorIpc).toContain("ipcChannels.authorRelationship.updateCharacter");
     expect(authorIpc).toContain("ipcChannels.authorRelationship.updateCharacterLayout");
+    expect(authorIpc).toContain("ipcChannels.authorRelationship.updateRelationship");
     expect(authorIpc).toContain("createValidatedIpcHandler");
   });
 });

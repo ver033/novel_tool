@@ -41,7 +41,7 @@ function createHarness(reporter?: UsageAnalyticsReporter, getProjectContext?: ()
           return "产品使用分析报告";
         }
       },
-    appVersion: "1.5.2",
+    appVersion: "1.5.3",
     platform: "darwin",
     ...(getProjectContext ? { getProjectContext } : {})
   });
@@ -61,7 +61,7 @@ describe("UsageAnalyticsService", () => {
     const serialized = JSON.stringify(snapshot);
 
     expect(snapshot).toMatchObject({
-      appVersion: "1.5.2",
+      appVersion: "1.5.3",
       platform: "darwin",
       rangeDays: 14,
       activeDays: 1,
