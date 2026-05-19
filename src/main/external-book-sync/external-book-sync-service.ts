@@ -30,6 +30,7 @@ const DEFAULT_SCAN_BUDGET_MS = 180_000;
 const WINDOWS_INDEX_TIMEOUT_MS = 15_000;
 const MAX_BOOK_BYTES = 20 * 1024 * 1024;
 const AUTOMATIC_SYNC_SCHEDULE_LOCAL_TIMES = ["07:00", "11:00", "23:00"] as const;
+const RETRYABLE_AUTOMATIC_SYNC_DELAY_MS = 5 * 60 * 1000;
 
 export type ExternalBookSyncMode = "quick" | "global" | "directory";
 export type ExternalBookSyncSearchTrigger = ExternalBookSyncAutomaticTrigger | "manual";
@@ -171,6 +172,44 @@ function latestDueSyncSlot(now: Date): { readonly localTime: string; readonly sl
 
 function scheduledSyncSlotKey(slotDate: Date, localTimeValue: string): string {
   return `${localDateKey(slotDate)}T${localTimeValue}`;
+}
+
+function isRetryableAutomaticSyncError(error: string | null): boolean {
+  if (!error) {
+    return false;
+  }
+  const normalized = error.toLowerCase();
+  return (
+    normalized.includes("429") ||
+    normalized.includes("限流") ||
+    normalized.includes("rate limit") ||
+    normalized.includes("rate-limit") ||
+    normalized.includes("rate_limited") ||
+    normalized.includes("too many requests") ||
+    normalized.includes("timeout") ||
+    normalized.includes("timed out") ||
+    normalized.includes("超时") ||
+    normalized.includes("network") ||
+    normalized.includes("network_error") ||
+    normalized.includes("fetch failed") ||
+    normalized.includes("econnreset") ||
+    normalized.includes("econnaborted") ||
+    normalized.includes("econnrefused") ||
+    normalized.includes("etimedout") ||
+    normalized.includes("enotfound") ||
+    normalized.includes("eai_again") ||
+    normalized.includes("socket hang up") ||
+    normalized.includes("temporarily unavailable") ||
+    normalized.includes("暂时不可用")
+  );
+}
+
+function canRetryFailedAutomaticRun(run: ExternalBookSyncAutomaticRunRecord, now: Date): boolean {
+  if (run.status !== "failed" || !isRetryableAutomaticSyncError(run.error)) {
+    return false;
+  }
+  const retryFrom = new Date(run.completedAt ?? run.requestedAt);
+  return !Number.isNaN(retryFrom.getTime()) && now.getTime() - retryFrom.getTime() >= RETRYABLE_AUTOMATIC_SYNC_DELAY_MS;
 }
 
 type CandidateComparisonStats = Pick<ExternalBookComparisonResult, "currentLatestOrdinal" | "currentChapterCount" | "externalLatestOrdinal"> & {
@@ -352,7 +391,8 @@ export class ExternalBookSyncService {
       return true;
     }
     const dueSlot = latestDueSyncSlot(now);
-    return !this.deps.automationStore.getRunBySlot(projectId, scheduledSyncSlotKey(dueSlot.slotDate, dueSlot.localTime));
+    const existingRun = this.deps.automationStore.getRunBySlot(projectId, scheduledSyncSlotKey(dueSlot.slotDate, dueSlot.localTime));
+    return !existingRun || canRetryFailedAutomaticRun(existingRun, now);
   }
 
   runStartupCatchUpSync(projectId: string, now = new Date()): Promise<ExternalBookSyncAutomaticRunRecord | null> {
@@ -365,7 +405,8 @@ export class ExternalBookSyncService {
     const slotKey = scheduledSyncSlotKey(dueSlot.slotDate, dueSlot.localTime);
     const savedSourcesBeforeRun = this.deps.sourceStore.listSources(input.projectId);
     const shouldRetryStartupDiscovery = input.trigger === "startup" && savedSourcesBeforeRun.length === 0;
-    if (!shouldRetryStartupDiscovery && this.deps.automationStore.getRunBySlot(input.projectId, slotKey)) {
+    const existingRun = this.deps.automationStore.getRunBySlot(input.projectId, slotKey);
+    if (!shouldRetryStartupDiscovery && existingRun && !canRetryFailedAutomaticRun(existingRun, now)) {
       return null;
     }
 
@@ -385,6 +426,8 @@ export class ExternalBookSyncService {
       requestedAt: startedAt,
       completedAt: null
     });
+
+    const completedAt = (): Date => input.now ?? new Date();
 
     try {
       const savedSources = savedSourcesBeforeRun;
@@ -412,7 +455,7 @@ export class ExternalBookSyncService {
           sentMissingChapterCount: 0,
           sentLatestProjectChapter: false,
           error: null
-        });
+        }, completedAt());
       }
       const sent = await this.sendMissingChaptersToAi({
         projectId: input.projectId,
@@ -426,7 +469,7 @@ export class ExternalBookSyncService {
         sentMissingChapterCount: sent.sentMissingChapterCount,
         sentLatestProjectChapter: sent.sentLatestProjectChapter,
         error: null
-      });
+      }, completedAt());
     } catch (reason) {
       const error = reason instanceof Error ? reason.message : String(reason);
       return this.completeAutomaticRun(running, "failed", {
@@ -436,7 +479,7 @@ export class ExternalBookSyncService {
         sentMissingChapterCount: 0,
         sentLatestProjectChapter: false,
         error
-      });
+      }, completedAt());
     }
   }
 
@@ -450,7 +493,8 @@ export class ExternalBookSyncService {
       readonly sentMissingChapterCount: number;
       readonly sentLatestProjectChapter: boolean;
       readonly error: string | null;
-    }
+    },
+    completedAt = new Date()
   ): ExternalBookSyncAutomaticRunRecord {
     return this.deps.automationStore.upsertRun({
       ...run,
@@ -461,7 +505,7 @@ export class ExternalBookSyncService {
       sentMissingChapterCount: result.sentMissingChapterCount,
       sentLatestProjectChapter: result.sentLatestProjectChapter,
       error: result.error,
-      completedAt: new Date().toISOString()
+      completedAt: completedAt.toISOString()
     });
   }
 

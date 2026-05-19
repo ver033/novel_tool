@@ -28,7 +28,10 @@ afterEach(() => {
   }
 });
 
-function createFixture(options: { readonly rootPath?: string | null } = {}) {
+function createFixture(options: {
+  readonly rootPath?: string | null;
+  readonly sendChatMessage?: ExternalBookAiSender["sendChatMessage"];
+} = {}) {
   const dir = mkdtempSync(join(tmpdir(), "external-book-sync-"));
   tempDirs.push(dir);
   const db = createDatabase(":memory:");
@@ -63,9 +66,9 @@ function createFixture(options: { readonly rootPath?: string | null } = {}) {
   const sentMessages: string[] = [];
   const aiSender: ExternalBookAiSender = {
     createChatSession: () => ({ id: "session_external", title: "外部同步检查" }),
-    sendChatMessage: async (input) => {
+    sendChatMessage: options.sendChatMessage ?? (async (input) => {
       sentMessages.push(input.message);
-    }
+    })
   };
   const sourceStore = new ExternalBookSourceStore(new SettingsRepository(db));
   const automationStore = new ExternalBookSyncAutomationStore(new SettingsRepository(db));
@@ -77,14 +80,34 @@ function createFixture(options: { readonly rootPath?: string | null } = {}) {
     aiSender
   });
   return {
+    db,
     dir,
     project,
+    projectRepo,
     chapterRepo,
     summaryRepo,
     sourceStore,
     service,
     sentMessages
   };
+}
+
+function createReopenedService(input: {
+  readonly db: SqliteDatabase;
+  readonly projectRepo: ProjectRepository;
+  readonly sendChatMessage: ExternalBookAiSender["sendChatMessage"];
+}): ExternalBookSyncService {
+  const chapterRepo = new ChapterRepository(input.db);
+  return new ExternalBookSyncService({
+    sourceStore: new ExternalBookSourceStore(new SettingsRepository(input.db)),
+    automationStore: new ExternalBookSyncAutomationStore(new SettingsRepository(input.db)),
+    resolveChapterRepo: () => chapterRepo,
+    projectRepo: input.projectRepo,
+    aiSender: {
+      createChatSession: () => ({ id: "session_external_reopened", title: "外部同步检查" }),
+      sendChatMessage: input.sendChatMessage
+    }
+  });
 }
 
 describe("ExternalBookSyncService", () => {
@@ -351,6 +374,142 @@ describe("ExternalBookSyncService", () => {
     expect(duplicate).toBeNull();
     expect(second).toMatchObject({ status: "completed", trigger: "scheduled", scheduledLocalTime: "11:00", sentChapterCount: 2, sentMissingChapterCount: 1 });
     expect(sentMessages.filter((message) => message.includes("缺失章节：第二章"))).toHaveLength(2);
+    expect(sentMessages.join("\n")).toContain("当前项目最新章在 .Book 中的对应内容");
+  });
+
+  it.each([
+    ["429 rate limit", "OpenRouter 请求失败 (429)：上游 Provider 限流或暂时不可用。"],
+    ["network timeout", "OpenRouter 请求失败：timeout of 30000ms exceeded"]
+  ])("retries retryable automatic send failures after five minutes (%s)", async (_caseName, errorMessage) => {
+    const sentMessages: string[] = [];
+    let sendAttempts = 0;
+    const { dir, project, service } = createFixture({
+      async sendChatMessage(input) {
+        sendAttempts += 1;
+        if (sendAttempts === 1) {
+          throw new Error(errorMessage);
+        }
+        sentMessages.push(input.message);
+      }
+    });
+    const projectBookDir = join(dir, "举足无措");
+    mkdirSync(projectBookDir, { recursive: true });
+    writeFileSync(join(projectBookDir, "story.Book"), "第一章\n.Book 里的第一章修订正文。\n\n第二章\n新增正文。", "utf8");
+    await service.scanProject({
+      projectId: project.id,
+      mode: "directory",
+      directoryPath: dir,
+      roots: [dir],
+      timeBudgetMs: 10_000
+    });
+
+    const failed = await service.runDueAutomaticSync({
+      projectId: project.id,
+      trigger: "scheduled",
+      now: new Date(2026, 4, 19, 7, 0)
+    });
+    expect(service.hasDueAutomaticSync(project.id, new Date(2026, 4, 19, 7, 4))).toBe(false);
+    expect(service.hasDueAutomaticSync(project.id, new Date(2026, 4, 19, 7, 5))).toBe(true);
+
+    const tooSoon = await service.runDueAutomaticSync({
+      projectId: project.id,
+      trigger: "scheduled",
+      now: new Date(2026, 4, 19, 7, 4)
+    });
+    const retried = await service.runDueAutomaticSync({
+      projectId: project.id,
+      trigger: "scheduled",
+      now: new Date(2026, 4, 19, 7, 5)
+    });
+
+    expect(failed).toMatchObject({ status: "failed", scheduledLocalTime: "07:00", error: errorMessage });
+    expect(tooSoon).toBeNull();
+    expect(retried).toMatchObject({ status: "completed", scheduledLocalTime: "07:00", sentChapterCount: 2 });
+    expect(sendAttempts).toBe(2);
+    expect(sentMessages.join("\n")).toContain("缺失章节：第二章");
+  });
+
+  it("does not retry non-transient automatic send failures in the same sync slot", async () => {
+    let sendAttempts = 0;
+    const { dir, project, service } = createFixture({
+      async sendChatMessage() {
+        sendAttempts += 1;
+        throw new Error("没有可用的 OpenRouter API Key。");
+      }
+    });
+    const projectBookDir = join(dir, "举足无措");
+    mkdirSync(projectBookDir, { recursive: true });
+    writeFileSync(join(projectBookDir, "story.Book"), "第一章\n.Book 里的第一章修订正文。\n\n第二章\n新增正文。", "utf8");
+    await service.scanProject({
+      projectId: project.id,
+      mode: "directory",
+      directoryPath: dir,
+      roots: [dir],
+      timeBudgetMs: 10_000
+    });
+
+    const failed = await service.runDueAutomaticSync({
+      projectId: project.id,
+      trigger: "scheduled",
+      now: new Date(2026, 4, 19, 7, 0)
+    });
+    const retry = await service.runDueAutomaticSync({
+      projectId: project.id,
+      trigger: "scheduled",
+      now: new Date(2026, 4, 19, 7, 5)
+    });
+
+    expect(failed).toMatchObject({ status: "failed", error: expect.stringContaining("API Key") });
+    expect(retry).toBeNull();
+    expect(sendAttempts).toBe(1);
+  });
+
+  it("retries a persisted retryable failure on startup after reopening the app", async () => {
+    const sentMessages: string[] = [];
+    let sendAttempts = 0;
+    const { db, dir, project, projectRepo, service } = createFixture({
+      async sendChatMessage() {
+        sendAttempts += 1;
+        throw new Error("OpenRouter 请求失败 (429)：上游 Provider 限流或暂时不可用。");
+      }
+    });
+    const projectBookDir = join(dir, "举足无措");
+    mkdirSync(projectBookDir, { recursive: true });
+    writeFileSync(join(projectBookDir, "story.Book"), "第一章\n.Book 里的第一章修订正文。\n\n第二章\n新增正文。", "utf8");
+    await service.scanProject({
+      projectId: project.id,
+      mode: "directory",
+      directoryPath: dir,
+      roots: [dir],
+      timeBudgetMs: 10_000
+    });
+
+    const failed = await service.runDueAutomaticSync({
+      projectId: project.id,
+      trigger: "scheduled",
+      now: new Date(2026, 4, 19, 7, 0)
+    });
+    const reopenedService = createReopenedService({
+      db,
+      projectRepo,
+      async sendChatMessage(input) {
+        sendAttempts += 1;
+        sentMessages.push(input.message);
+      }
+    });
+    const startupRetry = await reopenedService.runStartupCatchUpSync(project.id, new Date(2026, 4, 19, 7, 6));
+
+    expect(failed).toMatchObject({ status: "failed", trigger: "scheduled", scheduledLocalTime: "07:00" });
+    expect(startupRetry).toMatchObject({
+      status: "completed",
+      trigger: "startup",
+      scheduledLocalTime: "07:00",
+      sentChapterCount: 2,
+      sentMissingChapterCount: 1,
+      sentLatestProjectChapter: true
+    });
+    expect(sendAttempts).toBe(2);
+    expect(sentMessages.join("\n")).toContain("缺失章节：第二章");
     expect(sentMessages.join("\n")).toContain("当前项目最新章在 .Book 中的对应内容");
   });
 
