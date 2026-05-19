@@ -1338,9 +1338,6 @@ function ExternalBookSyncPane({ currentProject }: ExternalBookSyncPaneProps) {
                       <h4>{selectedCandidate.fileName}</h4>
                       <p className="muted" title={selectedCandidate.filePath}>{selectedCandidate.filePath}</p>
                     </div>
-                    <span className={`mini-tag ${selectedCandidate.confidence === "high" ? "green" : selectedCandidate.confidence === "medium" ? "orange" : "subtle"}`}>
-                      {selectedCandidate.confidence === "high" ? "高可信" : selectedCandidate.confidence === "medium" ? "需确认" : "低可信"}
-                    </span>
                   </div>
                   {selectedCandidate.warnings.length > 0 ? <p className="settings-message warning">{selectedCandidate.warnings.join("；")}</p> : null}
                   <div className="external-book-sync-chapters">

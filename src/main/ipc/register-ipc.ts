@@ -25,6 +25,7 @@ import { SummaryRepository } from "../db/repositories/summary-repo";
 import { UsageAnalyticsRepository } from "../db/repositories/usage-analytics-repo";
 import { WritingGoalRepository } from "../db/repositories/writing-goal-repo";
 import { ShareableProjectExporter } from "../export/shareable-project-exporter";
+import { ExternalBookSyncAutomationStore } from "../external-book-sync/book-automation-store";
 import { ExternalBookSourceStore } from "../external-book-sync/book-source-store";
 import { ExternalBookSyncService } from "../external-book-sync/external-book-sync-service";
 import { TxtExporter } from "../export/txt-exporter";
@@ -87,6 +88,7 @@ type DirectHandler<TResult> = (event: IpcMainInvokeEvent, payload: unknown) => P
 let registered = false;
 const SUMMARY_WORKER_INTERVAL_MS = 3_000;
 const USAGE_ANALYTICS_INTERVAL_MS = 60_000;
+const EXTERNAL_BOOK_SYNC_INTERVAL_MS = 60_000;
 
 function useE2eAiGenerators(): boolean {
   return process.env.NODE_ENV === "test" && process.env.NOVEL_TOOL_E2E_AI === "1";
@@ -319,6 +321,7 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
     const shareableProjectExporter = new ShareableProjectExporter((projectId) => resolveProjectDb(projectId));
     const externalBookSyncService = new ExternalBookSyncService({
       sourceStore: new ExternalBookSourceStore(settingsRepo),
+      automationStore: new ExternalBookSyncAutomationStore(settingsRepo),
       resolveChapterRepo,
       projectRepo,
       aiSender: {
@@ -330,6 +333,10 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
         }
       }
     });
+    const resolveAutomaticSyncProject = () => {
+      const project = projectService.getRuntimeActiveProject() ?? projectService.getCurrentProject();
+      return project?.rootPath ? project : null;
+    };
     const summaryWorkerInterval = setInterval(() => {
       const currentProject = projectService.getRuntimeActiveProject();
       if (!currentProject?.rootPath) {
@@ -383,6 +390,33 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
     }, SUMMARY_WORKER_INTERVAL_MS);
     summaryWorkerInterval.unref?.();
     if (process.env.NODE_ENV !== "test") {
+      let externalBookSyncRunPromise: Promise<unknown> | null = null;
+      const runDueExternalBookSync = (trigger: "scheduled" | "startup") => {
+        if (externalBookSyncRunPromise) {
+          return externalBookSyncRunPromise;
+        }
+        const project = resolveAutomaticSyncProject();
+        if (!project) {
+          return Promise.resolve(null);
+        }
+        const run =
+          trigger === "startup"
+            ? externalBookSyncService.runStartupCatchUpSync(project.id)
+            : externalBookSyncService.runDueAutomaticSync({ projectId: project.id, trigger });
+        externalBookSyncRunPromise = run
+          .catch((error: unknown) => {
+            console.error("External Book automatic sync failed", error);
+            return null;
+          })
+          .finally(() => {
+            externalBookSyncRunPromise = null;
+          });
+        return externalBookSyncRunPromise;
+      };
+      void runDueExternalBookSync("startup");
+      const externalBookSyncInterval = setInterval(() => void runDueExternalBookSync("scheduled"), EXTERNAL_BOOK_SYNC_INTERVAL_MS);
+      externalBookSyncInterval.unref?.();
+
       let usageAnalyticsReportRunning = false;
       const runDueUsageAnalyticsReport = (trigger: "startup" | "interval") => {
         if (usageAnalyticsReportRunning) {

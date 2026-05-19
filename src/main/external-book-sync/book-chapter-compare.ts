@@ -6,11 +6,18 @@ export type ExternalBookMissingChapter = ImportPreviewChapter & {
   readonly key: string;
 };
 
+export type ExternalBookReferenceChapter = ImportPreviewChapter & {
+  readonly ordinal: number | null;
+  readonly key: string;
+  readonly projectChapterTitle: string;
+};
+
 export type ExternalBookComparisonResult = {
   readonly currentLatestOrdinal: number | null;
   readonly currentChapterCount: number;
   readonly externalLatestOrdinal: number | null;
   readonly externalChapterCount: number;
+  readonly latestProjectChapterInExternal: ExternalBookReferenceChapter | null;
   readonly missingChapters: readonly ExternalBookMissingChapter[];
   readonly warnings: readonly string[];
 };
@@ -31,6 +38,33 @@ function maxOrdinal(titles: readonly string[]): number | null {
 
 function createMissingChapterKey(chapter: ImportPreviewChapter, ordinal: number | null): string {
   return `book_${ordinal ?? "unknown"}_${chapter.order}_${chapter.lineStart}_${normalizeTitle(chapter.title).slice(0, 48)}`;
+}
+
+function findLatestProjectChapterInExternal(
+  projectChapters: readonly Pick<ChapterSummary, "id" | "title" | "sortOrder" | "wordCount">[],
+  externalChapters: readonly ImportPreviewChapter[]
+): ExternalBookReferenceChapter | null {
+  const latestProjectChapter = projectChapters.at(-1);
+  if (!latestProjectChapter) {
+    return null;
+  }
+
+  const latestTitleKey = normalizeTitle(latestProjectChapter.title);
+  const latestOrdinal = parseChapterOrdinal(latestProjectChapter.title);
+  const externalChapter =
+    externalChapters.find((chapter) => latestTitleKey && normalizeTitle(chapter.title) === latestTitleKey) ??
+    (latestOrdinal !== null ? externalChapters.find((chapter) => parseChapterOrdinal(chapter.title) === latestOrdinal) : undefined);
+  if (!externalChapter) {
+    return null;
+  }
+
+  const ordinal = parseChapterOrdinal(externalChapter.title);
+  return {
+    ...externalChapter,
+    ordinal,
+    key: createMissingChapterKey(externalChapter, ordinal),
+    projectChapterTitle: latestProjectChapter.title
+  };
 }
 
 function duplicateTitleWarnings(chapters: readonly ImportPreviewChapter[]): string[] {
@@ -94,6 +128,7 @@ export function compareExternalBookChapters(input: CompareExternalBookChaptersIn
     currentChapterCount: projectChapters.length,
     externalLatestOrdinal,
     externalChapterCount: input.externalChapters.length,
+    latestProjectChapterInExternal: findLatestProjectChapterInExternal(projectChapters, input.externalChapters),
     missingChapters,
     warnings: [...duplicateTitleWarnings(input.externalChapters), ...gapWarnings(missingChapters, currentLatestOrdinal)]
   };

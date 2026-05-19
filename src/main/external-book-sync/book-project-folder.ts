@@ -16,13 +16,18 @@ function normalizeSegmentForPlatform(segment: string, platform: ProjectFolderPla
   return platform === "win32" ? segment.toLocaleLowerCase("zh-CN") : segment;
 }
 
+function normalizePathForPlatform(filePath: string, platform: ProjectFolderPlatform): string {
+  return platform === "win32" ? path.win32.normalize(filePath) : path.normalize(filePath);
+}
+
 export function isPathInsideProjectBookFolder(filePath: string, projectName: string, platform: ProjectFolderPlatform = process.platform): boolean {
   const expected = normalizeProjectFolderName(projectName);
   if (!expected) {
     return false;
   }
 
-  const parsed = platform === "win32" ? path.win32.parse(filePath) : path.parse(filePath);
+  const normalizedPath = normalizePathForPlatform(filePath, platform);
+  const parsed = platform === "win32" ? path.win32.parse(normalizedPath) : path.parse(normalizedPath);
   const directorySegments = splitPathSegments(parsed.dir);
   const expectedSegment = normalizeSegmentForPlatform(expected, platform);
   return directorySegments.some((segment) => normalizeSegmentForPlatform(segment, platform) === expectedSegment);
@@ -33,7 +38,8 @@ export function isProjectBookFolderPath(directoryPath: string, projectName: stri
   if (!expected) {
     return false;
   }
-  const baseName = platform === "win32" ? path.win32.basename(directoryPath) : path.basename(directoryPath);
+  const normalizedPath = normalizePathForPlatform(directoryPath, platform);
+  const baseName = platform === "win32" ? path.win32.basename(normalizedPath) : path.basename(normalizedPath);
   return normalizeSegmentForPlatform(baseName, platform) === normalizeSegmentForPlatform(expected, platform);
 }
 

@@ -295,16 +295,22 @@ export type ExternalBookMissingChapter = Omit<ImportPreviewChapter, "text"> & {
   readonly textLength: number;
 };
 
+export type ExternalBookReferenceChapter = Omit<ImportPreviewChapter, "text"> & {
+  readonly ordinal: number | null;
+  readonly key: string;
+  readonly projectChapterTitle: string;
+  readonly textLength: number;
+};
+
 export type ExternalBookComparisonResult = {
   readonly currentLatestOrdinal: number | null;
   readonly currentChapterCount: number;
   readonly externalLatestOrdinal: number | null;
   readonly externalChapterCount: number;
+  readonly latestProjectChapterInExternal: ExternalBookReferenceChapter | null;
   readonly missingChapters: readonly ExternalBookMissingChapter[];
   readonly warnings: readonly string[];
 };
-
-export type ExternalBookSyncCandidateConfidence = "high" | "medium" | "low";
 
 export type ExternalBookSyncCandidate = {
   readonly id: string;
@@ -315,7 +321,6 @@ export type ExternalBookSyncCandidate = {
   readonly modifiedAt: string | null;
   readonly contentHash: string;
   readonly encoding: string;
-  readonly confidence: ExternalBookSyncCandidateConfidence;
   readonly reasons: readonly string[];
   readonly warnings: readonly string[];
   readonly detectedChapterCount: number;

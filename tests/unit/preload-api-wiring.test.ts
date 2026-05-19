@@ -85,6 +85,12 @@ describe("summary index preload and IPC wiring", () => {
     expect(preload).toContain("sendMissingChaptersToAi: (input: ExternalBookSyncSendToAiInput)");
     expect(registerIpc).toContain("registerExternalBookSyncIpc(externalBookSyncService)");
     expect(registerIpc).toContain("new ExternalBookSyncService");
+    expect(registerIpc).toContain('runDueExternalBookSync("startup")');
+    expect(registerIpc).toContain("EXTERNAL_BOOK_SYNC_INTERVAL_MS");
+    expect(registerIpc).toContain('runDueExternalBookSync("scheduled")');
+    expect(registerIpc).not.toContain('app.on("before-quit"');
+    expect(registerIpc).not.toContain('runDueExternalBookSync("shutdown")');
+    expect(registerIpc).not.toContain("EXTERNAL_BOOK_SYNC_SHUTDOWN_TIMEOUT_MS");
     expect(externalIpc).toContain("createValidatedIpcHandler(externalBookSyncScanInputSchema");
     expect(externalIpc).toContain("ipcChannels.externalBookSync.scanDone");
     expect(externalIpc).toContain("ipcChannels.externalBookSync.scanError");

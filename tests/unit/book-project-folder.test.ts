@@ -22,6 +22,11 @@ describe("project book folder matching", () => {
     expect(isPathInsideProjectBookFolder("D:\\Books\\TestNovel\\story.Book", "testnovel", "win32")).toBe(true);
   });
 
+  it("normalizes parent directory traversal before matching project folder segments", () => {
+    expect(isPathInsideProjectBookFolder("D:\\写作\\举足无措\\..\\别的项目\\story.Book", "举足无措", "win32")).toBe(false);
+    expect(isPathInsideProjectBookFolder("/Users/me/举足无措/../别的项目/story.Book", "举足无措", "darwin")).toBe(false);
+  });
+
   it("checks .Book extension by basename", () => {
     expect(isBookFilePath("D:\\Books\\举足无措\\story.Book")).toBe(true);
     expect(isBookFilePath("D:\\Books\\举足无措\\story.book")).toBe(true);

@@ -78,4 +78,20 @@ describe("compareExternalBookChapters", () => {
 
     expect(result.missingChapters).toEqual([]);
   });
+
+  it("returns the external content matching the current project latest chapter", () => {
+    const result = compareExternalBookChapters({
+      projectChapters: projectChapters.slice(0, 1),
+      externalChapters: [
+        { title: "第一章", text: ".Book 里的第一章修订正文。", order: 0, wordCount: 14, lineStart: 1, lineEnd: 2 },
+        { title: "第二章", text: "新增正文。", order: 1, wordCount: 5, lineStart: 3, lineEnd: 4 }
+      ]
+    });
+
+    expect(result.latestProjectChapterInExternal).toMatchObject({
+      title: "第一章",
+      projectChapterTitle: "第1章",
+      text: ".Book 里的第一章修订正文。"
+    });
+  });
 });

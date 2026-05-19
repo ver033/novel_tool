@@ -86,6 +86,9 @@ describe("settings page scope", () => {
     expect(settings).toContain("api.externalBookSync.selectDirectory");
     expect(settings).toContain("api.externalBookSync.cancelScan");
     expect(settings).toContain("停止扫描");
+    expect(settings).not.toContain("高可信");
+    expect(settings).not.toContain("需确认");
+    expect(settings).not.toContain("低可信");
   });
 
   it("exposes chapter summary cache management without manual cache editing", () => {

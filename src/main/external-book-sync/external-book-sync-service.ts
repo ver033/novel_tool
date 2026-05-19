@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, statSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { ChapterRepository } from "../db/repositories/chapter-repo";
@@ -8,8 +8,19 @@ import { detectTxtChapters } from "../import/chapter-detector";
 import { readTextFile } from "../import/txt-reader";
 import { createId } from "../shared/ids";
 import type { ImportPreviewChapter } from "../shared/types";
-import { compareExternalBookChapters, type ExternalBookComparisonResult, type ExternalBookMissingChapter } from "./book-chapter-compare";
+import {
+  compareExternalBookChapters,
+  type ExternalBookComparisonResult,
+  type ExternalBookMissingChapter,
+  type ExternalBookReferenceChapter
+} from "./book-chapter-compare";
 import { buildExternalBookSyncChatMessages } from "./book-prompt-builder";
+import {
+  ExternalBookSyncAutomationStore,
+  type ExternalBookSyncAutomaticRunRecord,
+  type ExternalBookSyncAutomaticRunStatus,
+  type ExternalBookSyncAutomaticTrigger
+} from "./book-automation-store";
 import { ExternalBookSourceStore, type ExternalBookSyncSource } from "./book-source-store";
 import { isBookFilePath, isPathInsideProjectBookFolder } from "./book-project-folder";
 import { scanBookFiles, type BookFileScanProgress, type BookFileScanResult } from "./filesystem-book-scanner";
@@ -18,15 +29,20 @@ import { searchWindowsIndexForBookFiles } from "./windows-index-search";
 const DEFAULT_SCAN_BUDGET_MS = 180_000;
 const WINDOWS_INDEX_TIMEOUT_MS = 15_000;
 const MAX_BOOK_BYTES = 20 * 1024 * 1024;
+const AUTOMATIC_SYNC_SCHEDULE_LOCAL_TIMES = ["07:00", "11:00", "23:00"] as const;
 
 export type ExternalBookSyncMode = "quick" | "global" | "directory";
-export type ExternalBookSyncCandidateConfidence = "high" | "medium" | "low";
 
 export type ExternalBookMissingChapterPreview = Omit<ExternalBookMissingChapter, "text"> & {
   readonly textLength: number;
 };
 
-export type ExternalBookComparisonPreviewResult = Omit<ExternalBookComparisonResult, "missingChapters"> & {
+export type ExternalBookReferenceChapterPreview = Omit<ExternalBookReferenceChapter, "text"> & {
+  readonly textLength: number;
+};
+
+export type ExternalBookComparisonPreviewResult = Omit<ExternalBookComparisonResult, "missingChapters" | "latestProjectChapterInExternal"> & {
+  readonly latestProjectChapterInExternal: ExternalBookReferenceChapterPreview | null;
   readonly missingChapters: readonly ExternalBookMissingChapterPreview[];
 };
 
@@ -39,7 +55,6 @@ export type ExternalBookSyncCandidate = {
   readonly modifiedAt: string | null;
   readonly contentHash: string;
   readonly encoding: string;
-  readonly confidence: ExternalBookSyncCandidateConfidence;
   readonly reasons: readonly string[];
   readonly warnings: readonly string[];
   readonly detectedChapterCount: number;
@@ -75,6 +90,12 @@ export type ExternalBookSyncSendResult = {
   readonly sentChapterCount: number;
 };
 
+export type ExternalBookSyncAutomaticInput = {
+  readonly projectId: string;
+  readonly trigger: ExternalBookSyncAutomaticTrigger;
+  readonly now?: Date;
+};
+
 export type ExternalBookAiSender = {
   readonly createChatSession: (input: { readonly projectId: string; readonly title: string }) => Promise<{ readonly id: string; readonly title: string }> | { readonly id: string; readonly title: string };
   readonly sendChatMessage: (input: { readonly requestId: string; readonly projectId: string; readonly sessionId: string; readonly message: string }) => Promise<void>;
@@ -82,6 +103,7 @@ export type ExternalBookAiSender = {
 
 export type ExternalBookSyncServiceDeps = {
   readonly sourceStore: ExternalBookSourceStore;
+  readonly automationStore: ExternalBookSyncAutomationStore;
   readonly resolveChapterRepo: (projectId: string) => ChapterRepository;
   readonly projectRepo: ProjectRepository;
   readonly aiSender: ExternalBookAiSender;
@@ -96,6 +118,48 @@ function contentHash(text: string): string {
   return createHash("sha256").update(text).digest("hex");
 }
 
+function pad2(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+function localDateKey(value: Date): string {
+  return `${value.getFullYear()}-${pad2(value.getMonth() + 1)}-${pad2(value.getDate())}`;
+}
+
+function parseScheduleMinutes(value: string): number {
+  const match = /^([01]\d|2[0-3]):([0-5]\d)$/u.exec(value);
+  if (!match) {
+    throw new Error(`自动同步检查时间无效：${value}`);
+  }
+  return Number(match[1]) * 60 + Number(match[2]);
+}
+
+function minutesToLocalTime(minutes: number): string {
+  return `${pad2(Math.floor(minutes / 60))}:${pad2(minutes % 60)}`;
+}
+
+function latestDueSyncSlot(now: Date): { readonly localTime: string; readonly slotDate: Date } {
+  const current = now.getHours() * 60 + now.getMinutes();
+  const sorted = AUTOMATIC_SYNC_SCHEDULE_LOCAL_TIMES.map(parseScheduleMinutes).sort((a, b) => a - b);
+  const due = sorted.filter((minutes) => minutes <= current).at(-1);
+  if (due !== undefined) {
+    return {
+      localTime: minutesToLocalTime(due),
+      slotDate: now
+    };
+  }
+  const previousDate = new Date(now);
+  previousDate.setDate(previousDate.getDate() - 1);
+  return {
+    localTime: minutesToLocalTime(sorted.at(-1) ?? 0),
+    slotDate: previousDate
+  };
+}
+
+function scheduledSyncSlotKey(slotDate: Date, localTimeValue: string): string {
+  return `${localDateKey(slotDate)}T${localTimeValue}`;
+}
+
 type CandidateComparisonStats = Pick<ExternalBookComparisonResult, "currentLatestOrdinal" | "currentChapterCount" | "externalLatestOrdinal"> & {
   readonly missingChapters: readonly unknown[];
 };
@@ -104,16 +168,6 @@ type LoadedExternalBookCandidate = {
   readonly candidate: ExternalBookSyncCandidate;
   readonly fullComparison: ExternalBookComparisonResult;
 };
-
-function confidenceForCandidate(comparison: CandidateComparisonStats, warnings: readonly string[]): ExternalBookSyncCandidateConfidence {
-  if (comparison.missingChapters.length === 0 || warnings.length > 0 || comparison.externalLatestOrdinal === null) {
-    return "low";
-  }
-  if (comparison.currentLatestOrdinal !== null && comparison.externalLatestOrdinal > comparison.currentLatestOrdinal) {
-    return "high";
-  }
-  return "medium";
-}
 
 function candidateReasons(comparison: CandidateComparisonStats): string[] {
   const reasons: string[] = [];
@@ -150,16 +204,19 @@ function defaultRoots(projectRootPath: string | null): string[] {
   return [...roots].filter((root) => root && existsSync(root));
 }
 
+function redactChapterText<T extends { readonly text: string }>(chapter: T): Omit<T, "text"> & { readonly textLength: number } {
+  const { text: _text, ...preview } = chapter;
+  return {
+    ...preview,
+    textLength: chapter.text.length
+  };
+}
+
 function redactComparison(comparison: ExternalBookComparisonResult): ExternalBookComparisonPreviewResult {
   return {
     ...comparison,
-    missingChapters: comparison.missingChapters.map((chapter) => {
-      const { text: _text, ...preview } = chapter;
-      return {
-        ...preview,
-        textLength: chapter.text.length
-      };
-    })
+    latestProjectChapterInExternal: comparison.latestProjectChapterInExternal ? redactChapterText(comparison.latestProjectChapterInExternal) : null,
+    missingChapters: comparison.missingChapters.map((chapter) => redactChapterText(chapter))
   };
 }
 
@@ -193,6 +250,119 @@ export class ExternalBookSyncService {
     return { ok: true };
   }
 
+  private rememberCandidateSource(candidate: ExternalBookSyncCandidate, scannedAt: string): void {
+    const existing = this.deps.sourceStore.listSources(candidate.projectId).find((source) => source.bookFilePath === candidate.filePath);
+    this.deps.sourceStore.upsertSource({
+      id: existing?.id,
+      projectId: candidate.projectId,
+      bookFilePath: candidate.filePath,
+      displayName: candidate.fileName,
+      lastKnownSize: candidate.size,
+      lastModifiedAt: candidate.modifiedAt,
+      lastContentHash: candidate.contentHash,
+      lastScanAt: scannedAt,
+      confirmedAt: existing?.confirmedAt ?? scannedAt
+    });
+  }
+
+  hasDueAutomaticSync(projectId: string, now = new Date()): boolean {
+    const dueSlot = latestDueSyncSlot(now);
+    return !this.deps.automationStore.getRunBySlot(projectId, scheduledSyncSlotKey(dueSlot.slotDate, dueSlot.localTime));
+  }
+
+  runStartupCatchUpSync(projectId: string, now = new Date()): Promise<ExternalBookSyncAutomaticRunRecord | null> {
+    return this.runDueAutomaticSync({ projectId, trigger: "startup", now });
+  }
+
+  async runDueAutomaticSync(input: ExternalBookSyncAutomaticInput): Promise<ExternalBookSyncAutomaticRunRecord | null> {
+    const now = input.now ?? new Date();
+    const dueSlot = latestDueSyncSlot(now);
+    const slotKey = scheduledSyncSlotKey(dueSlot.slotDate, dueSlot.localTime);
+    if (this.deps.automationStore.getRunBySlot(input.projectId, slotKey)) {
+      return null;
+    }
+
+    const startedAt = now.toISOString();
+    const running = this.deps.automationStore.upsertRun({
+      projectId: input.projectId,
+      trigger: input.trigger,
+      scheduledSlotKey: slotKey,
+      scheduledLocalTime: dueSlot.localTime,
+      status: "running",
+      candidateCount: 0,
+      sentMessageCount: 0,
+      sentChapterCount: 0,
+      error: null,
+      requestedAt: startedAt,
+      completedAt: null
+    });
+
+    try {
+      if (this.deps.sourceStore.listSources(input.projectId).length === 0) {
+        return this.completeAutomaticRun(running, "skipped", {
+          candidateCount: 0,
+          sentMessageCount: 0,
+          sentChapterCount: 0,
+          error: null
+        });
+      }
+      const scan = await this.scanProject({
+        projectId: input.projectId,
+        mode: "quick",
+        roots: []
+      });
+      const candidate = scan.candidates.find((item) => item.comparison.missingChapters.length > 0);
+      if (!candidate) {
+        return this.completeAutomaticRun(running, "skipped", {
+          candidateCount: scan.candidates.length,
+          sentMessageCount: 0,
+          sentChapterCount: 0,
+          error: null
+        });
+      }
+      const sent = await this.sendMissingChaptersToAi({
+        projectId: input.projectId,
+        candidateId: candidate.id,
+        chapterKeys: candidate.comparison.missingChapters.map((chapter) => chapter.key)
+      });
+      return this.completeAutomaticRun(running, "completed", {
+        candidateCount: scan.candidates.length,
+        sentMessageCount: sent.sentMessageCount,
+        sentChapterCount: sent.sentChapterCount,
+        error: null
+      });
+    } catch (reason) {
+      const error = reason instanceof Error ? reason.message : String(reason);
+      return this.completeAutomaticRun(running, "failed", {
+        candidateCount: 0,
+        sentMessageCount: 0,
+        sentChapterCount: 0,
+        error
+      });
+    }
+  }
+
+  private completeAutomaticRun(
+    run: ExternalBookSyncAutomaticRunRecord,
+    status: ExternalBookSyncAutomaticRunStatus,
+    result: {
+      readonly candidateCount: number;
+      readonly sentMessageCount: number;
+      readonly sentChapterCount: number;
+      readonly error: string | null;
+    }
+  ): ExternalBookSyncAutomaticRunRecord {
+    return this.deps.automationStore.upsertRun({
+      ...run,
+      status,
+      candidateCount: result.candidateCount,
+      sentMessageCount: result.sentMessageCount,
+      sentChapterCount: result.sentChapterCount,
+      error: result.error,
+      completedAt: new Date().toISOString()
+    });
+  }
+
   async scanProject(input: ExternalBookSyncScanInput, handlers: ExternalBookSyncHandlers = {}): Promise<ExternalBookSyncScanResult> {
     const project = this.deps.projectRepo.findById(input.projectId);
     if (!project) {
@@ -205,7 +375,8 @@ export class ExternalBookSyncService {
       candidatePaths.add(source.bookFilePath);
     }
 
-    const indexResult = input.mode !== "directory" ? await searchWindowsIndexForBookFiles({ projectName: project.name, timeoutMs: WINDOWS_INDEX_TIMEOUT_MS }) : null;
+    const shouldSearchIndex = input.mode !== "directory" && (input.mode === "global" || candidatePaths.size === 0);
+    const indexResult = shouldSearchIndex ? await searchWindowsIndexForBookFiles({ projectName: project.name, timeoutMs: WINDOWS_INDEX_TIMEOUT_MS }) : null;
     if (indexResult?.status === "failed") {
       warnings.push(`Windows Search 查询失败：${indexResult.error}`);
     }
@@ -229,6 +400,7 @@ export class ExternalBookSyncService {
     }
 
     const candidates: ExternalBookSyncCandidate[] = [];
+    const completedAt = new Date().toISOString();
     for (const [candidateId, candidate] of this.candidatesById) {
       if (candidate.projectId === input.projectId) {
         this.candidatesById.delete(candidateId);
@@ -242,13 +414,17 @@ export class ExternalBookSyncService {
       });
       if (loaded) {
         candidates.push(loaded.candidate);
+        this.rememberCandidateSource(loaded.candidate, completedAt);
         this.candidatesById.set(loaded.candidate.id, loaded.candidate);
       }
     }
 
     candidates.sort((a, b) => {
-      const confidenceWeight: Record<ExternalBookSyncCandidateConfidence, number> = { high: 3, medium: 2, low: 1 };
-      return confidenceWeight[b.confidence] - confidenceWeight[a.confidence] || b.comparison.missingChapters.length - a.comparison.missingChapters.length;
+      return (
+        b.comparison.missingChapters.length - a.comparison.missingChapters.length ||
+        b.detectedChapterCount - a.detectedChapterCount ||
+        a.fileName.localeCompare(b.fileName, "zh-CN")
+      );
     });
 
     if (candidates.length === 0) {
@@ -261,7 +437,7 @@ export class ExternalBookSyncService {
       scan,
       warnings,
       searchedRoots: roots,
-      completedAt: new Date().toISOString()
+      completedAt
     };
   }
 
@@ -297,8 +473,8 @@ export class ExternalBookSyncService {
     });
     const messages = buildExternalBookSyncChatMessages({
       projectName: project.name,
-      bookFilePath: candidate.filePath,
       currentLatestLabel: candidate.comparison.currentLatestOrdinal ? `第${candidate.comparison.currentLatestOrdinal}章` : `${candidate.comparison.currentChapterCount} 章`,
+      latestProjectChapterInExternal: loaded.fullComparison.latestProjectChapterInExternal,
       missingChapters: chapters
     });
     for (const message of messages) {
@@ -309,16 +485,7 @@ export class ExternalBookSyncService {
         message
       });
     }
-    this.deps.sourceStore.upsertSource({
-      projectId: input.projectId,
-      bookFilePath: candidate.filePath,
-      displayName: candidate.fileName,
-      lastKnownSize: candidate.size,
-      lastModifiedAt: candidate.modifiedAt,
-      lastContentHash: candidate.contentHash,
-      lastScanAt: new Date().toISOString(),
-      confirmedAt: new Date().toISOString()
-    });
+    this.rememberCandidateSource(candidate, new Date().toISOString());
     return {
       sessionId: session.id,
       sessionTitle: session.title,
@@ -328,17 +495,24 @@ export class ExternalBookSyncService {
   }
 
   private loadCandidate(input: { readonly projectId: string; readonly projectName: string; readonly filePath: string }): LoadedExternalBookCandidate | null {
-    if (!isBookFilePath(input.filePath) || !isPathInsideProjectBookFolder(input.filePath, input.projectName)) {
+    const resolvedFilePath = path.resolve(input.filePath);
+    if (!isBookFilePath(resolvedFilePath) || !existsSync(resolvedFilePath)) {
       return null;
     }
-    if (!existsSync(input.filePath)) {
+    let realFilePath: string;
+    try {
+      realFilePath = realpathSync(resolvedFilePath);
+    } catch {
       return null;
     }
-    const info = statSync(input.filePath);
+    if (!isBookFilePath(realFilePath) || !isPathInsideProjectBookFolder(realFilePath, input.projectName)) {
+      return null;
+    }
+    const info = statSync(realFilePath);
     if (!info.isFile() || info.size > MAX_BOOK_BYTES) {
       return null;
     }
-    const read = readTextFile(input.filePath, { label: ".Book 文件", maxBytes: MAX_BOOK_BYTES });
+    const read = readTextFile(realFilePath, { label: ".Book 文件", maxBytes: MAX_BOOK_BYTES });
     const chapters = detectTxtChapters(read.text).filter((chapter: ImportPreviewChapter) => chapter.title.trim() || chapter.text.trim());
     if (chapters.length === 0) {
       return null;
@@ -350,15 +524,14 @@ export class ExternalBookSyncService {
     const comparison = redactComparison(fullComparison);
     const warnings = comparison.warnings;
     const candidate: ExternalBookSyncCandidate = {
-      id: candidateIdForPath(input.projectId, input.filePath),
+      id: candidateIdForPath(input.projectId, realFilePath),
       projectId: input.projectId,
-      filePath: input.filePath,
-      fileName: path.basename(input.filePath),
+      filePath: realFilePath,
+      fileName: path.basename(realFilePath),
       size: info.size,
       modifiedAt: info.mtime ? info.mtime.toISOString() : null,
       contentHash: contentHash(read.text),
       encoding: read.encoding,
-      confidence: confidenceForCandidate(comparison, warnings),
       reasons: candidateReasons(comparison),
       warnings,
       detectedChapterCount: chapters.length,

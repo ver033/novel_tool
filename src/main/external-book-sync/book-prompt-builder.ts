@@ -1,11 +1,11 @@
-import type { ExternalBookMissingChapter } from "./book-chapter-compare";
+import type { ExternalBookMissingChapter, ExternalBookReferenceChapter } from "./book-chapter-compare";
 
 const MAX_EXTERNAL_BOOK_SYNC_MESSAGE_CHARS = 7000;
 
 export type BuildExternalBookSyncChatMessagesInput = {
   readonly projectName: string;
-  readonly bookFilePath: string;
   readonly currentLatestLabel: string;
+  readonly latestProjectChapterInExternal?: ExternalBookReferenceChapter | null;
   readonly missingChapters: readonly ExternalBookMissingChapter[];
 };
 
@@ -54,26 +54,37 @@ function buildHeader(input: BuildExternalBookSyncChatMessagesInput, partLabel: s
     "【外部写作软件同步检查】",
     "",
     "下面是从外部 .Book 文件中检测到、但当前墨枢项目还没有的章节。",
+    input.latestProjectChapterInExternal ? "同时附上当前项目最新章在 .Book 中的对应正文，用来判断项目内最新章是否落后于外部文件。" : null,
     "请先阅读这些章节，等待作者下一步指令。不要自动改写、不要总结成缓存、不要假设这些章节已经写入项目。",
     "",
     `当前项目：${input.projectName}`,
-    `来源文件：${input.bookFilePath}`,
     `当前项目最新章节：${input.currentLatestLabel}`,
     `本批缺失章节：${chapterRangeLabel}`,
     `消息分段：${partLabel}`,
     ""
-  ].join("\n");
+  ].filter((line): line is string => line !== null).join("\n");
+}
+
+function buildSectionChunks(input: BuildExternalBookSyncChatMessagesInput, title: string, text: string): string[] {
+  const available = Math.max(500, MAX_EXTERNAL_BOOK_SYNC_MESSAGE_CHARS - buildHeader(input, "999/999").length - title.length - 8);
+  return splitLongText(text, available).map((chunk, index, chunks) => {
+    const suffix = chunks.length > 1 ? `（${index + 1}/${chunks.length}）` : "";
+    return `${title}${suffix}\n${chunk}`;
+  });
 }
 
 export function buildExternalBookSyncChatMessages(input: BuildExternalBookSyncChatMessagesInput): string[] {
-  const rawSections = input.missingChapters.flatMap((chapter) => {
-    const title = `## ${chapter.title}`;
-    const available = Math.max(500, MAX_EXTERNAL_BOOK_SYNC_MESSAGE_CHARS - buildHeader(input, "999/999").length - title.length - 8);
-    return splitLongText(chapter.text, available).map((chunk, index, chunks) => {
-      const suffix = chunks.length > 1 ? `（${index + 1}/${chunks.length}）` : "";
-      return `${title}${suffix}\n${chunk}`;
-    });
-  });
+  const latestSection = input.latestProjectChapterInExternal
+    ? buildSectionChunks(
+        input,
+        `## 当前项目最新章在 .Book 中的对应内容：${input.latestProjectChapterInExternal.title}`,
+        input.latestProjectChapterInExternal.projectChapterTitle === input.latestProjectChapterInExternal.title
+          ? input.latestProjectChapterInExternal.text
+          : `项目章节标题：${input.latestProjectChapterInExternal.projectChapterTitle}\n\n${input.latestProjectChapterInExternal.text}`
+      )
+    : [];
+  const missingSections = input.missingChapters.flatMap((chapter) => buildSectionChunks(input, `## 缺失章节：${chapter.title}`, chapter.text));
+  const rawSections = [...latestSection, ...missingSections];
 
   const messages: string[] = [];
   const placeholderHeader = buildHeader(input, "999/999");
