@@ -97,6 +97,7 @@ describe("ExternalBookSyncService", () => {
     const bookFilePath = join(projectBookDir, "story.Book");
     writeFileSync(bookFilePath, "第一章\n已有。\n\n第二章\n新增正文。", "utf8");
     const realBookFilePath = realpathSync(bookFilePath);
+    const realBookFolderPath = realpathSync(projectBookDir);
     writeFileSync(join(otherBookDir, "ignored.Book"), "第二章\n不应读取。", "utf8");
 
     const result = await service.scanProject({
@@ -112,11 +113,12 @@ describe("ExternalBookSyncService", () => {
     expect("text" in result.candidates[0].comparison.missingChapters[0]).toBe(false);
     expect(sourceStore.listSources(project.id)).toMatchObject([
       {
-        bookFilePath: realBookFilePath,
+        bookFolderPath: realBookFolderPath,
         displayName: "story.Book",
         confirmedAt: expect.any(String)
       }
     ]);
+    expect("bookFilePath" in sourceStore.listSources(project.id)[0]).toBe(false);
 
     const second = await service.scanProject({
       projectId: project.id,
@@ -153,7 +155,9 @@ describe("ExternalBookSyncService", () => {
       chapterKeys: candidate.comparison.missingChapters.map((chapter) => chapter.key)
     });
 
-    expect(sent.sentChapterCount).toBe(1);
+    expect(sent.sentChapterCount).toBe(2);
+    expect(sent.sentMissingChapterCount).toBe(1);
+    expect(sent.sentLatestProjectChapter).toBe(true);
     expect(sentMessages.length).toBeGreaterThan(0);
     expect(sentMessages.every((message) => message.length <= 7000)).toBe(true);
     expect(sentMessages.join("\n")).toContain("当前项目最新章在 .Book 中的对应内容");
@@ -172,7 +176,7 @@ describe("ExternalBookSyncService", () => {
     mkdirSync(projectBookDir, { recursive: true });
     const bookFilePath = join(projectBookDir, "story.Book");
     writeFileSync(bookFilePath, "第一章\n.Book 里的第一章修订正文。\n\n第二章\n新增正文。", "utf8");
-    const realBookFilePath = realpathSync(bookFilePath);
+    const realBookFolderPath = realpathSync(projectBookDir);
 
     const run = await service.runStartupCatchUpSync(project.id, new Date(2026, 4, 19, 7, 10));
 
@@ -181,15 +185,23 @@ describe("ExternalBookSyncService", () => {
       scheduledLocalTime: "07:00",
       status: "completed",
       candidateCount: 1,
-      sentChapterCount: 1
+      sentChapterCount: 2,
+      sentMissingChapterCount: 1,
+      sentLatestProjectChapter: true
     });
     expect(sourceStore.listSources(project.id)).toMatchObject([
       {
-        bookFilePath: realBookFilePath,
+        bookFolderPath: realBookFolderPath,
         displayName: "story.Book",
         confirmedAt: expect.any(String)
       }
     ]);
+    expect(service.getStatus(project.id).latestAutomaticRun).toMatchObject({
+      status: "completed",
+      sentChapterCount: 2,
+      sentMissingChapterCount: 1,
+      sentLatestProjectChapter: true
+    });
     expect(sentMessages.join("\n")).toContain("缺失章节：第二章");
     expect(sentMessages.join("\n")).not.toContain(bookFilePath);
     expect(sentMessages.join("\n")).not.toContain("story.Book");
@@ -203,7 +215,7 @@ describe("ExternalBookSyncService", () => {
     vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
     const bookFilePath = join(projectBookDir, "story.Book");
     writeFileSync(bookFilePath, "第一章\n.Book 里的第一章修订正文。\n\n第二章\n新增正文。", "utf8");
-    const realBookFilePath = realpathSync(bookFilePath);
+    const realBookFolderPath = realpathSync(projectBookDir);
 
     const run = await service.runStartupCatchUpSync(project.id, new Date(2026, 4, 19, 7, 10));
 
@@ -212,11 +224,11 @@ describe("ExternalBookSyncService", () => {
       scheduledLocalTime: "07:00",
       status: "completed",
       candidateCount: 1,
-      sentChapterCount: 1
+      sentChapterCount: 2
     });
     expect(sourceStore.listSources(project.id)).toMatchObject([
       {
-        bookFilePath: realBookFilePath,
+        bookFolderPath: realBookFolderPath,
         displayName: "story.Book"
       }
     ]);
@@ -237,14 +249,14 @@ describe("ExternalBookSyncService", () => {
     mkdirSync(projectBookDir, { recursive: true });
     const bookFilePath = join(projectBookDir, "story.Book");
     writeFileSync(bookFilePath, "第一章\n.Book 里的第一章修订正文。\n\n第二章\n新增正文。", "utf8");
-    const realBookFilePath = realpathSync(bookFilePath);
+    const realBookFolderPath = realpathSync(projectBookDir);
     const secondRun = await service.runStartupCatchUpSync(project.id, new Date(2026, 4, 19, 7, 20));
 
     expect(firstRun).toMatchObject({ trigger: "startup", scheduledLocalTime: "07:00", status: "skipped", candidateCount: 0 });
-    expect(secondRun).toMatchObject({ trigger: "startup", scheduledLocalTime: "07:00", status: "completed", candidateCount: 1, sentChapterCount: 1 });
+    expect(secondRun).toMatchObject({ trigger: "startup", scheduledLocalTime: "07:00", status: "completed", candidateCount: 1, sentChapterCount: 2 });
     expect(sourceStore.listSources(project.id)).toMatchObject([
       {
-        bookFilePath: realBookFilePath,
+        bookFolderPath: realBookFolderPath,
         displayName: "story.Book"
       }
     ]);
@@ -281,6 +293,31 @@ describe("ExternalBookSyncService", () => {
     });
   });
 
+  it("automatically sends the latest project chapter from .Book even when no chapters are missing", async () => {
+    const { dir, project, sourceStore, service, sentMessages } = createFixture();
+    const projectBookDir = join(dir, "举足无措");
+    mkdirSync(projectBookDir, { recursive: true });
+    writeFileSync(join(projectBookDir, "story.Book"), "第一章\n.Book 里的第一章修订正文。", "utf8");
+
+    const run = await service.runStartupCatchUpSync(project.id, new Date(2026, 4, 19, 7, 10));
+
+    expect(run).toMatchObject({
+      status: "completed",
+      sentChapterCount: 1,
+      sentMissingChapterCount: 0,
+      sentLatestProjectChapter: true
+    });
+    expect(sourceStore.listSources(project.id)).toMatchObject([
+      {
+        bookFolderPath: realpathSync(projectBookDir),
+        displayName: "story.Book"
+      }
+    ]);
+    expect(sentMessages.join("\n")).toContain("当前项目最新章在 .Book 中的对应内容");
+    expect(sentMessages.join("\n")).toContain(".Book 里的第一章修订正文。");
+    expect(sentMessages.join("\n")).toContain("本批缺失章节：无");
+  });
+
   it("automatically sends missing chapters once for each due sync slot", async () => {
     const { dir, project, service, sentMessages } = createFixture();
     const projectBookDir = join(dir, "举足无措");
@@ -310,9 +347,9 @@ describe("ExternalBookSyncService", () => {
       now: new Date(2026, 4, 19, 11, 0)
     });
 
-    expect(first).toMatchObject({ status: "completed", trigger: "scheduled", scheduledLocalTime: "07:00", sentChapterCount: 1 });
+    expect(first).toMatchObject({ status: "completed", trigger: "scheduled", scheduledLocalTime: "07:00", sentChapterCount: 2, sentMissingChapterCount: 1 });
     expect(duplicate).toBeNull();
-    expect(second).toMatchObject({ status: "completed", trigger: "scheduled", scheduledLocalTime: "11:00", sentChapterCount: 1 });
+    expect(second).toMatchObject({ status: "completed", trigger: "scheduled", scheduledLocalTime: "11:00", sentChapterCount: 2, sentMissingChapterCount: 1 });
     expect(sentMessages.filter((message) => message.includes("缺失章节：第二章"))).toHaveLength(2);
     expect(sentMessages.join("\n")).toContain("当前项目最新章在 .Book 中的对应内容");
   });
@@ -334,8 +371,8 @@ describe("ExternalBookSyncService", () => {
     const startup = await service.runStartupCatchUpSync(project.id, new Date(2026, 4, 19, 11, 30));
     const duplicateStartup = await service.runStartupCatchUpSync(project.id, new Date(2026, 4, 19, 11, 45));
 
-    expect(previousNight).toMatchObject({ trigger: "startup", scheduledLocalTime: "23:00", scheduledSlotKey: "2026-05-18T23:00", sentChapterCount: 1 });
-    expect(startup).toMatchObject({ trigger: "startup", scheduledLocalTime: "11:00", sentChapterCount: 1 });
+    expect(previousNight).toMatchObject({ trigger: "startup", scheduledLocalTime: "23:00", scheduledSlotKey: "2026-05-18T23:00", sentChapterCount: 2 });
+    expect(startup).toMatchObject({ trigger: "startup", scheduledLocalTime: "11:00", sentChapterCount: 2 });
     expect(duplicateStartup).toBeNull();
     expect(sentMessages.filter((message) => message.includes("缺失章节：第二章"))).toHaveLength(2);
   });

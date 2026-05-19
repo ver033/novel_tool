@@ -1060,6 +1060,36 @@ function formatExternalBookSearchMode(mode: ExternalBookSyncStatus["search"]["mo
   return "快速搜索";
 }
 
+function formatExternalBookRunTitle(run: NonNullable<ExternalBookSyncStatus["latestAutomaticRun"]>): string {
+  if (run.status === "completed") {
+    return "最近自动同步：已发给 LLM";
+  }
+  if (run.status === "running") {
+    return "最近自动同步：正在处理";
+  }
+  if (run.status === "failed") {
+    return "最近自动同步：发送失败";
+  }
+  return "最近自动同步：未发送";
+}
+
+function formatExternalBookRunDetail(run: NonNullable<ExternalBookSyncStatus["latestAutomaticRun"]>): string {
+  const details = [
+    `时间 ${run.scheduledLocalTime}`,
+    `候选 ${run.candidateCount}`,
+    `发给 LLM ${run.sentChapterCount} 章`,
+    `缺失 ${run.sentMissingChapterCount} 章`,
+    `消息 ${run.sentMessageCount} 条`
+  ];
+  if (run.sentLatestProjectChapter) {
+    details.push("含项目最新章");
+  }
+  if (run.error) {
+    details.push(run.error);
+  }
+  return details.join(" · ");
+}
+
 function ExternalBookSyncPane({ currentProject }: ExternalBookSyncPaneProps) {
   const api = useMemo(getNovelToolApi, []);
   const [status, setStatus] = useState<ExternalBookSyncStatus | null>(null);
@@ -1263,7 +1293,8 @@ function ExternalBookSyncPane({ currentProject }: ExternalBookSyncPaneProps) {
         candidateId: selectedCandidate.id,
         chapterKeys: [...selectedChapterKeys]
       })) as ExternalBookSyncSendResult;
-      setMessage(`已发送 ${result.sentChapterCount} 个缺失章节到 AI 对话「${result.sessionTitle}」。`);
+      const latestNote = result.sentLatestProjectChapter ? "，含项目最新章" : "";
+      setMessage(`已发送 ${result.sentChapterCount} 章到 AI 对话「${result.sessionTitle}」（缺失 ${result.sentMissingChapterCount} 章${latestNote}）。`);
       await loadStatus();
     } catch (reason) {
       setError(formatError(reason));
@@ -1334,6 +1365,13 @@ function ExternalBookSyncPane({ currentProject }: ExternalBookSyncPaneProps) {
             </div>
           ) : null}
 
+          {status?.latestAutomaticRun ? (
+            <div className="external-book-sync-progress" role="status">
+              <span>{formatExternalBookRunTitle(status.latestAutomaticRun)}</span>
+              <small>{formatExternalBookRunDetail(status.latestAutomaticRun)}</small>
+            </div>
+          ) : null}
+
           {status?.sources.length ? (
             <section className="external-book-sync-sources" aria-label="已确认的外部 Book 来源">
               <b>已确认来源</b>
@@ -1348,7 +1386,7 @@ function ExternalBookSyncPane({ currentProject }: ExternalBookSyncPaneProps) {
                     </div>
                     <details>
                       <summary>查看保存路径</summary>
-                      <code className="external-book-sync-source-path">{source.bookFilePath}</code>
+                      <code className="external-book-sync-source-path">{source.bookFolderPath}</code>
                     </details>
                   </div>
                 ))}

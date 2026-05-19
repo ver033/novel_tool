@@ -66,6 +66,7 @@ export type ExternalBookSyncStatus = {
   readonly projectId: string;
   readonly sources: readonly ExternalBookSyncSource[];
   readonly search: ExternalBookSyncSearchStatus;
+  readonly latestAutomaticRun: ExternalBookSyncAutomaticRunRecord | null;
 };
 
 export type ExternalBookSyncSearchStatus = {
@@ -98,6 +99,8 @@ export type ExternalBookSyncSendResult = {
   readonly sessionTitle: string;
   readonly sentMessageCount: number;
   readonly sentChapterCount: number;
+  readonly sentMissingChapterCount: number;
+  readonly sentLatestProjectChapter: boolean;
 };
 
 export type ExternalBookSyncAutomaticInput = {
@@ -256,6 +259,15 @@ function selectedChapters(comparison: ExternalBookComparisonResult, chapterKeys:
   return comparison.missingChapters.filter((chapter) => keySet.has(chapter.key));
 }
 
+function sourceBookFilePath(source: ExternalBookSyncSource): string {
+  const joiner = source.bookFolderPath.includes("\\") ? path.win32 : path;
+  return joiner.join(source.bookFolderPath, source.displayName);
+}
+
+function shouldSendCandidateToAi(candidate: ExternalBookSyncCandidate): boolean {
+  return candidate.comparison.missingChapters.length > 0 || candidate.comparison.latestProjectChapterInExternal !== null;
+}
+
 export class ExternalBookSyncService {
   private readonly candidatesById = new Map<string, ExternalBookSyncCandidate>();
   private readonly activeSearchesById = new Map<string, ActiveExternalBookSearch>();
@@ -266,7 +278,8 @@ export class ExternalBookSyncService {
     return {
       projectId,
       sources: this.deps.sourceStore.listSources(projectId),
-      search: this.getActiveSearchStatus(projectId)
+      search: this.getActiveSearchStatus(projectId),
+      latestAutomaticRun: this.deps.automationStore.listRuns(projectId)[0] ?? null
     };
   }
 
@@ -319,11 +332,12 @@ export class ExternalBookSyncService {
   }
 
   private rememberCandidateSource(candidate: ExternalBookSyncCandidate, scannedAt: string): void {
-    const existing = this.deps.sourceStore.listSources(candidate.projectId).find((source) => source.bookFilePath === candidate.filePath);
+    const bookFolderPath = path.dirname(candidate.filePath);
+    const existing = this.deps.sourceStore.listSources(candidate.projectId).find((source) => sourceBookFilePath(source) === candidate.filePath);
     this.deps.sourceStore.upsertSource({
       id: existing?.id,
       projectId: candidate.projectId,
-      bookFilePath: candidate.filePath,
+      bookFolderPath,
       displayName: candidate.fileName,
       lastKnownSize: candidate.size,
       lastModifiedAt: candidate.modifiedAt,
@@ -365,6 +379,8 @@ export class ExternalBookSyncService {
       candidateCount: 0,
       sentMessageCount: 0,
       sentChapterCount: 0,
+      sentMissingChapterCount: 0,
+      sentLatestProjectChapter: false,
       error: null,
       requestedAt: startedAt,
       completedAt: null
@@ -387,12 +403,14 @@ export class ExternalBookSyncService {
           searchTrigger: input.trigger
         });
       }
-      const candidate = scan.candidates.find((item) => item.comparison.missingChapters.length > 0);
+      const candidate = scan.candidates.find(shouldSendCandidateToAi);
       if (!candidate) {
         return this.completeAutomaticRun(running, "skipped", {
           candidateCount: scan.candidates.length,
           sentMessageCount: 0,
           sentChapterCount: 0,
+          sentMissingChapterCount: 0,
+          sentLatestProjectChapter: false,
           error: null
         });
       }
@@ -405,6 +423,8 @@ export class ExternalBookSyncService {
         candidateCount: scan.candidates.length,
         sentMessageCount: sent.sentMessageCount,
         sentChapterCount: sent.sentChapterCount,
+        sentMissingChapterCount: sent.sentMissingChapterCount,
+        sentLatestProjectChapter: sent.sentLatestProjectChapter,
         error: null
       });
     } catch (reason) {
@@ -413,6 +433,8 @@ export class ExternalBookSyncService {
         candidateCount: 0,
         sentMessageCount: 0,
         sentChapterCount: 0,
+        sentMissingChapterCount: 0,
+        sentLatestProjectChapter: false,
         error
       });
     }
@@ -425,6 +447,8 @@ export class ExternalBookSyncService {
       readonly candidateCount: number;
       readonly sentMessageCount: number;
       readonly sentChapterCount: number;
+      readonly sentMissingChapterCount: number;
+      readonly sentLatestProjectChapter: boolean;
       readonly error: string | null;
     }
   ): ExternalBookSyncAutomaticRunRecord {
@@ -434,6 +458,8 @@ export class ExternalBookSyncService {
       candidateCount: result.candidateCount,
       sentMessageCount: result.sentMessageCount,
       sentChapterCount: result.sentChapterCount,
+      sentMissingChapterCount: result.sentMissingChapterCount,
+      sentLatestProjectChapter: result.sentLatestProjectChapter,
       error: result.error,
       completedAt: new Date().toISOString()
     });
@@ -454,7 +480,7 @@ export class ExternalBookSyncService {
       const warnings: string[] = [];
       const candidatePaths = new Set<string>();
       for (const source of this.deps.sourceStore.listSources(input.projectId)) {
-        candidatePaths.add(source.bookFilePath);
+        candidatePaths.add(sourceBookFilePath(source));
       }
 
       const shouldSearchIndex = input.mode !== "directory" && (input.mode === "global" || candidatePaths.size === 0);
@@ -549,8 +575,9 @@ export class ExternalBookSyncService {
     }
     const candidate = loaded.candidate;
     const chapters = selectedChapters(loaded.fullComparison, input.chapterKeys);
-    if (chapters.length === 0) {
-      throw new Error("没有选择可发送的缺失章节。");
+    const latestProjectChapterInExternal = loaded.fullComparison.latestProjectChapterInExternal;
+    if (chapters.length === 0 && !latestProjectChapterInExternal) {
+      throw new Error("没有可发送的外部章节。");
     }
     const session = await this.deps.aiSender.createChatSession({
       projectId: input.projectId,
@@ -559,7 +586,7 @@ export class ExternalBookSyncService {
     const messages = buildExternalBookSyncChatMessages({
       projectName: project.name,
       currentLatestLabel: candidate.comparison.currentLatestOrdinal ? `第${candidate.comparison.currentLatestOrdinal}章` : `${candidate.comparison.currentChapterCount} 章`,
-      latestProjectChapterInExternal: loaded.fullComparison.latestProjectChapterInExternal,
+      latestProjectChapterInExternal,
       missingChapters: chapters
     });
     for (const message of messages) {
@@ -575,7 +602,9 @@ export class ExternalBookSyncService {
       sessionId: session.id,
       sessionTitle: session.title,
       sentMessageCount: messages.length,
-      sentChapterCount: chapters.length
+      sentChapterCount: chapters.length + (latestProjectChapterInExternal ? 1 : 0),
+      sentMissingChapterCount: chapters.length,
+      sentLatestProjectChapter: Boolean(latestProjectChapterInExternal)
     };
   }
 

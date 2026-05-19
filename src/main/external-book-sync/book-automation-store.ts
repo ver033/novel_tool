@@ -16,6 +16,8 @@ export type ExternalBookSyncAutomaticRunRecord = {
   readonly candidateCount: number;
   readonly sentMessageCount: number;
   readonly sentChapterCount: number;
+  readonly sentMissingChapterCount: number;
+  readonly sentLatestProjectChapter: boolean;
   readonly error: string | null;
   readonly requestedAt: string;
   readonly completedAt: string | null;
@@ -33,7 +35,11 @@ export class ExternalBookSyncAutomationStore {
   constructor(private readonly settingsRepo: SettingsRepository) {}
 
   listRuns(projectId: string): ExternalBookSyncAutomaticRunRecord[] {
-    return this.settingsRepo.getJson<ExternalBookSyncAutomaticRunRecord[]>(automaticRunsKey(projectId)) ?? [];
+    return (this.settingsRepo.getJson<ExternalBookSyncAutomaticRunRecord[]>(automaticRunsKey(projectId)) ?? []).map((run) => ({
+      ...run,
+      sentMissingChapterCount: run.sentMissingChapterCount ?? run.sentChapterCount,
+      sentLatestProjectChapter: run.sentLatestProjectChapter ?? false
+    }));
   }
 
   getRunBySlot(projectId: string, scheduledSlotKey: string): ExternalBookSyncAutomaticRunRecord | null {

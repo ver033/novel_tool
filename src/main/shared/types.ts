@@ -281,7 +281,7 @@ export type ImportPreview = {
 export type ExternalBookSyncSource = {
   readonly id: string;
   readonly projectId: string;
-  readonly bookFilePath: string;
+  readonly bookFolderPath: string;
   readonly displayName: string;
   readonly lastKnownSize: number;
   readonly lastModifiedAt: string | null;
@@ -337,6 +337,21 @@ export type ExternalBookSyncStatus = {
     readonly trigger: "manual" | "scheduled" | "startup" | null;
     readonly startedAt: string | null;
   };
+  readonly latestAutomaticRun: {
+    readonly id: string;
+    readonly trigger: "scheduled" | "startup";
+    readonly scheduledSlotKey: string;
+    readonly scheduledLocalTime: string;
+    readonly status: "running" | "completed" | "skipped" | "failed";
+    readonly candidateCount: number;
+    readonly sentMessageCount: number;
+    readonly sentChapterCount: number;
+    readonly sentMissingChapterCount: number;
+    readonly sentLatestProjectChapter: boolean;
+    readonly error: string | null;
+    readonly requestedAt: string;
+    readonly completedAt: string | null;
+  } | null;
 };
 
 export type ExternalBookScanProgress = {
@@ -372,6 +387,8 @@ export type ExternalBookSyncSendResult = {
   readonly sessionTitle: string;
   readonly sentMessageCount: number;
   readonly sentChapterCount: number;
+  readonly sentMissingChapterCount: number;
+  readonly sentLatestProjectChapter: boolean;
 };
 
 export type ImportConfirmResult = {

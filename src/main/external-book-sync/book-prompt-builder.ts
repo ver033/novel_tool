@@ -47,15 +47,17 @@ function splitLongText(text: string, maxLength: number): string[] {
 
 function buildHeader(input: BuildExternalBookSyncChatMessagesInput, partLabel: string): string {
   const chapterRangeLabel =
-    input.missingChapters.length === 1
-      ? input.missingChapters[0].title
-      : `${input.missingChapters[0]?.title ?? "未知"} - ${input.missingChapters.at(-1)?.title ?? "未知"}`;
+    input.missingChapters.length === 0
+      ? "无"
+      : input.missingChapters.length === 1
+        ? input.missingChapters[0].title
+        : `${input.missingChapters[0]?.title ?? "未知"} - ${input.missingChapters.at(-1)?.title ?? "未知"}`;
   return [
     "【外部写作软件同步检查】",
     "",
-    "下面是从外部 .Book 文件中检测到、但当前墨枢项目还没有的章节。",
-    input.latestProjectChapterInExternal ? "同时附上当前项目最新章在 .Book 中的对应正文，用来判断项目内最新章是否落后于外部文件。" : null,
-    "请先阅读这些章节，等待作者下一步指令。不要自动改写、不要总结成缓存、不要假设这些章节已经写入项目。",
+    input.missingChapters.length > 0 ? "下面是从外部 .Book 文件中检测到、但当前墨枢项目还没有的章节。" : null,
+    input.latestProjectChapterInExternal ? "附上当前项目最新章在 .Book 中的对应正文，用来判断项目内最新章是否落后于外部文件。" : null,
+    "请先阅读这些内容，等待作者下一步指令。不要自动改写、不要总结成缓存、不要假设这些章节已经写入项目。",
     "",
     `当前项目：${input.projectName}`,
     `当前项目最新章节：${input.currentLatestLabel}`,
