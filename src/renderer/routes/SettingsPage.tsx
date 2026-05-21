@@ -15,12 +15,6 @@ import type {
   ChapterCacheBuildOrder,
   EditorSettings,
   ExportShareableProjectCopyResult,
-  ExternalBookScanProgress,
-  ExternalBookSyncCandidate,
-  ExternalBookSyncScanResult,
-  ExternalBookSyncSendResult,
-  ExternalBookSyncSource,
-  ExternalBookSyncStatus,
   OpenRouterModelSummary,
   ProjectRecord,
   SettingsSaveInput,
@@ -1035,99 +1029,15 @@ function createExternalBookScanRequestId(): string {
   return `external_book_scan_${Date.now()}_${Math.random().toString(16).slice(2)}`;
 }
 
-function formatFileSize(bytes: number): string {
-  if (bytes >= 1024 * 1024) {
-    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  }
-  if (bytes >= 1024) {
-    return `${(bytes / 1024).toFixed(1)} KB`;
-  }
-  return `${bytes} B`;
-}
-
-function formatExternalBookSource(source: ExternalBookSyncSource): string {
-  const confirmed = source.confirmedAt ? `已确认 ${formatDateTime(source.confirmedAt)}` : "未确认";
-  return `${source.displayName} · ${confirmed}`;
-}
-
-function formatExternalBookSearchMode(mode: ExternalBookSyncStatus["search"]["mode"]): string {
-  if (mode === "global") {
-    return "全局搜索";
-  }
-  if (mode === "directory") {
-    return "指定目录搜索";
-  }
-  return "快速搜索";
-}
-
-function formatExternalBookRunTitle(run: NonNullable<ExternalBookSyncStatus["latestAutomaticRun"]>): string {
-  if (run.status === "completed") {
-    return "最近自动同步：已发给 LLM";
-  }
-  if (run.status === "running") {
-    return "最近自动同步：正在处理";
-  }
-  if (run.status === "failed") {
-    return "最近自动同步：发送失败";
-  }
-  return "最近自动同步：未发送";
-}
-
-function formatExternalBookRunDetail(run: NonNullable<ExternalBookSyncStatus["latestAutomaticRun"]>): string {
-  const details = [
-    `时间 ${run.scheduledLocalTime}`,
-    `候选 ${run.candidateCount}`,
-    `发给 LLM ${run.sentChapterCount} 章`,
-    `缺失 ${run.sentMissingChapterCount} 章`,
-    `消息 ${run.sentMessageCount} 条`
-  ];
-  if (run.sentLatestProjectChapter) {
-    details.push("含项目最新章");
-  }
-  if (run.error) {
-    details.push(run.error);
-  }
-  return details.join(" · ");
-}
-
 function ExternalBookSyncPane({ currentProject }: ExternalBookSyncPaneProps) {
   const api = useMemo(getNovelToolApi, []);
-  const [status, setStatus] = useState<ExternalBookSyncStatus | null>(null);
-  const [candidates, setCandidates] = useState<ExternalBookSyncCandidate[]>([]);
-  const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null);
-  const [selectedChapterKeys, setSelectedChapterKeys] = useState<Set<string>>(new Set());
-  const [scanProgress, setScanProgress] = useState<(ExternalBookScanProgress & { readonly requestId: string }) | null>(null);
   const [scanBusy, setScanBusy] = useState(false);
   const [activeScanRequestId, setActiveScanRequestIdState] = useState<string | null>(null);
-  const [sendBusy, setSendBusy] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const activeScanRequestIdRef = useRef<string | null>(null);
-
-  const selectedCandidate = candidates.find((candidate) => candidate.id === selectedCandidateId) ?? candidates[0] ?? null;
-  const selectedChapterCount = selectedCandidate ? selectedCandidate.comparison.missingChapters.filter((chapter) => selectedChapterKeys.has(chapter.key)).length : 0;
 
   function setActiveScanRequestId(requestId: string | null): void {
     activeScanRequestIdRef.current = requestId;
     setActiveScanRequestIdState(requestId);
-  }
-
-  async function loadStatus(options: { readonly clearError?: boolean } = {}): Promise<void> {
-    const shouldSurfaceError = options.clearError ?? true;
-    if (shouldSurfaceError) {
-      setError(null);
-    }
-    try {
-      if (!currentProject) {
-        setStatus(null);
-        return;
-      }
-      setStatus((await api.externalBookSync.getStatus({ projectId: currentProject.id })) as ExternalBookSyncStatus);
-    } catch (reason) {
-      if (shouldSurfaceError) {
-        setError(formatError(reason));
-      }
-    }
   }
 
   useEffect(() => {
@@ -1135,27 +1045,9 @@ function ExternalBookSyncPane({ currentProject }: ExternalBookSyncPaneProps) {
     if (requestId) {
       void api.externalBookSync.cancelScan({ requestId });
     }
-    setCandidates([]);
-    setSelectedCandidateId(null);
-    setSelectedChapterKeys(new Set());
-    setScanProgress(null);
     setActiveScanRequestId(null);
     setScanBusy(false);
-    setMessage(null);
-    setError(null);
-    void loadStatus();
   }, [currentProject?.id]);
-
-  useEffect(() => {
-    if (!currentProject) {
-      return;
-    }
-    const intervalId = window.setInterval(
-      () => void loadStatus({ clearError: false }),
-      status?.search.isRunning ? 1000 : 5000
-    );
-    return () => window.clearInterval(intervalId);
-  }, [currentProject?.id, status?.search.isRunning]);
 
   useEffect(() => {
     return () => {
@@ -1166,70 +1058,23 @@ function ExternalBookSyncPane({ currentProject }: ExternalBookSyncPaneProps) {
     };
   }, [api]);
 
-  useEffect(() => {
-    if (!selectedCandidate) {
-      setSelectedChapterKeys(new Set());
-      return;
-    }
-    setSelectedChapterKeys(new Set(selectedCandidate.comparison.missingChapters.map((chapter) => chapter.key)));
-  }, [selectedCandidate?.id]);
-
-  function applyScanResult(result: ExternalBookSyncScanResult): void {
-    setCandidates([...result.candidates]);
-    const firstCandidate = result.candidates[0] ?? null;
-    setSelectedCandidateId(firstCandidate?.id ?? null);
-    setMessage(result.candidates.length > 0 ? `找到 ${result.candidates.length} 个候选 .Book 文件。` : "没有找到可同步的 .Book 文件。");
-    if (result.warnings.length > 0) {
-      setError(result.warnings.join("；"));
-    }
-  }
-
   async function runScan(mode: "quick" | "global" | "directory", directoryPath?: string): Promise<void> {
     if (!currentProject || scanBusy) {
       return;
     }
     const requestId = createExternalBookScanRequestId();
-    const unsubscribe = api.externalBookSync.subscribeScan(requestId, {
-      onProgress(progress) {
-        if (activeScanRequestIdRef.current === progress.requestId) {
-          setScanProgress(progress);
-        }
-      },
-      onDone(result) {
-        if (activeScanRequestIdRef.current === result.requestId) {
-          applyScanResult(result);
-        }
-      },
-      onError(payload) {
-        if (activeScanRequestIdRef.current === payload.requestId) {
-          setError(payload.error);
-        }
-      }
-    });
     setScanBusy(true);
     setActiveScanRequestId(requestId);
-    setMessage(mode === "directory" ? "正在扫描选择的目录。" : "正在查找项目同名文件夹下的 .Book 文件。");
-    setError(null);
-    setCandidates([]);
-    setSelectedCandidateId(null);
-    setScanProgress(null);
     try {
-      const result = (await api.externalBookSync.scan({
+      await api.externalBookSync.scan({
         projectId: currentProject.id,
         requestId,
         mode,
         ...(directoryPath ? { directoryPath } : {})
-      })) as ExternalBookSyncScanResult;
-      if (activeScanRequestIdRef.current === requestId) {
-        applyScanResult(result);
-        await loadStatus();
-      }
+      });
     } catch (reason) {
-      if (activeScanRequestIdRef.current === requestId) {
-        setError(formatError(reason));
-      }
+      void reason;
     } finally {
-      unsubscribe();
       if (activeScanRequestIdRef.current === requestId) {
         setActiveScanRequestId(null);
         setScanBusy(false);
@@ -1242,77 +1087,24 @@ function ExternalBookSyncPane({ currentProject }: ExternalBookSyncPaneProps) {
     if (!requestId) {
       return;
     }
-    setMessage("正在停止扫描。");
-    setError(null);
     try {
       await api.externalBookSync.cancelScan({ requestId });
-      setMessage("已停止扫描。");
     } catch (reason) {
-      setError(formatError(reason));
+      void reason;
     } finally {
       setActiveScanRequestId(null);
       setScanBusy(false);
-      setScanProgress(null);
     }
   }
 
   async function scanSelectedDirectory(): Promise<void> {
-    setError(null);
     try {
       const selected = (await api.externalBookSync.selectDirectory()) as ExternalBookSyncSelectedDirectory | null;
       if (selected) {
         await runScan("directory", selected.directoryPath);
       }
     } catch (reason) {
-      setError(formatError(reason));
-    }
-  }
-
-  function toggleMissingChapter(key: string, checked: boolean): void {
-    setSelectedChapterKeys((current) => {
-      const next = new Set(current);
-      if (checked) {
-        next.add(key);
-      } else {
-        next.delete(key);
-      }
-      return next;
-    });
-  }
-
-  async function sendSelectedChapters(): Promise<void> {
-    if (!currentProject || !selectedCandidate || selectedChapterCount === 0 || sendBusy) {
-      return;
-    }
-    setSendBusy(true);
-    setError(null);
-    setMessage(null);
-    try {
-      const result = (await api.externalBookSync.sendMissingChaptersToAi({
-        projectId: currentProject.id,
-        candidateId: selectedCandidate.id,
-        chapterKeys: [...selectedChapterKeys]
-      })) as ExternalBookSyncSendResult;
-      const latestNote = result.sentLatestProjectChapter ? "，含项目最新章" : "";
-      setMessage(`已发送 ${result.sentChapterCount} 章到 AI 对话「${result.sessionTitle}」（缺失 ${result.sentMissingChapterCount} 章${latestNote}）。`);
-      await loadStatus();
-    } catch (reason) {
-      setError(formatError(reason));
-    } finally {
-      setSendBusy(false);
-    }
-  }
-
-  async function forgetSource(sourceId: string): Promise<void> {
-    if (!currentProject) {
-      return;
-    }
-    setError(null);
-    try {
-      await api.externalBookSync.forgetSource({ projectId: currentProject.id, sourceId });
-      await loadStatus();
-    } catch (reason) {
-      setError(formatError(reason));
+      void reason;
     }
   }
 
@@ -1322,134 +1114,24 @@ function ExternalBookSyncPane({ currentProject }: ExternalBookSyncPaneProps) {
         <div>
           <h3>同步检查</h3>
         </div>
-        <span className="tag">原型功能</span>
       </div>
 
-        {!currentProject ? (
-          <div className="empty-inline">请先打开项目，再检查外部 .Book 文件。</div>
-        ) : (
-          <>
-            <div className="external-book-sync-actions">
-              <Button disabled={scanBusy || sendBusy} onClick={() => void runScan("quick")} type="button" variant="primary">
-                {scanBusy ? "正在查找" : "查找 .Book"}
-              </Button>
-              <Button disabled={scanBusy || sendBusy} onClick={() => void scanSelectedDirectory()} type="button" variant="secondary">
-                选择检查目录
-              </Button>
-              <Button disabled={scanBusy || sendBusy} onClick={() => void runScan("global")} type="button" variant="secondary">
-                全局重新扫描
-              </Button>
-              {scanBusy && activeScanRequestId ? (
-                <Button disabled={sendBusy} onClick={() => void cancelActiveScan()} type="button" variant="ghost">
-                  停止扫描
-                </Button>
-              ) : null}
-            </div>
-
-          {status?.search.isRunning && !scanBusy ? (
-            <div className="external-book-sync-progress" role="status">
-              <span>{status.search.trigger === "manual" ? "正在搜索 .Book" : "正在自动搜索 .Book"}</span>
-              <small>
-                {formatExternalBookSearchMode(status.search.mode)}
-                {status.search.startedAt ? ` · 开始 ${formatDateTime(status.search.startedAt)}` : ""}
-              </small>
-            </div>
-          ) : null}
-
-          {scanProgress ? (
-            <div className="external-book-sync-progress" role="status">
-              <span>{scanProgress.currentRoot ? `正在扫描：${scanProgress.currentRoot}` : "扫描已完成"}</span>
-              <small>
-                目录 {scanProgress.checkedDirectories.toLocaleString("zh-CN")} · 文件 {scanProgress.checkedFiles.toLocaleString("zh-CN")} · 候选 {scanProgress.candidatesFound}
-              </small>
-            </div>
-          ) : null}
-
-          {status?.latestAutomaticRun ? (
-            <div className="external-book-sync-progress" role="status">
-              <span>{formatExternalBookRunTitle(status.latestAutomaticRun)}</span>
-              <small>{formatExternalBookRunDetail(status.latestAutomaticRun)}</small>
-            </div>
-          ) : null}
-
-          {status?.sources.length ? (
-            <section className="external-book-sync-sources" aria-label="已确认的外部 Book 来源">
-              <b>已确认来源</b>
-              <div className="external-book-sync-source-list">
-                {status.sources.map((source) => (
-                  <div className="external-book-sync-source-item" key={source.id}>
-                    <div className="external-book-sync-source-summary">
-                      <span>{formatExternalBookSource(source)}</span>
-                      <button onClick={() => void forgetSource(source.id)} type="button">
-                        忘记
-                      </button>
-                    </div>
-                    <details>
-                      <summary>查看保存路径</summary>
-                      <code className="external-book-sync-source-path">{source.bookFolderPath}</code>
-                    </details>
-                  </div>
-                ))}
-              </div>
-            </section>
-          ) : null}
-
-          {candidates.length > 0 ? (
-            <section className="external-book-sync-candidates" aria-label="Book 候选文件">
-              <div className="external-book-sync-candidate-list">
-                {candidates.map((candidate) => (
-                  <button
-                    className={`external-book-sync-candidate ${candidate.id === selectedCandidate?.id ? "active" : ""}`}
-                    key={candidate.id}
-                    onClick={() => setSelectedCandidateId(candidate.id)}
-                    type="button"
-                  >
-                    <b>{candidate.fileName}</b>
-                    <small>{candidate.comparison.missingChapters.length} 个缺失章节 · {formatFileSize(candidate.size)}</small>
-                    <span>{candidate.reasons.join("，")}</span>
-                  </button>
-                ))}
-              </div>
-
-              {selectedCandidate ? (
-                <div className="external-book-sync-preview">
-                  <div className="settings-card-head compact">
-                    <div>
-                      <h4>{selectedCandidate.fileName}</h4>
-                      <p className="muted" title={selectedCandidate.filePath}>{selectedCandidate.filePath}</p>
-                    </div>
-                  </div>
-                  {selectedCandidate.warnings.length > 0 ? <p className="settings-message warning">{selectedCandidate.warnings.join("；")}</p> : null}
-                  <div className="external-book-sync-chapters">
-                    {selectedCandidate.comparison.missingChapters.map((chapter) => (
-                      <label key={chapter.key}>
-                        <input
-                          checked={selectedChapterKeys.has(chapter.key)}
-                          onChange={(event) => toggleMissingChapter(chapter.key, event.target.checked)}
-                          type="checkbox"
-                        />
-                        <span>
-                          <b>{chapter.title || `第 ${chapter.order + 1} 段`}</b>
-                          <small>{chapter.textLength.toLocaleString("zh-CN")} 字</small>
-                        </span>
-                      </label>
-                    ))}
-                  </div>
-                  <div className="external-book-sync-send">
-                    <Button disabled={sendBusy || selectedChapterCount === 0} onClick={() => void sendSelectedChapters()} type="button" variant="primary">
-                      {sendBusy ? "正在发送" : `发送 ${selectedChapterCount} 章给 AI`}
-                    </Button>
-                    <span className="summary-cache-hint">发送后只进入 AI 对话，不会自动创建或覆盖章节。</span>
-                  </div>
-                </div>
-              ) : null}
-            </section>
-          ) : null}
-        </>
-      )}
-
-      {message ? <p className="settings-message success">{message}</p> : null}
-      {error ? <p className="settings-message error">{error}</p> : null}
+      <div className="external-book-sync-actions">
+        <Button disabled={!currentProject || scanBusy} onClick={() => void runScan("quick")} type="button" variant="primary">
+          查找 .Book
+        </Button>
+        <Button disabled={!currentProject || scanBusy} onClick={() => void scanSelectedDirectory()} type="button" variant="secondary">
+          选择检查目录
+        </Button>
+        <Button disabled={!currentProject || scanBusy} onClick={() => void runScan("global")} type="button" variant="secondary">
+          全局重新扫描
+        </Button>
+        {scanBusy && activeScanRequestId ? (
+          <Button onClick={() => void cancelActiveScan()} type="button" variant="ghost">
+            停止扫描
+          </Button>
+        ) : null}
+      </div>
     </div>
   );
 }
