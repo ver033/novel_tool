@@ -705,7 +705,123 @@ const migrations: readonly Migration[] = [
       }
     }
   },
+  {
+    version: 22,
+    name: "author_outline_planning",
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS outline_threads (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          color TEXT NOT NULL,
+          sort_order INTEGER NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(project_id, name),
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_outline_threads_project_sort
+          ON outline_threads(project_id, sort_order);
+
+        CREATE TABLE IF NOT EXISTS outline_events (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          chapter_id TEXT,
+          title TEXT NOT NULL,
+          summary TEXT NOT NULL,
+          story_date TEXT,
+          story_time_label TEXT NOT NULL DEFAULT '',
+          weekday_label TEXT NOT NULL DEFAULT '',
+          story_time_order INTEGER,
+          day_segment TEXT NOT NULL CHECK (day_segment IN ('day', 'night', 'custom', 'unknown')),
+          custom_day_segment TEXT,
+          location TEXT NOT NULL DEFAULT '',
+          pov_character TEXT NOT NULL DEFAULT '',
+          characters_json TEXT NOT NULL DEFAULT '[]',
+          goal TEXT NOT NULL DEFAULT '',
+          conflict TEXT NOT NULL DEFAULT '',
+          outcome TEXT NOT NULL DEFAULT '',
+          foreshadowing TEXT NOT NULL DEFAULT '',
+          notes TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL CHECK (status IN ('planned', 'drafting', 'written', 'needs_revision', 'done')),
+          event_order INTEGER NOT NULL,
+          import_batch_id TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+          FOREIGN KEY (chapter_id) REFERENCES chapters(id) ON DELETE SET NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_outline_events_project_order
+          ON outline_events(project_id, event_order);
+
+        CREATE INDEX IF NOT EXISTS idx_outline_events_project_chapter
+          ON outline_events(project_id, chapter_id, event_order);
+
+        CREATE INDEX IF NOT EXISTS idx_outline_events_project_date
+          ON outline_events(project_id, story_date, story_time_order, day_segment, event_order);
+
+        CREATE INDEX IF NOT EXISTS idx_outline_events_project_time_order
+          ON outline_events(project_id, story_time_order, event_order);
+
+        CREATE INDEX IF NOT EXISTS idx_outline_events_project_import_batch
+          ON outline_events(project_id, import_batch_id);
+
+        CREATE TABLE IF NOT EXISTS outline_event_threads (
+          event_id TEXT NOT NULL,
+          thread_id TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          PRIMARY KEY (event_id, thread_id),
+          FOREIGN KEY (event_id) REFERENCES outline_events(id) ON DELETE CASCADE,
+          FOREIGN KEY (thread_id) REFERENCES outline_threads(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_outline_event_threads_thread
+          ON outline_event_threads(thread_id, event_id);
+
+        CREATE TABLE IF NOT EXISTS outline_chapter_notes (
+          project_id TEXT NOT NULL,
+          chapter_id TEXT NOT NULL,
+          content TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (project_id, chapter_id),
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+          FOREIGN KEY (chapter_id) REFERENCES chapters(id) ON DELETE CASCADE
+        );
+      `);
+    }
+  },
 ];
+
+function ensureMigrationRecord(db: SqliteDatabase, migration: Migration): void {
+  db.prepare(
+    `INSERT INTO schema_migrations (version, name, applied_at)
+     VALUES (?, ?, ?)
+     ON CONFLICT(version) DO UPDATE SET name = excluded.name`
+  ).run(migration.version, migration.name, new Date().toISOString());
+}
+
+function repairRequiredSchema(db: SqliteDatabase): void {
+  const outlineMigration = migrations.find((migration) => migration.version === 22);
+  if (!outlineMigration) {
+    return;
+  }
+
+  const hasOutlineSchema =
+    tableExists(db, "outline_threads") &&
+    tableExists(db, "outline_events") &&
+    tableExists(db, "outline_event_threads") &&
+    tableExists(db, "outline_chapter_notes");
+  if (hasOutlineSchema) {
+    return;
+  }
+
+  outlineMigration.up(db);
+  ensureMigrationRecord(db, outlineMigration);
+}
 
 export function runMigrations(db: SqliteDatabase): void {
   db.exec(`
@@ -739,4 +855,6 @@ export function runMigrations(db: SqliteDatabase): void {
 
     applyMigration();
   }
+
+  repairRequiredSchema(db);
 }

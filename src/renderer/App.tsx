@@ -1,12 +1,13 @@
 import "./styles/globals.css";
 import { useCallback, useEffect, useState } from "react";
 import { AppShell } from "./layout/AppShell";
-import type { FloatingPanelGeometry, FloatingPanelKind, FloatingPanelState } from "./layout/floating-panel-state";
+import type { FloatingPanelGeometry, FloatingPanelKind, FloatingPanelState, OutlineFloatingTab } from "./layout/floating-panel-state";
 import { clampFloatingPanelGeometry, createFloatingPanelId, getDefaultFloatingPanelGeometry, openOrRaiseFloatingPanel } from "./layout/floating-panel-state";
 import type { SidebarTab, TaskType } from "./layout/RightUtilitySidebar";
 import { ExportPage } from "./routes/ExportPage";
 import { ImportWizardPage } from "./routes/ImportWizardPage";
 import { NewProjectPage } from "./routes/NewProjectPage";
+import { OutlinePage } from "./routes/OutlinePage";
 import { CharacterRelationshipGraphPage } from "./relationship-graph/CharacterRelationshipGraphPage";
 import { SettingsPage, type SettingsCategory } from "./routes/SettingsPage";
 import { WelcomePage } from "./routes/WelcomePage";
@@ -16,10 +17,10 @@ import type { AiChatDraftSeed } from "./sidebar/chat-draft";
 import { useAppStore } from "./state/app-store";
 import type { ImportConfirmResult, ProjectCreateInput, SelectionSnapshot, TaskPromptPreset } from "../main/shared/types";
 
-type Page = "welcome" | "writing" | "relationshipGraph" | "writingGoals" | "settings" | "import" | "export" | "newProject";
+type Page = "welcome" | "writing" | "relationshipGraph" | "outline" | "writingGoals" | "settings" | "import" | "export" | "newProject";
 type ImportReturnPage = "welcome" | "writing";
 type ExportReturnPage = "welcome" | "writing";
-type SettingsReturnPage = "welcome" | "writing" | "relationshipGraph" | "writingGoals";
+type SettingsReturnPage = "welcome" | "writing" | "relationshipGraph" | "outline" | "writingGoals";
 
 export function App() {
   const [page, setPage] = useState<Page>("welcome");
@@ -73,6 +74,10 @@ export function App() {
     setSidebarOpen(false);
     setPage("relationshipGraph");
   }, []);
+  const openOutline = useCallback(() => {
+    setSidebarOpen(false);
+    setPage("outline");
+  }, []);
   const openWritingGoals = useCallback(() => {
     setSidebarOpen(false);
     setPage("writingGoals");
@@ -91,7 +96,7 @@ export function App() {
     if (category) {
       setSettingsCategory(category);
     }
-    setSettingsReturnPage(page === "writing" || page === "relationshipGraph" || page === "writingGoals" ? page : "welcome");
+    setSettingsReturnPage(page === "writing" || page === "relationshipGraph" || page === "outline" || page === "writingGoals" ? page : "welcome");
     setPage("settings");
   }, [page]);
   const returnFromSettings = useCallback(() => {
@@ -192,8 +197,8 @@ export function App() {
     setSidebarTab("task");
   }, []);
   const openFloatingPanel = useCallback(
-    (kind: FloatingPanelKind, chapterId: string | null = appStore.activeChapterId, scratchNoteId: string | null = null) => {
-      setFloatingPanels((current) => openOrRaiseFloatingPanel(current, kind, chapterId, floatingViewport(), scratchNoteId));
+    (kind: FloatingPanelKind, chapterId: string | null = appStore.activeChapterId, scratchNoteId: string | null = null, outlineTab: OutlineFloatingTab = "chapter") => {
+      setFloatingPanels((current) => openOrRaiseFloatingPanel(current, kind, chapterId, floatingViewport(), scratchNoteId, outlineTab));
     },
     [appStore.activeChapterId, floatingViewport]
   );
@@ -377,6 +382,23 @@ export function App() {
         <CharacterRelationshipGraphPage
           currentProject={appStore.currentProject}
           onOpenChapter={openWritingAtChapter}
+          onOpenOutline={openOutline}
+          onOpenSettings={() => openSettings()}
+          onOpenWriting={openWriting}
+          onOpenWritingGoals={openWritingGoals}
+          onWelcome={openWelcome}
+        />
+      </AppShell>
+    );
+  }
+
+  if (page === "outline") {
+    return (
+      <AppShell>
+        <OutlinePage
+          currentProject={appStore.currentProject}
+          initialChapterId={appStore.activeChapterId}
+          onOpenRelationshipGraph={openRelationshipGraph}
           onOpenSettings={() => openSettings()}
           onOpenWriting={openWriting}
           onOpenWritingGoals={openWritingGoals}
@@ -391,6 +413,7 @@ export function App() {
       <AppShell>
         <WritingGoalsPage
           currentProject={appStore.currentProject}
+          onOpenOutline={openOutline}
           onOpenRelationshipGraph={openRelationshipGraph}
           onOpenSettings={() => openSettings()}
           onOpenWriting={openWriting}
@@ -430,6 +453,7 @@ export function App() {
           onOpenAiChat={openAiChat}
           onOpenFloatingAiChat={openFloatingAiChat}
           onOpenFloatingPanel={openFloatingPanel}
+          onOpenOutline={openOutline}
           onOpenFloatingScratchpad={openFloatingScratchpad}
           onOpenRelationshipGraph={openRelationshipGraph}
           onOpenWritingGoals={openWritingGoals}

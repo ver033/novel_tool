@@ -11,11 +11,10 @@ import { NovelEditor } from "../editor/NovelEditor";
 import { createSelectionSnapshotFromEditor } from "../editor/tiptap/selection-utils";
 import { EditorContextMenu, type EditorContextMenuState } from "../layout/EditorContextMenu";
 import { FloatingWorkspaceLayer } from "../layout/FloatingWorkspaceLayer";
-import type { FloatingPanelGeometry, FloatingPanelKind, FloatingPanelState } from "../layout/floating-panel-state";
+import type { FloatingPanelGeometry, FloatingPanelKind, FloatingPanelState, OutlineFloatingTab } from "../layout/floating-panel-state";
 import { LeftChapterTree, type ChapterAuxiliaryInfo } from "../layout/LeftChapterTree";
 import { ProjectModuleRail, type ProjectModule } from "../layout/ProjectModuleRail";
 import { RightUtilitySidebar, type SidebarTab, type TaskType } from "../layout/RightUtilitySidebar";
-import { outlineStorageKey } from "../sidebar/OutlinePanel";
 import type { AiChatDraftSeed } from "../sidebar/chat-draft";
 import { TopBar } from "../layout/TopBar";
 import { getNovelToolApi } from "../state/app-store";
@@ -249,8 +248,9 @@ type WritingPageProps = {
   readonly onMoveFloatingPanel: (panelId: string, geometry: Pick<FloatingPanelGeometry, "x" | "y">) => void;
   readonly onOpenAiChat: () => void;
   readonly onOpenFloatingAiChat: () => void;
-  readonly onOpenFloatingPanel: (kind: FloatingPanelKind, chapterId?: string | null, scratchNoteId?: string | null) => void;
+  readonly onOpenFloatingPanel: (kind: FloatingPanelKind, chapterId?: string | null, scratchNoteId?: string | null, outlineTab?: OutlineFloatingTab) => void;
   readonly onOpenFloatingScratchpad: (chapterId?: string | null, scratchNoteId?: string | null) => void;
+  readonly onOpenOutline: () => void;
   readonly onOpenRelationshipGraph: () => void;
   readonly onOpenWritingGoals: () => void;
   readonly onOpenScratchpad: () => void;
@@ -299,6 +299,7 @@ export function WritingPage({
   onOpenFloatingAiChat,
   onOpenFloatingPanel,
   onOpenFloatingScratchpad,
+  onOpenOutline,
   onOpenRelationshipGraph,
   onOpenWritingGoals,
   onOpenScratchpad,
@@ -420,32 +421,32 @@ export function WritingPage({
       return undefined;
     }
 
-    const outlineInfoByChapterId = chapters.reduce<Record<string, ChapterAuxiliaryInfo>>((next, chapter) => {
-      let hasOutline = false;
-      try {
-        hasOutline = Boolean(window.localStorage.getItem(outlineStorageKey(currentProject.id, chapter.id))?.trim());
-      } catch {
-        hasOutline = false;
-      }
-      next[chapter.id] = {
-        hasOutline,
-        scratchCount: 0,
-        scratchNoteIds: []
-      };
+    let cancelled = false;
+    const emptyAuxiliaryInfo = chapters.reduce<Record<string, ChapterAuxiliaryInfo>>((next, chapter) => {
+      next[chapter.id] = { hasOutline: false, scratchCount: 0, scratchNoteIds: [] };
       return next;
     }, {});
-
-    let cancelled = false;
-    setChapterAuxiliaryInfoById(outlineInfoByChapterId);
-    void api.scratch
-      .list({ projectId: currentProject.id })
-      .then((result) => {
+    setChapterAuxiliaryInfoById(emptyAuxiliaryInfo);
+    void Promise.allSettled([api.scratch.list({ projectId: currentProject.id }), api.outline.getOverview({ projectId: currentProject.id })])
+      .then(([scratchResult, outlineResult]) => {
         if (cancelled) {
           return;
         }
-        const notes = result as ScratchNoteRecord[];
+        const notes = scratchResult.status === "fulfilled" ? (scratchResult.value as ScratchNoteRecord[]) : [];
+        const outline = outlineResult.status === "fulfilled" ? (outlineResult.value as { readonly chapterNotes: readonly { readonly chapterId: string; readonly content: string }[]; readonly events: readonly { readonly chapterId: string | null }[] }) : null;
         const scratchCountByChapterId = new Map<string, number>();
         const scratchNoteIdsByChapterId = new Map<string, string[]>();
+        const outlineChapterIds = new Set<string>();
+        outline?.chapterNotes.forEach((note) => {
+          if (note.content.trim()) {
+            outlineChapterIds.add(note.chapterId);
+          }
+        });
+        outline?.events.forEach((event) => {
+          if (event.chapterId) {
+            outlineChapterIds.add(event.chapterId);
+          }
+        });
         notes.forEach((note) => {
           if (!note.chapterId) {
             return;
@@ -457,7 +458,7 @@ export function WritingPage({
           chapters.reduce<Record<string, ChapterAuxiliaryInfo>>((next, chapter) => {
             const scratchNoteIds = scratchNoteIdsByChapterId.get(chapter.id) ?? [];
             next[chapter.id] = {
-              hasOutline: outlineInfoByChapterId[chapter.id]?.hasOutline ?? false,
+              hasOutline: outlineChapterIds.has(chapter.id),
               scratchCount: scratchCountByChapterId.get(chapter.id) ?? 0,
               scratchNoteIds
             };
@@ -467,7 +468,7 @@ export function WritingPage({
       })
       .catch(() => {
         if (!cancelled) {
-          setChapterAuxiliaryInfoById(outlineInfoByChapterId);
+          setChapterAuxiliaryInfoById(emptyAuxiliaryInfo);
         }
       });
 
@@ -607,6 +608,10 @@ export function WritingPage({
         handleOpenRelationshipGraph();
         return;
       }
+      if (module === "outline") {
+        flushBeforeNavigation(onOpenOutline);
+        return;
+      }
       if (module === "goals") {
         flushBeforeNavigation(onOpenWritingGoals);
         return;
@@ -615,7 +620,7 @@ export function WritingPage({
         handleSettings();
       }
     },
-    [flushBeforeNavigation, handleOpenRelationshipGraph, handleSettings, onOpenWritingGoals]
+    [flushBeforeNavigation, handleOpenRelationshipGraph, handleSettings, onOpenOutline, onOpenWritingGoals]
   );
   const handleFocusModeToggle = useCallback(() => {
     setFocusMode((current) => !current);
@@ -635,7 +640,7 @@ export function WritingPage({
       return;
     }
     if (activeChapterAuxiliaryInfo?.hasOutline) {
-      onOpenFloatingPanel("outline", activeChapterId);
+      onOpenFloatingPanel("outline", activeChapterId, null, "chapter");
     }
     for (const scratchNoteId of activeChapterScratchNoteIds) {
       onOpenFloatingScratchpad(activeChapterId, scratchNoteId);
@@ -1066,8 +1071,12 @@ export function WritingPage({
                     onOpenFloatingAiChat();
                     closeEditorContextMenu();
                   }}
+                  onOpenBookOutline={() => {
+                    onOpenFloatingPanel("outline", null, null, "book");
+                    closeEditorContextMenu();
+                  }}
                   onOpenOutline={() => {
-                    onOpenFloatingPanel("outline", activeChapterId);
+                    onOpenFloatingPanel("outline", activeChapterId, null, "chapter");
                     closeEditorContextMenu();
                   }}
                   onOpenScratchpad={() => {

@@ -8,7 +8,7 @@ import { ScratchpadEditorPanel } from "../sidebar/ScratchpadEditorPanel";
 import type { SettingsCategory } from "../routes/SettingsPage";
 import type { ChatStore } from "../state/chat-store";
 import type { SavedChapterVersion } from "../state/editor-store";
-import type { FloatingPanelKind } from "./floating-panel-state";
+import type { FloatingPanelKind, OutlineFloatingTab } from "./floating-panel-state";
 import type { TaskType } from "./RightUtilitySidebar";
 
 export type UtilityPanelContentProps = {
@@ -26,6 +26,7 @@ export type UtilityPanelContentProps = {
   readonly onContentSaved: (content: ChapterContent) => void;
   readonly onOpenSettings: (category?: SettingsCategory) => void;
   readonly onScratchNoteSaved: (panelId: string, noteId: string) => void;
+  readonly outlineTab: OutlineFloatingTab;
   readonly panelId: string;
   readonly scratchNoteId: string | null;
   readonly selectionSnapshot: SelectionSnapshot | null;
@@ -47,6 +48,7 @@ export function UtilityPanelContent({
   onContentSaved,
   onOpenSettings,
   onScratchNoteSaved,
+  outlineTab,
   panelId,
   panelKind,
   scratchNoteId,
@@ -91,6 +93,7 @@ export function UtilityPanelContent({
       <OutlinePanel
         chapterId={currentChapterId}
         currentChapterTitle={currentChapterTitle}
+        initialTab={outlineTab}
         onAuxiliaryChanged={onAuxiliaryChanged}
         projectId={currentProjectId}
       />
