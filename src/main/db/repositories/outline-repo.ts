@@ -322,6 +322,11 @@ export class OutlineRepository {
     return result.changes;
   }
 
+  deleteImportedEvents(projectId: string): number {
+    const result = this.db.prepare("DELETE FROM outline_events WHERE project_id = ? AND import_batch_id IS NOT NULL").run(projectId);
+    return result.changes;
+  }
+
   reorderEvents(projectId: string, orderedEventIds: readonly string[]): void {
     this.db.transaction(() => {
       orderedEventIds.forEach((eventId, index) => {

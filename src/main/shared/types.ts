@@ -59,6 +59,7 @@ import type {
   outlinePreviewImportFileInputSchema,
   outlineReorderEventsInputSchema,
   outlineSaveChapterNoteInputSchema,
+  outlineClearImportedEventsInputSchema,
   outlineUndoImportBatchInputSchema,
   outlineUpdateEventInputSchema,
   outlineUpdateThreadInputSchema,
@@ -641,6 +642,7 @@ export type OutlinePreviewImportFileInput = z.input<typeof outlinePreviewImportF
 export type OutlinePreviewBulkImportInput = z.input<typeof outlinePreviewBulkImportInputSchema>;
 export type OutlineConfirmBulkImportInput = z.input<typeof outlineConfirmBulkImportInputSchema>;
 export type OutlineUndoImportBatchInput = z.input<typeof outlineUndoImportBatchInputSchema>;
+export type OutlineClearImportedEventsInput = z.input<typeof outlineClearImportedEventsInputSchema>;
 export type ExportSelectTxtFilePathInput = z.input<typeof exportSelectTxtFilePathInputSchema>;
 export type ExportTxtInput = z.input<typeof exportTxtInputSchema>;
 export type ExportTxtResult = {
@@ -901,7 +903,8 @@ export const ipcChannels = {
     previewImportFile: "novelTool:outline:previewImportFile",
     previewBulkImport: "novelTool:outline:previewBulkImport",
     confirmBulkImport: "novelTool:outline:confirmBulkImport",
-    undoImportBatch: "novelTool:outline:undoImportBatch"
+    undoImportBatch: "novelTool:outline:undoImportBatch",
+    clearImportedEvents: "novelTool:outline:clearImportedEvents"
   },
   writingGoals: {
     getOverview: "novelTool:writingGoals:getOverview",

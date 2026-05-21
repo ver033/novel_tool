@@ -412,6 +412,28 @@ export function OutlinePage({
     }
   }
 
+  async function clearImportedEvents(): Promise<void> {
+    if (!projectId) {
+      return;
+    }
+    if (!window.confirm("清空导入内容？只会删除通过导入创建的大纲场景，手动创建的大纲不会受影响。")) {
+      return;
+    }
+    try {
+      setImportError(null);
+      const result = (await api.outline.clearImportedEvents({ projectId })) as { readonly deletedCount: number };
+      setNotice(result.deletedCount > 0 ? `已清空 ${result.deletedCount} 条导入的大纲场景。` : "没有需要清空的导入大纲场景。");
+      setImportOpen(false);
+      setImportPreview(null);
+      setImportText("");
+      setImportFileName("");
+      setImportError(null);
+      reload();
+    } catch (reason) {
+      setImportError(reason instanceof Error ? reason.message : String(reason));
+    }
+  }
+
   if (!currentProject) {
     return (
       <div className="outline-page">
@@ -839,6 +861,7 @@ export function OutlinePage({
                 <div className="outline-import-summary">
                   <strong>{importPreview.rows.length} 条可导入</strong>
                   <span>{importPreview.newThreadNames.length} 条新情节线</span>
+                  {importPreview.skippedRows.length > 0 && <span>{importPreview.skippedRows.length} 行已跳过</span>}
                 </div>
                 <div className="outline-import-preview-list">
                   {importPreview.rows.slice(0, 8).map((row) => (
@@ -848,10 +871,19 @@ export function OutlinePage({
                       {row.warnings.length > 0 && <small>{row.warnings.join("；")}</small>}
                     </div>
                   ))}
+                  {importPreview.skippedRows.slice(0, 3).map((row) => (
+                    <div key={`skipped:${row.rowNumber}`}>
+                      <b>第 {row.rowNumber} 行已跳过</b>
+                      <span>{row.reason}</span>
+                    </div>
+                  ))}
                 </div>
               </div>
             )}
             <footer>
+              <button className="outline-danger-button" onClick={() => { void clearImportedEvents(); }} type="button">
+                清空导入内容
+              </button>
               <Button onClick={() => { setImportOpen(false); setImportError(null); }} variant="secondary">取消</Button>
               <button className="outline-primary-button" disabled={!importPreview || importPreview.rows.length === 0} onClick={() => { void confirmImport(); }} type="button">
                 <Check size={17} />

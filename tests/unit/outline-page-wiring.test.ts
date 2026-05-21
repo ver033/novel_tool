@@ -31,9 +31,12 @@ describe("author outline page wiring", () => {
     expect(page).toContain("api.outline.updateEvent");
     expect(page).toContain("api.outline.previewBulkImport");
     expect(page).toContain("api.outline.confirmBulkImport");
+    expect(page).toContain("api.outline.clearImportedEvents");
     expect(page).toMatch(/async function confirmImport\(\)[\s\S]*try \{[\s\S]*api\.outline\.confirmBulkImport[\s\S]*catch \(reason\)/);
     expect(page).toMatch(/async function deleteSelectedEvent\(\)[\s\S]*try \{[\s\S]*api\.outline\.deleteEvent[\s\S]*catch \(reason\)/);
     expect(page).toContain("title={importFileName}");
+    expect(page).toContain("清空导入内容");
+    expect(page).toContain("只会删除通过导入创建的大纲场景");
     expect(page).toContain("importPreview.rows.length === 0");
     expect(page).toContain("时间线");
     expect(page).toContain("章节落点");

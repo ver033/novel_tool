@@ -701,7 +701,7 @@ export const outlineConfirmBulkImportInputSchema = z
   .object({
     projectId: idSchema,
     importBatchId: idSchema,
-    rows: z.array(outlineBulkImportPreviewRowSchema).min(1).max(1000)
+    rows: z.array(outlineBulkImportPreviewRowSchema).min(1).max(5000)
   })
   .strict();
 export const outlineUndoImportBatchInputSchema = z
@@ -710,6 +710,7 @@ export const outlineUndoImportBatchInputSchema = z
     importBatchId: idSchema
   })
   .strict();
+export const outlineClearImportedEventsInputSchema = outlineGetOverviewInputSchema;
 
 export const exportSelectTxtFilePathInputSchema = z
   .object({
