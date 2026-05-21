@@ -110,6 +110,34 @@ function createReopenedService(input: {
   });
 }
 
+function createChapter(
+  repo: ChapterRepository,
+  input: {
+    readonly projectId: string;
+    readonly title: string;
+    readonly sortOrder: number;
+    readonly plainText: string;
+  }
+): void {
+  const createdAt = "2026-05-18T00:00:00.000Z";
+  repo.create({
+    id: createId("chapter"),
+    projectId: input.projectId,
+    title: input.title,
+    volumeTitle: null,
+    sortOrder: input.sortOrder,
+    contentJson: emptyChapterContent,
+    plainText: input.plainText,
+    wordCount: countWritingUnits(input.plainText),
+    dailyWordCount: 0,
+    dailyWordCountDate: null,
+    targetWordCount: null,
+    status: "draft",
+    createdAt,
+    updatedAt: createdAt
+  });
+}
+
 describe("ExternalBookSyncService", () => {
   it("finds missing chapters without mutating chapters or summary jobs", async () => {
     const { dir, project, chapterRepo, summaryRepo, sourceStore, service } = createFixture();
@@ -234,9 +262,10 @@ describe("ExternalBookSyncService", () => {
     const { dir, project, sourceStore, service, sentMessages } = createFixture();
     const projectBookDir = join(dir, "举足无措");
     mkdirSync(projectBookDir, { recursive: true });
-    const firstBookFilePath = join(projectBookDir, "001.Book");
+    const firstBookFileName = "qvprnlsx.Book";
+    const firstBookFilePath = join(projectBookDir, firstBookFileName);
     writeFileSync(firstBookFilePath, "第一章\n.Book 里的第一章修订正文。", "utf8");
-    writeFileSync(join(projectBookDir, "002.Book"), "第二章\n第二章新增正文。", "utf8");
+    writeFileSync(join(projectBookDir, "xkmbtzha.Book"), "第二章\n第二章新增正文。", "utf8");
     const realBookFolderPath = realpathSync(projectBookDir);
 
     const firstRun = await service.runStartupCatchUpSync(project.id, new Date(2026, 4, 19, 7, 10));
@@ -259,9 +288,9 @@ describe("ExternalBookSyncService", () => {
     expect(sentMessages.join("\n")).toContain(".Book 里的第一章修订正文。");
     expect(sentMessages.join("\n")).toContain("缺失章节：第二章");
     expect(sentMessages.join("\n")).not.toContain(firstBookFilePath);
-    expect(sentMessages.join("\n")).not.toContain("001.Book");
+    expect(sentMessages.join("\n")).not.toContain(firstBookFileName);
 
-    writeFileSync(join(projectBookDir, "003.Book"), "第三章\n第三章新增正文。", "utf8");
+    writeFileSync(join(projectBookDir, "nhpwlqrs.Book"), "第三章\n第三章新增正文。", "utf8");
     const secondRun = await service.runDueAutomaticSync({
       projectId: project.id,
       trigger: "scheduled",
@@ -286,11 +315,12 @@ describe("ExternalBookSyncService", () => {
     chapterRepo.rename(latestProjectChapter.id, "第40章", "2026-05-18T01:00:00.000Z");
     const projectBookDir = join(dir, "举足无措");
     mkdirSync(projectBookDir, { recursive: true });
-    const latestBookFilePath = join(projectBookDir, "040.Book");
+    const latestBookFileName = "zzzzalpha.Book";
+    const latestBookFilePath = join(projectBookDir, latestBookFileName);
     writeFileSync(latestBookFilePath, "第40章\n.Book 里的第40章正文。", "utf8");
-    writeFileSync(join(projectBookDir, "041.Book"), "第41章\n第41章新增正文。", "utf8");
-    writeFileSync(join(projectBookDir, "042.Book"), "第42章\n第42章新增正文。", "utf8");
-    writeFileSync(join(projectBookDir, "043.Book"), "第43章\n第43章新增正文。", "utf8");
+    writeFileSync(join(projectBookDir, "aaaabeta.Book"), "第41章\n第41章新增正文。", "utf8");
+    writeFileSync(join(projectBookDir, "mmmmgamma.Book"), "第42章\n第42章新增正文。", "utf8");
+    writeFileSync(join(projectBookDir, "bbbbdelta.Book"), "第43章\n第43章新增正文。", "utf8");
 
     const run = await service.runStartupCatchUpSync(project.id, new Date(2026, 4, 19, 7, 10));
     const sentBody = sentMessages.join("\n");
@@ -310,7 +340,51 @@ describe("ExternalBookSyncService", () => {
     expect(sentBody).toContain("缺失章节：第42章");
     expect(sentBody).toContain("缺失章节：第43章");
     expect(sentBody).not.toContain(latestBookFilePath);
-    expect(sentBody).not.toContain("040.Book");
+    expect(sentBody).not.toContain(latestBookFileName);
+  });
+
+  it("locally verifies a project at chapter 48 sends external Book chapters 48 through 51", async () => {
+    const { dir, project, chapterRepo, service, sentMessages } = createFixture();
+    const firstChapter = chapterRepo.listByProject(project.id)[0];
+    chapterRepo.rename(firstChapter.id, "第1章", "2026-05-18T01:00:00.000Z");
+    for (let ordinal = 2; ordinal <= 48; ordinal += 1) {
+      createChapter(chapterRepo, {
+        projectId: project.id,
+        title: `第${ordinal}章`,
+        sortOrder: ordinal - 1,
+        plainText: `本地第${ordinal}章正文。`
+      });
+    }
+    const projectBookDir = join(dir, "举足无措");
+    mkdirSync(projectBookDir, { recursive: true });
+    const bookFileNames = ["zzzzlatest.Book", "aaaamissing.Book", "mmmmmissing.Book", "bbbbmissing.Book"];
+    writeFileSync(join(projectBookDir, bookFileNames[0]), "第48章\n.Book 里的第48章正文。", "utf8");
+    writeFileSync(join(projectBookDir, bookFileNames[1]), "第49章\n第49章新增正文。", "utf8");
+    writeFileSync(join(projectBookDir, bookFileNames[2]), "第50章\n第50章新增正文。", "utf8");
+    writeFileSync(join(projectBookDir, bookFileNames[3]), "第51章\n第51章新增正文。", "utf8");
+
+    const run = await service.runStartupCatchUpSync(project.id, new Date(2026, 4, 21, 9, 0));
+    const sentBody = sentMessages.join("\n");
+
+    expect(run).toMatchObject({
+      trigger: "startup",
+      status: "completed",
+      candidateCount: 4,
+      sentChapterCount: 4,
+      sentMissingChapterCount: 3,
+      sentLatestProjectChapter: true
+    });
+    expect(sentBody).toContain("当前项目最新章在 .Book 中的对应内容：第48章");
+    expect(sentBody).toContain(".Book 里的第48章正文。");
+    expect(sentBody).toContain("缺失章节：第49章");
+    expect(sentBody).toContain("第49章新增正文。");
+    expect(sentBody).toContain("缺失章节：第50章");
+    expect(sentBody).toContain("第50章新增正文。");
+    expect(sentBody).toContain("缺失章节：第51章");
+    expect(sentBody).toContain("第51章新增正文。");
+    for (const fileName of bookFileNames) {
+      expect(sentBody).not.toContain(fileName);
+    }
   });
 
   it("falls back to global discovery when first automatic quick discovery finds no source", async () => {

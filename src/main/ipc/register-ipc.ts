@@ -336,7 +336,12 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
           return aiTaskService.createChatSession(input);
         },
         async sendChatMessage(input) {
-          await aiTaskService.sendChatMessageStream(input);
+          await aiTaskService.sendChatMessageStream(input, {}, {
+            allowActions: false,
+            allowTools: false,
+            allowAutoChapterContext: false,
+            allowInlineWritingOperation: false
+          });
         }
       }
     });

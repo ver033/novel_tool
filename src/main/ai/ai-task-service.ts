@@ -191,6 +191,13 @@ export type AiChatMessageResult = {
   readonly actions?: readonly AiChatAction[];
 };
 
+export type AiChatStreamExecutionOptions = {
+  readonly allowActions?: boolean;
+  readonly allowTools?: boolean;
+  readonly allowAutoChapterContext?: boolean;
+  readonly allowInlineWritingOperation?: boolean;
+};
+
 export type AiChatGenerationInput = AiSendChatMessageStreamInput & {
   readonly history: readonly AiChatMessageRecord[];
   readonly agentContext?: ChatAgentContext;
@@ -642,7 +649,7 @@ export class AiTaskService {
     memory: Pick<AiChatSessionRecord, "compactedMemorySummary" | "compactedMemoryThroughMessageId">,
     signal?: AbortSignal,
     streamHandlers?: AiChatStreamHandlers,
-    options: { readonly allowActions?: boolean } = {}
+    options: AiChatStreamExecutionOptions = {}
   ): Promise<AiChatAgentGenerationInput | null> {
     if (!this.chatGenerator?.sendAgentMessageStream || !this.resolveChapterRepo) {
       return null;
@@ -705,12 +712,15 @@ export class AiTaskService {
         wordCount: chapter.wordCount,
         current: chapter.id === input.chapterId
       })),
-      tools: MOSHU_CHAT_AGENT_TOOLS.filter((tool) => {
-        if (tool.function.name === "add_to_scratchpad") {
-          return allowedActions.includes("add_to_scratchpad");
-        }
-        return true;
-      }),
+      tools:
+        options.allowTools === false
+          ? []
+          : MOSHU_CHAT_AGENT_TOOLS.filter((tool) => {
+              if (tool.function.name === "add_to_scratchpad") {
+                return allowedActions.includes("add_to_scratchpad");
+              }
+              return true;
+            }),
       executeTool: (call) =>
         executeChatAgentToolWithAction({
           name: call.name,
@@ -1194,7 +1204,7 @@ export class AiTaskService {
     history: readonly AiChatMessageRecord[],
     abortController: AbortController,
     handlers: AiChatStreamHandlers,
-    options: { readonly allowActions?: boolean } = {}
+    options: AiChatStreamExecutionOptions = {}
   ): Promise<{
     readonly content: string;
     readonly assistantAction: AiChatAction | null;
@@ -1225,7 +1235,7 @@ export class AiTaskService {
         handlers.onContext?.(contextUsage);
       }
     } satisfies AiChatStreamHandlers;
-    const inlineWritingOperation = inferInlineWritingOperationRequest(input.message);
+    const inlineWritingOperation = options.allowInlineWritingOperation === false ? null : inferInlineWritingOperationRequest(input.message);
     if (inlineWritingOperation) {
       const generated = await this.runChatWritingOperation({
         projectId: input.projectId,
@@ -1251,16 +1261,19 @@ export class AiTaskService {
       memoryCompactedThisRun: memory.memoryCompacted
     };
     let legacyAgenticGeneration: Awaited<ReturnType<AiTaskService["buildAgenticChatGenerationInput"]>> = null;
-    try {
-      legacyAgenticGeneration = await this.buildAgenticChatGenerationInput(input, history, memory, abortController.signal, { allowPlanner: false });
-    } catch (reason) {
-      const message = reason instanceof Error ? reason.message : String(reason);
-      if (!message.includes("当前没有打开章节") && !message.includes("找不到第")) {
-        throw reason;
+    if (options.allowAutoChapterContext !== false) {
+      try {
+        legacyAgenticGeneration = await this.buildAgenticChatGenerationInput(input, history, memory, abortController.signal, { allowPlanner: false });
+      } catch (reason) {
+        const message = reason instanceof Error ? reason.message : String(reason);
+        if (!message.includes("当前没有打开章节") && !message.includes("找不到第")) {
+          throw reason;
+        }
       }
     }
     const toolCallAgentBaseInput = await this.buildToolCallAgentGenerationInput(input, history, memory, abortController.signal, streamHandlers, {
-      allowActions: options.allowActions
+      allowActions: options.allowActions,
+      allowTools: options.allowTools
     });
     if (!toolCallAgentBaseInput) {
       throw new Error("AI 对话工具调用上下文服务未初始化。");
@@ -1308,7 +1321,11 @@ export class AiTaskService {
     };
   }
 
-  async sendChatMessageStream(input: AiSendChatMessageStreamInput, handlers: AiChatStreamHandlers = {}): Promise<AiChatStreamResult> {
+  async sendChatMessageStream(
+    input: AiSendChatMessageStreamInput,
+    handlers: AiChatStreamHandlers = {},
+    options: AiChatStreamExecutionOptions = {}
+  ): Promise<AiChatStreamResult> {
     const chatRepo = this.getAiChatRepo(input.projectId);
     const history = chatRepo.listMessages({
       projectId: input.projectId,
@@ -1346,7 +1363,7 @@ export class AiTaskService {
     const abortController = this.registerStream(input.requestId);
 
     try {
-      const generated = await this.generateChatAnswerStream(input, chatRepo, history, abortController, handlers);
+      const generated = await this.generateChatAnswerStream(input, chatRepo, history, abortController, handlers, options);
       const assistantMessage = chatRepo.createMessage({
         projectId: input.projectId,
         sessionId: input.sessionId,

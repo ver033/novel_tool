@@ -4,9 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import type { ChapterRepository } from "../db/repositories/chapter-repo";
 import type { ProjectRepository } from "../db/repositories/project-repo";
-import { detectTxtChapters } from "../import/chapter-detector";
+import { detectTxtChapters, normalizeTxtContent } from "../import/chapter-detector";
 import { readTextFile } from "../import/txt-reader";
 import { createId } from "../shared/ids";
+import { countWritingUnits } from "../shared/text";
 import type { ImportPreviewChapter } from "../shared/types";
 import {
   compareExternalBookChapters,
@@ -23,6 +24,7 @@ import {
 } from "./book-automation-store";
 import { ExternalBookSourceStore, type ExternalBookSyncSource } from "./book-source-store";
 import { isBookFilePath, isPathInsideProjectBookFolder } from "./book-project-folder";
+import { parseChapterOrdinal } from "./book-chapter-ordinal";
 import { scanBookFiles, type BookFileScanProgress, type BookFileScanResult } from "./filesystem-book-scanner";
 import { searchWindowsIndexForBookFiles } from "./windows-index-search";
 
@@ -328,6 +330,64 @@ function compareMissingChapters(a: ExternalBookMissingChapter, b: ExternalBookMi
     return 1;
   }
   return a.title.localeCompare(b.title, "zh-CN") || a.order - b.order;
+}
+
+function mergeRepeatedOrdinalBookChapters(chapters: readonly ImportPreviewChapter[]): ImportPreviewChapter[] {
+  const merged: ImportPreviewChapter[] = [];
+  for (const chapter of chapters) {
+    const previous = merged.at(-1);
+    const previousOrdinal = previous ? parseChapterOrdinal(previous.title) : null;
+    const chapterOrdinal = parseChapterOrdinal(chapter.title);
+    if (previous && previousOrdinal !== null && previousOrdinal === chapterOrdinal) {
+      const text = normalizeTxtContent([previous.text, chapter.title, chapter.text].filter((value) => value.trim()).join("\n"));
+      merged[merged.length - 1] = {
+        ...previous,
+        text,
+        wordCount: countWritingUnits(text),
+        lineEnd: chapter.lineEnd
+      };
+      continue;
+    }
+    merged.push(chapter);
+  }
+  return merged.map((chapter, order) => ({
+    ...chapter,
+    order,
+    wordCount: countWritingUnits(chapter.text)
+  }));
+}
+
+function recoverSingleChapterBookText(content: string, chapters: readonly ImportPreviewChapter[]): ImportPreviewChapter[] {
+  if (chapters.length !== 1 || chapters[0]?.text.trim()) {
+    return [...chapters];
+  }
+  const normalized = normalizeTxtContent(content);
+  const lines = normalized.split("\n");
+  if (lines.length <= 1) {
+    return [...chapters];
+  }
+  const title = lines[0]?.trim() ?? "";
+  const chapter = chapters[0];
+  const titleOrdinal = parseChapterOrdinal(title);
+  const chapterOrdinal = parseChapterOrdinal(chapter.title);
+  if (titleOrdinal === null || chapterOrdinal !== titleOrdinal) {
+    return [...chapters];
+  }
+  const text = normalizeTxtContent(lines.slice(1).join("\n"));
+  return [
+    {
+      ...chapter,
+      title,
+      text,
+      wordCount: countWritingUnits(text),
+      lineEnd: lines.length
+    }
+  ];
+}
+
+function detectExternalBookChapters(content: string): ImportPreviewChapter[] {
+  const merged = mergeRepeatedOrdinalBookChapters(detectTxtChapters(content));
+  return recoverSingleChapterBookText(content, merged);
 }
 
 export class ExternalBookSyncService {
@@ -778,7 +838,7 @@ export class ExternalBookSyncService {
       return null;
     }
     const read = readTextFile(realFilePath, { label: ".Book 文件", maxBytes: MAX_BOOK_BYTES });
-    const chapters = detectTxtChapters(read.text).filter((chapter: ImportPreviewChapter) => chapter.title.trim() || chapter.text.trim());
+    const chapters = detectExternalBookChapters(read.text).filter((chapter: ImportPreviewChapter) => chapter.title.trim() || chapter.text.trim());
     if (chapters.length === 0) {
       return null;
     }
