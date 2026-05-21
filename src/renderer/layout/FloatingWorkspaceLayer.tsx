@@ -22,6 +22,7 @@ type FloatingWorkspaceLayerProps = {
   readonly onContentSaved: (content: ChapterContent) => void;
   readonly onMinimizePanel: (panelId: string) => void;
   readonly onMovePanel: (panelId: string, geometry: Pick<FloatingPanelGeometry, "x" | "y">) => void;
+  readonly onOpenOutline: () => void;
   readonly onOpenSettings: (category?: SettingsCategory) => void;
   readonly onRaisePanel: (panelId: string) => void;
   readonly onResetPanel: (panelId: string) => void;
@@ -63,6 +64,7 @@ export function FloatingWorkspaceLayer({
   onContentSaved,
   onMinimizePanel,
   onMovePanel,
+  onOpenOutline,
   onOpenSettings,
   onRaisePanel,
   onResetPanel,
@@ -106,6 +108,7 @@ export function FloatingWorkspaceLayer({
               flushPendingSave={flushPendingSave}
               onAuxiliaryChanged={onAuxiliaryChanged}
               onContentSaved={onContentSaved}
+              onOpenOutline={onOpenOutline}
               onOpenSettings={onOpenSettings}
               onScratchNoteSaved={onScratchNoteSaved}
               outlineTab={panel.outlineTab ?? "chapter"}

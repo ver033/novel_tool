@@ -24,6 +24,7 @@ export type UtilityPanelContentProps = {
   readonly flushPendingSave: () => Promise<SavedChapterVersion | null>;
   readonly onAuxiliaryChanged: () => void;
   readonly onContentSaved: (content: ChapterContent) => void;
+  readonly onOpenOutline: () => void;
   readonly onOpenSettings: (category?: SettingsCategory) => void;
   readonly onScratchNoteSaved: (panelId: string, noteId: string) => void;
   readonly outlineTab: OutlineFloatingTab;
@@ -46,6 +47,7 @@ export function UtilityPanelContent({
   flushPendingSave,
   onAuxiliaryChanged,
   onContentSaved,
+  onOpenOutline,
   onOpenSettings,
   onScratchNoteSaved,
   outlineTab,
@@ -95,6 +97,7 @@ export function UtilityPanelContent({
         currentChapterTitle={currentChapterTitle}
         initialTab={outlineTab}
         onAuxiliaryChanged={onAuxiliaryChanged}
+        onOpenOutline={onOpenOutline}
         projectId={currentProjectId}
       />
     );

@@ -591,6 +591,7 @@ export function WritingPage({
     () => flushBeforeNavigation(onOpenRelationshipGraph),
     [flushBeforeNavigation, onOpenRelationshipGraph]
   );
+  const handleOpenOutlinePage = useCallback(() => flushBeforeNavigation(onOpenOutline), [flushBeforeNavigation, onOpenOutline]);
   const handleWelcome = useCallback(() => {
     setConfirmWelcomeOpen(true);
   }, []);
@@ -1039,6 +1040,7 @@ export function WritingPage({
                 onContentSaved={editorStore.markContentSaved}
                 onMinimizePanel={onMinimizeFloatingPanel}
                 onMovePanel={onMoveFloatingPanel}
+                onOpenOutline={handleOpenOutlinePage}
                 onOpenSettings={handleSettings}
                 onRaisePanel={onRaiseFloatingPanel}
                 onResetPanel={onResetFloatingPanel}
@@ -1072,7 +1074,7 @@ export function WritingPage({
                     closeEditorContextMenu();
                   }}
                   onOpenBookOutline={() => {
-                    onOpenFloatingPanel("outline", null, null, "book");
+                    onOpenFloatingPanel("outline", activeChapterId, null, "book");
                     closeEditorContextMenu();
                   }}
                   onOpenOutline={() => {

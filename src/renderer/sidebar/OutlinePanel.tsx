@@ -1,16 +1,32 @@
 import { useEffect, useMemo, useState } from "react";
-import type { OutlineChapterNoteRecord, OutlineEventRecord, OutlineOverview } from "../../main/shared/types";
+import type { OutlineChapterNoteRecord, OutlineDaySegment, OutlineEventRecord, OutlineOverview } from "../../main/shared/types";
 import { Button } from "../components/Button";
 import { getNovelToolApi } from "../state/app-store";
 
 type OutlinePanelTab = "chapter" | "book";
+type OutlineBookFilter = "all" | "current" | "unassigned";
+
+type OutlineEventGroup = {
+  readonly key: string;
+  readonly title: string;
+  readonly subtitle: string;
+  readonly events: readonly OutlineEventRecord[];
+};
 
 type OutlinePanelProps = {
   readonly chapterId: string | null;
   readonly currentChapterTitle: string | null;
   readonly initialTab?: OutlinePanelTab;
   readonly onAuxiliaryChanged?: () => void;
+  readonly onOpenOutline?: () => void;
   readonly projectId: string | null;
+};
+
+const daySegmentLabels: Record<OutlineDaySegment, string> = {
+  day: "白天",
+  night: "晚上",
+  custom: "自定义",
+  unknown: "未定"
 };
 
 export function outlineStorageKey(projectId: string, chapterId: string): string {
@@ -32,8 +48,15 @@ function chapterLabel(overview: OutlineOverview | null, event: OutlineEventRecor
   return overview?.chapters.find((chapter) => chapter.id === event.chapterId)?.title ?? "章节已删除";
 }
 
+function daySegmentLabel(event: OutlineEventRecord): string {
+  if (event.daySegment === "custom") {
+    return event.customDaySegment || "自定义";
+  }
+  return daySegmentLabels[event.daySegment];
+}
+
 function timeLabel(event: OutlineEventRecord): string {
-  return [event.storyTimeLabel || event.storyDate || "未定时间", event.weekdayLabel].filter(Boolean).join(" · ");
+  return [event.storyTimeLabel || event.storyDate || "未定时间", event.weekdayLabel, daySegmentLabel(event)].filter(Boolean).join(" · ");
 }
 
 function threadLabel(overview: OutlineOverview | null, event: OutlineEventRecord): string {
@@ -46,7 +69,92 @@ function threadLabel(overview: OutlineOverview | null, event: OutlineEventRecord
     .join("、");
 }
 
-export function OutlinePanel({ chapterId, currentChapterTitle, initialTab = "chapter", onAuxiliaryChanged, projectId }: OutlinePanelProps) {
+function eventSummaryText(event: OutlineEventRecord): string {
+  return event.summary || event.goal || event.conflict || event.outcome || event.notes || "未填写场景摘要。";
+}
+
+function eventMetaLabel(overview: OutlineOverview | null, event: OutlineEventRecord): string {
+  return [
+    chapterLabel(overview, event),
+    threadLabel(overview, event),
+    event.location,
+    event.povCharacter ? `视角：${event.povCharacter}` : ""
+  ].filter(Boolean).join(" · ");
+}
+
+function eventSearchText(overview: OutlineOverview | null, event: OutlineEventRecord): string {
+  return [
+    event.title,
+    event.summary,
+    event.goal,
+    event.conflict,
+    event.outcome,
+    event.foreshadowing,
+    event.notes,
+    event.location,
+    event.povCharacter,
+    event.characters.join("、"),
+    chapterLabel(overview, event),
+    threadLabel(overview, event),
+    timeLabel(event)
+  ].join("\n").toLowerCase();
+}
+
+export function groupBookEvents(events: readonly OutlineEventRecord[]): OutlineEventGroup[] {
+  const groups = new Map<string, OutlineEventRecord[]>();
+  for (const event of events) {
+    const title = timeLabel(event);
+    const groupEvents = groups.get(title) ?? [];
+    groupEvents.push(event);
+    groups.set(title, groupEvents);
+  }
+  return [...groups.entries()].map(([title, items]) => ({
+    key: title,
+    title,
+    subtitle: `${items.length} 个场景`,
+    events: items
+  }));
+}
+
+function chapterEventGroups(overview: OutlineOverview | null, chapterId: string | null): OutlineEventGroup[] {
+  if (!overview || !chapterId) {
+    return [];
+  }
+  const chapterIndex = overview.chapters.findIndex((chapter) => chapter.id === chapterId);
+  if (chapterIndex < 0) {
+    return [];
+  }
+  const groupForChapter = (key: string, title: string, targetChapterId: string | undefined): OutlineEventGroup | null => {
+    if (!targetChapterId) {
+      return null;
+    }
+    const targetChapter = overview.chapters.find((chapter) => chapter.id === targetChapterId);
+    const events = sortOutlineEvents(overview.events.filter((event) => event.chapterId === targetChapterId));
+    if (events.length === 0) {
+      return null;
+    }
+    return {
+      key,
+      title,
+      subtitle: targetChapter?.title ?? "章节已删除",
+      events
+    };
+  };
+  return [
+    groupForChapter("current", "当前章节", chapterId),
+    groupForChapter("previous", "上一章", overview.chapters[chapterIndex - 1]?.id),
+    groupForChapter("next", "下一章", overview.chapters[chapterIndex + 1]?.id)
+  ].filter((group): group is OutlineEventGroup => Boolean(group));
+}
+
+export function OutlinePanel({
+  chapterId,
+  currentChapterTitle,
+  initialTab = "chapter",
+  onAuxiliaryChanged,
+  onOpenOutline,
+  projectId
+}: OutlinePanelProps) {
   const api = useMemo(getNovelToolApi, []);
   const storageKey = useMemo(() => {
     if (!projectId || !chapterId) {
@@ -60,10 +168,18 @@ export function OutlinePanel({ chapterId, currentChapterTitle, initialTab = "cha
   const [legacyContent, setLegacyContent] = useState("");
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(false);
+  const [bookQuery, setBookQuery] = useState("");
+  const [bookFilter, setBookFilter] = useState<OutlineBookFilter>("all");
 
   useEffect(() => {
     setActiveTab(initialTab);
   }, [initialTab]);
+
+  useEffect(() => {
+    if (!chapterId && bookFilter === "current") {
+      setBookFilter("all");
+    }
+  }, [bookFilter, chapterId]);
 
   useEffect(() => {
     if (!projectId) {
@@ -108,16 +224,7 @@ export function OutlinePanel({ chapterId, currentChapterTitle, initialTab = "cha
     };
   }, [api, chapterId, projectId, storageKey]);
 
-  const chapterEvents = useMemo(() => {
-    if (!overview || !chapterId) {
-      return [];
-    }
-    const chapterIndex = overview.chapters.findIndex((chapter) => chapter.id === chapterId);
-    const nearbyChapterIds = new Set(
-      [overview.chapters[chapterIndex - 1]?.id, chapterId, overview.chapters[chapterIndex + 1]?.id].filter((id): id is string => Boolean(id))
-    );
-    return sortOutlineEvents(overview.events.filter((event) => event.chapterId && nearbyChapterIds.has(event.chapterId)));
-  }, [chapterId, overview]);
+  const chapterGroups = useMemo(() => chapterEventGroups(overview, chapterId), [chapterId, overview]);
 
   const bookEvents = useMemo(() => {
     if (!overview) {
@@ -131,6 +238,20 @@ export function OutlinePanel({ chapterId, currentChapterTitle, initialTab = "cha
 
   const unassignedCount = bookEvents.filter((event) => event.chapterId === null).length;
   const assignedCount = bookEvents.length - unassignedCount;
+  const currentChapterEventCount = chapterId ? bookEvents.filter((event) => event.chapterId === chapterId).length : 0;
+  const filteredBookEvents = useMemo(() => {
+    const query = bookQuery.trim().toLowerCase();
+    return bookEvents.filter((event) => {
+      if (bookFilter === "current" && event.chapterId !== chapterId) {
+        return false;
+      }
+      if (bookFilter === "unassigned" && event.chapterId !== null) {
+        return false;
+      }
+      return !query || eventSearchText(overview, event).includes(query);
+    });
+  }, [bookEvents, bookFilter, bookQuery, chapterId, overview]);
+  const groupedBookEvents = useMemo(() => groupBookEvents(filteredBookEvents), [filteredBookEvents]);
 
   async function saveOutline(): Promise<void> {
     if (!projectId || !chapterId) {
@@ -170,15 +291,22 @@ export function OutlinePanel({ chapterId, currentChapterTitle, initialTab = "cha
       <div className="outline-head aux-editor-head">
         <div>
           <h2 className="task-title">{activeTab === "book" ? "全书大纲速览" : currentChapterTitle ? `${currentChapterTitle} · 细纲` : "本章细纲"}</h2>
-          <p className="muted">{activeTab === "book" ? "查看作者规划表里的全局时间线、情节线和未安排章节。" : "绑定当前章节，用于写作参考，不会进入正文导出。"}</p>
+          <p className="muted">{activeTab === "book" ? "检索全局计划，确认情节线、时间和未落章场景。" : "写作时查看本章计划、前后章事件和本章备注。"}</p>
         </div>
-        <div className="outline-panel-tabs" role="tablist" aria-label="大纲类型">
-          <button className={activeTab === "chapter" ? "active" : ""} onClick={() => setActiveTab("chapter")} role="tab" type="button">
-            本章细纲
-          </button>
-          <button className={activeTab === "book" ? "active" : ""} onClick={() => setActiveTab("book")} role="tab" type="button">
-            全书大纲
-          </button>
+        <div className="outline-head-actions">
+          <div className="outline-panel-tabs" role="tablist" aria-label="大纲类型">
+            <button className={activeTab === "chapter" ? "active" : ""} onClick={() => setActiveTab("chapter")} role="tab" type="button">
+              本章细纲
+            </button>
+            <button className={activeTab === "book" ? "active" : ""} onClick={() => setActiveTab("book")} role="tab" type="button">
+              全书大纲
+            </button>
+          </div>
+          {onOpenOutline ? (
+            <button className="outline-panel-open-button" onClick={onOpenOutline} type="button">
+              打开大纲页
+            </button>
+          ) : null}
         </div>
       </div>
 
@@ -187,24 +315,64 @@ export function OutlinePanel({ chapterId, currentChapterTitle, initialTab = "cha
           <div className="outline-panel-stat-row">
             <span><b>{bookEvents.length}</b> 场景</span>
             <span><b>{unassignedCount}</b> 未安排章节</span>
-            <span><b>{assignedCount}</b> 已落章</span>
+            <span><b>{chapterId ? currentChapterEventCount : assignedCount}</b> {chapterId ? "本章相关" : "已落章"}</span>
+          </div>
+          <div className="outline-panel-book-toolbar">
+            <input
+              aria-label="搜索全书大纲"
+              onChange={(event) => setBookQuery(event.target.value)}
+              placeholder="搜索场景、人物、地点、情节线..."
+              type="search"
+              value={bookQuery}
+            />
+            <div className="outline-panel-filter-row" role="group" aria-label="筛选全书大纲">
+              <button className={`outline-filter-pill${bookFilter === "all" ? " active" : ""}`} onClick={() => setBookFilter("all")} type="button">
+                全部
+              </button>
+              <button
+                className={`outline-filter-pill${bookFilter === "current" ? " active" : ""}`}
+                disabled={!chapterId}
+                onClick={() => setBookFilter("current")}
+                type="button"
+              >
+                当前章节
+              </button>
+              <button className={`outline-filter-pill${bookFilter === "unassigned" ? " active" : ""}`} onClick={() => setBookFilter("unassigned")} type="button">
+                未落章
+              </button>
+            </div>
           </div>
           {bookEvents.length === 0 ? (
             <div className="outline-panel-empty">
               <strong>还没有全书大纲</strong>
               <span>可以在大纲页导入 Excel，或先录入日期、日夜、情节线和场景摘要。</span>
             </div>
+          ) : groupedBookEvents.length === 0 ? (
+            <div className="outline-panel-empty">
+              <strong>没有匹配的大纲事件</strong>
+              <span>换一个关键词，或切回全部范围继续浏览。</span>
+            </div>
           ) : (
-            <div className="outline-panel-events outline-panel-book-events">
-              {bookEvents.slice(0, 24).map((event) => (
-                <article key={event.id}>
-                  <div>
-                    <strong>{event.title}</strong>
-                    <span>{chapterLabel(overview, event)}</span>
+            <div className="outline-panel-events outline-panel-grouped-events">
+              {groupedBookEvents.map((group) => (
+                <section className="outline-panel-event-group" key={group.key}>
+                  <header>
+                    <strong>{group.title}</strong>
+                    <span>{group.subtitle}</span>
+                  </header>
+                  <div className="outline-panel-book-events">
+                    {group.events.map((event) => (
+                      <article key={event.id}>
+                        <div>
+                          <strong>{event.title}</strong>
+                          <span>{chapterLabel(overview, event)}</span>
+                        </div>
+                        <p>{eventSummaryText(event)}</p>
+                        <small>{eventMetaLabel(overview, event)}</small>
+                      </article>
+                    ))}
                   </div>
-                  <p>{event.summary}</p>
-                  <small>{[timeLabel(event), threadLabel(overview, event)].filter(Boolean).join(" · ")}</small>
-                </article>
+                </section>
               ))}
             </div>
           )}
@@ -218,17 +386,36 @@ export function OutlinePanel({ chapterId, currentChapterTitle, initialTab = "cha
               <button onClick={() => { void importLegacyOutline(); }} type="button">导入旧细纲</button>
             </div>
           ) : null}
-          {chapterEvents.length > 0 ? (
-            <div className="outline-panel-events">
+          {chapterGroups.length > 0 ? (
+            <div className="outline-panel-events outline-panel-chapter-events">
               <span className="muted">本章前后大纲事件</span>
-              {chapterEvents.map((event) => (
-                <article key={event.id}>
-                  <strong>{event.title}</strong>
-                  <p>{event.summary}</p>
-                </article>
+              {chapterGroups.map((group) => (
+                <section className="outline-panel-event-group" key={group.key}>
+                  <header>
+                    <strong>{group.title}</strong>
+                    <span>{group.subtitle}</span>
+                  </header>
+                  <div className="outline-panel-book-events">
+                    {group.events.map((event) => (
+                      <article key={event.id}>
+                        <div>
+                          <strong>{event.title}</strong>
+                          <span>{timeLabel(event)}</span>
+                        </div>
+                        <p>{eventSummaryText(event)}</p>
+                        <small>{eventMetaLabel(overview, event)}</small>
+                      </article>
+                    ))}
+                  </div>
+                </section>
               ))}
             </div>
-          ) : null}
+          ) : (
+            <div className="outline-panel-empty outline-panel-compact-empty">
+              <strong>当前章节附近还没有大纲事件</strong>
+              <span>可以先写本章细纲，或打开大纲页补充全书计划。</span>
+            </div>
+          )}
           <textarea
             className="outline-editor ruled-aux-editor"
             disabled={!projectId || !chapterId || loading}
