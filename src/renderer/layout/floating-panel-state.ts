@@ -47,10 +47,11 @@ export function createFloatingPanelId(
   return `${kind}:${kind === "chat" ? "global" : chapterId ?? "current"}`;
 }
 
-function defaultPanelSize(kind: FloatingPanelKind): Pick<FloatingPanelGeometry, "width" | "height"> {
+function defaultPanelSize(kind: FloatingPanelKind, outlineTab: OutlineFloatingTab = "chapter"): Pick<FloatingPanelGeometry, "width" | "height"> {
   if (kind === "chat") return { width: 460, height: 620 };
   if (kind === "task") return { width: 540, height: 620 };
-  if (kind === "outline") return { width: 430, height: 520 };
+  if (kind === "outline" && outlineTab === "book") return { width: 620, height: 680 };
+  if (kind === "outline") return { width: 460, height: 560 };
   return { width: 460, height: 560 };
 }
 
@@ -74,9 +75,10 @@ export function clampFloatingPanelGeometry(
 export function getDefaultFloatingPanelGeometry(
   kind: FloatingPanelKind,
   viewport: { readonly width: number; readonly height: number },
-  offset = 0
+  offset = 0,
+  outlineTab: OutlineFloatingTab = "chapter"
 ): FloatingPanelGeometry {
-  const size = defaultPanelSize(kind);
+  const size = defaultPanelSize(kind, outlineTab);
   const width = Math.min(size.width, Math.max(minPanelWidth, viewport.width - panelMargin * 2));
   const height = Math.min(size.height, Math.max(minPanelHeight, viewport.height - panelMargin * 2));
   const x = Math.max(panelMargin, viewport.width - width - 34 - offset);
@@ -101,10 +103,12 @@ export function openOrRaiseFloatingPanel(
   const maxZIndex = panels.reduce((max, panel) => Math.max(max, panel.zIndex), 100);
   const existing = panels.find((panel) => panel.id === id);
   if (existing) {
-    return panels.map((panel) => (panel.id === id ? { ...panel, minimized: false, outlineTab: panelOutlineTab, zIndex: maxZIndex + 1 } : panel));
+    return panels.map((panel) =>
+      panel.id === id ? { ...panel, chapterId: panelChapterId, minimized: false, outlineTab: panelOutlineTab, zIndex: maxZIndex + 1 } : panel
+    );
   }
 
-  const geometry = getDefaultFloatingPanelGeometry(kind, viewport, panels.length * 26);
+  const geometry = getDefaultFloatingPanelGeometry(kind, viewport, panels.length * 26, outlineTab);
   return [
     ...panels,
     {

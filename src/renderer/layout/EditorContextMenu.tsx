@@ -79,14 +79,25 @@ export function EditorContextMenu({
     <div className="editor-context-menu" ref={menuRef} role="menu" style={{ left: position.left, top: position.top }}>
       {mode === "selection" ? (
         <>
+          <span className="editor-context-menu-section">选中文本</span>
           <button onClick={onPolishSelection} role="menuitem" type="button">润色选中内容</button>
           <button onClick={onExpandSelection} role="menuitem" type="button">扩写选中内容</button>
           <button onClick={onProofreadSelection} role="menuitem" type="button">校对选中内容</button>
           <button onClick={onSelectionToScratchpad} role="menuitem" type="button">加入本章草稿纸</button>
+          <span className="context-menu-separator" />
         </>
       ) : null}
-      <button onClick={onOpenBookOutline} role="menuitem" type="button">查看全书大纲</button>
-      <button onClick={onOpenOutline} role="menuitem" type="button">打开当前章节细纲</button>
+      <span className="editor-context-menu-section">大纲</span>
+      <button className="menu-rich-item" onClick={onOpenOutline} role="menuitem" type="button">
+        <span>查看本章上下文</span>
+        <small>当前章节细纲、前后章节事件</small>
+      </button>
+      <button className="menu-rich-item" onClick={onOpenBookOutline} role="menuitem" type="button">
+        <span>浏览全书大纲</span>
+        <small>按时间、情节线和章节查找场景</small>
+      </button>
+      <span className="context-menu-separator" />
+      <span className="editor-context-menu-section">辅助</span>
       <button onClick={onOpenScratchpad} role="menuitem" type="button">创建当前章节草稿纸</button>
       <button onClick={onOpenChat} role="menuitem" type="button">打开 AI 对话</button>
       {canOpenAllAssist ? (

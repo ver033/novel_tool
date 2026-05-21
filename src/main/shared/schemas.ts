@@ -567,7 +567,7 @@ export const importConfirmTxtInputSchema = z
 
 export const outlineDaySegmentSchema = z.enum(["day", "night", "custom", "unknown"]);
 export const outlineEventStatusSchema = z.enum(["planned", "drafting", "written", "needs_revision", "done"]);
-export const outlineViewModeSchema = z.enum(["chapter", "timeline", "plotline"]);
+export const outlineViewModeSchema = z.enum(["chapter", "timeline", "plotline", "sheet"]);
 
 const outlineNullableIdSchema = idSchema.nullable().optional();
 const outlineText80Schema = z.string().trim().max(80);

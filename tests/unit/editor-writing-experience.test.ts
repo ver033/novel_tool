@@ -227,10 +227,13 @@ describe("editor writing experience optimizations", () => {
     expect(floatingLayer).toContain("UtilityPanelContent");
     expect(floatingFrame).toContain("floating-panel-resize-handle");
     expect(floatingFrame).toContain("setPointerCapture");
-    expect(editorContextMenu).toContain("查看全书大纲");
-    expect(editorContextMenu).toContain("打开当前章节细纲");
+    expect(editorContextMenu).toContain("editor-context-menu-section");
+    expect(editorContextMenu).toContain("menu-rich-item");
+    expect(editorContextMenu).toContain("大纲");
+    expect(editorContextMenu).toContain("浏览全书大纲");
+    expect(editorContextMenu).toContain("查看本章上下文");
     expect(editorContextMenu).toContain("onOpenBookOutline");
-    expect(writingPage).toContain('onOpenFloatingPanel("outline", null, null, "book")');
+    expect(writingPage).toContain('onOpenFloatingPanel("outline", activeChapterId, null, "book")');
     expect(writingPage).toContain('onOpenFloatingPanel("outline", activeChapterId, null, "chapter")');
     expect(editorContextMenu).toContain("创建当前章节草稿纸");
     expect(editorContextMenu).not.toContain("打开当前章节草稿纸");
@@ -242,6 +245,8 @@ describe("editor writing experience optimizations", () => {
     expect(editorContextMenu).toContain("复制");
     expect(css).toContain(".floating-workspace-layer");
     expect(css).toContain(".editor-context-menu");
+    expect(css).toContain(".editor-context-menu-section");
+    expect(css).toContain(".menu-rich-item");
   });
 
   it("keeps selection and context menus visible at full-document and bottom-edge selections", () => {
@@ -312,6 +317,35 @@ describe("editor writing experience optimizations", () => {
     expect(css).toContain(".aux-editor-page");
     expect(css).toContain(".ruled-aux-editor");
     expect(css).toContain("background-size: 100% var(--aux-line-step");
+  });
+
+  it("makes the floating outline browser readable from the editor context menu", () => {
+    const viewport = { height: 840, width: 1280 };
+    const outlinePanel = readSource("src/renderer/sidebar/OutlinePanel.tsx");
+    const floatingLayer = readSource("src/renderer/layout/FloatingWorkspaceLayer.tsx");
+    const utilityPanel = readSource("src/renderer/layout/UtilityPanelContent.tsx");
+    const css = readSource("src/renderer/styles/globals.css");
+    const bookOutline = openOrRaiseFloatingPanel([], "outline", null, viewport, null, "book");
+    const chapterOutline = openOrRaiseFloatingPanel([], "outline", "chapter_1", viewport, null, "chapter");
+    const raisedBookOutline = openOrRaiseFloatingPanel(bookOutline, "outline", "chapter_7", viewport, null, "book");
+
+    expect(bookOutline[0]).toMatchObject({ width: 620, height: 680, outlineTab: "book" });
+    expect(raisedBookOutline[0]).toMatchObject({ chapterId: "chapter_7", outlineTab: "book" });
+    expect(chapterOutline[0]).toMatchObject({ width: 460, height: 560, outlineTab: "chapter" });
+    expect(floatingLayer).toContain("onOpenOutline");
+    expect(utilityPanel).toContain("onOpenOutline={onOpenOutline}");
+    expect(outlinePanel).toContain("bookQuery");
+    expect(outlinePanel).toContain("bookFilter");
+    expect(outlinePanel).toContain("groupBookEvents");
+    expect(outlinePanel).toContain("filteredBookEvents");
+    expect(outlinePanel).toContain("chapterEventGroups");
+    expect(outlinePanel).toContain("当前章节");
+    expect(outlinePanel).toContain("上一章");
+    expect(outlinePanel).toContain("下一章");
+    expect(outlinePanel).toContain("打开大纲页");
+    expect(css).toContain(".outline-panel-book-toolbar");
+    expect(css).toContain(".outline-filter-pill");
+    expect(css).toContain(".outline-panel-event-group");
   });
 
   it("creates a fresh floating scratchpad draft each time until a note exists", () => {
