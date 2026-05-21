@@ -26,6 +26,7 @@ import {
 type CharacterRelationshipGraphPageProps = {
   readonly currentProject: ProjectRecord | null;
   readonly onOpenChapter: (chapterId: string) => void;
+  readonly onOpenOutline: () => void;
   readonly onOpenSettings: () => void;
   readonly onOpenWriting: () => void;
   readonly onOpenWritingGoals: () => void;
@@ -44,6 +45,7 @@ const defaultFilters: RelationshipGraphFilterState = {
 export function CharacterRelationshipGraphPage({
   currentProject,
   onOpenChapter,
+  onOpenOutline,
   onOpenSettings,
   onOpenWriting,
   onOpenWritingGoals,
@@ -188,6 +190,10 @@ export function CharacterRelationshipGraphPage({
     }
     if (module === "goals") {
       onOpenWritingGoals();
+      return;
+    }
+    if (module === "outline") {
+      onOpenOutline();
     }
   }
 

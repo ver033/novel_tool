@@ -283,6 +283,7 @@ export const usageAnalyticsFeatureSchema = z.enum([
   "welcome",
   "writing",
   "relationshipGraph",
+  "outline",
   "writingGoals",
   "settings",
   "import",
@@ -561,6 +562,194 @@ export const importConfirmTxtInputSchema = z
     mode: z.enum(["create_new_project", "import_into_current_project"]),
     projectId: optionalIdSchema,
     projectName: z.string().trim().min(1).max(120).optional()
+  })
+  .strict();
+
+export const outlineDaySegmentSchema = z.enum(["day", "night", "custom", "unknown"]);
+export const outlineEventStatusSchema = z.enum(["planned", "drafting", "written", "needs_revision", "done"]);
+export const outlineViewModeSchema = z.enum(["chapter", "timeline", "plotline"]);
+
+const outlineNullableIdSchema = idSchema.nullable().optional();
+const outlineText80Schema = z.string().trim().max(80);
+const outlineText120Schema = z.string().trim().max(120);
+const outlineLongTextSchema = z.string().max(3000);
+
+const outlineEventInputBaseSchema = z
+  .object({
+    projectId: idSchema,
+    chapterId: outlineNullableIdSchema,
+    title: outlineText120Schema,
+    summary: z.string().trim().max(1000),
+    storyDate: localDateSchema.nullable().optional(),
+    storyTimeLabel: outlineText80Schema.optional(),
+    weekdayLabel: outlineText80Schema.optional(),
+    storyTimeOrder: z.number().int().nullable().optional(),
+    daySegment: outlineDaySegmentSchema,
+    customDaySegment: outlineText80Schema.nullable().optional(),
+    location: outlineText120Schema.optional(),
+    povCharacter: outlineText80Schema.optional(),
+    characters: z.array(outlineText80Schema.min(1)).max(30).optional(),
+    goal: outlineLongTextSchema.optional(),
+    conflict: outlineLongTextSchema.optional(),
+    outcome: outlineLongTextSchema.optional(),
+    foreshadowing: outlineLongTextSchema.optional(),
+    notes: outlineLongTextSchema.optional(),
+    status: outlineEventStatusSchema,
+    threadIds: z.array(idSchema).max(50).optional()
+  })
+  .strict();
+
+export const outlineGetOverviewInputSchema = z
+  .object({
+    projectId: idSchema
+  })
+  .strict();
+
+export const outlineListEventsInputSchema = z
+  .object({
+    projectId: idSchema,
+    chapterId: optionalIdSchema,
+    threadId: optionalIdSchema,
+    status: outlineEventStatusSchema.optional(),
+    query: z.string().trim().max(160).optional()
+  })
+  .strict();
+
+export const outlineCreateEventInputSchema = outlineEventInputBaseSchema;
+export const outlineUpdateEventInputSchema = z
+  .object({
+    projectId: idSchema,
+    eventId: idSchema,
+    patch: outlineEventInputBaseSchema.omit({ projectId: true }).partial().refine((value) => Object.keys(value).length > 0, {
+      message: "patch must include at least one field"
+    })
+  })
+  .strict();
+export const outlineDeleteEventInputSchema = z
+  .object({
+    projectId: idSchema,
+    eventId: idSchema
+  })
+  .strict();
+export const outlineReorderEventsInputSchema = z
+  .object({
+    projectId: idSchema,
+    orderedEventIds: z.array(idSchema).min(1),
+    chapterId: outlineNullableIdSchema
+  })
+  .strict();
+
+export const outlineListThreadsInputSchema = outlineGetOverviewInputSchema;
+export const outlineCreateThreadInputSchema = z
+  .object({
+    projectId: idSchema,
+    name: nonEmptyString.max(80),
+    color: nonEmptyString.max(32).optional()
+  })
+  .strict();
+export const outlineUpdateThreadInputSchema = z
+  .object({
+    projectId: idSchema,
+    threadId: idSchema,
+    patch: z
+      .object({
+        name: nonEmptyString.max(80).optional(),
+        color: nonEmptyString.max(32).optional(),
+        sortOrder: z.number().int().nonnegative().optional()
+      })
+      .strict()
+      .refine((value) => Object.keys(value).length > 0, {
+        message: "patch must include at least one field"
+      })
+  })
+  .strict();
+export const outlineDeleteThreadInputSchema = z
+  .object({
+    projectId: idSchema,
+    threadId: idSchema
+  })
+  .strict();
+
+export const outlineGetChapterNoteInputSchema = z
+  .object({
+    projectId: idSchema,
+    chapterId: idSchema
+  })
+  .strict();
+export const outlineSaveChapterNoteInputSchema = z
+  .object({
+    projectId: idSchema,
+    chapterId: idSchema,
+    content: z.string().max(20000)
+  })
+  .strict();
+export const outlineImportLegacyChapterNoteInputSchema = outlineSaveChapterNoteInputSchema
+  .extend({
+    overwrite: z.boolean().optional()
+  })
+  .strict();
+
+export const outlineImportColumnMappingSchema = z
+  .object({
+    chapter: z.string().trim().max(120).nullable().optional(),
+    storyTimeLabel: z.string().trim().max(120).nullable().optional(),
+    storyDate: z.string().trim().max(120).nullable().optional(),
+    weekdayLabel: z.string().trim().max(120).nullable().optional(),
+    daySegment: z.string().trim().max(120).nullable().optional(),
+    thread: z.string().trim().max(120).nullable().optional(),
+    summary: z.string().trim().max(120).nullable().optional(),
+    characters: z.string().trim().max(120).nullable().optional(),
+    location: z.string().trim().max(120).nullable().optional(),
+    status: z.string().trim().max(120).nullable().optional()
+  })
+  .strict();
+
+export const outlinePreviewImportFileInputSchema = z
+  .object({
+    projectId: idSchema,
+    filePath: nonEmptyString.max(4096).refine((value) => /\.(xlsx|csv)$/i.test(value), {
+      message: "outline import file must be .xlsx or .csv"
+    }),
+    mapping: outlineImportColumnMappingSchema.optional()
+  })
+  .strict();
+export const outlinePreviewBulkImportInputSchema = z
+  .object({
+    projectId: idSchema,
+    rawText: nonEmptyString.max(200000),
+    mapping: outlineImportColumnMappingSchema.optional()
+  })
+  .strict();
+export const outlineBulkImportPreviewRowSchema = z
+  .object({
+    rowNumber: z.number().int().positive(),
+    chapterTitle: z.string().trim().max(160),
+    chapterId: idSchema.nullable(),
+    storyDate: localDateSchema.nullable().optional(),
+    storyTimeLabel: outlineText80Schema,
+    weekdayLabel: outlineText80Schema,
+    storyTimeOrder: z.number().int().nullable().optional(),
+    daySegment: outlineDaySegmentSchema,
+    customDaySegment: outlineText80Schema.nullable().optional(),
+    threadNames: z.array(nonEmptyString.max(80)).max(50),
+    summary: z.string().trim().min(1).max(1000),
+    characters: z.array(outlineText80Schema.min(1)).max(30),
+    location: outlineText120Schema,
+    status: outlineEventStatusSchema,
+    warnings: z.array(z.string().trim().min(1).max(300)).max(20)
+  })
+  .strict();
+export const outlineConfirmBulkImportInputSchema = z
+  .object({
+    projectId: idSchema,
+    importBatchId: idSchema,
+    rows: z.array(outlineBulkImportPreviewRowSchema).min(1).max(1000)
+  })
+  .strict();
+export const outlineUndoImportBatchInputSchema = z
+  .object({
+    projectId: idSchema,
+    importBatchId: idSchema
   })
   .strict();
 

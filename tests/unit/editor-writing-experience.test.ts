@@ -164,7 +164,7 @@ describe("editor writing experience optimizations", () => {
     expect(app).toContain("auxiliaryRefreshToken");
     expect(app).toContain("handleAuxiliaryChanged");
     expect(writingPage).toContain("chapterAuxiliaryInfoById");
-    expect(writingPage).toContain("outlineStorageKey");
+    expect(writingPage).toContain("api.outline.getOverview");
     expect(writingPage).toContain("scratchCountByChapterId");
     expect(writingPage).toContain("scratchNoteIdsByChapterId");
     expect(writingPage).toContain("scratchNoteIds");
@@ -227,7 +227,11 @@ describe("editor writing experience optimizations", () => {
     expect(floatingLayer).toContain("UtilityPanelContent");
     expect(floatingFrame).toContain("floating-panel-resize-handle");
     expect(floatingFrame).toContain("setPointerCapture");
+    expect(editorContextMenu).toContain("查看全书大纲");
     expect(editorContextMenu).toContain("打开当前章节细纲");
+    expect(editorContextMenu).toContain("onOpenBookOutline");
+    expect(writingPage).toContain('onOpenFloatingPanel("outline", null, null, "book")');
+    expect(writingPage).toContain('onOpenFloatingPanel("outline", activeChapterId, null, "chapter")');
     expect(editorContextMenu).toContain("创建当前章节草稿纸");
     expect(editorContextMenu).not.toContain("打开当前章节草稿纸");
     expect(editorContextMenu).toContain("打开 AI 对话");

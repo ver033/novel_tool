@@ -42,6 +42,9 @@ function titleForPanel(panel: FloatingPanelState, chapters: readonly ChapterSumm
     return `${chapterTitle} · 当前任务`;
   }
   if (panel.kind === "outline") {
+    if (panel.outlineTab === "book") {
+      return "全书大纲速览";
+    }
     return `${chapterTitle} · 细纲`;
   }
   return `${chapterTitle} · 草稿纸`;
@@ -105,6 +108,7 @@ export function FloatingWorkspaceLayer({
               onContentSaved={onContentSaved}
               onOpenSettings={onOpenSettings}
               onScratchNoteSaved={onScratchNoteSaved}
+              outlineTab={panel.outlineTab ?? "chapter"}
               panelId={panel.id}
               panelKind={panel.kind}
               scratchNoteId={panel.scratchNoteId}

@@ -1541,8 +1541,8 @@ function ShareableProjectExportPane({ currentProject }: ShareableProjectExportPa
               <label className="shareable-export-option fixed">
                 <input checked disabled type="checkbox" />
                 <span>
-                  <b>章节正文 / 人物关系设定</b>
-                  <small>项目名称、章节结构、章节正文和作者手工人物关系会保留。</small>
+                  <b>章节正文 / 人物关系设定 / 大纲规划</b>
+                  <small>项目名称、章节结构、章节正文、作者手工人物关系和作者大纲会保留。</small>
                 </span>
               </label>
               <label className={`shareable-export-option ${options.includeSummaryCache ? "active" : ""}`}>

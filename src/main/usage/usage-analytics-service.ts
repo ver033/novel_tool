@@ -208,7 +208,7 @@ function scheduledSlotKey(now: Date, localTimeValue: string): string {
 }
 
 function eventMatchesPage(event: UsageAnalyticsEventRecord): boolean {
-  return ["welcome", "writing", "relationshipGraph", "writingGoals", "settings", "import", "export", "newProject"].includes(event.feature);
+  return ["welcome", "writing", "relationshipGraph", "outline", "writingGoals", "settings", "import", "export", "newProject"].includes(event.feature);
 }
 
 function resolveProjectContext(provider?: () => UsageAnalyticsProjectContext | null): UsageAnalyticsProjectContext | null {

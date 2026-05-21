@@ -9,6 +9,7 @@ export type UsageAnalyticsFeature =
   | "welcome"
   | "writing"
   | "relationshipGraph"
+  | "outline"
   | "writingGoals"
   | "settings"
   | "import"
