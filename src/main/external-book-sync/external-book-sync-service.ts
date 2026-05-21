@@ -298,13 +298,36 @@ function selectedChapters(comparison: ExternalBookComparisonResult, chapterKeys:
   return comparison.missingChapters.filter((chapter) => keySet.has(chapter.key));
 }
 
-function sourceBookFilePath(source: ExternalBookSyncSource): string {
+function sourceBookFilePath(source: ExternalBookSyncSource): string | null {
+  if (!isBookFilePath(source.displayName)) {
+    return null;
+  }
   const joiner = source.bookFolderPath.includes("\\") ? path.win32 : path;
   return joiner.join(source.bookFolderPath, source.displayName);
 }
 
 function shouldSendCandidateToAi(candidate: ExternalBookSyncCandidate): boolean {
   return candidate.comparison.missingChapters.length > 0 || candidate.comparison.latestProjectChapterInExternal !== null;
+}
+
+function missingChapterIdentity(chapter: ExternalBookMissingChapter): string {
+  if (chapter.ordinal !== null) {
+    return `ordinal:${chapter.ordinal}`;
+  }
+  return `title:${chapter.title.trim().toLocaleLowerCase("zh-CN")}`;
+}
+
+function compareMissingChapters(a: ExternalBookMissingChapter, b: ExternalBookMissingChapter): number {
+  if (a.ordinal !== null && b.ordinal !== null && a.ordinal !== b.ordinal) {
+    return a.ordinal - b.ordinal;
+  }
+  if (a.ordinal !== null && b.ordinal === null) {
+    return -1;
+  }
+  if (a.ordinal === null && b.ordinal !== null) {
+    return 1;
+  }
+  return a.title.localeCompare(b.title, "zh-CN") || a.order - b.order;
 }
 
 export class ExternalBookSyncService {
@@ -372,7 +395,7 @@ export class ExternalBookSyncService {
 
   private rememberCandidateSource(candidate: ExternalBookSyncCandidate, scannedAt: string): void {
     const bookFolderPath = path.dirname(candidate.filePath);
-    const existing = this.deps.sourceStore.listSources(candidate.projectId).find((source) => sourceBookFilePath(source) === candidate.filePath);
+    const existing = this.deps.sourceStore.listSources(candidate.projectId).find((source) => source.bookFolderPath === bookFolderPath);
     this.deps.sourceStore.upsertSource({
       id: existing?.id,
       projectId: candidate.projectId,
@@ -404,9 +427,8 @@ export class ExternalBookSyncService {
     const dueSlot = latestDueSyncSlot(now);
     const slotKey = scheduledSyncSlotKey(dueSlot.slotDate, dueSlot.localTime);
     const savedSourcesBeforeRun = this.deps.sourceStore.listSources(input.projectId);
-    const shouldRetryStartupDiscovery = input.trigger === "startup" && savedSourcesBeforeRun.length === 0;
     const existingRun = this.deps.automationStore.getRunBySlot(input.projectId, slotKey);
-    if (!shouldRetryStartupDiscovery && existingRun && !canRetryFailedAutomaticRun(existingRun, now)) {
+    if (input.trigger !== "startup" && existingRun && !canRetryFailedAutomaticRun(existingRun, now)) {
       return null;
     }
 
@@ -431,11 +453,11 @@ export class ExternalBookSyncService {
 
     try {
       const savedSources = savedSourcesBeforeRun;
-      const project = savedSources.length === 0 ? this.deps.projectRepo.findById(input.projectId) : null;
+      const project = this.deps.projectRepo.findById(input.projectId);
       let scan = await this.scanProject({
         projectId: input.projectId,
         mode: "quick",
-        roots: savedSources.length > 0 ? [] : automaticDiscoveryRoots(project?.rootPath ?? null),
+        ...(savedSources.length > 0 ? {} : { roots: automaticDiscoveryRoots(project?.rootPath ?? null) }),
         searchTrigger: input.trigger
       });
       if (savedSources.length === 0 && scan.candidates.length === 0) {
@@ -446,8 +468,8 @@ export class ExternalBookSyncService {
           searchTrigger: input.trigger
         });
       }
-      const candidate = scan.candidates.find(shouldSendCandidateToAi);
-      if (!candidate) {
+      const candidatesToSend = scan.candidates.filter(shouldSendCandidateToAi);
+      if (candidatesToSend.length === 0) {
         return this.completeAutomaticRun(running, "skipped", {
           candidateCount: scan.candidates.length,
           sentMessageCount: 0,
@@ -457,10 +479,9 @@ export class ExternalBookSyncService {
           error: null
         }, completedAt());
       }
-      const sent = await this.sendMissingChaptersToAi({
+      const sent = await this.sendAutomaticCandidatesToAi({
         projectId: input.projectId,
-        candidateId: candidate.id,
-        chapterKeys: candidate.comparison.missingChapters.map((chapter) => chapter.key)
+        candidates: candidatesToSend
       });
       return this.completeAutomaticRun(running, "completed", {
         candidateCount: scan.candidates.length,
@@ -509,6 +530,80 @@ export class ExternalBookSyncService {
     });
   }
 
+  private async sendAutomaticCandidatesToAi(input: {
+    readonly projectId: string;
+    readonly candidates: readonly ExternalBookSyncCandidate[];
+  }): Promise<ExternalBookSyncSendResult> {
+    const project = this.deps.projectRepo.findById(input.projectId);
+    if (!project) {
+      throw new Error("项目不存在，无法发送外部章节。");
+    }
+    const missingByIdentity = new Map<string, ExternalBookMissingChapter>();
+    const sentCandidates: ExternalBookSyncCandidate[] = [];
+    let latestProjectChapterInExternal: ExternalBookReferenceChapter | null = null;
+
+    for (const candidate of input.candidates) {
+      const loaded = this.loadCandidate({
+        projectId: input.projectId,
+        projectName: project.name,
+        filePath: candidate.filePath
+      });
+      if (!loaded) {
+        throw new Error("外部 .Book 候选已不可用，请重新扫描。");
+      }
+      if (loaded.candidate.contentHash !== candidate.contentHash) {
+        throw new Error("外部 .Book 文件已变化，请重新扫描后再发送。");
+      }
+      sentCandidates.push(loaded.candidate);
+      for (const chapter of selectedChapters(loaded.fullComparison, candidate.comparison.missingChapters.map((item) => item.key))) {
+        const identity = missingChapterIdentity(chapter);
+        if (!missingByIdentity.has(identity)) {
+          missingByIdentity.set(identity, chapter);
+        }
+      }
+      if (!latestProjectChapterInExternal && loaded.fullComparison.latestProjectChapterInExternal) {
+        latestProjectChapterInExternal = loaded.fullComparison.latestProjectChapterInExternal;
+      }
+    }
+
+    const missingChapters = [...missingByIdentity.values()].sort(compareMissingChapters);
+    if (missingChapters.length === 0 && !latestProjectChapterInExternal) {
+      throw new Error("没有可发送的外部章节。");
+    }
+
+    const comparison = input.candidates[0]?.comparison;
+    const session = await this.deps.aiSender.createChatSession({
+      projectId: input.projectId,
+      title: "外部同步检查"
+    });
+    const messages = buildExternalBookSyncChatMessages({
+      projectName: project.name,
+      currentLatestLabel: comparison?.currentLatestOrdinal ? `第${comparison.currentLatestOrdinal}章` : `${comparison?.currentChapterCount ?? 0} 章`,
+      latestProjectChapterInExternal,
+      missingChapters
+    });
+    for (const message of messages) {
+      await this.deps.aiSender.sendChatMessage({
+        requestId: createId("external_book_sync_chat"),
+        projectId: input.projectId,
+        sessionId: session.id,
+        message
+      });
+    }
+    const scannedAt = new Date().toISOString();
+    for (const candidate of sentCandidates) {
+      this.rememberCandidateSource(candidate, scannedAt);
+    }
+    return {
+      sessionId: session.id,
+      sessionTitle: session.title,
+      sentMessageCount: messages.length,
+      sentChapterCount: missingChapters.length + (latestProjectChapterInExternal ? 1 : 0),
+      sentMissingChapterCount: missingChapters.length,
+      sentLatestProjectChapter: Boolean(latestProjectChapterInExternal)
+    };
+  }
+
   async scanProject(input: ExternalBookSyncScanInput, handlers: ExternalBookSyncHandlers = {}): Promise<ExternalBookSyncScanResult> {
     const project = this.deps.projectRepo.findById(input.projectId);
     if (!project) {
@@ -523,11 +618,18 @@ export class ExternalBookSyncService {
     try {
       const warnings: string[] = [];
       const candidatePaths = new Set<string>();
+      const savedSourceRoots: string[] = [];
       for (const source of this.deps.sourceStore.listSources(input.projectId)) {
-        candidatePaths.add(sourceBookFilePath(source));
+        if (source.bookFolderPath) {
+          savedSourceRoots.push(source.bookFolderPath);
+        }
+        const sourceFilePath = sourceBookFilePath(source);
+        if (sourceFilePath) {
+          candidatePaths.add(sourceFilePath);
+        }
       }
 
-      const shouldSearchIndex = input.mode !== "directory" && (input.mode === "global" || candidatePaths.size === 0);
+      const shouldSearchIndex = input.mode !== "directory" && (input.mode === "global" || (candidatePaths.size === 0 && savedSourceRoots.length === 0));
       const indexResult = shouldSearchIndex ? await searchWindowsIndexForBookFiles({ projectName: project.name, timeoutMs: WINDOWS_INDEX_TIMEOUT_MS }) : null;
       if (indexResult?.status === "failed") {
         warnings.push(`Windows Search 查询失败：${indexResult.error}`);
@@ -536,8 +638,13 @@ export class ExternalBookSyncService {
         candidatePaths.add(filePath);
       }
 
-      const roots = input.roots ?? (input.directoryPath ? [input.directoryPath] : defaultRoots(project.rootPath));
-      const shouldScanFileSystem = input.mode === "global" || input.mode === "directory" || candidatePaths.size === 0;
+      const hasExplicitRoots = input.roots !== undefined || Boolean(input.directoryPath);
+      const roots = input.roots ?? (input.directoryPath ? [input.directoryPath] : savedSourceRoots.length > 0 ? savedSourceRoots : defaultRoots(project.rootPath));
+      const shouldScanFileSystem =
+        input.mode === "global" ||
+        input.mode === "directory" ||
+        candidatePaths.size === 0 ||
+        (savedSourceRoots.length > 0 && !hasExplicitRoots);
       const scan = shouldScanFileSystem
         ? await scanBookFiles({
             projectName: project.name,
