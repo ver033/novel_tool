@@ -56,6 +56,7 @@ import type {
   ImportPreviewTxtInput,
   ImportUpdatePreviewInput,
   OutlineConfirmBulkImportInput,
+  OutlineClearImportedEventsInput,
   OutlineCreateEventInput,
   OutlineCreateThreadInput,
   OutlineDeleteEventInput,
@@ -226,6 +227,7 @@ export type NovelToolApi = {
     readonly previewBulkImport: (input: OutlinePreviewBulkImportInput) => Promise<unknown>;
     readonly confirmBulkImport: (input: OutlineConfirmBulkImportInput) => Promise<unknown>;
     readonly undoImportBatch: (input: OutlineUndoImportBatchInput) => Promise<unknown>;
+    readonly clearImportedEvents: (input: OutlineClearImportedEventsInput) => Promise<unknown>;
   };
   readonly writingGoals: {
     readonly getOverview: (input: WritingGoalOverviewInput) => Promise<unknown>;
@@ -375,7 +377,8 @@ export const novelToolApi: NovelToolApi = Object.freeze({
     previewImportFile: (input: OutlinePreviewImportFileInput) => ipcRenderer.invoke(ipcChannels.outline.previewImportFile, input),
     previewBulkImport: (input: OutlinePreviewBulkImportInput) => ipcRenderer.invoke(ipcChannels.outline.previewBulkImport, input),
     confirmBulkImport: (input: OutlineConfirmBulkImportInput) => ipcRenderer.invoke(ipcChannels.outline.confirmBulkImport, input),
-    undoImportBatch: (input: OutlineUndoImportBatchInput) => ipcRenderer.invoke(ipcChannels.outline.undoImportBatch, input)
+    undoImportBatch: (input: OutlineUndoImportBatchInput) => ipcRenderer.invoke(ipcChannels.outline.undoImportBatch, input),
+    clearImportedEvents: (input: OutlineClearImportedEventsInput) => ipcRenderer.invoke(ipcChannels.outline.clearImportedEvents, input)
   }),
   writingGoals: Object.freeze({
     getOverview: (input: WritingGoalOverviewInput) => ipcRenderer.invoke(ipcChannels.writingGoals.getOverview, input),

@@ -67,6 +67,35 @@ function createTinyInlineStringXlsx(rows: readonly (readonly string[])[]): Uint8
   });
 }
 
+function createTinyDateStyledXlsx(): Uint8Array {
+  const sharedStrings = ["章节", "日期", "时间段", "情节线", "场景摘要", "第一章", "白天", "校园线", "主角进入学校"];
+  const sharedIndex = new Map(sharedStrings.map((value, index) => [value, index]));
+  const sharedCell = (ref: string, value: string) => `<c r="${ref}" t="s"><v>${sharedIndex.get(value) ?? 0}</v></c>`;
+  const sheetRows = [
+    `<row r="1">${sharedCell("A1", "章节")}${sharedCell("B1", "日期")}${sharedCell("C1", "时间段")}${sharedCell("D1", "情节线")}${sharedCell("E1", "场景摘要")}</row>`,
+    `<row r="2">${sharedCell("A2", "第一章")}<c r="B2" s="1"><v>44880</v></c>${sharedCell("C2", "白天")}${sharedCell("D2", "校园线")}${sharedCell("E2", "主角进入学校")}</row>`
+  ].join("");
+  const sharedStringXml = `<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="${sharedStrings.length}" uniqueCount="${sharedStrings.length}">${sharedStrings
+    .map((value) => `<si><t>${value}</t></si>`)
+    .join("")}</sst>`;
+  return zipSync({
+    "[Content_Types].xml": strToU8(`<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"></Types>`),
+    "xl/workbook.xml": strToU8(
+      `<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="大纲" sheetId="1" r:id="rId1"/></sheets></workbook>`
+    ),
+    "xl/_rels/workbook.xml.rels": strToU8(
+      `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>`
+    ),
+    "xl/sharedStrings.xml": strToU8(sharedStringXml),
+    "xl/styles.xml": strToU8(
+      `<?xml version="1.0" encoding="UTF-8"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="1"><numFmt numFmtId="164" formatCode="m&quot;月&quot;d&quot;日&quot;"/></numFmts><cellXfs count="2"><xf numFmtId="0"/><xf numFmtId="164" applyNumberFormat="1"/></cellXfs></styleSheet>`
+    ),
+    "xl/worksheets/sheet1.xml": strToU8(
+      `<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${sheetRows}</sheetData></worksheet>`
+    )
+  });
+}
+
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
@@ -137,6 +166,24 @@ describe("outline import parser", () => {
       expect.objectContaining({
         chapterTitle: "第一章",
         storyTimeLabel: "开学第一天",
+        daySegment: "day",
+        threadNames: ["校园线"],
+        summary: "主角进入学校"
+      })
+    ]);
+  });
+
+  it("formats numeric Excel date cells using the cell date style", () => {
+    const dir = createTempDir();
+    const filePath = join(dir, "date-styled-outline.xlsx");
+    writeFileSync(filePath, createTinyDateStyledXlsx());
+
+    const rows = parseOutlineFile(filePath);
+
+    expect(rows).toEqual([
+      expect.objectContaining({
+        storyDate: null,
+        storyTimeLabel: "11月15日",
         daySegment: "day",
         threadNames: ["校园线"],
         summary: "主角进入学校"

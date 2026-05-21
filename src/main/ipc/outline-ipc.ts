@@ -6,6 +6,7 @@ import {
   outlineConfirmBulkImportInputSchema,
   outlineCreateEventInputSchema,
   outlineCreateThreadInputSchema,
+  outlineClearImportedEventsInputSchema,
   outlineDeleteEventInputSchema,
   outlineDeleteThreadInputSchema,
   outlineGetChapterNoteInputSchema,
@@ -114,5 +115,9 @@ export function registerOutlineIpc(serviceFactory: (projectId: string) => Outlin
   ipcMain.handle(
     ipcChannels.outline.undoImportBatch,
     createValidatedIpcHandler(outlineUndoImportBatchInputSchema, (input) => serviceFactory(input.projectId).undoImportBatch(input))
+  );
+  ipcMain.handle(
+    ipcChannels.outline.clearImportedEvents,
+    createValidatedIpcHandler(outlineClearImportedEventsInputSchema, (input) => serviceFactory(input.projectId).clearImportedEvents(input))
   );
 }

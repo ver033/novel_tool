@@ -35,7 +35,8 @@ describe("outline IPC schemas and channels", () => {
       previewImportFile: "novelTool:outline:previewImportFile",
       previewBulkImport: "novelTool:outline:previewBulkImport",
       confirmBulkImport: "novelTool:outline:confirmBulkImport",
-      undoImportBatch: "novelTool:outline:undoImportBatch"
+      undoImportBatch: "novelTool:outline:undoImportBatch",
+      clearImportedEvents: "novelTool:outline:clearImportedEvents"
     });
   });
 
@@ -122,9 +123,11 @@ describe("outline IPC schemas and channels", () => {
     expect(preload).toContain("getOverview: (input: OutlineGetOverviewInput)");
     expect(preload).toContain("previewImportFile: (input: OutlinePreviewImportFileInput)");
     expect(preload).toContain("confirmBulkImport: (input: OutlineConfirmBulkImportInput)");
+    expect(preload).toContain("clearImportedEvents: (input: OutlineClearImportedEventsInput)");
     expect(preload).toContain("ipcChannels.outline.getOverview");
     expect(preload).toContain("ipcChannels.outline.selectImportFile");
     expect(preload).toContain("ipcChannels.outline.undoImportBatch");
+    expect(preload).toContain("ipcChannels.outline.clearImportedEvents");
     expect(registerIpc).toContain("registerOutlineIpc");
     expect(registerIpc).toContain("OutlineRepository");
     expect(registerIpc).toContain("OutlineService");
@@ -133,6 +136,7 @@ describe("outline IPC schemas and channels", () => {
     expect(outlineIpc).toContain("filters: [{ name: \"大纲文件\", extensions: [\"xlsx\", \"csv\"] }]");
     expect(outlineIpc).toContain("outlineGetOverviewInputSchema");
     expect(outlineIpc).toContain("outlineConfirmBulkImportInputSchema");
+    expect(outlineIpc).toContain("outlineClearImportedEventsInputSchema");
     expect(outlineIpc).toMatch(/ipcChannels\.outline\.previewImportFile[\s\S]*createValidatedIpcHandler/);
   });
 });

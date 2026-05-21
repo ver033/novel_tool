@@ -9,6 +9,7 @@ import { OutlineRepository } from "../../src/main/db/repositories/outline-repo";
 import { ProjectRepository } from "../../src/main/db/repositories/project-repo";
 import { OutlineService } from "../../src/main/outline/outline-service";
 import { allowSelectedOutlineImportFilePath } from "../../src/main/security/file-access";
+import { outlineConfirmBulkImportInputSchema } from "../../src/main/shared/schemas";
 import type { OutlineBulkImportPreview } from "../../src/main/shared/types";
 
 const tempDirs: string[] = [];
@@ -158,6 +159,36 @@ describe("OutlineService", () => {
     expect(threads.map((thread) => thread.name)).toEqual(["吕老师线", "马俊明线"]);
   });
 
+  it("sanitizes oversized imported cells before the preview is confirmed through IPC", () => {
+    const longSummary = "很长的场景摘要".repeat(400);
+    const longTime = "非常非常长的故事时间标签".repeat(8);
+    const longThread = "非常非常长的情节线名称".repeat(8);
+    const longCharacter = "非常非常长的人物称呼".repeat(8);
+    const characters = Array.from({ length: 35 }, (_, index) => `${longCharacter}${index}`).join("、");
+    const preview = service.previewBulkImport({
+      projectId: "project_1",
+      rawText: `章节\t故事时间\t星期/备注\t时间段\t情节线\t场景摘要\t角色\t地点\n第一章\t${longTime}\t${longTime}\t${longTime}\t${longThread}\t${longSummary}\t${characters}\t${longSummary}`
+    });
+    const rows = mutablePreviewRows(preview);
+
+    expect(rows[0].warnings.length).toBeGreaterThan(0);
+    expect(outlineConfirmBulkImportInputSchema.safeParse({ projectId: "project_1", importBatchId: preview.importBatchId, rows }).success).toBe(true);
+  });
+
+  it("keeps large import previews inside the confirm IPC batch limit", () => {
+    const rows = Array.from({ length: 5002 }, (_, index) => `第一章\t导入场景 ${index + 1}`).join("\n");
+    const preview = service.previewBulkImport({
+      projectId: "project_1",
+      rawText: `章节\t场景摘要\n${rows}`
+    });
+    const confirmRows = mutablePreviewRows(preview);
+
+    expect(confirmRows).toHaveLength(5000);
+    expect(preview.skippedRows).toHaveLength(2);
+    expect(preview.skippedRows[0]).toMatchObject({ rowNumber: 5002 });
+    expect(outlineConfirmBulkImportInputSchema.safeParse({ projectId: "project_1", importBatchId: preview.importBatchId, rows: confirmRows }).success).toBe(true);
+  });
+
   it("reads outline import files only after the user selected the path", () => {
     const filePath = join(tempDirs[0], "outline.csv");
     writeFileSync(filePath, "章节,场景摘要\n第一章,文件导入事件", "utf8");
@@ -201,6 +232,38 @@ describe("OutlineService", () => {
     expect(service.undoImportBatch({ projectId: "project_1", importBatchId: one.importBatchId })).toEqual({ deletedCount: 1 });
     expect(service.listEvents({ projectId: "project_1" }).map((event) => event.summary)).toEqual(["事件二"]);
   });
+
+  it("clears all imported outline events without deleting author-created events", () => {
+    const one = service.previewBulkImport({ projectId: "project_1", rawText: "章节\t场景摘要\n第一章\t导入事件一" });
+    const two = service.previewBulkImport({ projectId: "project_1", rawText: "章节\t场景摘要\n第二章\t导入事件二" });
+    service.confirmBulkImport({ projectId: "project_1", importBatchId: one.importBatchId, rows: mutablePreviewRows(one) });
+    service.confirmBulkImport({ projectId: "project_1", importBatchId: two.importBatchId, rows: mutablePreviewRows(two) });
+    service.createEvent({
+      projectId: "project_1",
+      chapterId: "chapter_1",
+      title: "手动场景",
+      summary: "作者手动创建的场景不能被清空。",
+      storyDate: null,
+      storyTimeLabel: "",
+      weekdayLabel: "",
+      storyTimeOrder: null,
+      daySegment: "unknown",
+      customDaySegment: null,
+      location: "",
+      povCharacter: "",
+      characters: [],
+      goal: "",
+      conflict: "",
+      outcome: "",
+      foreshadowing: "",
+      notes: "",
+      status: "planned",
+      threadIds: []
+    });
+
+    expect(service.clearImportedEvents({ projectId: "project_1" })).toEqual({ deletedCount: 2 });
+    expect(service.listEvents({ projectId: "project_1" }).map((event) => event.summary)).toEqual(["作者手动创建的场景不能被清空。"]);
+  });
 });
 
 const providedOutlineFixturePath = join(process.cwd(), "..", "test_novel", "大纲.xlsx");
@@ -225,4 +288,17 @@ fixtureIt("imports the provided real outline workbook into events and plotline t
   expect(overview.threads.length).toBeGreaterThan(0);
   expect(overview.events.some((event) => event.chapterId === null)).toBe(true);
   expect(overview.events.filter((event) => event.threadIds.length > 0).length).toBeGreaterThan(10);
+});
+
+fixtureIt("keeps the provided real outline workbook confirm payload valid for IPC", () => {
+  allowSelectedOutlineImportFilePath(providedOutlineFixturePath);
+  const preview = service.previewImportFile({ projectId: "project_1", filePath: providedOutlineFixturePath });
+
+  const parsed = outlineConfirmBulkImportInputSchema.safeParse({
+    projectId: "project_1",
+    importBatchId: preview.importBatchId,
+    rows: mutablePreviewRows(preview)
+  });
+
+  expect(parsed.success).toBe(true);
 });
