@@ -1,4 +1,5 @@
 export type FloatingPanelKind = "chat" | "task" | "scratch" | "outline";
+export type OutlineFloatingTab = "chapter" | "book";
 
 export type FloatingPanelGeometry = {
   readonly x: number;
@@ -11,6 +12,7 @@ export type FloatingPanelState = FloatingPanelGeometry & {
   readonly id: string;
   readonly kind: FloatingPanelKind;
   readonly chapterId: string | null;
+  readonly outlineTab: OutlineFloatingTab | null;
   readonly scratchDraftId: string | null;
   readonly scratchNoteId: string | null;
   readonly minimized: boolean;
@@ -30,13 +32,17 @@ export function createFloatingPanelId(
   kind: FloatingPanelKind,
   chapterId: string | null,
   scratchNoteId: string | null = null,
-  scratchDraftId: string | null = null
+  scratchDraftId: string | null = null,
+  outlineTab: OutlineFloatingTab = "chapter"
 ): string {
   if (kind === "scratch" && scratchNoteId) {
     return `scratch:${chapterId ?? "global"}:${scratchNoteId}`;
   }
   if (kind === "scratch" && scratchDraftId) {
     return `scratch:${chapterId ?? "global"}:${scratchDraftId}`;
+  }
+  if (kind === "outline" && outlineTab === "book") {
+    return "outline:book";
   }
   return `${kind}:${kind === "chat" ? "global" : chapterId ?? "current"}`;
 }
@@ -84,16 +90,18 @@ export function openOrRaiseFloatingPanel(
   kind: FloatingPanelKind,
   chapterId: string | null,
   viewport: { readonly width: number; readonly height: number },
-  scratchNoteId: string | null = null
+  scratchNoteId: string | null = null,
+  outlineTab: OutlineFloatingTab = "chapter"
 ): FloatingPanelState[] {
   const panelChapterId = kind === "chat" ? null : chapterId;
   const panelScratchNoteId = kind === "scratch" ? scratchNoteId ?? null : null;
   const panelScratchDraftId = kind === "scratch" && !panelScratchNoteId ? createFloatingScratchDraftId() : null;
-  const id = createFloatingPanelId(kind, panelChapterId, panelScratchNoteId, panelScratchDraftId);
+  const panelOutlineTab = kind === "outline" ? outlineTab : null;
+  const id = createFloatingPanelId(kind, panelChapterId, panelScratchNoteId, panelScratchDraftId, outlineTab);
   const maxZIndex = panels.reduce((max, panel) => Math.max(max, panel.zIndex), 100);
   const existing = panels.find((panel) => panel.id === id);
   if (existing) {
-    return panels.map((panel) => (panel.id === id ? { ...panel, minimized: false, zIndex: maxZIndex + 1 } : panel));
+    return panels.map((panel) => (panel.id === id ? { ...panel, minimized: false, outlineTab: panelOutlineTab, zIndex: maxZIndex + 1 } : panel));
   }
 
   const geometry = getDefaultFloatingPanelGeometry(kind, viewport, panels.length * 26);
@@ -104,6 +112,7 @@ export function openOrRaiseFloatingPanel(
       id,
       kind,
       chapterId: panelChapterId,
+      outlineTab: panelOutlineTab,
       scratchDraftId: panelScratchDraftId,
       scratchNoteId: panelScratchNoteId,
       minimized: false,

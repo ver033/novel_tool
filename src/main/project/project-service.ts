@@ -4,6 +4,7 @@ import { emptyChapterContent } from "../chapter/default-content";
 import type { SqliteDatabase } from "../db/database";
 import { ChapterRepository } from "../db/repositories/chapter-repo";
 import { ProjectRepository } from "../db/repositories/project-repo";
+import { runMigrations } from "../db/migrations";
 import { createId } from "../shared/ids";
 import type {
   ChapterSummary,
@@ -128,6 +129,7 @@ export class ProjectService {
     }
 
     const projectDb = this.activeProjectDb && this.activeProjectFilePath === filePath ? this.activeProjectDb : openExistingProjectDatabase(filePath);
+    runMigrations(projectDb);
     const fileProject = readProjectRecordFromDatabase(projectDb);
     const projectRepo = new ProjectRepository(projectDb);
     const updatedAt = nowIso();
@@ -216,6 +218,7 @@ export class ProjectService {
 
   getProjectDatabaseForProject(projectId: string): SqliteDatabase {
     if (this.activeProjectDb && this.activeProjectId === projectId) {
+      runMigrations(this.activeProjectDb);
       return this.activeProjectDb;
     }
 
@@ -231,6 +234,7 @@ export class ProjectService {
     if (!this.activeProjectDb) {
       throw new Error("项目文件打开失败。");
     }
+    runMigrations(this.activeProjectDb);
     return this.activeProjectDb;
   }
 
@@ -244,6 +248,7 @@ export class ProjectService {
     if (!this.activeProjectDb) {
       throw new Error("请先打开项目文件。");
     }
+    runMigrations(this.activeProjectDb);
     return this.activeProjectDb;
   }
 

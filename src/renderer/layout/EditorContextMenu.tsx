@@ -16,6 +16,7 @@ type EditorContextMenuProps = EditorContextMenuState & {
   readonly onExpandSelection: () => void;
   readonly onMinimizeAllPanels: () => void;
   readonly onOpenAllAssist: () => void;
+  readonly onOpenBookOutline: () => void;
   readonly onOpenChat: () => void;
   readonly onOpenOutline: () => void;
   readonly onOpenScratchpad: () => void;
@@ -35,6 +36,7 @@ export function EditorContextMenu({
   onExpandSelection,
   onMinimizeAllPanels,
   onOpenAllAssist,
+  onOpenBookOutline,
   onOpenChat,
   onOpenOutline,
   onOpenScratchpad,
@@ -83,6 +85,7 @@ export function EditorContextMenu({
           <button onClick={onSelectionToScratchpad} role="menuitem" type="button">加入本章草稿纸</button>
         </>
       ) : null}
+      <button onClick={onOpenBookOutline} role="menuitem" type="button">查看全书大纲</button>
       <button onClick={onOpenOutline} role="menuitem" type="button">打开当前章节细纲</button>
       <button onClick={onOpenScratchpad} role="menuitem" type="button">创建当前章节草稿纸</button>
       <button onClick={onOpenChat} role="menuitem" type="button">打开 AI 对话</button>

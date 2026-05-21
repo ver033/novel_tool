@@ -18,6 +18,7 @@ import { AiTaskRepository } from "../db/repositories/ai-task-repo";
 import { AuthorRelationshipRepository } from "../db/repositories/author-relationship-repo";
 import { ChapterRepository } from "../db/repositories/chapter-repo";
 import { ImportJobRepository } from "../db/repositories/import-job-repo";
+import { OutlineRepository } from "../db/repositories/outline-repo";
 import { ProjectRepository } from "../db/repositories/project-repo";
 import { ScratchNoteRepository } from "../db/repositories/scratch-note-repo";
 import { SettingsRepository } from "../db/repositories/settings-repo";
@@ -26,6 +27,7 @@ import { WritingGoalRepository } from "../db/repositories/writing-goal-repo";
 import { ShareableProjectExporter } from "../export/shareable-project-exporter";
 import { TxtExporter } from "../export/txt-exporter";
 import { TxtImporter } from "../import/txt-importer";
+import { OutlineService } from "../outline/outline-service";
 import { ProjectService } from "../project/project-service";
 import { AuthorRelationshipGraphService } from "../relationships/author-relationship-graph";
 import { SummaryRelationshipGraphAggregator } from "../relationships/relationship-graph-aggregator";
@@ -54,6 +56,7 @@ import { registerAuthorRelationshipIpc } from "./author-relationship-ipc";
 import { registerChapterIpc } from "./chapter-ipc";
 import { registerExportIpc } from "./export-ipc";
 import { registerImportIpc } from "./import-ipc";
+import { registerOutlineIpc } from "./outline-ipc";
 import { registerProjectIpc } from "./project-ipc";
 import { registerRelationshipGraphIpc } from "./relationship-graph-ipc";
 import { registerScratchIpc } from "./scratch-ipc";
@@ -218,6 +221,10 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
     const resolveAuthorRelationshipRepo = (projectId: string): AuthorRelationshipRepository => new AuthorRelationshipRepository(resolveProjectDb(projectId));
     const resolveWritingGoalRepo = (projectId: string): WritingGoalRepository => new WritingGoalRepository(resolveProjectDb(projectId));
     const resolveWritingGoalService = (projectId: string): WritingGoalService => new WritingGoalService(resolveWritingGoalRepo(projectId));
+    const resolveOutlineService = (projectId: string): OutlineService => {
+      const projectDb = resolveProjectDb(projectId);
+      return new OutlineService(new OutlineRepository(projectDb), new ProjectRepository(projectDb), new ChapterRepository(projectDb));
+    };
     const writingOperationRunner = useE2eAiGenerators()
       ? undefined
       : WritingOperationRunner.fromSettings(settingsService, resolveChapterRepo, resolveSummaryRepo);
@@ -401,6 +408,7 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
         }
       };
     });
+    registerOutlineIpc(resolveOutlineService);
     ipcMain.handle(
       ipcChannels.summary.getIndexStatus,
       createValidatedIpcHandler(summaryIndexStatusInputSchema, (input) =>

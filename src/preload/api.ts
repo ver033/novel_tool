@@ -43,6 +43,23 @@ import type {
   ImportConfirmTxtInput,
   ImportPreviewTxtInput,
   ImportUpdatePreviewInput,
+  OutlineConfirmBulkImportInput,
+  OutlineCreateEventInput,
+  OutlineCreateThreadInput,
+  OutlineDeleteEventInput,
+  OutlineDeleteThreadInput,
+  OutlineGetChapterNoteInput,
+  OutlineGetOverviewInput,
+  OutlineImportLegacyChapterNoteInput,
+  OutlineListEventsInput,
+  OutlineListThreadsInput,
+  OutlinePreviewBulkImportInput,
+  OutlinePreviewImportFileInput,
+  OutlineReorderEventsInput,
+  OutlineSaveChapterNoteInput,
+  OutlineUndoImportBatchInput,
+  OutlineUpdateEventInput,
+  OutlineUpdateThreadInput,
   ProjectDeleteInput,
   ProjectOpenFileInput,
   ProjectOpenInput,
@@ -147,6 +164,26 @@ export type NovelToolApi = {
     readonly createRelationship: (input: AuthorRelationshipCreateRelationshipInput) => Promise<unknown>;
     readonly deleteCharacter: (input: AuthorRelationshipDeleteCharacterInput) => Promise<unknown>;
     readonly deleteRelationship: (input: AuthorRelationshipDeleteRelationshipInput) => Promise<unknown>;
+  };
+  readonly outline: {
+    readonly selectImportFile: () => Promise<unknown>;
+    readonly getOverview: (input: OutlineGetOverviewInput) => Promise<unknown>;
+    readonly listEvents: (input: OutlineListEventsInput) => Promise<unknown>;
+    readonly createEvent: (input: OutlineCreateEventInput) => Promise<unknown>;
+    readonly updateEvent: (input: OutlineUpdateEventInput) => Promise<unknown>;
+    readonly deleteEvent: (input: OutlineDeleteEventInput) => Promise<unknown>;
+    readonly reorderEvents: (input: OutlineReorderEventsInput) => Promise<unknown>;
+    readonly listThreads: (input: OutlineListThreadsInput) => Promise<unknown>;
+    readonly createThread: (input: OutlineCreateThreadInput) => Promise<unknown>;
+    readonly updateThread: (input: OutlineUpdateThreadInput) => Promise<unknown>;
+    readonly deleteThread: (input: OutlineDeleteThreadInput) => Promise<unknown>;
+    readonly getChapterNote: (input: OutlineGetChapterNoteInput) => Promise<unknown>;
+    readonly saveChapterNote: (input: OutlineSaveChapterNoteInput) => Promise<unknown>;
+    readonly importLegacyChapterNote: (input: OutlineImportLegacyChapterNoteInput) => Promise<unknown>;
+    readonly previewImportFile: (input: OutlinePreviewImportFileInput) => Promise<unknown>;
+    readonly previewBulkImport: (input: OutlinePreviewBulkImportInput) => Promise<unknown>;
+    readonly confirmBulkImport: (input: OutlineConfirmBulkImportInput) => Promise<unknown>;
+    readonly undoImportBatch: (input: OutlineUndoImportBatchInput) => Promise<unknown>;
   };
   readonly writingGoals: {
     readonly getOverview: (input: WritingGoalOverviewInput) => Promise<unknown>;
@@ -260,6 +297,26 @@ export const novelToolApi: NovelToolApi = Object.freeze({
     createRelationship: (input: AuthorRelationshipCreateRelationshipInput) => ipcRenderer.invoke(ipcChannels.authorRelationship.createRelationship, input),
     deleteCharacter: (input: AuthorRelationshipDeleteCharacterInput) => ipcRenderer.invoke(ipcChannels.authorRelationship.deleteCharacter, input),
     deleteRelationship: (input: AuthorRelationshipDeleteRelationshipInput) => ipcRenderer.invoke(ipcChannels.authorRelationship.deleteRelationship, input)
+  }),
+  outline: Object.freeze({
+    selectImportFile: () => ipcRenderer.invoke(ipcChannels.outline.selectImportFile),
+    getOverview: (input: OutlineGetOverviewInput) => ipcRenderer.invoke(ipcChannels.outline.getOverview, input),
+    listEvents: (input: OutlineListEventsInput) => ipcRenderer.invoke(ipcChannels.outline.listEvents, input),
+    createEvent: (input: OutlineCreateEventInput) => ipcRenderer.invoke(ipcChannels.outline.createEvent, input),
+    updateEvent: (input: OutlineUpdateEventInput) => ipcRenderer.invoke(ipcChannels.outline.updateEvent, input),
+    deleteEvent: (input: OutlineDeleteEventInput) => ipcRenderer.invoke(ipcChannels.outline.deleteEvent, input),
+    reorderEvents: (input: OutlineReorderEventsInput) => ipcRenderer.invoke(ipcChannels.outline.reorderEvents, input),
+    listThreads: (input: OutlineListThreadsInput) => ipcRenderer.invoke(ipcChannels.outline.listThreads, input),
+    createThread: (input: OutlineCreateThreadInput) => ipcRenderer.invoke(ipcChannels.outline.createThread, input),
+    updateThread: (input: OutlineUpdateThreadInput) => ipcRenderer.invoke(ipcChannels.outline.updateThread, input),
+    deleteThread: (input: OutlineDeleteThreadInput) => ipcRenderer.invoke(ipcChannels.outline.deleteThread, input),
+    getChapterNote: (input: OutlineGetChapterNoteInput) => ipcRenderer.invoke(ipcChannels.outline.getChapterNote, input),
+    saveChapterNote: (input: OutlineSaveChapterNoteInput) => ipcRenderer.invoke(ipcChannels.outline.saveChapterNote, input),
+    importLegacyChapterNote: (input: OutlineImportLegacyChapterNoteInput) => ipcRenderer.invoke(ipcChannels.outline.importLegacyChapterNote, input),
+    previewImportFile: (input: OutlinePreviewImportFileInput) => ipcRenderer.invoke(ipcChannels.outline.previewImportFile, input),
+    previewBulkImport: (input: OutlinePreviewBulkImportInput) => ipcRenderer.invoke(ipcChannels.outline.previewBulkImport, input),
+    confirmBulkImport: (input: OutlineConfirmBulkImportInput) => ipcRenderer.invoke(ipcChannels.outline.confirmBulkImport, input),
+    undoImportBatch: (input: OutlineUndoImportBatchInput) => ipcRenderer.invoke(ipcChannels.outline.undoImportBatch, input)
   }),
   writingGoals: Object.freeze({
     getOverview: (input: WritingGoalOverviewInput) => ipcRenderer.invoke(ipcChannels.writingGoals.getOverview, input),

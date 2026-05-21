@@ -114,4 +114,31 @@ describe("project creation flow", () => {
     expect(() => activeDb.prepare("SELECT 1").get()).toThrow();
     mainDb.close();
   });
+
+  it("repairs outline tables before reusing an already open project database", () => {
+    const dir = createTempDir();
+    const mainDb = createDatabase(join(dir, "main.sqlite3"));
+    runMigrations(mainDb);
+    const service = trackProjectService(
+      new ProjectService(new ProjectRepository(mainDb), {
+        projectFileDirectory: () => join(dir, "projects")
+      })
+    );
+    const created = service.createProject({ name: "星河旧梦" });
+    const activeDb = service.getActiveProjectDatabase();
+
+    activeDb.exec(`
+      DROP TABLE outline_chapter_notes;
+      DROP TABLE outline_event_threads;
+      DROP TABLE outline_events;
+      DROP TABLE outline_threads;
+    `);
+
+    const projectDb = service.getProjectDatabaseForProject(created.project.id);
+
+    expect(projectDb.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'outline_threads'").get()).toEqual({
+      name: "outline_threads"
+    });
+    mainDb.close();
+  });
 });

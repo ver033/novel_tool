@@ -42,6 +42,27 @@ import type {
   importConfirmTxtInputSchema,
   importPreviewTxtInputSchema,
   importUpdatePreviewInputSchema,
+  outlineConfirmBulkImportInputSchema,
+  outlineCreateEventInputSchema,
+  outlineCreateThreadInputSchema,
+  outlineDaySegmentSchema,
+  outlineDeleteEventInputSchema,
+  outlineDeleteThreadInputSchema,
+  outlineEventStatusSchema,
+  outlineGetChapterNoteInputSchema,
+  outlineGetOverviewInputSchema,
+  outlineImportColumnMappingSchema,
+  outlineImportLegacyChapterNoteInputSchema,
+  outlineListEventsInputSchema,
+  outlineListThreadsInputSchema,
+  outlinePreviewBulkImportInputSchema,
+  outlinePreviewImportFileInputSchema,
+  outlineReorderEventsInputSchema,
+  outlineSaveChapterNoteInputSchema,
+  outlineUndoImportBatchInputSchema,
+  outlineUpdateEventInputSchema,
+  outlineUpdateThreadInputSchema,
+  outlineViewModeSchema,
   projectCreateInputSchema,
   projectDeleteInputSchema,
   projectOpenFileInputSchema,
@@ -274,6 +295,96 @@ export type ImportConfirmResult = {
   readonly chapters: readonly ChapterSummary[];
   readonly firstChapterId: string | null;
 };
+
+export type OutlineDaySegment = z.output<typeof outlineDaySegmentSchema>;
+export type OutlineEventStatus = z.output<typeof outlineEventStatusSchema>;
+export type OutlineViewMode = z.output<typeof outlineViewModeSchema>;
+
+export type OutlineThreadRecord = {
+  readonly id: string;
+  readonly projectId: string;
+  readonly name: string;
+  readonly color: string;
+  readonly sortOrder: number;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+};
+
+export type OutlineEventRecord = {
+  readonly id: string;
+  readonly projectId: string;
+  readonly chapterId: string | null;
+  readonly title: string;
+  readonly summary: string;
+  readonly storyDate: string | null;
+  readonly storyTimeLabel: string;
+  readonly weekdayLabel: string;
+  readonly storyTimeOrder: number | null;
+  readonly daySegment: OutlineDaySegment;
+  readonly customDaySegment: string | null;
+  readonly location: string;
+  readonly povCharacter: string;
+  readonly characters: readonly string[];
+  readonly goal: string;
+  readonly conflict: string;
+  readonly outcome: string;
+  readonly foreshadowing: string;
+  readonly notes: string;
+  readonly status: OutlineEventStatus;
+  readonly eventOrder: number;
+  readonly importBatchId: string | null;
+  readonly threadIds: readonly string[];
+  readonly createdAt: string;
+  readonly updatedAt: string;
+};
+
+export type OutlineChapterNoteRecord = {
+  readonly projectId: string;
+  readonly chapterId: string;
+  readonly content: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+};
+
+export type OutlineOverview = {
+  readonly projectId: string;
+  readonly chapters: readonly ChapterSummary[];
+  readonly threads: readonly OutlineThreadRecord[];
+  readonly events: readonly OutlineEventRecord[];
+  readonly chapterNotes: readonly OutlineChapterNoteRecord[];
+};
+
+export type OutlineBulkImportPreviewRow = {
+  readonly rowNumber: number;
+  readonly chapterTitle: string;
+  readonly chapterId: string | null;
+  readonly storyDate: string | null;
+  readonly storyTimeLabel: string;
+  readonly weekdayLabel: string;
+  readonly storyTimeOrder: number | null;
+  readonly daySegment: OutlineDaySegment;
+  readonly customDaySegment: string | null;
+  readonly threadNames: readonly string[];
+  readonly summary: string;
+  readonly characters: readonly string[];
+  readonly location: string;
+  readonly status: OutlineEventStatus;
+  readonly warnings: readonly string[];
+};
+
+export type OutlineBulkImportPreview = {
+  readonly importBatchId: string;
+  readonly rows: readonly OutlineBulkImportPreviewRow[];
+  readonly newThreadNames: readonly string[];
+  readonly skippedRows: readonly { readonly rowNumber: number; readonly reason: string }[];
+};
+
+export type OutlineImportFileSelection = {
+  readonly filePath: string;
+  readonly fileName: string;
+};
+
+export type OutlineImportColumnMapping = z.input<typeof outlineImportColumnMappingSchema>;
 
 export type ProjectRecord = {
   readonly id: string;
@@ -513,6 +624,23 @@ export type ScratchDeleteInput = z.input<typeof scratchDeleteInputSchema>;
 export type ImportPreviewTxtInput = z.input<typeof importPreviewTxtInputSchema>;
 export type ImportUpdatePreviewInput = z.input<typeof importUpdatePreviewInputSchema>;
 export type ImportConfirmTxtInput = z.input<typeof importConfirmTxtInputSchema>;
+export type OutlineGetOverviewInput = z.input<typeof outlineGetOverviewInputSchema>;
+export type OutlineListEventsInput = z.input<typeof outlineListEventsInputSchema>;
+export type OutlineCreateEventInput = z.input<typeof outlineCreateEventInputSchema>;
+export type OutlineUpdateEventInput = z.input<typeof outlineUpdateEventInputSchema>;
+export type OutlineDeleteEventInput = z.input<typeof outlineDeleteEventInputSchema>;
+export type OutlineReorderEventsInput = z.input<typeof outlineReorderEventsInputSchema>;
+export type OutlineListThreadsInput = z.input<typeof outlineListThreadsInputSchema>;
+export type OutlineCreateThreadInput = z.input<typeof outlineCreateThreadInputSchema>;
+export type OutlineUpdateThreadInput = z.input<typeof outlineUpdateThreadInputSchema>;
+export type OutlineDeleteThreadInput = z.input<typeof outlineDeleteThreadInputSchema>;
+export type OutlineGetChapterNoteInput = z.input<typeof outlineGetChapterNoteInputSchema>;
+export type OutlineSaveChapterNoteInput = z.input<typeof outlineSaveChapterNoteInputSchema>;
+export type OutlineImportLegacyChapterNoteInput = z.input<typeof outlineImportLegacyChapterNoteInputSchema>;
+export type OutlinePreviewImportFileInput = z.input<typeof outlinePreviewImportFileInputSchema>;
+export type OutlinePreviewBulkImportInput = z.input<typeof outlinePreviewBulkImportInputSchema>;
+export type OutlineConfirmBulkImportInput = z.input<typeof outlineConfirmBulkImportInputSchema>;
+export type OutlineUndoImportBatchInput = z.input<typeof outlineUndoImportBatchInputSchema>;
 export type ExportSelectTxtFilePathInput = z.input<typeof exportSelectTxtFilePathInputSchema>;
 export type ExportTxtInput = z.input<typeof exportTxtInputSchema>;
 export type ExportTxtResult = {
@@ -754,6 +882,26 @@ export const ipcChannels = {
     createRelationship: "novelTool:authorRelationship:createRelationship",
     deleteCharacter: "novelTool:authorRelationship:deleteCharacter",
     deleteRelationship: "novelTool:authorRelationship:deleteRelationship"
+  },
+  outline: {
+    getOverview: "novelTool:outline:getOverview",
+    listEvents: "novelTool:outline:listEvents",
+    createEvent: "novelTool:outline:createEvent",
+    updateEvent: "novelTool:outline:updateEvent",
+    deleteEvent: "novelTool:outline:deleteEvent",
+    reorderEvents: "novelTool:outline:reorderEvents",
+    listThreads: "novelTool:outline:listThreads",
+    createThread: "novelTool:outline:createThread",
+    updateThread: "novelTool:outline:updateThread",
+    deleteThread: "novelTool:outline:deleteThread",
+    getChapterNote: "novelTool:outline:getChapterNote",
+    saveChapterNote: "novelTool:outline:saveChapterNote",
+    importLegacyChapterNote: "novelTool:outline:importLegacyChapterNote",
+    selectImportFile: "novelTool:outline:selectImportFile",
+    previewImportFile: "novelTool:outline:previewImportFile",
+    previewBulkImport: "novelTool:outline:previewBulkImport",
+    confirmBulkImport: "novelTool:outline:confirmBulkImport",
+    undoImportBatch: "novelTool:outline:undoImportBatch"
   },
   writingGoals: {
     getOverview: "novelTool:writingGoals:getOverview",
