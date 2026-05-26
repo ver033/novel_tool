@@ -35,10 +35,12 @@ import { OutlineService } from "../outline/outline-service";
 import { ProjectService } from "../project/project-service";
 import { AuthorRelationshipGraphService } from "../relationships/author-relationship-graph";
 import { SummaryRelationshipGraphAggregator } from "../relationships/relationship-graph-aggregator";
+import { logMainError } from "../logger";
 import { createElectronSecretStore } from "../settings/electron-secret-store";
 import { SettingsService } from "../settings/settings-service";
 import { ipcChannels } from "../shared/types";
 import type { TaskType } from "../shared/types";
+import { SettingsStartupLaunchPreferenceStore, StartupLaunchService } from "../startup/startup-launch-service";
 import { OpenRouterUsageAnalyticsReporter, UsageAnalyticsService, type UsageAnalyticsProjectContext } from "../usage/usage-analytics-service";
 import { WritingGoalService } from "../writing-goals/writing-goal-service";
 import {
@@ -203,6 +205,16 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
       connectionTester: new DefaultOpenRouterConnectionTester(),
       modelCatalog: new OpenRouterModelCatalogClient()
     });
+    const startupLaunchService = new StartupLaunchService({
+      isPackaged: app.isPackaged,
+      getLoginItemSettings: (options) => app.getLoginItemSettings({ ...options, args: [...options.args] }),
+      setLoginItemSettings: (settings) => app.setLoginItemSettings({ ...settings, args: [...settings.args] })
+    }, {}, new SettingsStartupLaunchPreferenceStore(settingsRepo));
+    try {
+      startupLaunchService.ensureDefaultEnabled();
+    } catch (error) {
+      logMainError("enable default Windows startup launch failed", error);
+    }
     const summaryServices = new Map<string, SummaryService>();
     const recoveredSummaryJobProjects = new Set<string>();
     let activeSummaryWorker:
@@ -614,7 +626,7 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
     registerExternalBookSyncIpc(externalBookSyncService);
     registerExportIpc(txtExporter, shareableProjectExporter);
     registerUsageAnalyticsIpc(usageAnalyticsService);
-    registerSettingsIpc(settingsService);
+    registerSettingsIpc(settingsService, startupLaunchService);
     registered = true;
   }
 

@@ -319,6 +319,12 @@ export const usageAnalyticsUpdateSettingsInputSchema = z
     message: "at least one usage analytics setting is required"
   });
 
+export const startupLaunchUpdateInputSchema = z
+  .object({
+    enabled: z.boolean()
+  })
+  .strict();
+
 export const settingsSaveInputSchema = z
   .object({
     editor: editorSettingsSchema.optional(),

@@ -87,6 +87,7 @@ import type {
   scratchUpdateInputSchema,
   settingsSaveInputSchema,
   settingsListModelsInputSchema,
+  startupLaunchUpdateInputSchema,
   settingsTestConnectionInputSchema,
   summaryCancelCurrentJobInputSchema,
   summaryClearAndRetryArcCacheInputSchema,
@@ -723,6 +724,12 @@ export type WritingGoalDayDetailInput = z.input<typeof writingGoalDayDetailInput
 export type SettingsSaveInput = z.input<typeof settingsSaveInputSchema>;
 export type SettingsTestConnectionInput = z.input<typeof settingsTestConnectionInputSchema>;
 export type SettingsListModelsInput = z.input<typeof settingsListModelsInputSchema>;
+export type StartupLaunchStatus = {
+  readonly supported: boolean;
+  readonly enabled: boolean;
+  readonly reason: "not_windows" | "not_packaged" | null;
+};
+export type StartupLaunchUpdateInput = z.input<typeof startupLaunchUpdateInputSchema>;
 export type UsageAnalyticsRecordEventInput = z.input<typeof usageAnalyticsRecordEventInputSchema>;
 export type UsageAnalyticsUpdateSettingsInput = z.input<typeof usageAnalyticsUpdateSettingsInputSchema>;
 export type UsageAnalyticsStatus = {
@@ -987,6 +994,10 @@ export const ipcChannels = {
     save: "novelTool:settings:save",
     testConnection: "novelTool:settings:testConnection",
     listModels: "novelTool:settings:listModels"
+  },
+  startupLaunch: {
+    getStatus: "novelTool:startupLaunch:getStatus",
+    updateSettings: "novelTool:startupLaunch:updateSettings"
   },
   usageAnalytics: {
     getStatus: "novelTool:usageAnalytics:getStatus",

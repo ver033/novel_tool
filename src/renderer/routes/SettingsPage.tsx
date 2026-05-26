@@ -20,6 +20,7 @@ import type {
   SettingsSaveInput,
   SettingsState,
   SettingsTestConnectionInput,
+  StartupLaunchStatus,
   SummaryArcCacheDetail,
   SummaryArcCacheEntry,
   SummaryBookCacheDetail,
@@ -37,7 +38,7 @@ import { Textarea } from "../components/Textarea";
 import { RelationshipGraphCachePanel } from "../relationship-graph/RelationshipGraphCachePanel";
 import { getNovelToolApi } from "../state/app-store";
 
-export type SettingsCategory = "通用" | "编辑器" | "AI 服务" | "提示词预设" | "章节索引缓存" | "导入导出" | "实验功能" | "备份与数据" | "快捷键";
+export type SettingsCategory = "编辑器" | "AI 服务" | "提示词预设" | "章节索引缓存" | "导入导出" | "实验功能" | "备份与数据" | "快捷键";
 
 type SettingsPageProps = {
   readonly activeCategory: SettingsCategory;
@@ -825,6 +826,79 @@ function SettingsContent({
   return null;
 }
 
+function startupLaunchStatusText(status: StartupLaunchStatus | null): string {
+  if (!status) {
+    return "正在读取状态";
+  }
+  if (!status.supported) {
+    return status.reason === "not_windows" ? "仅 Windows 安装版支持" : "仅安装版支持";
+  }
+  return status.enabled ? "已开启" : "已关闭";
+}
+
+function StartupLaunchSettingsPane() {
+  const api = useMemo(getNovelToolApi, []);
+  const [status, setStatus] = useState<StartupLaunchStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function loadStatus(): Promise<void> {
+    try {
+      setError(null);
+      setStatus(await api.startupLaunch.getStatus());
+    } catch (reason) {
+      setError(formatError(reason));
+    }
+  }
+
+  useEffect(() => {
+    void loadStatus();
+  }, [api]);
+
+  async function updateStartupLaunch(enabled: boolean): Promise<void> {
+    setBusy(true);
+    setError(null);
+    try {
+      setStatus(await api.startupLaunch.updateSettings({ enabled }));
+    } catch (reason) {
+      setError(formatError(reason));
+      await loadStatus();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const enabled = Boolean(status?.enabled);
+  const supported = Boolean(status?.supported);
+
+  return (
+    <div className="settings-grid">
+      <div className="settings-card wide">
+        <div className="settings-card-head">
+          <div>
+            <h3>Windows 登录后自动启动</h3>
+          </div>
+        </div>
+        <div className="detected-row">
+          <span>
+            <b>Windows 登录后自动启动</b>
+            <br />
+            <span className="muted">{startupLaunchStatusText(status)}</span>
+          </span>
+          <button
+            aria-label="Windows 登录后自动启动"
+            className={`toggle ${enabled ? "on" : ""}`}
+            disabled={!supported || busy}
+            onClick={() => void updateStartupLaunch(!enabled)}
+            type="button"
+          />
+        </div>
+        {error ? <p className="settings-message error">{error}</p> : null}
+      </div>
+    </div>
+  );
+}
+
 type UsageAnalyticsSettingsPaneProps = {
   readonly apiKeyConfigured: boolean;
 };
@@ -977,6 +1051,7 @@ function ExperimentalSettingsPane({ apiKeyConfigured, currentProject }: Experime
   return (
     <div className="settings-grid experimental-settings">
       <UsageAnalyticsSettingsPane apiKeyConfigured={apiKeyConfigured} />
+      <StartupLaunchSettingsPane />
       <ExternalBookSyncPane currentProject={currentProject} />
     </div>
   );

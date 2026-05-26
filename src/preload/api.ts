@@ -89,6 +89,8 @@ import type {
   SettingsListModelsInput,
   SettingsSaveInput,
   SettingsTestConnectionInput,
+  StartupLaunchStatus,
+  StartupLaunchUpdateInput,
   SummaryCancelCurrentJobInput,
   SummaryClearAndRetryArcCacheInput,
   SummaryClearAndRetryBookCacheInput,
@@ -174,6 +176,10 @@ export type NovelToolApi = {
     readonly save: (input: SettingsSaveInput) => Promise<unknown>;
     readonly testConnection: (input?: SettingsTestConnectionInput) => Promise<unknown>;
     readonly listModels: (input?: SettingsListModelsInput) => Promise<unknown>;
+  };
+  readonly startupLaunch: {
+    readonly getStatus: () => Promise<StartupLaunchStatus>;
+    readonly updateSettings: (input: StartupLaunchUpdateInput) => Promise<StartupLaunchStatus>;
   };
   readonly usageAnalytics: {
     readonly getStatus: () => Promise<UsageAnalyticsStatus>;
@@ -324,6 +330,10 @@ export const novelToolApi: NovelToolApi = Object.freeze({
     save: (input: SettingsSaveInput) => ipcRenderer.invoke(ipcChannels.settings.save, input),
     testConnection: (input?: SettingsTestConnectionInput) => ipcRenderer.invoke(ipcChannels.settings.testConnection, input),
     listModels: (input?: SettingsListModelsInput) => ipcRenderer.invoke(ipcChannels.settings.listModels, input)
+  }),
+  startupLaunch: Object.freeze({
+    getStatus: () => ipcRenderer.invoke(ipcChannels.startupLaunch.getStatus),
+    updateSettings: (input: StartupLaunchUpdateInput) => ipcRenderer.invoke(ipcChannels.startupLaunch.updateSettings, input)
   }),
   usageAnalytics: Object.freeze({
     getStatus: () => ipcRenderer.invoke(ipcChannels.usageAnalytics.getStatus),

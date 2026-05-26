@@ -26,6 +26,29 @@ describe("settings page scope", () => {
     expect(app).toContain('useState<SettingsCategory>("AI 服务")');
   });
 
+  it("exposes Windows startup launch on the experimental settings page with a dedicated IPC surface", () => {
+    const settings = readSource("src/renderer/routes/SettingsPage.tsx");
+    const preload = readSource("src/preload/api.ts");
+    const ipcTypes = readSource("src/main/shared/types.ts");
+    const settingsIpc = readSource("src/main/ipc/settings-ipc.ts");
+    const registerIpc = readSource("src/main/ipc/register-ipc.ts");
+    const experimentalPane = readFunctionBlock(settings, "ExperimentalSettingsPane");
+
+    expect(settings).toContain("Windows 登录后自动启动");
+    expect(settings).toContain("StartupLaunchSettingsPane");
+    expect(experimentalPane).toContain("<StartupLaunchSettingsPane />");
+    expect(settings).toContain("api.startupLaunch.getStatus");
+    expect(settings).toContain("api.startupLaunch.updateSettings");
+    expect(preload).toContain("startupLaunch");
+    expect(preload).toContain("ipcChannels.startupLaunch.getStatus");
+    expect(preload).toContain("ipcChannels.startupLaunch.updateSettings");
+    expect(ipcTypes).toContain("novelTool:startupLaunch:getStatus");
+    expect(ipcTypes).toContain("novelTool:startupLaunch:updateSettings");
+    expect(settingsIpc).toContain("startupLaunchService.getStatus");
+    expect(settingsIpc).toContain("startupLaunchService.setEnabled");
+    expect(registerIpc).toContain("startupLaunchService.ensureDefaultEnabled");
+  });
+
   it("does not show disabled placeholder AI behavior controls in the visible AI settings", () => {
     const settings = readSource("src/renderer/routes/SettingsPage.tsx");
 
@@ -75,6 +98,7 @@ describe("settings page scope", () => {
     expect(aiBranch).not.toContain("UsageAnalyticsSettingsPane");
     expect(importExportPane).not.toContain("ExternalBookSyncPane");
     expect(experimentalPane).toContain("<UsageAnalyticsSettingsPane apiKeyConfigured={apiKeyConfigured} />");
+    expect(experimentalPane).toContain("<StartupLaunchSettingsPane />");
     expect(experimentalPane).toContain("<ExternalBookSyncPane currentProject={currentProject} />");
     expect(settings).toContain("<h3>同步检查</h3>");
     expect(settings).not.toContain("外部 .Book 同步检查");

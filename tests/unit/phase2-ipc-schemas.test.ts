@@ -33,6 +33,7 @@ import {
   scratchListInputSchema,
   scratchUpdateInputSchema,
   settingsSaveInputSchema,
+  startupLaunchUpdateInputSchema,
   usageAnalyticsRecordEventInputSchema,
   usageAnalyticsUpdateSettingsInputSchema
 } from "../../src/main/shared/schemas";
@@ -69,6 +70,9 @@ describe("phase 2 ipc schemas", () => {
     });
     expect(parseIpcPayload(usageAnalyticsUpdateSettingsInputSchema, { automaticReportsEnabled: false })).toEqual({
       automaticReportsEnabled: false
+    });
+    expect(parseIpcPayload(startupLaunchUpdateInputSchema, { enabled: true })).toEqual({
+      enabled: true
     });
     expect(
       parseIpcPayload(settingsSaveInputSchema, {

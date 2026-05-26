@@ -1,0 +1,148 @@
+import path from "node:path";
+import type { SettingsRepository } from "../db/repositories/settings-repo";
+
+const STARTUP_LAUNCH_NAME = "Moshu";
+const STARTUP_LAUNCH_SETTINGS_KEY = "startupLaunch";
+
+export type StartupLaunchUnsupportedReason = "not_windows" | "not_packaged";
+
+export type StartupLaunchStatus = {
+  readonly supported: boolean;
+  readonly enabled: boolean;
+  readonly reason: StartupLaunchUnsupportedReason | null;
+};
+
+type LoginItemSettings = {
+  readonly openAtLogin?: boolean;
+  readonly executableWillLaunchAtLogin?: boolean;
+};
+
+type LoginItemOptions = {
+  readonly name: string;
+  readonly path: string;
+  readonly args: readonly string[];
+};
+
+type SetLoginItemSettingsInput = LoginItemOptions & {
+  readonly openAtLogin: boolean;
+  readonly enabled: boolean;
+};
+
+export type StartupLaunchElectronApp = {
+  readonly isPackaged: boolean;
+  readonly getLoginItemSettings: (options: LoginItemOptions) => LoginItemSettings;
+  readonly setLoginItemSettings: (settings: SetLoginItemSettingsInput) => void;
+};
+
+export type StartupLaunchServiceOptions = {
+  readonly platform?: NodeJS.Platform;
+  readonly execPath?: string;
+};
+
+export type StartupLaunchPreferenceStore = {
+  readonly getDefaultEnabledApplied: () => boolean;
+  readonly setDefaultEnabledApplied: (value: boolean) => void;
+};
+
+type StoredStartupLaunchSettings = {
+  readonly defaultEnabledApplied?: boolean;
+};
+
+const alreadyAppliedPreferenceStore: StartupLaunchPreferenceStore = {
+  getDefaultEnabledApplied: () => true,
+  setDefaultEnabledApplied() {}
+};
+
+export class SettingsStartupLaunchPreferenceStore implements StartupLaunchPreferenceStore {
+  constructor(private readonly settingsRepo: SettingsRepository) {}
+
+  getDefaultEnabledApplied(): boolean {
+    return Boolean(this.settingsRepo.getJson<StoredStartupLaunchSettings>(STARTUP_LAUNCH_SETTINGS_KEY)?.defaultEnabledApplied);
+  }
+
+  setDefaultEnabledApplied(value: boolean): void {
+    this.settingsRepo.setJson(STARTUP_LAUNCH_SETTINGS_KEY, { defaultEnabledApplied: value } satisfies StoredStartupLaunchSettings);
+  }
+}
+
+export function resolveWindowsSquirrelStubLauncher(execPath: string): string {
+  return path.win32.resolve(path.win32.dirname(execPath), "..", path.win32.basename(execPath));
+}
+
+export class StartupLaunchService {
+  private readonly platform: NodeJS.Platform;
+  private readonly execPath: string;
+
+  constructor(
+    private readonly app: StartupLaunchElectronApp,
+    options: StartupLaunchServiceOptions = {},
+    private readonly preferenceStore: StartupLaunchPreferenceStore = alreadyAppliedPreferenceStore
+  ) {
+    this.platform = options.platform ?? process.platform;
+    this.execPath = options.execPath ?? process.execPath;
+  }
+
+  getStatus(): StartupLaunchStatus {
+    const unsupportedReason = this.unsupportedReason();
+    if (unsupportedReason) {
+      return {
+        supported: false,
+        enabled: false,
+        reason: unsupportedReason
+      };
+    }
+
+    const settings = this.app.getLoginItemSettings(this.loginItemOptions());
+    return {
+      supported: true,
+      enabled: Boolean(settings.openAtLogin && (settings.executableWillLaunchAtLogin ?? true)),
+      reason: null
+    };
+  }
+
+  setEnabled(enabled: boolean): StartupLaunchStatus {
+    if (this.unsupportedReason()) {
+      throw new Error("开机自启动只支持 Windows 安装版。");
+    }
+
+    this.app.setLoginItemSettings({
+      ...this.loginItemOptions(),
+      openAtLogin: enabled,
+      enabled
+    });
+    this.preferenceStore.setDefaultEnabledApplied(true);
+    return this.getStatus();
+  }
+
+  ensureDefaultEnabled(): StartupLaunchStatus {
+    if (this.unsupportedReason() || this.preferenceStore.getDefaultEnabledApplied()) {
+      return this.getStatus();
+    }
+
+    this.app.setLoginItemSettings({
+      ...this.loginItemOptions(),
+      openAtLogin: true,
+      enabled: true
+    });
+    this.preferenceStore.setDefaultEnabledApplied(true);
+    return this.getStatus();
+  }
+
+  private unsupportedReason(): StartupLaunchUnsupportedReason | null {
+    if (this.platform !== "win32") {
+      return "not_windows";
+    }
+    if (!this.app.isPackaged) {
+      return "not_packaged";
+    }
+    return null;
+  }
+
+  private loginItemOptions(): LoginItemOptions {
+    return {
+      name: STARTUP_LAUNCH_NAME,
+      path: resolveWindowsSquirrelStubLauncher(this.execPath),
+      args: []
+    };
+  }
+}
