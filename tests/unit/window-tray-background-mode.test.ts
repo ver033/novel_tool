@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createWindowsTrayBackgroundController, type TrayCloseEvent, type TrayMenuItem, type TrayRuntime, type TrayWindow } from "../../src/main/window-tray-background";
+import { isHiddenStartupLaunch } from "../../src/main/startup/startup-launch-service";
 
 type CloseEvent = TrayCloseEvent & { readonly preventDefault: ReturnType<typeof vi.fn<() => void>> };
 
@@ -41,6 +42,11 @@ function createRuntime(platform: NodeJS.Platform = "win32") {
 }
 
 describe("Windows tray background mode", () => {
+  it("detects login startup launches that should start hidden", () => {
+    expect(isHiddenStartupLaunch(["novel-tool.exe", "--hidden-startup"])).toBe(true);
+    expect(isHiddenStartupLaunch(["novel-tool.exe"])).toBe(false);
+  });
+
   it("hides the Windows main window instead of closing when the user clicks X", () => {
     const { runtime } = createRuntime("win32");
     const window = createFakeWindow();

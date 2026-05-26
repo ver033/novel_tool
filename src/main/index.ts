@@ -2,6 +2,7 @@ import { app, BrowserWindow, Menu, nativeImage, Tray } from "electron";
 import path from "node:path";
 import { registerIpcHandlers } from "./ipc/register-ipc";
 import { initializeMainLogger, installMainProcessErrorHandlers, logMainError } from "./logger";
+import { isHiddenStartupLaunch } from "./startup/startup-launch-service";
 import { createWindowsTrayBackgroundController } from "./window-tray-background";
 import { handleWindowsSquirrelStartupEvent } from "./windows-squirrel-startup";
 
@@ -141,7 +142,9 @@ if (!handleWindowsSquirrelStartupEvent({ quit: () => app.quit() })) {
       logMainError("registerIpcHandlers failed", error);
       throw error;
     }
-    createMainWindow();
+    if (!isHiddenStartupLaunch()) {
+      createMainWindow();
+    }
     windowsTrayBackgroundController.ensureTray();
 
     app.on("activate", () => {

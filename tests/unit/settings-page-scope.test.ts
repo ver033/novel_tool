@@ -34,7 +34,8 @@ describe("settings page scope", () => {
     const registerIpc = readSource("src/main/ipc/register-ipc.ts");
     const experimentalPane = readFunctionBlock(settings, "ExperimentalSettingsPane");
 
-    expect(settings).toContain("Windows 登录后自动启动");
+    expect(settings).toContain("开机自启动");
+    expect(settings).not.toContain("Windows 登录后自动启动");
     expect(settings).toContain("StartupLaunchSettingsPane");
     expect(experimentalPane).toContain("<StartupLaunchSettingsPane />");
     expect(settings).toContain("api.startupLaunch.getStatus");

@@ -826,16 +826,6 @@ function SettingsContent({
   return null;
 }
 
-function startupLaunchStatusText(status: StartupLaunchStatus | null): string {
-  if (!status) {
-    return "正在读取状态";
-  }
-  if (!status.supported) {
-    return status.reason === "not_windows" ? "仅 Windows 安装版支持" : "仅安装版支持";
-  }
-  return status.enabled ? "已开启" : "已关闭";
-}
-
 function StartupLaunchSettingsPane() {
   const api = useMemo(getNovelToolApi, []);
   const [status, setStatus] = useState<StartupLaunchStatus | null>(null);
@@ -869,32 +859,22 @@ function StartupLaunchSettingsPane() {
   }
 
   const enabled = Boolean(status?.enabled);
-  const supported = Boolean(status?.supported);
 
   return (
-    <div className="settings-grid">
-      <div className="settings-card wide">
-        <div className="settings-card-head">
-          <div>
-            <h3>Windows 登录后自动启动</h3>
-          </div>
-        </div>
-        <div className="detected-row">
-          <span>
-            <b>Windows 登录后自动启动</b>
-            <br />
-            <span className="muted">{startupLaunchStatusText(status)}</span>
-          </span>
-          <button
-            aria-label="Windows 登录后自动启动"
-            className={`toggle ${enabled ? "on" : ""}`}
-            disabled={!supported || busy}
-            onClick={() => void updateStartupLaunch(!enabled)}
-            type="button"
-          />
-        </div>
-        {error ? <p className="settings-message error">{error}</p> : null}
+    <div className="settings-card wide">
+      <div className="detected-row">
+        <span>
+          <b>开机自启动</b>
+        </span>
+        <button
+          aria-label="开机自启动"
+          className={`toggle ${enabled ? "on" : ""}`}
+          disabled={!status || busy}
+          onClick={() => void updateStartupLaunch(!enabled)}
+          type="button"
+        />
       </div>
+      {error ? <p className="settings-message error">{error}</p> : null}
     </div>
   );
 }
