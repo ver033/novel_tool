@@ -21,7 +21,7 @@ describe("StartupLaunchService", () => {
       },
       {
         platform: "win32",
-        execPath: "C:\\Users\\me\\AppData\\Local\\moshu\\app-1.6.1\\novel-tool.exe"
+        execPath: "C:\\Users\\me\\AppData\\Local\\moshu\\app-1.7.0\\novel-tool.exe"
       }
     );
 
@@ -46,7 +46,7 @@ describe("StartupLaunchService", () => {
       },
       {
         platform: "win32",
-        execPath: "C:\\Users\\me\\AppData\\Local\\moshu\\app-1.6.1\\novel-tool.exe"
+        execPath: "C:\\Users\\me\\AppData\\Local\\moshu\\app-1.7.0\\novel-tool.exe"
       }
     );
 
@@ -75,7 +75,7 @@ describe("StartupLaunchService", () => {
       },
       {
         platform: "win32",
-        execPath: "C:\\Users\\me\\AppData\\Local\\moshu\\app-1.6.1\\novel-tool.exe"
+        execPath: "C:\\Users\\me\\AppData\\Local\\moshu\\app-1.7.0\\novel-tool.exe"
       },
       preferenceStore
     );
@@ -103,7 +103,7 @@ describe("StartupLaunchService", () => {
       },
       {
         platform: "win32",
-        execPath: "C:\\Users\\me\\AppData\\Local\\moshu\\app-1.6.1\\novel-tool.exe"
+        execPath: "C:\\Users\\me\\AppData\\Local\\moshu\\app-1.7.0\\novel-tool.exe"
       },
       createPreferenceStore(true)
     );
@@ -147,7 +147,7 @@ describe("StartupLaunchService", () => {
   });
 
   it("resolves the Windows Squirrel stub launcher without depending on the versioned app folder", () => {
-    expect(resolveWindowsSquirrelStubLauncher("C:\\Users\\me\\AppData\\Local\\moshu\\app-1.6.1\\novel-tool.exe")).toBe(
+    expect(resolveWindowsSquirrelStubLauncher("C:\\Users\\me\\AppData\\Local\\moshu\\app-1.7.0\\novel-tool.exe")).toBe(
       "C:\\Users\\me\\AppData\\Local\\moshu\\novel-tool.exe"
     );
   });

@@ -8,6 +8,7 @@ import type {
   WritingWordEventRecord,
   WritingWordEventSource
 } from "../../shared/types";
+import { countWritingUnits } from "../../shared/text";
 
 type WritingGoalRow = {
   readonly id: string;
@@ -354,10 +355,8 @@ export class WritingGoalRepository {
   }
 
   getProjectWordCount(projectId: string): number {
-    const row = this.db.prepare("SELECT COALESCE(SUM(word_count), 0) AS wordCount FROM chapters WHERE project_id = ?").get(projectId) as
-      | { readonly wordCount: number }
-      | undefined;
-    return row?.wordCount ?? 0;
+    const rows = this.db.prepare("SELECT plain_text FROM chapters WHERE project_id = ?").all(projectId) as Array<{ readonly plain_text: string }>;
+    return rows.reduce((sum, row) => sum + countWritingUnits(row.plain_text), 0);
   }
 
   replaceDailyPlansFrom(projectId: string, goalId: string, fromDate: string, plans: readonly WritingDailyPlanInsert[]): void {

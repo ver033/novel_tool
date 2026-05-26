@@ -208,8 +208,8 @@ describe("chapter save and edit flow", () => {
       wordCount: 999
     });
 
-    expect(saved.wordCount).toBe(7);
-    expect(service.getContent({ projectId: "project_1", chapterId: chapter.id }).wordCount).toBe(7);
+    expect(saved.wordCount).toBe(8);
+    expect(service.getContent({ projectId: "project_1", chapterId: chapter.id }).wordCount).toBe(8);
   });
 
   it("normalizes legacy stored word counts when reading chapters", () => {
@@ -221,8 +221,10 @@ describe("chapter save and edit flow", () => {
     db.prepare("UPDATE chapters SET word_count = ? WHERE id = ?").run(999, chapter.id);
     const service = new ChapterService(chapterRepo);
 
-    expect(service.getContent({ projectId: "project_1", chapterId: chapter.id }).wordCount).toBe(6);
-    expect(service.listChapters({ projectId: "project_1" })[0]?.wordCount).toBe(6);
+    expect(service.getContent({ projectId: "project_1", chapterId: chapter.id }).wordCount).toBe(7);
+    expect(service.listChapters({ projectId: "project_1" })[0]?.wordCount).toBe(7);
+    expect(chapterRepo.getProjectWordCount("project_1")).toBe(7);
+    expect(new WritingGoalRepository(db).getProjectWordCount("project_1")).toBe(7);
   });
 
   it("self-heals already-open legacy chapter databases before saving content", () => {

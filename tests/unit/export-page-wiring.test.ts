@@ -52,6 +52,10 @@ describe("TXT export page wiring", () => {
 
     expect(exportPage).toContain("api.export.selectTxtFilePath");
     expect(exportPage).toContain("api.export.exportTxt");
+    expect(exportPage).toContain("自定义范围");
+    expect(exportPage).toContain("chapter_range");
+    expect(exportPage).toContain("fromChapterId");
+    expect(exportPage).toContain("toChapterId");
     expect(exportPage).toContain("草稿纸和 AI 记录不会进入正文导出");
     expect(exportPage).not.toContain("RightUtilitySidebar");
   });

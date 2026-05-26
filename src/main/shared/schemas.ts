@@ -809,11 +809,22 @@ export const exportSelectTxtFilePathInputSchema = z
   })
   .strict();
 
+const exportTxtRangeSchema = z.union([
+  z.literal("all_chapters"),
+  z
+    .object({
+      type: z.literal("chapter_range"),
+      fromChapterId: idSchema,
+      toChapterId: idSchema
+    })
+    .strict()
+]);
+
 export const exportTxtInputSchema = z
   .object({
     projectId: idSchema,
     filePath: nonEmptyString.max(4096),
-    range: z.literal("all_chapters"),
+    range: exportTxtRangeSchema,
     includeChapterTitles: z.boolean()
   })
   .strict();
