@@ -46,18 +46,23 @@ export type StartupLaunchPreferenceStore = {
   readonly setDefaultEnabledApplied: (value: boolean) => void;
   readonly getUserConfigured: () => boolean;
   readonly setUserConfigured: (value: boolean) => void;
+  readonly getDesiredEnabled: () => boolean | null;
+  readonly setDesiredEnabled: (value: boolean) => void;
 };
 
 type StoredStartupLaunchSettings = {
   readonly defaultEnabledApplied?: boolean;
   readonly userConfigured?: boolean;
+  readonly desiredEnabled?: boolean;
 };
 
 const alreadyAppliedPreferenceStore: StartupLaunchPreferenceStore = {
   getDefaultEnabledApplied: () => true,
   setDefaultEnabledApplied() {},
   getUserConfigured: () => true,
-  setUserConfigured() {}
+  setUserConfigured() {},
+  getDesiredEnabled: () => null,
+  setDesiredEnabled() {}
 };
 
 export class SettingsStartupLaunchPreferenceStore implements StartupLaunchPreferenceStore {
@@ -81,6 +86,15 @@ export class SettingsStartupLaunchPreferenceStore implements StartupLaunchPrefer
 
   setUserConfigured(value: boolean): void {
     this.settingsRepo.setJson(STARTUP_LAUNCH_SETTINGS_KEY, { ...this.getStoredSettings(), userConfigured: value } satisfies StoredStartupLaunchSettings);
+  }
+
+  getDesiredEnabled(): boolean | null {
+    const value = this.getStoredSettings().desiredEnabled;
+    return typeof value === "boolean" ? value : null;
+  }
+
+  setDesiredEnabled(value: boolean): void {
+    this.settingsRepo.setJson(STARTUP_LAUNCH_SETTINGS_KEY, { ...this.getStoredSettings(), desiredEnabled: value } satisfies StoredStartupLaunchSettings);
   }
 }
 
@@ -119,12 +133,13 @@ export class StartupLaunchService {
       };
     }
 
+    const desiredEnabled = this.preferenceStore.getDesiredEnabled();
+    if (desiredEnabled !== null) {
+      return this.enabledStatus(desiredEnabled);
+    }
+
     const settings = this.getEnabledLoginItemSettings();
-    return {
-      supported: true,
-      enabled: Boolean((settings.openAtLogin && (settings.executableWillLaunchAtLogin ?? true)) || settings.executableWillLaunchAtLogin),
-      reason: null
-    };
+    return this.enabledStatus(Boolean((settings.openAtLogin && (settings.executableWillLaunchAtLogin ?? true)) || settings.executableWillLaunchAtLogin));
   }
 
   setEnabled(enabled: boolean): StartupLaunchStatus {
@@ -134,9 +149,10 @@ export class StartupLaunchService {
 
     this.applyLoginItemSettings(this.loginItemOptions(), enabled);
     this.clearLegacyLoginItems();
+    this.preferenceStore.setDesiredEnabled(enabled);
     this.preferenceStore.setUserConfigured(true);
     this.preferenceStore.setDefaultEnabledApplied(true);
-    return this.getStatus();
+    return this.enabledStatus(enabled);
   }
 
   ensureDefaultEnabled(): StartupLaunchStatus {
@@ -145,9 +161,18 @@ export class StartupLaunchService {
       return this.getStatus();
     }
 
+    const desiredEnabled = this.preferenceStore.getDesiredEnabled();
+    if (this.preferenceStore.getUserConfigured() && desiredEnabled !== null) {
+      this.applyLoginItemSettings(this.loginItemOptions(), desiredEnabled);
+      this.clearLegacyLoginItems();
+      return this.enabledStatus(desiredEnabled);
+    }
+
     const currentStatus = this.readLoginItemStatus(this.loginItemOptions());
     if (currentStatus.enabled) {
       this.clearLegacyLoginItems();
+      this.preferenceStore.setDesiredEnabled(true);
+      this.preferenceStore.setDefaultEnabledApplied(true);
       return this.getStatus();
     }
 
@@ -155,6 +180,7 @@ export class StartupLaunchService {
     if (legacyStatus.enabled) {
       this.applyLoginItemSettings(this.loginItemOptions(), true);
       this.clearLegacyLoginItems();
+      this.preferenceStore.setDesiredEnabled(true);
       this.preferenceStore.setDefaultEnabledApplied(true);
       return this.getStatus();
     }
@@ -166,8 +192,17 @@ export class StartupLaunchService {
 
     this.applyLoginItemSettings(this.loginItemOptions(), true);
     this.clearLegacyLoginItems();
+    this.preferenceStore.setDesiredEnabled(true);
     this.preferenceStore.setDefaultEnabledApplied(true);
-    return this.getStatus();
+    return this.enabledStatus(true);
+  }
+
+  private enabledStatus(enabled: boolean): StartupLaunchStatus {
+    return {
+      supported: true,
+      enabled,
+      reason: null
+    };
   }
 
   private applyLoginItemSettings(options: LoginItemOptions, enabled: boolean): void {

@@ -11,6 +11,7 @@ const HIDDEN_NO_TRAY_STARTUP_ARGS = [HIDDEN_STARTUP_LAUNCH_ARG, NO_TRAY_HIDDEN_S
 describe("StartupLaunchService", () => {
   function createPreferenceStore(defaultEnabledApplied = false) {
     let userConfigured = false;
+    let desiredEnabled: boolean | null = null;
     return {
       getDefaultEnabledApplied: vi.fn(() => defaultEnabledApplied),
       setDefaultEnabledApplied: vi.fn((value: boolean) => {
@@ -19,6 +20,10 @@ describe("StartupLaunchService", () => {
       getUserConfigured: vi.fn(() => userConfigured),
       setUserConfigured: vi.fn((value: boolean) => {
         userConfigured = value;
+      }),
+      getDesiredEnabled: vi.fn(() => desiredEnabled),
+      setDesiredEnabled: vi.fn((value: boolean) => {
+        desiredEnabled = value;
       })
     };
   }
@@ -34,7 +39,7 @@ describe("StartupLaunchService", () => {
       },
       {
         platform: "win32",
-        execPath: "C:\\Users\\me\\AppData\\Local\\moshu\\app-1.7.1\\novel-tool.exe"
+        execPath: "C:\\Users\\me\\AppData\\Local\\moshu\\app-1.7.5\\novel-tool.exe"
       },
       preferenceStore
     );
@@ -63,6 +68,34 @@ describe("StartupLaunchService", () => {
       args: []
     });
     expect(preferenceStore.setUserConfigured).toHaveBeenCalledWith(true);
+    expect(preferenceStore.setDesiredEnabled).toHaveBeenCalledWith(true);
+  });
+
+  it("returns the desired enabled state after a user toggle even if Windows reports the old login item state immediately", () => {
+    const preferenceStore = createPreferenceStore();
+    const service = new StartupLaunchService(
+      {
+        isPackaged: true,
+        getLoginItemSettings: () => ({ openAtLogin: false, executableWillLaunchAtLogin: false }),
+        setLoginItemSettings: vi.fn()
+      },
+      {
+        platform: "win32",
+        execPath: "C:\\Users\\me\\AppData\\Local\\moshu\\app-1.7.5\\novel-tool.exe"
+      },
+      preferenceStore
+    );
+
+    expect(service.setEnabled(true)).toEqual({
+      supported: true,
+      enabled: true,
+      reason: null
+    });
+    expect(service.setEnabled(false)).toEqual({
+      supported: true,
+      enabled: false,
+      reason: null
+    });
   });
 
   it("removes both hidden and legacy visible startup launch entries when disabling", () => {
@@ -75,7 +108,7 @@ describe("StartupLaunchService", () => {
       },
       {
         platform: "win32",
-        execPath: "C:\\Users\\me\\AppData\\Local\\moshu\\app-1.7.1\\novel-tool.exe"
+        execPath: "C:\\Users\\me\\AppData\\Local\\moshu\\app-1.7.5\\novel-tool.exe"
       },
       createPreferenceStore()
     );
@@ -115,7 +148,7 @@ describe("StartupLaunchService", () => {
       },
       {
         platform: "win32",
-        execPath: "C:\\Users\\me\\AppData\\Local\\moshu\\app-1.7.1\\novel-tool.exe"
+        execPath: "C:\\Users\\me\\AppData\\Local\\moshu\\app-1.7.5\\novel-tool.exe"
       }
     );
 
@@ -144,7 +177,7 @@ describe("StartupLaunchService", () => {
       },
       {
         platform: "win32",
-        execPath: "C:\\Users\\me\\AppData\\Local\\moshu\\app-1.7.1\\novel-tool.exe"
+        execPath: "C:\\Users\\me\\AppData\\Local\\moshu\\app-1.7.5\\novel-tool.exe"
       },
       preferenceStore
     );
@@ -166,6 +199,8 @@ describe("StartupLaunchService", () => {
       args: [HIDDEN_STARTUP_LAUNCH_ARG]
     });
     expect(preferenceStore.setDefaultEnabledApplied).toHaveBeenCalledWith(true);
+    expect(preferenceStore.setDesiredEnabled).toHaveBeenCalledWith(true);
+    expect(status.enabled).toBe(true);
   });
 
   it("migrates the previous hidden startup registration to the no-tray hidden startup registration", () => {
@@ -183,7 +218,7 @@ describe("StartupLaunchService", () => {
       },
       {
         platform: "win32",
-        execPath: "C:\\Users\\me\\AppData\\Local\\moshu\\app-1.7.1\\novel-tool.exe"
+        execPath: "C:\\Users\\me\\AppData\\Local\\moshu\\app-1.7.5\\novel-tool.exe"
       },
       preferenceStore
     );
@@ -204,6 +239,7 @@ describe("StartupLaunchService", () => {
       path: "C:\\Users\\me\\AppData\\Local\\moshu\\novel-tool.exe",
       args: [HIDDEN_STARTUP_LAUNCH_ARG]
     });
+    expect(preferenceStore.setDesiredEnabled).toHaveBeenCalledWith(true);
   });
 
   it("does not force startup launch back on after the user has disabled it", () => {
@@ -218,7 +254,7 @@ describe("StartupLaunchService", () => {
       },
       {
         platform: "win32",
-        execPath: "C:\\Users\\me\\AppData\\Local\\moshu\\app-1.7.1\\novel-tool.exe"
+        execPath: "C:\\Users\\me\\AppData\\Local\\moshu\\app-1.7.5\\novel-tool.exe"
       },
       preferenceStore
     );
@@ -227,6 +263,36 @@ describe("StartupLaunchService", () => {
 
     expect(status.enabled).toBe(false);
     expect(setLoginItemSettings).not.toHaveBeenCalled();
+  });
+
+  it("keeps a user-disabled startup launch preference even if Windows still reports an enabled entry", () => {
+    const setLoginItemSettings = vi.fn();
+    const preferenceStore = createPreferenceStore(true);
+    preferenceStore.setUserConfigured(true);
+    preferenceStore.setDesiredEnabled(false);
+    const service = new StartupLaunchService(
+      {
+        isPackaged: true,
+        getLoginItemSettings: () => ({ openAtLogin: true, executableWillLaunchAtLogin: true }),
+        setLoginItemSettings
+      },
+      {
+        platform: "win32",
+        execPath: "C:\\Users\\me\\AppData\\Local\\moshu\\app-1.7.5\\novel-tool.exe"
+      },
+      preferenceStore
+    );
+
+    const status = service.ensureDefaultEnabled();
+
+    expect(status.enabled).toBe(false);
+    expect(setLoginItemSettings).toHaveBeenCalledWith({
+      openAtLogin: false,
+      enabled: false,
+      name: "Moshu",
+      path: "C:\\Users\\me\\AppData\\Local\\moshu\\novel-tool.exe",
+      args: HIDDEN_NO_TRAY_STARTUP_ARGS
+    });
   });
 
   it("does not expose startup launch on non-Windows or unpackaged builds", () => {
@@ -262,7 +328,7 @@ describe("StartupLaunchService", () => {
   });
 
   it("resolves the Windows Squirrel stub launcher without depending on the versioned app folder", () => {
-    expect(resolveWindowsSquirrelStubLauncher("C:\\Users\\me\\AppData\\Local\\moshu\\app-1.7.1\\novel-tool.exe")).toBe(
+    expect(resolveWindowsSquirrelStubLauncher("C:\\Users\\me\\AppData\\Local\\moshu\\app-1.7.5\\novel-tool.exe")).toBe(
       "C:\\Users\\me\\AppData\\Local\\moshu\\novel-tool.exe"
     );
   });

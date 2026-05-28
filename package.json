@@ -1,7 +1,7 @@
 {
   "name": "novel-tool",
   "productName": "墨枢",
-  "version": "1.7.1",
+  "version": "1.7.5",
   "private": true,
   "description": "Local-first Chinese long-form novel editing workstation.",
   "main": ".vite/build/index.js",

@@ -869,7 +869,7 @@ function StartupLaunchSettingsPane() {
         <button
           aria-label="开机自启动"
           className={`toggle ${enabled ? "on" : ""}`}
-          disabled={!status || busy}
+          disabled={!status || busy || !status.supported}
           onClick={() => void updateStartupLaunch(!enabled)}
           type="button"
         />
