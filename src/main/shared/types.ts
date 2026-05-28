@@ -32,6 +32,10 @@ import type {
   chapterGetContentInputSchema,
   chapterListInputSchema,
   chapterRenameInputSchema,
+  chapterReviewDeleteRunInputSchema,
+  chapterReviewGetRunInputSchema,
+  chapterReviewListRunsInputSchema,
+  chapterReviewStartInputSchema,
   chapterSaveContentInputSchema,
   chapterUpdateTargetWordCountInputSchema,
   chapterCacheBuildOrderSchema,
@@ -116,6 +120,7 @@ import type { ProofreadIssue } from "./proofread";
 import type { RelationshipGraphPosition, RelationshipGraphResult, RelationshipGraphSourceStatus } from "./relationship-graph";
 import type { WritingContextPlanMetadata } from "./ai-candidate-metadata";
 import type { ArcAiSummaryPayload, BookAiSummaryPayload, ChapterAiSummaryChunkPayload, ChapterAiSummaryPayload, SummaryJobStatus, SummaryJobType, SummaryStatus } from "./summary-index";
+import type { ChapterReviewProgressEvent, ChapterReviewRunRecord } from "./chapter-review";
 
 export type TaskType = "polish" | "expand" | "proofread" | "continue";
 export type PromptPresetTaskType = "polish" | "expand" | "continue";
@@ -715,6 +720,11 @@ export type ChapterGetContentInput = z.input<typeof chapterGetContentInputSchema
 export type ChapterSaveContentInput = z.input<typeof chapterSaveContentInputSchema>;
 export type ChapterCreateSnapshotInput = z.input<typeof chapterCreateSnapshotInputSchema>;
 export type ChapterUpdateTargetWordCountInput = z.input<typeof chapterUpdateTargetWordCountInputSchema>;
+export type ChapterReviewStartInput = z.input<typeof chapterReviewStartInputSchema>;
+export type ChapterReviewListRunsInput = z.input<typeof chapterReviewListRunsInputSchema>;
+export type ChapterReviewGetRunInput = z.input<typeof chapterReviewGetRunInputSchema>;
+export type ChapterReviewDeleteRunInput = z.input<typeof chapterReviewDeleteRunInputSchema>;
+export type { ChapterReviewProgressEvent, ChapterReviewRunRecord };
 export type WritingGoalOverviewInput = z.input<typeof writingGoalOverviewInputSchema>;
 export type WritingGoalCreateInput = z.input<typeof writingGoalCreateInputSchema>;
 export type WritingGoalUpdateInput = z.input<typeof writingGoalUpdateInputSchema>;
@@ -988,6 +998,13 @@ export const ipcChannels = {
     saveContent: "novelTool:chapter:saveContent",
     updateTargetWordCount: "novelTool:chapter:updateTargetWordCount",
     createSnapshot: "novelTool:chapter:createSnapshot"
+  },
+  chapterReview: {
+    startReview: "novelTool:chapterReview:startReview",
+    listRuns: "novelTool:chapterReview:listRuns",
+    getRun: "novelTool:chapterReview:getRun",
+    deleteRun: "novelTool:chapterReview:deleteRun",
+    progress: "novelTool:chapterReview:progress"
   },
   settings: {
     get: "novelTool:settings:get",

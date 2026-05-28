@@ -39,6 +39,7 @@ import { getNovelToolApi } from "../state/app-store";
 type OutlinePageProps = {
   readonly currentProject: ProjectRecord | null;
   readonly initialChapterId?: string | null;
+  readonly onOpenChapterReview: () => void;
   readonly onOpenRelationshipGraph: () => void;
   readonly onOpenSettings: () => void;
   readonly onOpenWriting: () => void;
@@ -384,6 +385,7 @@ export function buildOutlineSheetCellPatch(
 export function OutlinePage({
   currentProject,
   initialChapterId = null,
+  onOpenChapterReview,
   onOpenRelationshipGraph,
   onOpenSettings,
   onOpenWriting,
@@ -495,13 +497,15 @@ export function OutlinePage({
         onOpenWriting();
       } else if (module === "relationshipGraph") {
         onOpenRelationshipGraph();
+      } else if (module === "chapterReview") {
+        onOpenChapterReview();
       } else if (module === "goals") {
         onOpenWritingGoals();
       } else if (module === "settings") {
         onOpenSettings();
       }
     },
-    [onOpenRelationshipGraph, onOpenSettings, onOpenWriting, onOpenWritingGoals]
+    [onOpenChapterReview, onOpenRelationshipGraph, onOpenSettings, onOpenWriting, onOpenWritingGoals]
   );
 
   function startNewEvent(chapterId: string | null = selectedChapterId, threadId: string | null = null): void {

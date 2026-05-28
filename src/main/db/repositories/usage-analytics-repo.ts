@@ -10,6 +10,7 @@ export type UsageAnalyticsFeature =
   | "writing"
   | "relationshipGraph"
   | "outline"
+  | "chapterReview"
   | "writingGoals"
   | "settings"
   | "import"

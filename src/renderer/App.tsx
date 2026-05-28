@@ -6,6 +6,7 @@ import { clampFloatingPanelGeometry, createFloatingPanelId, getDefaultFloatingPa
 import type { SidebarTab, TaskType } from "./layout/RightUtilitySidebar";
 import { ExportPage } from "./routes/ExportPage";
 import { ImportWizardPage } from "./routes/ImportWizardPage";
+import { ChapterReviewPage } from "./routes/ChapterReviewPage";
 import { NewProjectPage } from "./routes/NewProjectPage";
 import { OutlinePage } from "./routes/OutlinePage";
 import { CharacterRelationshipGraphPage } from "./relationship-graph/CharacterRelationshipGraphPage";
@@ -17,16 +18,17 @@ import type { AiChatDraftSeed } from "./sidebar/chat-draft";
 import { getNovelToolApi, useAppStore } from "./state/app-store";
 import type { ImportConfirmResult, ProjectCreateInput, SelectionSnapshot, TaskPromptPreset, UsageAnalyticsRecordEventInput } from "../main/shared/types";
 
-type Page = "welcome" | "writing" | "relationshipGraph" | "outline" | "writingGoals" | "settings" | "import" | "export" | "newProject";
+type Page = "welcome" | "writing" | "relationshipGraph" | "outline" | "chapterReview" | "writingGoals" | "settings" | "import" | "export" | "newProject";
 type ImportReturnPage = "welcome" | "writing";
 type ExportReturnPage = "welcome" | "writing";
-type SettingsReturnPage = "welcome" | "writing" | "relationshipGraph" | "outline" | "writingGoals";
+type SettingsReturnPage = "welcome" | "writing" | "relationshipGraph" | "outline" | "chapterReview" | "writingGoals";
 
 const pageUsageFeatures: Record<Page, UsageAnalyticsRecordEventInput["feature"]> = {
   welcome: "welcome",
   writing: "writing",
   relationshipGraph: "relationshipGraph",
   outline: "outline",
+  chapterReview: "chapterReview",
   writingGoals: "writingGoals",
   settings: "settings",
   import: "import",
@@ -160,6 +162,10 @@ export function App() {
     setSidebarOpen(false);
     setPage("outline");
   }, []);
+  const openChapterReview = useCallback(() => {
+    setSidebarOpen(false);
+    setPage("chapterReview");
+  }, []);
   const openWritingGoals = useCallback(() => {
     setSidebarOpen(false);
     setPage("writingGoals");
@@ -178,7 +184,7 @@ export function App() {
     if (category) {
       setSettingsCategory(category);
     }
-    setSettingsReturnPage(page === "writing" || page === "relationshipGraph" || page === "outline" || page === "writingGoals" ? page : "welcome");
+    setSettingsReturnPage(page === "writing" || page === "relationshipGraph" || page === "outline" || page === "chapterReview" || page === "writingGoals" ? page : "welcome");
     setPage("settings");
   }, [page]);
   const returnFromSettings = useCallback(() => {
@@ -473,6 +479,7 @@ export function App() {
         <CharacterRelationshipGraphPage
           currentProject={appStore.currentProject}
           onOpenChapter={openWritingAtChapter}
+          onOpenChapterReview={openChapterReview}
           onOpenOutline={openOutline}
           onOpenSettings={() => openSettings()}
           onOpenWriting={openWriting}
@@ -490,6 +497,7 @@ export function App() {
           currentProject={appStore.currentProject}
           initialChapterId={appStore.activeChapterId}
           onOpenRelationshipGraph={openRelationshipGraph}
+          onOpenChapterReview={openChapterReview}
           onOpenSettings={() => openSettings()}
           onOpenWriting={openWriting}
           onOpenWritingGoals={openWritingGoals}
@@ -505,9 +513,28 @@ export function App() {
         <WritingGoalsPage
           currentProject={appStore.currentProject}
           onOpenOutline={openOutline}
+          onOpenChapterReview={openChapterReview}
           onOpenRelationshipGraph={openRelationshipGraph}
           onOpenSettings={() => openSettings()}
           onOpenWriting={openWriting}
+          onWelcome={openWelcome}
+        />
+      </AppShell>
+    );
+  }
+
+  if (page === "chapterReview") {
+    return (
+      <AppShell>
+        <ChapterReviewPage
+          chapters={appStore.chapters}
+          currentProject={appStore.currentProject}
+          onOpenChapter={openWritingAtChapter}
+          onOpenOutline={openOutline}
+          onOpenRelationshipGraph={openRelationshipGraph}
+          onOpenSettings={() => openSettings()}
+          onOpenWriting={openWriting}
+          onOpenWritingGoals={openWritingGoals}
           onWelcome={openWelcome}
         />
       </AppShell>
@@ -545,6 +572,7 @@ export function App() {
           onOpenFloatingAiChat={openFloatingAiChat}
           onOpenFloatingPanel={openFloatingPanel}
           onOpenOutline={openOutline}
+          onOpenChapterReview={openChapterReview}
           onOpenFloatingScratchpad={openFloatingScratchpad}
           onOpenRelationshipGraph={openRelationshipGraph}
           onOpenWritingGoals={openWritingGoals}

@@ -35,6 +35,12 @@ import type {
   ChapterGetContentInput,
   ChapterListInput,
   ChapterRenameInput,
+  ChapterReviewDeleteRunInput,
+  ChapterReviewGetRunInput,
+  ChapterReviewListRunsInput,
+  ChapterReviewProgressEvent,
+  ChapterReviewRunRecord,
+  ChapterReviewStartInput,
   ChapterSaveContentInput,
   ChapterUpdateTargetWordCountInput,
   ExportSelectShareableProjectFilePathInput,
@@ -141,6 +147,8 @@ type ExternalBookSyncScanHandlers = {
   readonly onError?: (event: ExternalBookSyncScanErrorEvent) => void;
 };
 
+type ChapterReviewProgressHandler = (event: ChapterReviewProgressEvent) => void;
+
 export type NovelToolApi = {
   readonly platform: {
     readonly isDesktop: true;
@@ -170,6 +178,13 @@ export type NovelToolApi = {
     readonly saveContent: (input: ChapterSaveContentInput) => Promise<unknown>;
     readonly updateTargetWordCount: (input: ChapterUpdateTargetWordCountInput) => Promise<unknown>;
     readonly createSnapshot: (input: ChapterCreateSnapshotInput) => Promise<unknown>;
+  };
+  readonly chapterReview: {
+    readonly startReview: (input: ChapterReviewStartInput) => Promise<ChapterReviewRunRecord>;
+    readonly listRuns: (input: ChapterReviewListRunsInput) => Promise<ChapterReviewRunRecord[]>;
+    readonly getRun: (input: ChapterReviewGetRunInput) => Promise<ChapterReviewRunRecord>;
+    readonly deleteRun: (input: ChapterReviewDeleteRunInput) => Promise<unknown>;
+    readonly subscribeProgress: (requestId: string, handler: ChapterReviewProgressHandler) => () => void;
   };
   readonly settings: {
     readonly get: () => Promise<unknown>;
@@ -324,6 +339,23 @@ export const novelToolApi: NovelToolApi = Object.freeze({
     saveContent: (input: ChapterSaveContentInput) => ipcRenderer.invoke(ipcChannels.chapter.saveContent, input),
     updateTargetWordCount: (input: ChapterUpdateTargetWordCountInput) => ipcRenderer.invoke(ipcChannels.chapter.updateTargetWordCount, input),
     createSnapshot: (input: ChapterCreateSnapshotInput) => ipcRenderer.invoke(ipcChannels.chapter.createSnapshot, input)
+  }),
+  chapterReview: Object.freeze({
+    startReview: (input: ChapterReviewStartInput) => ipcRenderer.invoke(ipcChannels.chapterReview.startReview, input),
+    listRuns: (input: ChapterReviewListRunsInput) => ipcRenderer.invoke(ipcChannels.chapterReview.listRuns, input),
+    getRun: (input: ChapterReviewGetRunInput) => ipcRenderer.invoke(ipcChannels.chapterReview.getRun, input),
+    deleteRun: (input: ChapterReviewDeleteRunInput) => ipcRenderer.invoke(ipcChannels.chapterReview.deleteRun, input),
+    subscribeProgress: (requestId: string, handler: ChapterReviewProgressHandler) => {
+      const onProgress = (_event: IpcRendererEvent, payload: ChapterReviewProgressEvent) => {
+        if (payload.requestId === requestId) {
+          handler(payload);
+        }
+      };
+      ipcRenderer.on(ipcChannels.chapterReview.progress, onProgress);
+      return () => {
+        ipcRenderer.off(ipcChannels.chapterReview.progress, onProgress);
+      };
+    }
   }),
   settings: Object.freeze({
     get: () => ipcRenderer.invoke(ipcChannels.settings.get),

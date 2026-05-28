@@ -31,6 +31,501 @@
   --topbar-brand-width: 280px;
 }
 
+.chapter-review-page {
+  min-height: 100vh;
+  background: linear-gradient(180deg, #ffffff 0%, #f7f9fb 100%);
+  color: var(--text);
+}
+
+.chapter-review-shell {
+  height: calc(100vh - var(--topbar));
+  display: flex;
+  min-width: 0;
+}
+
+.chapter-review-workspace {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  padding: 18px 22px 24px;
+}
+
+.chapter-review-empty {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 10px;
+  color: #64748b;
+  text-align: center;
+}
+
+.chapter-review-empty h1,
+.chapter-review-toolbar h1,
+.chapter-review-panel-head h2,
+.chapter-review-result h2,
+.chapter-review-placeholder h2 {
+  margin: 0;
+  color: #111827;
+  letter-spacing: 0;
+}
+
+.chapter-review-empty p,
+.chapter-review-result p,
+.chapter-review-placeholder p {
+  margin: 0;
+  color: #64748b;
+  line-height: 1.65;
+}
+
+.chapter-review-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.chapter-review-toolbar h1 {
+  margin-top: 4px;
+  font-size: 24px;
+}
+
+.chapter-review-kicker {
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 760;
+}
+
+.chapter-review-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.chapter-review-error {
+  margin-bottom: 14px;
+  padding: 11px 13px;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  background: #fff1f2;
+  color: #b91c1c;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.chapter-review-progress {
+  margin-bottom: 14px;
+  padding: 12px;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.chapter-review-progress.completed {
+  border-color: #bbf7d0;
+}
+
+.chapter-review-progress.failed {
+  border-color: #fecaca;
+}
+
+.chapter-review-progress-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  color: #1e3a8a;
+  font-size: 13px;
+  font-weight: 760;
+}
+
+.chapter-review-progress-track {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e2e8f0;
+}
+
+.chapter-review-progress-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--blue);
+  transition: width 180ms ease;
+}
+
+.chapter-review-progress small {
+  display: block;
+  margin-top: 7px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.chapter-review-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) minmax(420px, 1fr) minmax(210px, 250px);
+  gap: 14px;
+  align-items: start;
+}
+
+.chapter-review-sidebar,
+.chapter-review-results,
+.chapter-review-history {
+  min-width: 0;
+}
+
+.chapter-review-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.chapter-review-panel-head h2 {
+  font-size: 16px;
+}
+
+.chapter-review-panel-head span {
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.chapter-review-chapter-list,
+.chapter-review-history-list {
+  display: grid;
+  gap: 8px;
+}
+
+.chapter-review-chapter-option {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.chapter-review-chapter-option.selected {
+  border-color: #93c5fd;
+  background: #eff6ff;
+}
+
+.chapter-review-chapter-option input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--blue);
+}
+
+.chapter-review-chapter-option span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.chapter-review-chapter-option strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #111827;
+  font-size: 14px;
+}
+
+.chapter-review-chapter-option small,
+.chapter-review-history-item small,
+.chapter-review-issue small {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.chapter-review-run-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.chapter-review-run-summary div {
+  padding: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.chapter-review-run-summary span {
+  display: block;
+  margin-bottom: 5px;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.chapter-review-run-summary strong {
+  color: #111827;
+  font-size: 18px;
+}
+
+.chapter-review-category-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.chapter-review-category-tabs button {
+  min-width: 88px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fff;
+  color: #334155;
+  cursor: pointer;
+  font: inherit;
+}
+
+.chapter-review-category-tabs button.active {
+  border-color: #93c5fd;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.chapter-review-category-tabs button:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.chapter-review-category-tabs span {
+  font-size: 13px;
+  font-weight: 720;
+}
+
+.chapter-review-category-tabs strong {
+  font-size: 12px;
+}
+
+.chapter-review-result-list {
+  display: grid;
+  gap: 12px;
+}
+
+.chapter-review-result {
+  padding: 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.chapter-review-result > header {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: flex-start;
+  margin-bottom: 10px;
+}
+
+.chapter-review-result h2 {
+  font-size: 17px;
+}
+
+.chapter-review-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.chapter-review-metrics span {
+  padding: 5px 8px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.chapter-review-issue-list {
+  display: grid;
+  gap: 8px;
+}
+
+.chapter-review-issue-group {
+  display: grid;
+  gap: 8px;
+}
+
+.chapter-review-issue-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-top: 2px;
+}
+
+.chapter-review-issue-group-head h3 {
+  margin: 0;
+  color: #334155;
+  font-size: 14px;
+  letter-spacing: 0;
+}
+
+.chapter-review-issue-group-head span {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.chapter-review-issue {
+  padding: 11px;
+  border: 1px solid #e2e8f0;
+  border-left: 4px solid #94a3b8;
+  border-radius: 8px;
+  background: #fbfdff;
+}
+
+.chapter-review-issue.severity-high,
+.chapter-review-issue.severity-critical {
+  border-left-color: #ef4444;
+}
+
+.chapter-review-issue.severity-medium {
+  border-left-color: #f59e0b;
+}
+
+.chapter-review-issue-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.chapter-review-issue-head span,
+.chapter-review-issue-head strong {
+  font-size: 13px;
+  font-weight: 760;
+}
+
+.chapter-review-issue-head span {
+  color: #1e3a8a;
+}
+
+.chapter-review-issue-head strong {
+  color: #475569;
+}
+
+.chapter-review-issue blockquote {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #1f2937;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.chapter-review-issue p {
+  margin: 0 0 6px;
+  color: #334155;
+  font-size: 14px;
+}
+
+.chapter-review-suggestion {
+  font-weight: 650;
+}
+
+.chapter-review-no-issues {
+  padding: 10px 0 0;
+}
+
+.chapter-review-placeholder {
+  min-height: 280px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 10px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  color: #64748b;
+  background: #fff;
+}
+
+.chapter-review-history-item {
+  width: 100%;
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fff;
+  color: #334155;
+  text-align: left;
+  cursor: pointer;
+}
+
+.chapter-review-history-item.active {
+  border-color: #93c5fd;
+  background: #eff6ff;
+}
+
+.chapter-review-history-item span {
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.chapter-review-history-item strong {
+  color: #111827;
+  font-size: 14px;
+}
+
+.chapter-review-delete {
+  width: 100%;
+  margin-top: 10px;
+}
+
+@media (max-width: 1120px) {
+  .chapter-review-layout {
+    grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  }
+
+  .chapter-review-history {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 860px) {
+  .chapter-review-shell {
+    height: auto;
+    min-height: calc(100vh - var(--topbar));
+  }
+
+  .chapter-review-toolbar,
+  .chapter-review-result > header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .chapter-review-actions {
+    justify-content: flex-start;
+  }
+
+  .chapter-review-layout,
+  .chapter-review-run-summary {
+    grid-template-columns: 1fr;
+  }
+}
+
 .outline-page {
   min-height: 100vh;
   display: flex;
@@ -1688,6 +2183,12 @@ select:focus-visible {
   opacity: 0.58;
   transform: none;
   box-shadow: none;
+}
+
+.secondary-button.compact {
+  height: 36px;
+  padding: 0 12px;
+  gap: 6px;
 }
 
 .welcome-grid {

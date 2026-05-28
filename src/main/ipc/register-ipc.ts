@@ -9,6 +9,7 @@ import { SummaryService } from "../ai/summary-service";
 import { SummaryWorker } from "../ai/summary-worker";
 import { getTokenBudget } from "../ai/token-budget";
 import { WritingOperationRunner } from "../ai/writing-operation-runner";
+import { ChapterReviewService, createOpenRouterChapterReviewClient } from "../chapter-review/chapter-review-service";
 import { createChapterContentInvalidator } from "../chapter/chapter-content-invalidator";
 import { ChapterService } from "../chapter/chapter-service";
 import { createDatabase, resolveDatabasePath, type SqliteDatabase } from "../db/database";
@@ -17,6 +18,7 @@ import { AiChatRepository } from "../db/repositories/ai-chat-repo";
 import { AiTaskRepository } from "../db/repositories/ai-task-repo";
 import { AuthorRelationshipRepository } from "../db/repositories/author-relationship-repo";
 import { ChapterRepository } from "../db/repositories/chapter-repo";
+import { ChapterReviewRepository } from "../db/repositories/chapter-review-repo";
 import { ImportJobRepository } from "../db/repositories/import-job-repo";
 import { OutlineRepository } from "../db/repositories/outline-repo";
 import { ProjectRepository } from "../db/repositories/project-repo";
@@ -61,6 +63,7 @@ import type { z } from "zod";
 import { registerAiIpc } from "./ai-ipc";
 import { registerAuthorRelationshipIpc } from "./author-relationship-ipc";
 import { registerChapterIpc } from "./chapter-ipc";
+import { registerChapterReviewIpc } from "./chapter-review-ipc";
 import { registerExternalBookSyncIpc } from "./external-book-sync-ipc";
 import { registerExportIpc } from "./export-ipc";
 import { registerImportIpc } from "./import-ipc";
@@ -238,6 +241,7 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
     const resolveProjectDb = (projectId?: string): SqliteDatabase =>
       projectId ? projectService.getProjectDatabaseForProject(projectId) : projectService.getActiveProjectDatabase();
     const resolveChapterRepo = (projectId: string): ChapterRepository => new ChapterRepository(resolveProjectDb(projectId));
+    const resolveChapterReviewRepo = (projectId: string): ChapterReviewRepository => new ChapterReviewRepository(resolveProjectDb(projectId));
     const resolveSummaryRepo = (projectId: string): SummaryRepository => new SummaryRepository(resolveProjectDb(projectId));
     const resolveAuthorRelationshipRepo = (projectId: string): AuthorRelationshipRepository => new AuthorRelationshipRepository(resolveProjectDb(projectId));
     const resolveWritingGoalRepo = (projectId: string): WritingGoalRepository => new WritingGoalRepository(resolveProjectDb(projectId));
@@ -306,6 +310,14 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
           });
         }
       }
+    });
+    const chapterReviewService = new ChapterReviewService({
+      resolveChapterRepo,
+      resolveReviewRepo: resolveChapterReviewRepo,
+      getProjectName(projectId) {
+        return projectRepo.findById(projectId)?.name ?? projectService.getRuntimeActiveProject()?.name ?? "当前项目";
+      },
+      createClient: () => createOpenRouterChapterReviewClient(settingsService)
     });
     const aiTaskService = new AiTaskService(
       (projectId) => new AiTaskRepository(resolveProjectDb(projectId)),
@@ -468,6 +480,7 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
     );
     registerProjectIpc(projectService);
     registerChapterIpc(chapterService);
+    registerChapterReviewIpc(chapterReviewService);
     registerWritingGoalIpc((projectId) => {
       const service = resolveWritingGoalService(projectId);
       return {

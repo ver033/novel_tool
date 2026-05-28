@@ -145,6 +145,30 @@ export const chapterCreateSnapshotInputSchema = z
   })
   .strict();
 
+export const chapterReviewStartInputSchema = z
+  .object({
+    projectId: idSchema,
+    chapterIds: z.array(idSchema).min(1).max(200),
+    requestId: idSchema.optional()
+  })
+  .strict();
+
+export const chapterReviewListRunsInputSchema = z
+  .object({
+    projectId: idSchema,
+    limit: z.number().int().min(1).max(100).optional()
+  })
+  .strict();
+
+export const chapterReviewGetRunInputSchema = z
+  .object({
+    projectId: idSchema,
+    runId: idSchema
+  })
+  .strict();
+
+export const chapterReviewDeleteRunInputSchema = chapterReviewGetRunInputSchema;
+
 const localDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
 export const writingGoalStatusSchema = z.enum(["active", "paused", "completed", "archived"]);
@@ -284,6 +308,7 @@ export const usageAnalyticsFeatureSchema = z.enum([
   "writing",
   "relationshipGraph",
   "outline",
+  "chapterReview",
   "writingGoals",
   "settings",
   "import",
