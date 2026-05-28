@@ -4,6 +4,7 @@ import type { SettingsRepository } from "../db/repositories/settings-repo";
 const STARTUP_LAUNCH_NAME = "Moshu";
 const STARTUP_LAUNCH_SETTINGS_KEY = "startupLaunch";
 export const HIDDEN_STARTUP_LAUNCH_ARG = "--hidden-startup";
+export const NO_TRAY_HIDDEN_STARTUP_ARG = "--hidden-startup-no-tray";
 
 export type StartupLaunchUnsupportedReason = "not_windows" | "not_packaged";
 
@@ -91,6 +92,10 @@ export function isHiddenStartupLaunch(argv: readonly string[] = process.argv): b
   return argv.includes(HIDDEN_STARTUP_LAUNCH_ARG);
 }
 
+export function isNoTrayHiddenStartupLaunch(argv: readonly string[] = process.argv): boolean {
+  return isHiddenStartupLaunch(argv) && argv.includes(NO_TRAY_HIDDEN_STARTUP_ARG);
+}
+
 export class StartupLaunchService {
   private readonly platform: NodeJS.Platform;
   private readonly execPath: string;
@@ -114,7 +119,7 @@ export class StartupLaunchService {
       };
     }
 
-    const settings = this.app.getLoginItemSettings(this.loginItemOptions());
+    const settings = this.getEnabledLoginItemSettings();
     return {
       supported: true,
       enabled: Boolean((settings.openAtLogin && (settings.executableWillLaunchAtLogin ?? true)) || settings.executableWillLaunchAtLogin),
@@ -128,9 +133,7 @@ export class StartupLaunchService {
     }
 
     this.applyLoginItemSettings(this.loginItemOptions(), enabled);
-    if (!enabled) {
-      this.applyLoginItemSettings(this.legacyLoginItemOptions(), false);
-    }
+    this.clearLegacyLoginItems();
     this.preferenceStore.setUserConfigured(true);
     this.preferenceStore.setDefaultEnabledApplied(true);
     return this.getStatus();
@@ -142,12 +145,27 @@ export class StartupLaunchService {
       return this.getStatus();
     }
 
+    const currentStatus = this.readLoginItemStatus(this.loginItemOptions());
+    if (currentStatus.enabled) {
+      this.clearLegacyLoginItems();
+      return this.getStatus();
+    }
+
+    const legacyStatus = this.getLegacyEnabledLoginItemStatus();
+    if (legacyStatus.enabled) {
+      this.applyLoginItemSettings(this.loginItemOptions(), true);
+      this.clearLegacyLoginItems();
+      this.preferenceStore.setDefaultEnabledApplied(true);
+      return this.getStatus();
+    }
+
     const status = this.getStatus();
-    if (status.enabled || this.preferenceStore.getUserConfigured()) {
+    if (this.preferenceStore.getUserConfigured()) {
       return status;
     }
 
     this.applyLoginItemSettings(this.loginItemOptions(), true);
+    this.clearLegacyLoginItems();
     this.preferenceStore.setDefaultEnabledApplied(true);
     return this.getStatus();
   }
@@ -158,6 +176,39 @@ export class StartupLaunchService {
       openAtLogin: enabled,
       enabled
     });
+  }
+
+  private clearLegacyLoginItems(): void {
+    this.applyLoginItemSettings(this.hiddenStartupWithTrayLoginItemOptions(), false);
+    this.applyLoginItemSettings(this.legacyVisibleLoginItemOptions(), false);
+  }
+
+  private getEnabledLoginItemSettings(): LoginItemSettings {
+    const currentStatus = this.readLoginItemStatus(this.loginItemOptions());
+    if (currentStatus.enabled) {
+      return currentStatus.settings;
+    }
+    const legacyStatus = this.getLegacyEnabledLoginItemStatus();
+    if (legacyStatus.enabled) {
+      return legacyStatus.settings;
+    }
+    return currentStatus.settings;
+  }
+
+  private getLegacyEnabledLoginItemStatus(): { readonly enabled: boolean; readonly settings: LoginItemSettings } {
+    const hiddenWithTrayStatus = this.readLoginItemStatus(this.hiddenStartupWithTrayLoginItemOptions());
+    if (hiddenWithTrayStatus.enabled) {
+      return hiddenWithTrayStatus;
+    }
+    return this.readLoginItemStatus(this.legacyVisibleLoginItemOptions());
+  }
+
+  private readLoginItemStatus(options: LoginItemOptions): { readonly enabled: boolean; readonly settings: LoginItemSettings } {
+    const settings = this.app.getLoginItemSettings(options);
+    return {
+      enabled: Boolean((settings.openAtLogin && (settings.executableWillLaunchAtLogin ?? true)) || settings.executableWillLaunchAtLogin),
+      settings
+    };
   }
 
   private unsupportedReason(): StartupLaunchUnsupportedReason | null {
@@ -174,11 +225,18 @@ export class StartupLaunchService {
     return {
       name: STARTUP_LAUNCH_NAME,
       path: resolveWindowsSquirrelStubLauncher(this.execPath),
+      args: [HIDDEN_STARTUP_LAUNCH_ARG, NO_TRAY_HIDDEN_STARTUP_ARG]
+    };
+  }
+
+  private hiddenStartupWithTrayLoginItemOptions(): LoginItemOptions {
+    return {
+      ...this.loginItemOptions(),
       args: [HIDDEN_STARTUP_LAUNCH_ARG]
     };
   }
 
-  private legacyLoginItemOptions(): LoginItemOptions {
+  private legacyVisibleLoginItemOptions(): LoginItemOptions {
     return {
       ...this.loginItemOptions(),
       args: []

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createWindowsTrayBackgroundController, type TrayCloseEvent, type TrayMenuItem, type TrayRuntime, type TrayWindow } from "../../src/main/window-tray-background";
-import { isHiddenStartupLaunch } from "../../src/main/startup/startup-launch-service";
+import { isHiddenStartupLaunch, isNoTrayHiddenStartupLaunch } from "../../src/main/startup/startup-launch-service";
 
 type CloseEvent = TrayCloseEvent & { readonly preventDefault: ReturnType<typeof vi.fn<() => void>> };
 
@@ -45,6 +45,12 @@ describe("Windows tray background mode", () => {
   it("detects login startup launches that should start hidden", () => {
     expect(isHiddenStartupLaunch(["novel-tool.exe", "--hidden-startup"])).toBe(true);
     expect(isHiddenStartupLaunch(["novel-tool.exe"])).toBe(false);
+  });
+
+  it("detects test login startup launches that should start hidden without a tray", () => {
+    expect(isNoTrayHiddenStartupLaunch(["novel-tool.exe", "--hidden-startup", "--hidden-startup-no-tray"])).toBe(true);
+    expect(isNoTrayHiddenStartupLaunch(["novel-tool.exe", "--hidden-startup"])).toBe(false);
+    expect(isNoTrayHiddenStartupLaunch(["novel-tool.exe", "--hidden-startup-no-tray"])).toBe(false);
   });
 
   it("hides the Windows main window instead of closing when the user clicks X", () => {

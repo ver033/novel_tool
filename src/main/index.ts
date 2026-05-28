@@ -2,7 +2,7 @@ import { app, BrowserWindow, Menu, nativeImage, Tray } from "electron";
 import path from "node:path";
 import { registerIpcHandlers } from "./ipc/register-ipc";
 import { initializeMainLogger, installMainProcessErrorHandlers, logMainError } from "./logger";
-import { isHiddenStartupLaunch } from "./startup/startup-launch-service";
+import { isHiddenStartupLaunch, isNoTrayHiddenStartupLaunch } from "./startup/startup-launch-service";
 import { createWindowsTrayBackgroundController } from "./window-tray-background";
 import { handleWindowsSquirrelStartupEvent } from "./windows-squirrel-startup";
 
@@ -128,31 +128,46 @@ function showMainWindow(): void {
   mainWindowRef.focus();
 }
 
+function showMainWindowWithTray(): void {
+  showMainWindow();
+  windowsTrayBackgroundController.ensureTray();
+}
+
 if (!handleWindowsSquirrelStartupEvent({ quit: () => app.quit() })) {
   if (process.env.NODE_ENV === "test" && process.env.NOVEL_TOOL_E2E_USER_DATA_DIR) {
     app.setPath("userData", process.env.NOVEL_TOOL_E2E_USER_DATA_DIR);
   }
 
-  app.whenReady().then(() => {
-    initializeMainLogger(app.getPath("userData"));
-    installMainProcessErrorHandlers();
-    try {
-      registerIpcHandlers();
-    } catch (error) {
-      logMainError("registerIpcHandlers failed", error);
-      throw error;
-    }
-    if (!isHiddenStartupLaunch()) {
-      createMainWindow();
-    }
-    windowsTrayBackgroundController.ensureTray();
+  if (!app.requestSingleInstanceLock()) {
+    app.quit();
+  } else {
+    app.on("second-instance", () => {
+      showMainWindowWithTray();
+    });
 
-    app.on("activate", () => {
-      if (BrowserWindow.getAllWindows().length === 0) {
+    app.whenReady().then(() => {
+      initializeMainLogger(app.getPath("userData"));
+      installMainProcessErrorHandlers();
+      try {
+        registerIpcHandlers();
+      } catch (error) {
+        logMainError("registerIpcHandlers failed", error);
+        throw error;
+      }
+      if (!isHiddenStartupLaunch()) {
         createMainWindow();
       }
+      if (!isNoTrayHiddenStartupLaunch()) {
+        windowsTrayBackgroundController.ensureTray();
+      }
+
+      app.on("activate", () => {
+        if (BrowserWindow.getAllWindows().length === 0) {
+          createMainWindow();
+        }
+      });
     });
-  });
+  }
 }
 
 app.on("before-quit", () => {
