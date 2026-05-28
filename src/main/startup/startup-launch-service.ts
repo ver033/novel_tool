@@ -147,8 +147,11 @@ export class StartupLaunchService {
       throw new Error("开机自启动只支持 Windows 安装版。");
     }
 
-    this.applyLoginItemSettings(this.loginItemOptions(), enabled);
-    this.clearLegacyLoginItems();
+    if (enabled) {
+      this.applyLoginItemSettings(this.loginItemOptions(), true);
+    } else {
+      this.disableAllLoginItems();
+    }
     this.preferenceStore.setDesiredEnabled(enabled);
     this.preferenceStore.setUserConfigured(true);
     this.preferenceStore.setDefaultEnabledApplied(true);
@@ -162,15 +165,17 @@ export class StartupLaunchService {
     }
 
     const desiredEnabled = this.preferenceStore.getDesiredEnabled();
-    if (this.preferenceStore.getUserConfigured() && desiredEnabled !== null) {
-      this.applyLoginItemSettings(this.loginItemOptions(), desiredEnabled);
-      this.clearLegacyLoginItems();
+    if (desiredEnabled !== null) {
+      if (desiredEnabled) {
+        this.applyLoginItemSettings(this.loginItemOptions(), true);
+      } else {
+        this.disableAllLoginItems();
+      }
       return this.enabledStatus(desiredEnabled);
     }
 
     const currentStatus = this.readLoginItemStatus(this.loginItemOptions());
     if (currentStatus.enabled) {
-      this.clearLegacyLoginItems();
       this.preferenceStore.setDesiredEnabled(true);
       this.preferenceStore.setDefaultEnabledApplied(true);
       return this.getStatus();
@@ -179,19 +184,12 @@ export class StartupLaunchService {
     const legacyStatus = this.getLegacyEnabledLoginItemStatus();
     if (legacyStatus.enabled) {
       this.applyLoginItemSettings(this.loginItemOptions(), true);
-      this.clearLegacyLoginItems();
       this.preferenceStore.setDesiredEnabled(true);
       this.preferenceStore.setDefaultEnabledApplied(true);
       return this.getStatus();
     }
 
-    const status = this.getStatus();
-    if (this.preferenceStore.getUserConfigured()) {
-      return status;
-    }
-
     this.applyLoginItemSettings(this.loginItemOptions(), true);
-    this.clearLegacyLoginItems();
     this.preferenceStore.setDesiredEnabled(true);
     this.preferenceStore.setDefaultEnabledApplied(true);
     return this.enabledStatus(true);
@@ -213,7 +211,8 @@ export class StartupLaunchService {
     });
   }
 
-  private clearLegacyLoginItems(): void {
+  private disableAllLoginItems(): void {
+    this.applyLoginItemSettings(this.loginItemOptions(), false);
     this.applyLoginItemSettings(this.hiddenStartupWithTrayLoginItemOptions(), false);
     this.applyLoginItemSettings(this.legacyVisibleLoginItemOptions(), false);
   }

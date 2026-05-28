@@ -24,6 +24,7 @@ describe("app shell configuration", () => {
     expect(mainSource).toContain("requestSingleInstanceLock");
     expect(mainSource).toContain('"second-instance"');
     expect(mainSource).toContain("isNoTrayHiddenStartupLaunch");
+    expect(mainSource).toContain("createMainWindow({ show: false })");
     expect(mainSource).toContain("windowsTrayBackgroundController.ensureTray");
   });
 

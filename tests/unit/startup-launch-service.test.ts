@@ -7,6 +7,14 @@ import {
 } from "../../src/main/startup/startup-launch-service";
 
 const HIDDEN_NO_TRAY_STARTUP_ARGS = [HIDDEN_STARTUP_LAUNCH_ARG, NO_TRAY_HIDDEN_STARTUP_ARG];
+const HIDDEN_STARTUP_ARGS = [HIDDEN_STARTUP_LAUNCH_ARG];
+
+type StoredLoginItem = {
+  readonly path: string;
+  readonly args: readonly string[];
+  readonly openAtLogin: boolean;
+  readonly enabled: boolean;
+};
 
 describe("StartupLaunchService", () => {
   function createPreferenceStore(defaultEnabledApplied = false) {
@@ -25,6 +33,39 @@ describe("StartupLaunchService", () => {
       setDesiredEnabled: vi.fn((value: boolean) => {
         desiredEnabled = value;
       })
+    };
+  }
+
+  function createWindowsRegistryBackedApp() {
+    const loginItems = new Map<string, StoredLoginItem>();
+    return {
+      app: {
+        isPackaged: true,
+        getLoginItemSettings: vi.fn((options: { readonly name: string; readonly path: string; readonly args: readonly string[] }) => {
+          const item = loginItems.get(options.name);
+          const samePath = item?.path === options.path;
+          const sameArgs = JSON.stringify(item?.args ?? []) === JSON.stringify(options.args);
+          return {
+            openAtLogin: Boolean(item?.openAtLogin && samePath && sameArgs),
+            executableWillLaunchAtLogin: Boolean(item?.openAtLogin && item.enabled && samePath)
+          };
+        }),
+        setLoginItemSettings: vi.fn(
+          (settings: { readonly name: string; readonly path: string; readonly args: readonly string[]; readonly openAtLogin: boolean; readonly enabled: boolean }) => {
+            if (settings.openAtLogin) {
+              loginItems.set(settings.name, {
+                path: settings.path,
+                args: settings.args,
+                openAtLogin: settings.openAtLogin,
+                enabled: settings.enabled
+              });
+              return;
+            }
+            loginItems.delete(settings.name);
+          }
+        )
+      },
+      loginItems
     };
   }
 
@@ -53,22 +94,30 @@ describe("StartupLaunchService", () => {
       path: "C:\\Users\\me\\AppData\\Local\\moshu\\novel-tool.exe",
       args: HIDDEN_NO_TRAY_STARTUP_ARGS
     });
-    expect(setLoginItemSettings).toHaveBeenCalledWith({
-      openAtLogin: false,
-      enabled: false,
-      name: "Moshu",
-      path: "C:\\Users\\me\\AppData\\Local\\moshu\\novel-tool.exe",
-      args: [HIDDEN_STARTUP_LAUNCH_ARG]
-    });
-    expect(setLoginItemSettings).toHaveBeenCalledWith({
-      openAtLogin: false,
-      enabled: false,
-      name: "Moshu",
-      path: "C:\\Users\\me\\AppData\\Local\\moshu\\novel-tool.exe",
-      args: []
-    });
     expect(preferenceStore.setUserConfigured).toHaveBeenCalledWith(true);
     expect(preferenceStore.setDesiredEnabled).toHaveBeenCalledWith(true);
+  });
+
+  it("keeps the enabled Windows login item after writing it because registry entries are keyed by name", () => {
+    const preferenceStore = createPreferenceStore();
+    const { app, loginItems } = createWindowsRegistryBackedApp();
+    const service = new StartupLaunchService(
+      app,
+      {
+        platform: "win32",
+        execPath: "C:\\Users\\me\\AppData\\Local\\moshu\\app-1.7.5\\novel-tool.exe"
+      },
+      preferenceStore
+    );
+
+    service.setEnabled(true);
+
+    expect(loginItems.get("Moshu")).toEqual({
+      path: "C:\\Users\\me\\AppData\\Local\\moshu\\novel-tool.exe",
+      args: HIDDEN_NO_TRAY_STARTUP_ARGS,
+      openAtLogin: true,
+      enabled: true
+    });
   });
 
   it("returns the desired enabled state after a user toggle even if Windows reports the old login item state immediately", () => {
@@ -127,7 +176,7 @@ describe("StartupLaunchService", () => {
       enabled: false,
       name: "Moshu",
       path: "C:\\Users\\me\\AppData\\Local\\moshu\\novel-tool.exe",
-      args: [HIDDEN_STARTUP_LAUNCH_ARG]
+      args: HIDDEN_STARTUP_ARGS
     });
     expect(setLoginItemSettings).toHaveBeenCalledWith({
       openAtLogin: false,
@@ -191,13 +240,6 @@ describe("StartupLaunchService", () => {
       path: "C:\\Users\\me\\AppData\\Local\\moshu\\novel-tool.exe",
       args: HIDDEN_NO_TRAY_STARTUP_ARGS
     });
-    expect(setLoginItemSettings).toHaveBeenCalledWith({
-      openAtLogin: false,
-      enabled: false,
-      name: "Moshu",
-      path: "C:\\Users\\me\\AppData\\Local\\moshu\\novel-tool.exe",
-      args: [HIDDEN_STARTUP_LAUNCH_ARG]
-    });
     expect(preferenceStore.setDefaultEnabledApplied).toHaveBeenCalledWith(true);
     expect(preferenceStore.setDesiredEnabled).toHaveBeenCalledWith(true);
     expect(status.enabled).toBe(true);
@@ -211,8 +253,8 @@ describe("StartupLaunchService", () => {
       {
         isPackaged: true,
         getLoginItemSettings: (options) => ({
-          openAtLogin: options.args.length === 1 && options.args[0] === HIDDEN_STARTUP_LAUNCH_ARG,
-          executableWillLaunchAtLogin: options.args.length === 1 && options.args[0] === HIDDEN_STARTUP_LAUNCH_ARG
+          openAtLogin: JSON.stringify(options.args) === JSON.stringify(HIDDEN_STARTUP_ARGS),
+          executableWillLaunchAtLogin: JSON.stringify(options.args) === JSON.stringify(HIDDEN_STARTUP_ARGS)
         }),
         setLoginItemSettings
       },
@@ -232,17 +274,40 @@ describe("StartupLaunchService", () => {
       path: "C:\\Users\\me\\AppData\\Local\\moshu\\novel-tool.exe",
       args: HIDDEN_NO_TRAY_STARTUP_ARGS
     });
+    expect(preferenceStore.setDesiredEnabled).toHaveBeenCalledWith(true);
+  });
+
+  it("does not force startup launch back on after the user has disabled it", () => {
+    const setLoginItemSettings = vi.fn();
+    const preferenceStore = createPreferenceStore(true);
+    preferenceStore.setUserConfigured(true);
+    preferenceStore.setDesiredEnabled(false);
+    const service = new StartupLaunchService(
+      {
+        isPackaged: true,
+        getLoginItemSettings: () => ({ openAtLogin: false, executableWillLaunchAtLogin: false }),
+        setLoginItemSettings
+      },
+      {
+        platform: "win32",
+        execPath: "C:\\Users\\me\\AppData\\Local\\moshu\\app-1.7.5\\novel-tool.exe"
+      },
+      preferenceStore
+    );
+
+    const status = service.ensureDefaultEnabled();
+
+    expect(status.enabled).toBe(false);
     expect(setLoginItemSettings).toHaveBeenCalledWith({
       openAtLogin: false,
       enabled: false,
       name: "Moshu",
       path: "C:\\Users\\me\\AppData\\Local\\moshu\\novel-tool.exe",
-      args: [HIDDEN_STARTUP_LAUNCH_ARG]
+      args: HIDDEN_NO_TRAY_STARTUP_ARGS
     });
-    expect(preferenceStore.setDesiredEnabled).toHaveBeenCalledWith(true);
   });
 
-  it("does not force startup launch back on after the user has disabled it", () => {
+  it("enables startup for stale preference records that predate the desired enabled field", () => {
     const setLoginItemSettings = vi.fn();
     const preferenceStore = createPreferenceStore(true);
     preferenceStore.setUserConfigured(true);
@@ -261,8 +326,15 @@ describe("StartupLaunchService", () => {
 
     const status = service.ensureDefaultEnabled();
 
-    expect(status.enabled).toBe(false);
-    expect(setLoginItemSettings).not.toHaveBeenCalled();
+    expect(status.enabled).toBe(true);
+    expect(preferenceStore.setDesiredEnabled).toHaveBeenCalledWith(true);
+    expect(setLoginItemSettings).toHaveBeenCalledWith({
+      openAtLogin: true,
+      enabled: true,
+      name: "Moshu",
+      path: "C:\\Users\\me\\AppData\\Local\\moshu\\novel-tool.exe",
+      args: HIDDEN_NO_TRAY_STARTUP_ARGS
+    });
   });
 
   it("keeps a user-disabled startup launch preference even if Windows still reports an enabled entry", () => {

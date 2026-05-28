@@ -83,12 +83,13 @@ function isAllowedRendererNavigation(navigationUrl: string): boolean {
   }
 }
 
-function createMainWindow(): void {
+function createMainWindow(options: { readonly show?: boolean } = {}): void {
   const mainWindow = new BrowserWindow({
     width: 1600,
     height: 1000,
     minWidth: 1120,
     minHeight: 760,
+    show: options.show ?? true,
     backgroundColor: "#fafaf8",
     title: "墨枢",
     webPreferences: {
@@ -154,10 +155,13 @@ if (!handleWindowsSquirrelStartupEvent({ quit: () => app.quit() })) {
         logMainError("registerIpcHandlers failed", error);
         throw error;
       }
+      const noTrayHiddenStartup = isNoTrayHiddenStartupLaunch();
       if (!isHiddenStartupLaunch()) {
         createMainWindow();
+      } else if (noTrayHiddenStartup) {
+        createMainWindow({ show: false });
       }
-      if (!isNoTrayHiddenStartupLaunch()) {
+      if (!noTrayHiddenStartup) {
         windowsTrayBackgroundController.ensureTray();
       }
 
