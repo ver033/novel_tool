@@ -10,6 +10,7 @@ import { ProjectRepository } from "../../src/main/db/repositories/project-repo";
 import { SettingsRepository } from "../../src/main/db/repositories/settings-repo";
 import { SummaryRepository } from "../../src/main/db/repositories/summary-repo";
 import { ExternalBookSyncAutomationStore } from "../../src/main/external-book-sync/book-automation-store";
+import { ExternalBookSentChapterStore } from "../../src/main/external-book-sync/book-send-history-store";
 import { ExternalBookSourceStore } from "../../src/main/external-book-sync/book-source-store";
 import { ExternalBookSyncService, type ExternalBookAiSender } from "../../src/main/external-book-sync/external-book-sync-service";
 import { createId } from "../../src/main/shared/ids";
@@ -75,6 +76,7 @@ function createFixture(options: {
   const service = new ExternalBookSyncService({
     sourceStore,
     automationStore,
+    sentChapterStore: new ExternalBookSentChapterStore(new SettingsRepository(db)),
     resolveChapterRepo: () => chapterRepo,
     projectRepo,
     aiSender
@@ -101,6 +103,7 @@ function createReopenedService(input: {
   return new ExternalBookSyncService({
     sourceStore: new ExternalBookSourceStore(new SettingsRepository(input.db)),
     automationStore: new ExternalBookSyncAutomationStore(new SettingsRepository(input.db)),
+    sentChapterStore: new ExternalBookSentChapterStore(new SettingsRepository(input.db)),
     resolveChapterRepo: () => chapterRepo,
     projectRepo: input.projectRepo,
     aiSender: {
@@ -183,7 +186,7 @@ describe("ExternalBookSyncService", () => {
     expect(summaryRepo.listSummaryJobs(project.id)).toEqual([]);
   });
 
-  it("sends selected missing chapters to AI as bounded messages without changing the .Book file", async () => {
+  it("sends selected missing chapters to AI without changing the .Book file", async () => {
     const { dir, project, service, sentMessages } = createFixture();
     const projectBookDir = join(dir, "举足无措");
     mkdirSync(projectBookDir, { recursive: true });
@@ -210,7 +213,6 @@ describe("ExternalBookSyncService", () => {
     expect(sent.sentMissingChapterCount).toBe(1);
     expect(sent.sentLatestProjectChapter).toBe(true);
     expect(sentMessages.length).toBeGreaterThan(0);
-    expect(sentMessages.every((message) => message.length <= 7000)).toBe(true);
     expect(sentMessages.join("\n")).toContain("当前项目最新章在 .Book 中的对应内容");
     expect(sentMessages.join("\n")).toContain(".Book 里的第一章修订正文。");
     expect(sentMessages.join("\n")).toContain("第二章");
@@ -302,9 +304,9 @@ describe("ExternalBookSyncService", () => {
       scheduledLocalTime: "11:00",
       status: "completed",
       candidateCount: 3,
-      sentChapterCount: 3,
-      sentMissingChapterCount: 2,
-      sentLatestProjectChapter: true
+      sentChapterCount: 1,
+      sentMissingChapterCount: 1,
+      sentLatestProjectChapter: false
     });
     expect(sentMessages.join("\n")).toContain("缺失章节：第三章");
   });
@@ -368,6 +370,7 @@ describe("ExternalBookSyncService", () => {
 
     expect(run).toMatchObject({
       trigger: "startup",
+      scheduledLocalTime: "09:00",
       status: "completed",
       candidateCount: 4,
       sentChapterCount: 4,
@@ -498,7 +501,7 @@ describe("ExternalBookSyncService", () => {
     expect(sentMessages.join("\n")).toContain("本批缺失章节：无");
   });
 
-  it("automatically sends missing chapters once for each due sync slot", async () => {
+  it("checks every due sync slot but skips unchanged chapters that were already sent", async () => {
     const { dir, project, service, sentMessages } = createFixture();
     const projectBookDir = join(dir, "举足无措");
     mkdirSync(projectBookDir, { recursive: true });
@@ -524,14 +527,53 @@ describe("ExternalBookSyncService", () => {
     const second = await service.runDueAutomaticSync({
       projectId: project.id,
       trigger: "scheduled",
-      now: new Date(2026, 4, 19, 11, 0)
+      now: new Date(2026, 4, 19, 9, 0)
     });
 
     expect(first).toMatchObject({ status: "completed", trigger: "scheduled", scheduledLocalTime: "07:00", sentChapterCount: 2, sentMissingChapterCount: 1 });
     expect(duplicate).toBeNull();
-    expect(second).toMatchObject({ status: "completed", trigger: "scheduled", scheduledLocalTime: "11:00", sentChapterCount: 2, sentMissingChapterCount: 1 });
-    expect(sentMessages.filter((message) => message.includes("缺失章节：第二章"))).toHaveLength(2);
+    expect(second).toMatchObject({ status: "skipped", trigger: "scheduled", scheduledLocalTime: "09:00", candidateCount: 1, sentChapterCount: 0, sentMissingChapterCount: 0 });
+    expect(sentMessages.filter((message) => message.includes("缺失章节：第二章"))).toHaveLength(1);
     expect(sentMessages.join("\n")).toContain("当前项目最新章在 .Book 中的对应内容");
+  });
+
+  it("sends a previously sent .Book chapter again when the file hash changes", async () => {
+    const { dir, project, service, sentMessages } = createFixture();
+    const projectBookDir = join(dir, "举足无措");
+    mkdirSync(projectBookDir, { recursive: true });
+    const bookFilePath = join(projectBookDir, "chapter-token.Book");
+    writeFileSync(bookFilePath, "第二章\n旧的新增正文。", "utf8");
+    await service.scanProject({
+      projectId: project.id,
+      mode: "directory",
+      directoryPath: dir,
+      roots: [dir],
+      timeBudgetMs: 10_000
+    });
+
+    const first = await service.runDueAutomaticSync({
+      projectId: project.id,
+      trigger: "scheduled",
+      now: new Date(2026, 4, 19, 7, 0)
+    });
+    const unchanged = await service.runDueAutomaticSync({
+      projectId: project.id,
+      trigger: "scheduled",
+      now: new Date(2026, 4, 19, 9, 0)
+    });
+    writeFileSync(bookFilePath, "第二章\n修改后的新增正文。", "utf8");
+    const changed = await service.runDueAutomaticSync({
+      projectId: project.id,
+      trigger: "scheduled",
+      now: new Date(2026, 4, 19, 11, 0)
+    });
+
+    expect(first).toMatchObject({ status: "completed", scheduledLocalTime: "07:00", sentChapterCount: 1, sentMissingChapterCount: 1 });
+    expect(unchanged).toMatchObject({ status: "skipped", scheduledLocalTime: "09:00", sentChapterCount: 0, sentMissingChapterCount: 0 });
+    expect(changed).toMatchObject({ status: "completed", scheduledLocalTime: "11:00", sentChapterCount: 1, sentMissingChapterCount: 1 });
+    expect(sentMessages.filter((message) => message.includes("缺失章节：第二章"))).toHaveLength(2);
+    expect(sentMessages.join("\n")).toContain("旧的新增正文。");
+    expect(sentMessages.join("\n")).toContain("修改后的新增正文。");
   });
 
   it.each([
@@ -582,7 +624,7 @@ describe("ExternalBookSyncService", () => {
     expect(failed).toMatchObject({ status: "failed", scheduledLocalTime: "07:00", error: errorMessage });
     expect(tooSoon).toBeNull();
     expect(retried).toMatchObject({ status: "completed", scheduledLocalTime: "07:00", sentChapterCount: 2 });
-    expect(sendAttempts).toBe(2);
+    expect(sendAttempts).toBe(3);
     expect(sentMessages.join("\n")).toContain("缺失章节：第二章");
   });
 
@@ -665,12 +707,12 @@ describe("ExternalBookSyncService", () => {
       sentMissingChapterCount: 1,
       sentLatestProjectChapter: true
     });
-    expect(sendAttempts).toBe(2);
+    expect(sendAttempts).toBe(3);
     expect(sentMessages.join("\n")).toContain("缺失章节：第二章");
     expect(sentMessages.join("\n")).toContain("当前项目最新章在 .Book 中的对应内容");
   });
 
-  it("sends once on every startup even when the latest sync slot was already sent", async () => {
+  it("checks on every startup but skips unchanged chapters that were already sent", async () => {
     const { dir, project, service, sentMessages } = createFixture();
     const projectBookDir = join(dir, "举足无措");
     mkdirSync(projectBookDir, { recursive: true });
@@ -688,8 +730,8 @@ describe("ExternalBookSyncService", () => {
     const duplicateStartup = await service.runStartupCatchUpSync(project.id, new Date(2026, 4, 19, 11, 45));
 
     expect(previousNight).toMatchObject({ trigger: "startup", scheduledLocalTime: "23:00", scheduledSlotKey: "2026-05-18T23:00", sentChapterCount: 2 });
-    expect(startup).toMatchObject({ trigger: "startup", scheduledLocalTime: "11:00", sentChapterCount: 2 });
-    expect(duplicateStartup).toMatchObject({ trigger: "startup", scheduledLocalTime: "11:00", sentChapterCount: 2 });
-    expect(sentMessages.filter((message) => message.includes("缺失章节：第二章"))).toHaveLength(3);
+    expect(startup).toMatchObject({ trigger: "startup", scheduledLocalTime: "11:00", status: "skipped", candidateCount: 1, sentChapterCount: 0 });
+    expect(duplicateStartup).toMatchObject({ trigger: "startup", scheduledLocalTime: "11:00", status: "skipped", candidateCount: 1, sentChapterCount: 0 });
+    expect(sentMessages.filter((message) => message.includes("缺失章节：第二章"))).toHaveLength(1);
   });
 });

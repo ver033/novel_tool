@@ -29,6 +29,7 @@ import { UsageAnalyticsRepository } from "../db/repositories/usage-analytics-rep
 import { WritingGoalRepository } from "../db/repositories/writing-goal-repo";
 import { ShareableProjectExporter } from "../export/shareable-project-exporter";
 import { ExternalBookSyncAutomationStore } from "../external-book-sync/book-automation-store";
+import { ExternalBookSentChapterStore } from "../external-book-sync/book-send-history-store";
 import { ExternalBookSourceStore } from "../external-book-sync/book-source-store";
 import { ExternalBookSyncService } from "../external-book-sync/external-book-sync-service";
 import { TxtExporter } from "../export/txt-exporter";
@@ -353,6 +354,7 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
     const externalBookSyncService = new ExternalBookSyncService({
       sourceStore: new ExternalBookSourceStore(settingsRepo),
       automationStore: new ExternalBookSyncAutomationStore(settingsRepo),
+      sentChapterStore: new ExternalBookSentChapterStore(settingsRepo),
       resolveChapterRepo,
       projectRepo,
       aiSender: {
@@ -364,7 +366,8 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
             allowActions: false,
             allowTools: false,
             allowAutoChapterContext: false,
-            allowInlineWritingOperation: false
+            allowInlineWritingOperation: false,
+            includeHistory: false
           });
         }
       }

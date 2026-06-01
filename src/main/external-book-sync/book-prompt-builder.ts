@@ -1,6 +1,6 @@
 import type { ExternalBookMissingChapter, ExternalBookReferenceChapter } from "./book-chapter-compare";
 
-const MAX_EXTERNAL_BOOK_SYNC_MESSAGE_CHARS = 7000;
+const EXTERNAL_BOOK_SYNC_CHAPTER_SPLIT_THRESHOLD = 20_000;
 
 export type BuildExternalBookSyncChatMessagesInput = {
   readonly projectName: string;
@@ -9,8 +9,8 @@ export type BuildExternalBookSyncChatMessagesInput = {
   readonly missingChapters: readonly ExternalBookMissingChapter[];
 };
 
-function splitLongText(text: string, maxLength: number): string[] {
-  if (text.length <= maxLength) {
+function splitLongText(text: string): string[] {
+  if (text.length <= EXTERNAL_BOOK_SYNC_CHAPTER_SPLIT_THRESHOLD) {
     return [text];
   }
 
@@ -26,15 +26,15 @@ function splitLongText(text: string, maxLength: number): string[] {
   };
 
   for (const paragraph of paragraphs) {
-    if (paragraph.length > maxLength) {
+    if (paragraph.length > EXTERNAL_BOOK_SYNC_CHAPTER_SPLIT_THRESHOLD) {
       pushCurrent();
-      for (let index = 0; index < paragraph.length; index += maxLength) {
-        chunks.push(paragraph.slice(index, index + maxLength));
+      for (let index = 0; index < paragraph.length; index += EXTERNAL_BOOK_SYNC_CHAPTER_SPLIT_THRESHOLD) {
+        chunks.push(paragraph.slice(index, index + EXTERNAL_BOOK_SYNC_CHAPTER_SPLIT_THRESHOLD));
       }
       continue;
     }
     const next = current ? `${current}\n\n${paragraph}` : paragraph;
-    if (next.length > maxLength) {
+    if (next.length > EXTERNAL_BOOK_SYNC_CHAPTER_SPLIT_THRESHOLD) {
       pushCurrent();
       current = paragraph;
     } else {
@@ -67,52 +67,38 @@ function buildHeader(input: BuildExternalBookSyncChatMessagesInput, partLabel: s
   ].filter((line): line is string => line !== null).join("\n");
 }
 
-function buildSectionChunks(input: BuildExternalBookSyncChatMessagesInput, title: string, text: string): string[] {
-  const available = Math.max(500, MAX_EXTERNAL_BOOK_SYNC_MESSAGE_CHARS - buildHeader(input, "999/999").length - title.length - 8);
-  return splitLongText(text, available).map((chunk, index, chunks) => {
+function buildSectionMessages(input: BuildExternalBookSyncChatMessagesInput, title: string, text: string): string[] {
+  const chunks = splitLongText(text);
+  return chunks.map((chunk, index) => {
     const suffix = chunks.length > 1 ? `（${index + 1}/${chunks.length}）` : "";
-    return `${title}${suffix}\n${chunk}`;
+    return `${buildHeader(input, `${index + 1}/${chunks.length}`)}${title}${suffix}\n${chunk}`.trim();
   });
 }
 
 export function buildExternalBookSyncChatMessages(input: BuildExternalBookSyncChatMessagesInput): string[] {
   const latestSection = input.latestProjectChapterInExternal
-    ? buildSectionChunks(
-        input,
+    ? buildSectionMessages(
+        {
+          ...input,
+          missingChapters: []
+        },
         `## 当前项目最新章在 .Book 中的对应内容：${input.latestProjectChapterInExternal.title}`,
         input.latestProjectChapterInExternal.projectChapterTitle === input.latestProjectChapterInExternal.title
           ? input.latestProjectChapterInExternal.text
           : `项目章节标题：${input.latestProjectChapterInExternal.projectChapterTitle}\n\n${input.latestProjectChapterInExternal.text}`
       )
     : [];
-  const missingSections = input.missingChapters.flatMap((chapter) => buildSectionChunks(input, `## 缺失章节：${chapter.title}`, chapter.text));
-  const rawSections = [...latestSection, ...missingSections];
-
-  const messages: string[] = [];
-  const placeholderHeader = buildHeader(input, "999/999");
-  const maxBodyLength = MAX_EXTERNAL_BOOK_SYNC_MESSAGE_CHARS - placeholderHeader.length;
-  let currentSections: string[] = [];
-  let currentLength = 0;
-
-  const flush = () => {
-    if (currentSections.length > 0) {
-      messages.push(currentSections.join("\n\n"));
-      currentSections = [];
-      currentLength = 0;
-    }
-  };
-
-  for (const section of rawSections) {
-    const nextLength = currentLength + (currentSections.length > 0 ? 2 : 0) + section.length;
-    if (currentSections.length > 0 && nextLength > maxBodyLength) {
-      flush();
-    }
-    currentSections.push(section);
-    currentLength += (currentSections.length > 1 ? 2 : 0) + section.length;
-  }
-  flush();
-
-  const total = Math.max(messages.length, 1);
-  const finalMessages = messages.map((body, index) => `${buildHeader(input, `${index + 1}/${total}`)}${body}`.trim());
-  return finalMessages.length > 0 ? finalMessages : [buildHeader(input, "1/1").trim()];
+  const missingSections = input.missingChapters.flatMap((chapter) =>
+    buildSectionMessages(
+      {
+        ...input,
+        latestProjectChapterInExternal: null,
+        missingChapters: [chapter]
+      },
+      `## 缺失章节：${chapter.title}`,
+      chapter.text
+    )
+  );
+  const messages = [...latestSection, ...missingSections];
+  return messages.length > 0 ? messages : [buildHeader(input, "1/1").trim()];
 }

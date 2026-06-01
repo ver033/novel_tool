@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { buildExternalBookSyncChatMessages } from "../../src/main/external-book-sync/book-prompt-builder";
 
 describe("buildExternalBookSyncChatMessages", () => {
-  it("splits long missing chapters into bounded chat messages", () => {
-    const text = Array.from({ length: 120 }, (_, index) => `第${index}段内容。${"字".repeat(80)}`).join("\n\n");
+  it("keeps a missing chapter under twenty thousand characters in one complete message", () => {
+    const text = `开头${"正文".repeat(9_000)}结尾`;
     const messages = buildExternalBookSyncChatMessages({
       projectName: "测试项目",
       currentLatestLabel: "第48章",
@@ -12,10 +12,10 @@ describe("buildExternalBookSyncChatMessages", () => {
       ]
     });
 
-    expect(messages.length).toBeGreaterThan(1);
-    expect(messages.every((message) => message.length <= 7000)).toBe(true);
-    expect(messages.join("\n")).toContain("第四十九章");
-    expect(messages.join("\n")).toContain("第119段内容");
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toContain("第四十九章");
+    expect(messages[0]).toContain("开头");
+    expect(messages[0]).toContain("结尾");
   });
 
   it("keeps short chapters in one message", () => {
@@ -32,8 +32,8 @@ describe("buildExternalBookSyncChatMessages", () => {
     expect(messages[0]).toContain("新增正文。");
   });
 
-  it("preserves a long single chapter across multiple LLM messages", () => {
-    const longChapter = `开头${"正文".repeat(9000)}结尾`;
+  it("only splits a single chapter after twenty thousand characters", () => {
+    const longChapter = `开头${"正文".repeat(11_000)}结尾`;
     const messages = buildExternalBookSyncChatMessages({
       projectName: "举足无措",
       currentLatestLabel: "第48章",
@@ -44,7 +44,8 @@ describe("buildExternalBookSyncChatMessages", () => {
 
     const joined = messages.join("\n");
     expect(messages.length).toBeGreaterThan(1);
-    expect(messages.every((message) => message.length <= 7000)).toBe(true);
+    expect(messages.every((message) => message.length <= 21_000)).toBe(true);
+    expect(joined).toContain("第四十九章（1/");
     expect(joined).toContain("开头");
     expect(joined).toContain("结尾");
     expect(joined.length).toBeGreaterThan(longChapter.length);

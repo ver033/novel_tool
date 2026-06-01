@@ -22,6 +22,7 @@ import {
   type ExternalBookSyncAutomaticRunStatus,
   type ExternalBookSyncAutomaticTrigger
 } from "./book-automation-store";
+import { ExternalBookSentChapterStore } from "./book-send-history-store";
 import { ExternalBookSourceStore, type ExternalBookSyncSource } from "./book-source-store";
 import { isBookFilePath, isPathInsideProjectBookFolder } from "./book-project-folder";
 import { parseChapterOrdinal } from "./book-chapter-ordinal";
@@ -31,7 +32,7 @@ import { searchWindowsIndexForBookFiles } from "./windows-index-search";
 const DEFAULT_SCAN_BUDGET_MS = 180_000;
 const WINDOWS_INDEX_TIMEOUT_MS = 15_000;
 const MAX_BOOK_BYTES = 20 * 1024 * 1024;
-const AUTOMATIC_SYNC_SCHEDULE_LOCAL_TIMES = ["07:00", "11:00", "23:00"] as const;
+const AUTOMATIC_SYNC_SCHEDULE_LOCAL_TIMES = ["07:00", "09:00", "11:00", "13:00", "15:00", "17:00", "19:00", "21:00", "23:00"] as const;
 const RETRYABLE_AUTOMATIC_SYNC_DELAY_MS = 5 * 60 * 1000;
 
 export type ExternalBookSyncMode = "quick" | "global" | "directory";
@@ -120,6 +121,7 @@ export type ExternalBookAiSender = {
 export type ExternalBookSyncServiceDeps = {
   readonly sourceStore: ExternalBookSourceStore;
   readonly automationStore: ExternalBookSyncAutomationStore;
+  readonly sentChapterStore: ExternalBookSentChapterStore;
   readonly resolveChapterRepo: (projectId: string) => ChapterRepository;
   readonly projectRepo: ProjectRepository;
   readonly aiSender: ExternalBookAiSender;
@@ -223,6 +225,20 @@ type LoadedExternalBookCandidate = {
   readonly fullComparison: ExternalBookComparisonResult;
 };
 
+type ExternalBookChapterSendEntry =
+  | {
+      readonly kind: "latest_project_chapter";
+      readonly chapter: ExternalBookReferenceChapter;
+      readonly chapterIdentity: string;
+      readonly sourceContentHash: string;
+    }
+  | {
+      readonly kind: "missing_chapter";
+      readonly chapter: ExternalBookMissingChapter;
+      readonly chapterIdentity: string;
+      readonly sourceContentHash: string;
+    };
+
 type ActiveExternalBookSearch = {
   readonly projectId: string;
   readonly mode: ExternalBookSyncMode;
@@ -313,6 +329,13 @@ function shouldSendCandidateToAi(candidate: ExternalBookSyncCandidate): boolean 
 }
 
 function missingChapterIdentity(chapter: ExternalBookMissingChapter): string {
+  if (chapter.ordinal !== null) {
+    return `ordinal:${chapter.ordinal}`;
+  }
+  return `title:${chapter.title.trim().toLocaleLowerCase("zh-CN")}`;
+}
+
+function externalBookChapterIdentity(chapter: Pick<ExternalBookMissingChapter | ExternalBookReferenceChapter, "ordinal" | "title">): string {
   if (chapter.ordinal !== null) {
     return `ordinal:${chapter.ordinal}`;
   }
@@ -469,6 +492,26 @@ export class ExternalBookSyncService {
     });
   }
 
+  private hasSentUnchanged(projectId: string, entry: ExternalBookChapterSendEntry): boolean {
+    return this.deps.sentChapterStore.hasSentUnchanged({
+      projectId,
+      chapterIdentity: entry.chapterIdentity,
+      sourceContentHash: entry.sourceContentHash
+    });
+  }
+
+  private markSendEntrySent(projectId: string, entry: ExternalBookChapterSendEntry, sentAt: string): void {
+    this.deps.sentChapterStore.markSent({
+      projectId,
+      chapterIdentity: entry.chapterIdentity,
+      kind: entry.kind,
+      title: entry.chapter.title,
+      ordinal: entry.chapter.ordinal,
+      sourceContentHash: entry.sourceContentHash,
+      sentAt
+    });
+  }
+
   hasDueAutomaticSync(projectId: string, now = new Date()): boolean {
     if (this.deps.sourceStore.listSources(projectId).length === 0) {
       return true;
@@ -543,7 +586,7 @@ export class ExternalBookSyncService {
         projectId: input.projectId,
         candidates: candidatesToSend
       });
-      return this.completeAutomaticRun(running, "completed", {
+      return this.completeAutomaticRun(running, sent.sentChapterCount > 0 ? "completed" : "skipped", {
         candidateCount: scan.candidates.length,
         sentMessageCount: sent.sentMessageCount,
         sentChapterCount: sent.sentChapterCount,
@@ -598,9 +641,9 @@ export class ExternalBookSyncService {
     if (!project) {
       throw new Error("项目不存在，无法发送外部章节。");
     }
-    const missingByIdentity = new Map<string, ExternalBookMissingChapter>();
+    const missingByIdentity = new Map<string, Extract<ExternalBookChapterSendEntry, { readonly kind: "missing_chapter" }>>();
     const sentCandidates: ExternalBookSyncCandidate[] = [];
-    let latestProjectChapterInExternal: ExternalBookReferenceChapter | null = null;
+    let latestProjectChapterInExternal: Extract<ExternalBookChapterSendEntry, { readonly kind: "latest_project_chapter" }> | null = null;
 
     for (const candidate of input.candidates) {
       const loaded = this.loadCandidate({
@@ -616,19 +659,56 @@ export class ExternalBookSyncService {
       }
       sentCandidates.push(loaded.candidate);
       for (const chapter of selectedChapters(loaded.fullComparison, candidate.comparison.missingChapters.map((item) => item.key))) {
-        const identity = missingChapterIdentity(chapter);
-        if (!missingByIdentity.has(identity)) {
-          missingByIdentity.set(identity, chapter);
+        const chapterIdentity = missingChapterIdentity(chapter);
+        const entry = {
+          kind: "missing_chapter",
+          chapter,
+          chapterIdentity,
+          sourceContentHash: loaded.candidate.contentHash
+        } satisfies Extract<ExternalBookChapterSendEntry, { readonly kind: "missing_chapter" }>;
+        const existing = missingByIdentity.get(chapterIdentity);
+        if (!existing || (this.hasSentUnchanged(input.projectId, existing) && !this.hasSentUnchanged(input.projectId, entry))) {
+          missingByIdentity.set(chapterIdentity, entry);
         }
       }
-      if (!latestProjectChapterInExternal && loaded.fullComparison.latestProjectChapterInExternal) {
-        latestProjectChapterInExternal = loaded.fullComparison.latestProjectChapterInExternal;
+      if (loaded.fullComparison.latestProjectChapterInExternal) {
+        const chapter = loaded.fullComparison.latestProjectChapterInExternal;
+        const entry = {
+          kind: "latest_project_chapter",
+          chapter,
+          chapterIdentity: externalBookChapterIdentity(chapter),
+          sourceContentHash: loaded.candidate.contentHash
+        } satisfies Extract<ExternalBookChapterSendEntry, { readonly kind: "latest_project_chapter" }>;
+        if (
+          !latestProjectChapterInExternal ||
+          (this.hasSentUnchanged(input.projectId, latestProjectChapterInExternal) && !this.hasSentUnchanged(input.projectId, entry))
+        ) {
+          latestProjectChapterInExternal = entry;
+        }
       }
     }
 
-    const missingChapters = [...missingByIdentity.values()].sort(compareMissingChapters);
-    if (missingChapters.length === 0 && !latestProjectChapterInExternal) {
+    const missingChapterEntries = [...missingByIdentity.values()].sort((a, b) => compareMissingChapters(a.chapter, b.chapter));
+    const entries = [
+      ...(latestProjectChapterInExternal ? [latestProjectChapterInExternal] : []),
+      ...missingChapterEntries
+    ].filter((entry) => !this.hasSentUnchanged(input.projectId, entry));
+    if (missingChapterEntries.length === 0 && !latestProjectChapterInExternal) {
       throw new Error("没有可发送的外部章节。");
+    }
+    if (entries.length === 0) {
+      const scannedAt = new Date().toISOString();
+      for (const candidate of sentCandidates) {
+        this.rememberCandidateSource(candidate, scannedAt);
+      }
+      return {
+        sessionId: "",
+        sessionTitle: "外部同步检查",
+        sentMessageCount: 0,
+        sentChapterCount: 0,
+        sentMissingChapterCount: 0,
+        sentLatestProjectChapter: false
+      };
     }
 
     const comparison = input.candidates[0]?.comparison;
@@ -636,19 +716,32 @@ export class ExternalBookSyncService {
       projectId: input.projectId,
       title: "外部同步检查"
     });
-    const messages = buildExternalBookSyncChatMessages({
-      projectName: project.name,
-      currentLatestLabel: comparison?.currentLatestOrdinal ? `第${comparison.currentLatestOrdinal}章` : `${comparison?.currentChapterCount ?? 0} 章`,
-      latestProjectChapterInExternal,
-      missingChapters
-    });
-    for (const message of messages) {
-      await this.deps.aiSender.sendChatMessage({
-        requestId: createId("external_book_sync_chat"),
-        projectId: input.projectId,
-        sessionId: session.id,
-        message
+    let sentMessageCount = 0;
+    let sentMissingChapterCount = 0;
+    let sentLatestProjectChapter = false;
+    const currentLatestLabel = comparison?.currentLatestOrdinal ? `第${comparison.currentLatestOrdinal}章` : `${comparison?.currentChapterCount ?? 0} 章`;
+    for (const entry of entries) {
+      const messages = buildExternalBookSyncChatMessages({
+        projectName: project.name,
+        currentLatestLabel,
+        latestProjectChapterInExternal: entry.kind === "latest_project_chapter" ? entry.chapter : null,
+        missingChapters: entry.kind === "missing_chapter" ? [entry.chapter] : []
       });
+      for (const message of messages) {
+        await this.deps.aiSender.sendChatMessage({
+          requestId: createId("external_book_sync_chat"),
+          projectId: input.projectId,
+          sessionId: session.id,
+          message
+        });
+        sentMessageCount += 1;
+      }
+      this.markSendEntrySent(input.projectId, entry, new Date().toISOString());
+      if (entry.kind === "latest_project_chapter") {
+        sentLatestProjectChapter = true;
+      } else {
+        sentMissingChapterCount += 1;
+      }
     }
     const scannedAt = new Date().toISOString();
     for (const candidate of sentCandidates) {
@@ -657,10 +750,10 @@ export class ExternalBookSyncService {
     return {
       sessionId: session.id,
       sessionTitle: session.title,
-      sentMessageCount: messages.length,
-      sentChapterCount: missingChapters.length + (latestProjectChapterInExternal ? 1 : 0),
-      sentMissingChapterCount: missingChapters.length,
-      sentLatestProjectChapter: Boolean(latestProjectChapterInExternal)
+      sentMessageCount,
+      sentChapterCount: sentMissingChapterCount + (sentLatestProjectChapter ? 1 : 0),
+      sentMissingChapterCount,
+      sentLatestProjectChapter
     };
   }
 
@@ -785,37 +878,75 @@ export class ExternalBookSyncService {
       throw new Error("外部 .Book 文件已变化，请重新扫描后再发送。");
     }
     const candidate = loaded.candidate;
-    const chapters = selectedChapters(loaded.fullComparison, input.chapterKeys);
-    const latestProjectChapterInExternal = loaded.fullComparison.latestProjectChapterInExternal;
-    if (chapters.length === 0 && !latestProjectChapterInExternal) {
+    const missingEntries = selectedChapters(loaded.fullComparison, input.chapterKeys).map((chapter) => ({
+      kind: "missing_chapter" as const,
+      chapter,
+      chapterIdentity: missingChapterIdentity(chapter),
+      sourceContentHash: candidate.contentHash
+    }));
+    const latestProjectChapterEntry = loaded.fullComparison.latestProjectChapterInExternal
+      ? {
+          kind: "latest_project_chapter" as const,
+          chapter: loaded.fullComparison.latestProjectChapterInExternal,
+          chapterIdentity: externalBookChapterIdentity(loaded.fullComparison.latestProjectChapterInExternal),
+          sourceContentHash: candidate.contentHash
+        }
+      : null;
+    const allEntries = [...(latestProjectChapterEntry ? [latestProjectChapterEntry] : []), ...missingEntries];
+    if (allEntries.length === 0) {
       throw new Error("没有可发送的外部章节。");
+    }
+    const entries = allEntries.filter((entry) => !this.hasSentUnchanged(input.projectId, entry));
+    if (entries.length === 0) {
+      this.rememberCandidateSource(candidate, new Date().toISOString());
+      return {
+        sessionId: "",
+        sessionTitle: "外部同步检查",
+        sentMessageCount: 0,
+        sentChapterCount: 0,
+        sentMissingChapterCount: 0,
+        sentLatestProjectChapter: false
+      };
     }
     const session = await this.deps.aiSender.createChatSession({
       projectId: input.projectId,
       title: "外部同步检查"
     });
-    const messages = buildExternalBookSyncChatMessages({
-      projectName: project.name,
-      currentLatestLabel: candidate.comparison.currentLatestOrdinal ? `第${candidate.comparison.currentLatestOrdinal}章` : `${candidate.comparison.currentChapterCount} 章`,
-      latestProjectChapterInExternal,
-      missingChapters: chapters
-    });
-    for (const message of messages) {
-      await this.deps.aiSender.sendChatMessage({
-        requestId: createId("external_book_sync_chat"),
-        projectId: input.projectId,
-        sessionId: session.id,
-        message
+    let sentMessageCount = 0;
+    let sentMissingChapterCount = 0;
+    let sentLatestProjectChapter = false;
+    const currentLatestLabel = candidate.comparison.currentLatestOrdinal ? `第${candidate.comparison.currentLatestOrdinal}章` : `${candidate.comparison.currentChapterCount} 章`;
+    for (const entry of entries) {
+      const messages = buildExternalBookSyncChatMessages({
+        projectName: project.name,
+        currentLatestLabel,
+        latestProjectChapterInExternal: entry.kind === "latest_project_chapter" ? entry.chapter : null,
+        missingChapters: entry.kind === "missing_chapter" ? [entry.chapter] : []
       });
+      for (const message of messages) {
+        await this.deps.aiSender.sendChatMessage({
+          requestId: createId("external_book_sync_chat"),
+          projectId: input.projectId,
+          sessionId: session.id,
+          message
+        });
+        sentMessageCount += 1;
+      }
+      this.markSendEntrySent(input.projectId, entry, new Date().toISOString());
+      if (entry.kind === "latest_project_chapter") {
+        sentLatestProjectChapter = true;
+      } else {
+        sentMissingChapterCount += 1;
+      }
     }
     this.rememberCandidateSource(candidate, new Date().toISOString());
     return {
       sessionId: session.id,
       sessionTitle: session.title,
-      sentMessageCount: messages.length,
-      sentChapterCount: chapters.length + (latestProjectChapterInExternal ? 1 : 0),
-      sentMissingChapterCount: chapters.length,
-      sentLatestProjectChapter: Boolean(latestProjectChapterInExternal)
+      sentMessageCount,
+      sentChapterCount: sentMissingChapterCount + (sentLatestProjectChapter ? 1 : 0),
+      sentMissingChapterCount,
+      sentLatestProjectChapter
     };
   }
 

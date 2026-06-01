@@ -1421,10 +1421,17 @@ describe("AI chat flow", () => {
     repo.saveContent(initialChapter.id, emptyChapterContent, "本地第48章正文，不应被外部同步自动读取。", 20, 0, "2026-05-21", new Date().toISOString());
     const aiTaskService = new AiTaskService(aiTaskRepo, undefined, chatGenerator, chatRepo, scratchRepo, chapterRepo);
     const session = aiTaskService.getChatSession({ projectId: project.id });
+    chatRepo(project.id).createMessage({
+      projectId: project.id,
+      sessionId: session.id,
+      role: "user",
+      content: "最近对话原文不应进入同步请求。",
+      action: null
+    });
     const sendWithoutLocalTools = aiTaskService.sendChatMessageStream.bind(aiTaskService) as unknown as (
       input: Parameters<AiTaskService["sendChatMessageStream"]>[0],
       handlers: Parameters<AiTaskService["sendChatMessageStream"]>[1],
-      options: { readonly allowTools: false; readonly allowAutoChapterContext: false; readonly allowActions: false }
+      options: { readonly allowTools: false; readonly allowAutoChapterContext: false; readonly allowActions: false; readonly includeHistory: false }
     ) => ReturnType<AiTaskService["sendChatMessageStream"]>;
 
     await sendWithoutLocalTools(
@@ -1447,13 +1454,15 @@ describe("AI chat flow", () => {
         ].join("\n")
       },
       {},
-      { allowTools: false, allowAutoChapterContext: false, allowActions: false }
+      { allowTools: false, allowAutoChapterContext: false, allowActions: false, includeHistory: false }
     );
 
     expect(capturedInput).toMatchObject({
+      history: [],
       tools: []
     });
     expect(JSON.stringify(capturedInput)).not.toContain("本地第48章正文");
+    expect(JSON.stringify(capturedInput)).not.toContain("最近对话原文");
 
     db.close();
   });

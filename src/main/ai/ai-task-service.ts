@@ -196,6 +196,7 @@ export type AiChatStreamExecutionOptions = {
   readonly allowTools?: boolean;
   readonly allowAutoChapterContext?: boolean;
   readonly allowInlineWritingOperation?: boolean;
+  readonly includeHistory?: boolean;
 };
 
 export type AiChatGenerationInput = AiSendChatMessageStreamInput & {
@@ -1363,7 +1364,8 @@ export class AiTaskService {
     const abortController = this.registerStream(input.requestId);
 
     try {
-      const generated = await this.generateChatAnswerStream(input, chatRepo, history, abortController, handlers, options);
+      const generationHistory = options.includeHistory === false ? [] : history;
+      const generated = await this.generateChatAnswerStream(input, chatRepo, generationHistory, abortController, handlers, options);
       const assistantMessage = chatRepo.createMessage({
         projectId: input.projectId,
         sessionId: input.sessionId,
