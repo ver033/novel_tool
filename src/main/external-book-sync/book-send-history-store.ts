@@ -42,14 +42,18 @@ export class ExternalBookSentChapterStore {
   }
 
   markSent(input: ExternalBookSentChapterInput): ExternalBookSentChapterRecord {
-    const existing = this.list(input.projectId).find((record) => record.chapterIdentity === input.chapterIdentity);
+    const existing = this.list(input.projectId).find(
+      (record) => record.chapterIdentity === input.chapterIdentity && record.sourceContentHash === input.sourceContentHash
+    );
     const record: ExternalBookSentChapterRecord = {
       ...input,
       id: input.id ?? existing?.id ?? createId("external_book_sent_chapter")
     };
     const next = [
       record,
-      ...this.list(input.projectId).filter((item) => item.id !== record.id && item.chapterIdentity !== record.chapterIdentity)
+      ...this.list(input.projectId).filter(
+        (item) => item.id !== record.id && (item.chapterIdentity !== record.chapterIdentity || item.sourceContentHash !== record.sourceContentHash)
+      )
     ].slice(0, MAX_STORED_SENT_CHAPTERS);
     this.settingsRepo.setJson(sentChaptersKey(input.projectId), next);
     return record;

@@ -52,6 +52,11 @@ function buildHeader(input: BuildExternalBookSyncChatMessagesInput, partLabel: s
       : input.missingChapters.length === 1
         ? input.missingChapters[0].title
         : `${input.missingChapters[0]?.title ?? "未知"} - ${input.missingChapters.at(-1)?.title ?? "未知"}`;
+  const sendingLabel = input.latestProjectChapterInExternal
+    ? `当前项目最新章对应 .Book 内容：${input.latestProjectChapterInExternal.title}`
+    : input.missingChapters.length > 0
+      ? `缺失章节：${chapterRangeLabel}`
+      : "无";
   return [
     "【外部写作软件同步检查】",
     "",
@@ -60,7 +65,8 @@ function buildHeader(input: BuildExternalBookSyncChatMessagesInput, partLabel: s
     "请先阅读这些内容，等待作者下一步指令。不要自动改写、不要总结成缓存、不要假设这些章节已经写入项目。",
     "",
     `当前项目：${input.projectName}`,
-    `当前项目最新章节：${input.currentLatestLabel}`,
+    `当前项目最新章节（项目内，仅作比较基准）：${input.currentLatestLabel}`,
+    `本条发送章节：${sendingLabel}`,
     `本批缺失章节：${chapterRangeLabel}`,
     `消息分段：${partLabel}`,
     ""

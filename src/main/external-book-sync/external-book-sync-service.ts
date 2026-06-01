@@ -122,6 +122,7 @@ export type ExternalBookSyncServiceDeps = {
   readonly sourceStore: ExternalBookSourceStore;
   readonly automationStore: ExternalBookSyncAutomationStore;
   readonly sentChapterStore: ExternalBookSentChapterStore;
+  readonly searchBookFilesInWindowsIndex?: typeof searchWindowsIndexForBookFiles;
   readonly resolveChapterRepo: (projectId: string) => ChapterRepository;
   readonly projectRepo: ProjectRepository;
   readonly aiSender: ExternalBookAiSender;
@@ -134,6 +135,10 @@ export type ExternalBookSyncHandlers = {
 
 function contentHash(text: string): string {
   return createHash("sha256").update(text).digest("hex");
+}
+
+function chapterPayloadHash(chapter: Pick<ImportPreviewChapter, "title" | "text">): string {
+  return contentHash(normalizeTxtContent(`${chapter.title}\n${chapter.text}`));
 }
 
 function pad2(value: number): string {
@@ -231,12 +236,16 @@ type ExternalBookChapterSendEntry =
       readonly chapter: ExternalBookReferenceChapter;
       readonly chapterIdentity: string;
       readonly sourceContentHash: string;
+      readonly sourceModifiedAt: string | null;
+      readonly sourceFilePath: string;
     }
   | {
       readonly kind: "missing_chapter";
       readonly chapter: ExternalBookMissingChapter;
       readonly chapterIdentity: string;
       readonly sourceContentHash: string;
+      readonly sourceModifiedAt: string | null;
+      readonly sourceFilePath: string;
     };
 
 type ActiveExternalBookSearch = {
@@ -353,6 +362,29 @@ function compareMissingChapters(a: ExternalBookMissingChapter, b: ExternalBookMi
     return 1;
   }
   return a.title.localeCompare(b.title, "zh-CN") || a.order - b.order;
+}
+
+function modifiedTimeValue(value: string | null): number {
+  if (!value) {
+    return 0;
+  }
+  const time = new Date(value).getTime();
+  return Number.isNaN(time) ? 0 : time;
+}
+
+function compareSendEntryFreshness(a: ExternalBookChapterSendEntry, b: ExternalBookChapterSendEntry): number {
+  return (
+    modifiedTimeValue(a.sourceModifiedAt) - modifiedTimeValue(b.sourceModifiedAt) ||
+    a.sourceContentHash.localeCompare(b.sourceContentHash) ||
+    a.sourceFilePath.localeCompare(b.sourceFilePath)
+  );
+}
+
+function newerSendEntry<T extends ExternalBookChapterSendEntry>(current: T | null | undefined, next: T): T {
+  if (!current) {
+    return next;
+  }
+  return compareSendEntryFreshness(next, current) >= 0 ? next : current;
 }
 
 function mergeRepeatedOrdinalBookChapters(chapters: readonly ImportPreviewChapter[]): ImportPreviewChapter[] {
@@ -664,12 +696,12 @@ export class ExternalBookSyncService {
           kind: "missing_chapter",
           chapter,
           chapterIdentity,
-          sourceContentHash: loaded.candidate.contentHash
+          sourceContentHash: chapterPayloadHash(chapter),
+          sourceModifiedAt: loaded.candidate.modifiedAt,
+          sourceFilePath: loaded.candidate.filePath
         } satisfies Extract<ExternalBookChapterSendEntry, { readonly kind: "missing_chapter" }>;
         const existing = missingByIdentity.get(chapterIdentity);
-        if (!existing || (this.hasSentUnchanged(input.projectId, existing) && !this.hasSentUnchanged(input.projectId, entry))) {
-          missingByIdentity.set(chapterIdentity, entry);
-        }
+        missingByIdentity.set(chapterIdentity, newerSendEntry(existing, entry));
       }
       if (loaded.fullComparison.latestProjectChapterInExternal) {
         const chapter = loaded.fullComparison.latestProjectChapterInExternal;
@@ -677,14 +709,11 @@ export class ExternalBookSyncService {
           kind: "latest_project_chapter",
           chapter,
           chapterIdentity: externalBookChapterIdentity(chapter),
-          sourceContentHash: loaded.candidate.contentHash
+          sourceContentHash: chapterPayloadHash(chapter),
+          sourceModifiedAt: loaded.candidate.modifiedAt,
+          sourceFilePath: loaded.candidate.filePath
         } satisfies Extract<ExternalBookChapterSendEntry, { readonly kind: "latest_project_chapter" }>;
-        if (
-          !latestProjectChapterInExternal ||
-          (this.hasSentUnchanged(input.projectId, latestProjectChapterInExternal) && !this.hasSentUnchanged(input.projectId, entry))
-        ) {
-          latestProjectChapterInExternal = entry;
-        }
+        latestProjectChapterInExternal = newerSendEntry(latestProjectChapterInExternal, entry);
       }
     }
 
@@ -783,7 +812,8 @@ export class ExternalBookSyncService {
       }
 
       const shouldSearchIndex = input.mode !== "directory" && (input.mode === "global" || (candidatePaths.size === 0 && savedSourceRoots.length === 0));
-      const indexResult = shouldSearchIndex ? await searchWindowsIndexForBookFiles({ projectName: project.name, timeoutMs: WINDOWS_INDEX_TIMEOUT_MS }) : null;
+      const indexSearch = this.deps.searchBookFilesInWindowsIndex ?? searchWindowsIndexForBookFiles;
+      const indexResult = shouldSearchIndex ? await indexSearch({ projectName: project.name, timeoutMs: WINDOWS_INDEX_TIMEOUT_MS }) : null;
       if (indexResult?.status === "failed") {
         warnings.push(`Windows Search 查询失败：${indexResult.error}`);
       }
@@ -796,6 +826,7 @@ export class ExternalBookSyncService {
       const shouldScanFileSystem =
         input.mode === "global" ||
         input.mode === "directory" ||
+        savedSourceRoots.length === 0 ||
         candidatePaths.size === 0 ||
         (savedSourceRoots.length > 0 && !hasExplicitRoots);
       const scan = shouldScanFileSystem
@@ -835,6 +866,7 @@ export class ExternalBookSyncService {
         return (
           b.comparison.missingChapters.length - a.comparison.missingChapters.length ||
           b.detectedChapterCount - a.detectedChapterCount ||
+          modifiedTimeValue(b.modifiedAt) - modifiedTimeValue(a.modifiedAt) ||
           a.fileName.localeCompare(b.fileName, "zh-CN")
         );
       });
@@ -882,14 +914,18 @@ export class ExternalBookSyncService {
       kind: "missing_chapter" as const,
       chapter,
       chapterIdentity: missingChapterIdentity(chapter),
-      sourceContentHash: candidate.contentHash
+      sourceContentHash: chapterPayloadHash(chapter),
+      sourceModifiedAt: candidate.modifiedAt,
+      sourceFilePath: candidate.filePath
     }));
     const latestProjectChapterEntry = loaded.fullComparison.latestProjectChapterInExternal
       ? {
           kind: "latest_project_chapter" as const,
           chapter: loaded.fullComparison.latestProjectChapterInExternal,
           chapterIdentity: externalBookChapterIdentity(loaded.fullComparison.latestProjectChapterInExternal),
-          sourceContentHash: candidate.contentHash
+          sourceContentHash: chapterPayloadHash(loaded.fullComparison.latestProjectChapterInExternal),
+          sourceModifiedAt: candidate.modifiedAt,
+          sourceFilePath: candidate.filePath
         }
       : null;
     const allEntries = [...(latestProjectChapterEntry ? [latestProjectChapterEntry] : []), ...missingEntries];
