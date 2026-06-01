@@ -67,8 +67,12 @@ function createFixture(options: {
     updatedAt: "2026-05-18T00:00:00.000Z"
   });
   const sentMessages: string[] = [];
+  let sessionCounter = 0;
   const aiSender: ExternalBookAiSender = {
-    createChatSession: () => ({ id: "session_external", title: "外部同步检查" }),
+    createChatSession: () => {
+      sessionCounter += 1;
+      return { id: `session_external_${sessionCounter}`, title: "外部同步检查" };
+    },
     sendChatMessage: options.sendChatMessage ?? (async (input) => {
       sentMessages.push(input.message);
     })
@@ -325,7 +329,13 @@ describe("ExternalBookSyncService", () => {
   });
 
   it("automatically sends the latest project chapter and every later one-chapter .Book file", async () => {
-    const { dir, project, chapterRepo, service, sentMessages } = createFixture();
+    const sentSessionIds: string[] = [];
+    const { dir, project, chapterRepo, service, sentMessages } = createFixture({
+      async sendChatMessage(input) {
+        sentSessionIds.push(input.sessionId);
+        sentMessages.push(input.message);
+      }
+    });
     const latestProjectChapter = chapterRepo.listByProject(project.id)[0];
     chapterRepo.rename(latestProjectChapter.id, "第40章", "2026-05-18T01:00:00.000Z");
     const projectBookDir = join(dir, "举足无措");
@@ -356,6 +366,7 @@ describe("ExternalBookSyncService", () => {
     expect(sentBody).toContain("缺失章节：第43章");
     expect(sentBody).not.toContain(latestBookFilePath);
     expect(sentBody).not.toContain(latestBookFileName);
+    expect(new Set(sentSessionIds).size).toBe(4);
   });
 
   it("locally verifies a project at chapter 48 sends external Book chapters 48 through 51", async () => {
@@ -483,6 +494,33 @@ describe("ExternalBookSyncService", () => {
     expect(chapter54Message).not.toContain("这是第53章正文里的章节样式行，不是第54章正文。");
     expect(chapter56Message).toContain("第56章正确正文。");
     expect(chapter56Message).not.toContain("这是第53章正文里的章节样式行，不是第56章正文。");
+  });
+
+  it("uses the first non-empty chapter heading in a one-chapter .Book so empty leading markers cannot swap chapter bodies", async () => {
+    const { dir, project, chapterRepo, service, sentMessages } = createFixture();
+    const firstChapter = chapterRepo.listByProject(project.id)[0];
+    chapterRepo.rename(firstChapter.id, "第52章", "2026-05-18T01:00:00.000Z");
+    const projectBookDir = join(dir, "举足无措");
+    mkdirSync(projectBookDir, { recursive: true });
+    writeFileSync(join(projectBookDir, "random53.Book"), "第56章\n\n第53章\n第53章真实正文。", "utf8");
+    writeFileSync(join(projectBookDir, "random56.Book"), "第53章\n\n第56章\n第56章真实正文。", "utf8");
+
+    const run = await service.runStartupCatchUpSync(project.id, new Date(2026, 4, 21, 9, 0));
+    const chapter53Message = sentMessages.find((message) => message.includes("## 缺失章节：第53章")) ?? "";
+    const chapter56Message = sentMessages.find((message) => message.includes("## 缺失章节：第56章")) ?? "";
+
+    expect(run).toMatchObject({
+      trigger: "startup",
+      scheduledLocalTime: "09:00",
+      status: "completed",
+      candidateCount: 2,
+      sentChapterCount: 2,
+      sentMissingChapterCount: 2
+    });
+    expect(chapter53Message).toContain("第53章真实正文。");
+    expect(chapter53Message).not.toContain("第56章真实正文。");
+    expect(chapter56Message).toContain("第56章真实正文。");
+    expect(chapter56Message).not.toContain("第53章真实正文。");
   });
 
   it("ignores Windows Search results from nested project backup folders", async () => {

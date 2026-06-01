@@ -393,39 +393,48 @@ function detectSingleChapterBookFile(content: string): ImportPreviewChapter[] {
     return detectTxtChapters(content);
   }
   const lines = normalized.split("\n");
-  const detected = detectTxtChapters(normalized).filter((chapter: ImportPreviewChapter) => chapter.title.trim() || chapter.text.trim());
-  const chapter = detected.find((item) => parseChapterOrdinal(item.title) !== null) ?? detected[0];
-  if (!chapter) {
-    return [];
+  const headings = lines
+    .map((line, index) => ({ index, title: line.trim(), ordinal: parseChapterOrdinal(line) }))
+    .filter((heading): heading is { readonly index: number; readonly title: string; readonly ordinal: number } => heading.ordinal !== null && heading.title.length <= 80);
+  let selected = headings[0] ?? null;
+  for (let index = 0; index < headings.length; index += 1) {
+    const heading = headings[index];
+    const nextHeading = headings[index + 1] ?? null;
+    if (!nextHeading || nextHeading.ordinal === heading.ordinal) {
+      selected = heading;
+      break;
+    }
+    const hasBodyBeforeNextHeading = lines
+      .slice(heading.index + 1, nextHeading.index)
+      .some((line) => line.trim() && parseChapterOrdinal(line) === null);
+    if (hasBodyBeforeNextHeading) {
+      selected = heading;
+      break;
+    }
   }
-  const chapterOrdinal = parseChapterOrdinal(chapter.title);
-  let titleIndex = lines.findIndex((line) => line.trim() === chapter.title);
-  if (titleIndex < 0 && chapterOrdinal !== null) {
-    titleIndex = lines.findIndex((line) => {
-      const title = line.trim();
-      return title ? parseChapterOrdinal(title) === chapterOrdinal : false;
-    });
-  }
-  if (titleIndex < 0) {
-    const text = normalizeTxtContent(chapter.text);
+
+  if (!selected) {
+    const text = normalizeTxtContent(normalized);
     return [
       {
-        ...chapter,
+        title: "正文",
+        text,
         order: 0,
         wordCount: countWritingUnits(text),
-        text
+        lineStart: 1,
+        lineEnd: lines.length
       }
     ];
   }
-  const title = chapter.title;
-  const text = normalizeTxtContent(lines.slice(titleIndex + 1).join("\n"));
+
+  const text = normalizeTxtContent(lines.slice(selected.index + 1).join("\n"));
   return [
     {
-      ...chapter,
-      title,
+      title: selected.title,
       text,
+      order: 0,
       wordCount: countWritingUnits(text),
-      lineStart: titleIndex + 1,
+      lineStart: selected.index + 1,
       lineEnd: lines.length
     }
   ];
@@ -740,15 +749,17 @@ export class ExternalBookSyncService {
     }
 
     const comparison = input.candidates[0]?.comparison;
-    const session = await this.deps.aiSender.createChatSession({
-      projectId: input.projectId,
-      title: "外部同步检查"
-    });
+    let firstSession: { readonly id: string; readonly title: string } | null = null;
     let sentMessageCount = 0;
     let sentMissingChapterCount = 0;
     let sentLatestProjectChapter = false;
     const currentLatestLabel = comparison?.currentLatestOrdinal ? `第${comparison.currentLatestOrdinal}章` : `${comparison?.currentChapterCount ?? 0} 章`;
     for (const entry of entries) {
+      const session = await this.deps.aiSender.createChatSession({
+        projectId: input.projectId,
+        title: "外部同步检查"
+      });
+      firstSession ??= session;
       const messages = buildExternalBookSyncChatMessages({
         projectName: project.name,
         currentLatestLabel,
@@ -776,8 +787,8 @@ export class ExternalBookSyncService {
       this.rememberCandidateSource(candidate, scannedAt);
     }
     return {
-      sessionId: session.id,
-      sessionTitle: session.title,
+      sessionId: firstSession?.id ?? "",
+      sessionTitle: firstSession?.title ?? "外部同步检查",
       sentMessageCount,
       sentChapterCount: sentMissingChapterCount + (sentLatestProjectChapter ? 1 : 0),
       sentMissingChapterCount,
@@ -954,15 +965,17 @@ export class ExternalBookSyncService {
         sentLatestProjectChapter: false
       };
     }
-    const session = await this.deps.aiSender.createChatSession({
-      projectId: input.projectId,
-      title: "外部同步检查"
-    });
+    let firstSession: { readonly id: string; readonly title: string } | null = null;
     let sentMessageCount = 0;
     let sentMissingChapterCount = 0;
     let sentLatestProjectChapter = false;
     const currentLatestLabel = candidate.comparison.currentLatestOrdinal ? `第${candidate.comparison.currentLatestOrdinal}章` : `${candidate.comparison.currentChapterCount} 章`;
     for (const entry of entries) {
+      const session = await this.deps.aiSender.createChatSession({
+        projectId: input.projectId,
+        title: "外部同步检查"
+      });
+      firstSession ??= session;
       const messages = buildExternalBookSyncChatMessages({
         projectName: project.name,
         currentLatestLabel,
@@ -987,8 +1000,8 @@ export class ExternalBookSyncService {
     }
     this.rememberCandidateSource(candidate, new Date().toISOString());
     return {
-      sessionId: session.id,
-      sessionTitle: session.title,
+      sessionId: firstSession?.id ?? "",
+      sessionTitle: firstSession?.title ?? "外部同步检查",
       sentMessageCount,
       sentChapterCount: sentMissingChapterCount + (sentLatestProjectChapter ? 1 : 0),
       sentMissingChapterCount,
