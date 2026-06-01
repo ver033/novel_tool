@@ -387,6 +387,11 @@ function newerSendEntry<T extends ExternalBookChapterSendEntry>(current: T | nul
   return compareSendEntryFreshness(next, current) >= 0 ? next : current;
 }
 
+function sendEntrySessionTitle(entry: ExternalBookChapterSendEntry): string {
+  const title = entry.chapter.title.trim() || "正文";
+  return `外部同步检查 - ${title}`;
+}
+
 function detectSingleChapterBookFile(content: string): ImportPreviewChapter[] {
   const normalized = normalizeTxtContent(content);
   if (!normalized) {
@@ -757,7 +762,7 @@ export class ExternalBookSyncService {
     for (const entry of entries) {
       const session = await this.deps.aiSender.createChatSession({
         projectId: input.projectId,
-        title: "外部同步检查"
+        title: sendEntrySessionTitle(entry)
       });
       firstSession ??= session;
       const messages = buildExternalBookSyncChatMessages({
@@ -973,7 +978,7 @@ export class ExternalBookSyncService {
     for (const entry of entries) {
       const session = await this.deps.aiSender.createChatSession({
         projectId: input.projectId,
-        title: "外部同步检查"
+        title: sendEntrySessionTitle(entry)
       });
       firstSession ??= session;
       const messages = buildExternalBookSyncChatMessages({

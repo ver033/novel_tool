@@ -32,6 +32,7 @@ afterEach(() => {
 
 function createFixture(options: {
   readonly rootPath?: string | null;
+  readonly createChatSession?: ExternalBookAiSender["createChatSession"];
   readonly sendChatMessage?: ExternalBookAiSender["sendChatMessage"];
   readonly searchBookFilesInWindowsIndex?: ExternalBookSyncServiceDeps["searchBookFilesInWindowsIndex"];
 } = {}) {
@@ -69,10 +70,10 @@ function createFixture(options: {
   const sentMessages: string[] = [];
   let sessionCounter = 0;
   const aiSender: ExternalBookAiSender = {
-    createChatSession: () => {
+    createChatSession: options.createChatSession ?? (() => {
       sessionCounter += 1;
       return { id: `session_external_${sessionCounter}`, title: "外部同步检查" };
-    },
+    }),
     sendChatMessage: options.sendChatMessage ?? (async (input) => {
       sentMessages.push(input.message);
     })
@@ -521,6 +522,122 @@ describe("ExternalBookSyncService", () => {
     expect(chapter53Message).not.toContain("第56章真实正文。");
     expect(chapter56Message).toContain("第56章真实正文。");
     expect(chapter56Message).not.toContain("第53章真实正文。");
+  });
+
+  it("sends chapters 53 54 and 56 when they are mixed with other one-chapter .Book files", async () => {
+    const { dir, project, chapterRepo, service, sentMessages } = createFixture();
+    const firstChapter = chapterRepo.listByProject(project.id)[0];
+    chapterRepo.rename(firstChapter.id, "第52章", "2026-05-18T01:00:00.000Z");
+    const projectBookDir = join(dir, "举足无措");
+    mkdirSync(projectBookDir, { recursive: true });
+    writeFileSync(
+      join(projectBookDir, "random53.Book"),
+      "第53章\n第53章正确正文开头。\n\n第54章\n这是第53章正文里的章节样式行，不是第54章正文。\n\n第56章\n这是第53章正文里的章节样式行，不是第56章正文。",
+      "utf8"
+    );
+    writeFileSync(join(projectBookDir, "random54.Book"), "第54章", "utf8");
+    writeFileSync(join(projectBookDir, "random55.Book"), "第55章\n第55章正确正文。", "utf8");
+    writeFileSync(join(projectBookDir, "random56.Book"), "第56章\n第56章正确正文。", "utf8");
+    writeFileSync(join(projectBookDir, "random57.Book"), "第57章\n第57章正确正文。", "utf8");
+
+    const run = await service.runStartupCatchUpSync(project.id, new Date(2026, 4, 21, 9, 0));
+    const sentBody = sentMessages.join("\n");
+
+    expect(run).toMatchObject({
+      trigger: "startup",
+      scheduledLocalTime: "09:00",
+      status: "completed",
+      candidateCount: 5,
+      sentChapterCount: 5,
+      sentMissingChapterCount: 5
+    });
+    expect(sentBody).toContain("缺失章节：第53章");
+    expect(sentBody).toContain("缺失章节：第54章");
+    expect(sentBody).toContain("缺失章节：第55章");
+    expect(sentBody).toContain("缺失章节：第56章");
+    expect(sentBody).toContain("缺失章节：第57章");
+  });
+
+  it("sends missing gap chapters even when the project already has a later chapter", async () => {
+    const sentSessionIds: string[] = [];
+    const createdSessionTitles: string[] = [];
+    const { dir, project, chapterRepo, service, sentMessages } = createFixture({
+      createChatSession(input) {
+        createdSessionTitles.push(input.title);
+        return { id: `session_external_${createdSessionTitles.length}`, title: input.title };
+      },
+      async sendChatMessage(input) {
+        sentSessionIds.push(input.sessionId);
+        sentMessages.push(input.message);
+      }
+    });
+    const firstChapter = chapterRepo.listByProject(project.id)[0];
+    chapterRepo.rename(firstChapter.id, "第52章", "2026-05-18T01:00:00.000Z");
+    createChapter(chapterRepo, {
+      projectId: project.id,
+      title: "第55章",
+      sortOrder: 1,
+      plainText: "本地第55章正文。"
+    });
+    createChapter(chapterRepo, {
+      projectId: project.id,
+      title: "第57章",
+      sortOrder: 2,
+      plainText: "本地第57章正文。"
+    });
+    const projectBookDir = join(dir, "举足无措");
+    mkdirSync(projectBookDir, { recursive: true });
+    writeFileSync(join(projectBookDir, "random53.Book"), "第53章\n第53章正确正文。", "utf8");
+    writeFileSync(join(projectBookDir, "random54.Book"), "第54章", "utf8");
+    writeFileSync(join(projectBookDir, "random55.Book"), "第55章\n第55章外部正文。", "utf8");
+    writeFileSync(join(projectBookDir, "random56.Book"), "第56章\n第56章正确正文。", "utf8");
+    writeFileSync(join(projectBookDir, "random57.Book"), "第57章\n第57章外部正文。", "utf8");
+
+    const run = await service.runStartupCatchUpSync(project.id, new Date(2026, 4, 21, 9, 0));
+    const sentBody = sentMessages.join("\n");
+    const chapter53Message = sentMessages.find((message) => message.includes("## 缺失章节：第53章")) ?? "";
+    const chapter54Message = sentMessages.find((message) => message.includes("## 缺失章节：第54章")) ?? "";
+    const chapter56Message = sentMessages.find((message) => message.includes("## 缺失章节：第56章")) ?? "";
+
+    expect(run).toMatchObject({
+      trigger: "startup",
+      scheduledLocalTime: "09:00",
+      status: "completed",
+      candidateCount: 5,
+      sentChapterCount: 4,
+      sentMissingChapterCount: 3,
+      sentLatestProjectChapter: true
+    });
+    expect(sentBody).toContain("缺失章节：第53章");
+    expect(sentBody).toContain("缺失章节：第54章");
+    expect(sentBody).toContain("缺失章节：第56章");
+    expect(sentBody).toContain("当前项目最新章在 .Book 中的对应内容：第57章");
+    expect(sentBody).not.toContain("缺失章节：第55章");
+    expect(chapter53Message).toContain("第53章正确正文。");
+    expect(chapter54Message).toContain("（本章 .Book 正文为空）");
+    expect(chapter54Message).not.toContain("第53章正确正文。");
+    expect(chapter54Message).not.toContain("第56章正确正文。");
+    expect(chapter56Message).toContain("第56章正确正文。");
+    expect(createdSessionTitles).toContain("外部同步检查 - 第53章");
+    expect(createdSessionTitles).toContain("外部同步检查 - 第54章");
+    expect(createdSessionTitles).toContain("外部同步检查 - 第56章");
+    expect(new Set(sentSessionIds).size).toBe(sentSessionIds.length);
+
+    sentMessages.length = 0;
+    sentSessionIds.length = 0;
+    const unchangedRun = await service.runDueAutomaticSync({
+      projectId: project.id,
+      trigger: "scheduled",
+      now: new Date(2026, 4, 21, 11, 0)
+    });
+    expect(unchangedRun).toMatchObject({
+      status: "skipped",
+      scheduledLocalTime: "11:00",
+      sentChapterCount: 0,
+      sentMissingChapterCount: 0
+    });
+    expect(sentMessages).toEqual([]);
+    expect(sentSessionIds).toEqual([]);
   });
 
   it("ignores Windows Search results from nested project backup folders", async () => {

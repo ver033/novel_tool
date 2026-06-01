@@ -101,6 +101,7 @@ function gapWarnings(missingChapters: readonly ExternalBookMissingChapter[], cur
 export function compareExternalBookChapters(input: CompareExternalBookChaptersInput): ExternalBookComparisonResult {
   const projectChapters = [...input.projectChapters].sort((a, b) => a.sortOrder - b.sortOrder);
   const projectTitleKeys = new Set(projectChapters.map((chapter) => normalizeTitle(chapter.title)));
+  const projectOrdinals = new Set(projectChapters.map((chapter) => parseChapterOrdinal(chapter.title)).filter((value): value is number => value !== null));
   const currentLatestOrdinal = maxOrdinal(projectChapters.map((chapter) => chapter.title));
   const externalLatestOrdinal = maxOrdinal(input.externalChapters.map((chapter) => chapter.title));
   const missingChapters: ExternalBookMissingChapter[] = [];
@@ -108,10 +109,12 @@ export function compareExternalBookChapters(input: CompareExternalBookChaptersIn
   for (const chapter of input.externalChapters) {
     const ordinal = parseChapterOrdinal(chapter.title);
     const titleKey = normalizeTitle(chapter.title);
-    if (projectTitleKeys.has(titleKey)) {
+    const existsByTitle = projectTitleKeys.has(titleKey);
+    const existsByOrdinal = ordinal !== null && projectOrdinals.has(ordinal);
+    if (existsByTitle || existsByOrdinal) {
       continue;
     }
-    const isMissingByOrdinal = currentLatestOrdinal !== null && ordinal !== null && ordinal > currentLatestOrdinal;
+    const isMissingByOrdinal = currentLatestOrdinal !== null && ordinal !== null;
     const isMissingByOrder = currentLatestOrdinal === null && chapter.order >= projectChapters.length;
     if (!isMissingByOrdinal && !isMissingByOrder) {
       continue;

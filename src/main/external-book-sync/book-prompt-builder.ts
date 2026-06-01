@@ -1,6 +1,7 @@
 import type { ExternalBookMissingChapter, ExternalBookReferenceChapter } from "./book-chapter-compare";
 
 const EXTERNAL_BOOK_SYNC_CHAPTER_SPLIT_THRESHOLD = 20_000;
+const EMPTY_EXTERNAL_BOOK_CHAPTER_TEXT = "（本章 .Book 正文为空）";
 
 export type BuildExternalBookSyncChatMessagesInput = {
   readonly projectName: string;
@@ -74,7 +75,8 @@ function buildHeader(input: BuildExternalBookSyncChatMessagesInput, partLabel: s
 }
 
 function buildSectionMessages(input: BuildExternalBookSyncChatMessagesInput, title: string, text: string): string[] {
-  const chunks = splitLongText(text);
+  const body = text.trim() ? text : EMPTY_EXTERNAL_BOOK_CHAPTER_TEXT;
+  const chunks = splitLongText(body);
   return chunks.map((chunk, index) => {
     const suffix = chunks.length > 1 ? `（${index + 1}/${chunks.length}）` : "";
     return `${buildHeader(input, `${index + 1}/${chunks.length}`)}${title}${suffix}\n${chunk}`.trim();
