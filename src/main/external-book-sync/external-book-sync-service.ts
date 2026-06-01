@@ -387,57 +387,37 @@ function newerSendEntry<T extends ExternalBookChapterSendEntry>(current: T | nul
   return compareSendEntryFreshness(next, current) >= 0 ? next : current;
 }
 
-function mergeRepeatedOrdinalBookChapters(chapters: readonly ImportPreviewChapter[]): ImportPreviewChapter[] {
-  const merged: ImportPreviewChapter[] = [];
-  for (const chapter of chapters) {
-    const previous = merged.at(-1);
-    const previousOrdinal = previous ? parseChapterOrdinal(previous.title) : null;
-    const chapterOrdinal = parseChapterOrdinal(chapter.title);
-    if (previous && previousOrdinal !== null && previousOrdinal === chapterOrdinal) {
-      const text = normalizeTxtContent([previous.text, chapter.title, chapter.text].filter((value) => value.trim()).join("\n"));
-      merged[merged.length - 1] = {
-        ...previous,
-        text,
-        wordCount: countWritingUnits(text),
-        lineEnd: chapter.lineEnd
-      };
-      continue;
-    }
-    merged.push(chapter);
-  }
-  return merged.map((chapter, order) => ({
-    ...chapter,
-    order,
-    wordCount: countWritingUnits(chapter.text)
-  }));
-}
-
-function recoverSingleChapterBookText(content: string, chapters: readonly ImportPreviewChapter[]): ImportPreviewChapter[] {
-  if (chapters.length !== 1 || chapters[0]?.text.trim()) {
-    return [...chapters];
-  }
+function detectSingleChapterBookFile(content: string): ImportPreviewChapter[] {
   const normalized = normalizeTxtContent(content);
+  if (!normalized) {
+    return detectTxtChapters(content);
+  }
   const lines = normalized.split("\n");
-  if (lines.length <= 1) {
-    return [...chapters];
+  const detected = detectTxtChapters(normalized).filter((chapter: ImportPreviewChapter) => chapter.title.trim() || chapter.text.trim());
+  const chapter = detected.find((item) => parseChapterOrdinal(item.title) !== null) ?? detected[0];
+  if (!chapter) {
+    return [];
   }
-  const chapter = chapters[0];
   const chapterOrdinal = parseChapterOrdinal(chapter.title);
-  const titleIndex = lines.findIndex((line) => {
-    const title = line.trim();
-    if (!title) {
-      return false;
-    }
-    if (title === chapter.title) {
-      return true;
-    }
-    const titleOrdinal = parseChapterOrdinal(title);
-    return titleOrdinal !== null && chapterOrdinal !== null && titleOrdinal === chapterOrdinal;
-  });
-  if (titleIndex < 0) {
-    return [...chapters];
+  let titleIndex = lines.findIndex((line) => line.trim() === chapter.title);
+  if (titleIndex < 0 && chapterOrdinal !== null) {
+    titleIndex = lines.findIndex((line) => {
+      const title = line.trim();
+      return title ? parseChapterOrdinal(title) === chapterOrdinal : false;
+    });
   }
-  const title = lines[titleIndex]?.trim() || chapter.title;
+  if (titleIndex < 0) {
+    const text = normalizeTxtContent(chapter.text);
+    return [
+      {
+        ...chapter,
+        order: 0,
+        wordCount: countWritingUnits(text),
+        text
+      }
+    ];
+  }
+  const title = chapter.title;
   const text = normalizeTxtContent(lines.slice(titleIndex + 1).join("\n"));
   return [
     {
@@ -452,8 +432,7 @@ function recoverSingleChapterBookText(content: string, chapters: readonly Import
 }
 
 function detectExternalBookChapters(content: string): ImportPreviewChapter[] {
-  const merged = mergeRepeatedOrdinalBookChapters(detectTxtChapters(content));
-  return recoverSingleChapterBookText(content, merged);
+  return detectSingleChapterBookFile(content);
 }
 
 export class ExternalBookSyncService {
