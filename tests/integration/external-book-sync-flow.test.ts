@@ -397,6 +397,107 @@ describe("ExternalBookSyncService", () => {
     }
   });
 
+  it("does not send stale nested .Book files from backup folders when direct one-chapter files exist", async () => {
+    const { dir, project, chapterRepo, service, sentMessages } = createFixture();
+    const firstChapter = chapterRepo.listByProject(project.id)[0];
+    chapterRepo.rename(firstChapter.id, "第52章", "2026-05-18T01:00:00.000Z");
+    const projectBookDir = join(dir, "举足无措");
+    const backupDir = join(projectBookDir, "backup");
+    mkdirSync(backupDir, { recursive: true });
+    writeFileSync(join(projectBookDir, "direct53.Book"), "第53章\n第53章正确正文。", "utf8");
+    writeFileSync(join(projectBookDir, "direct54.Book"), "第54章", "utf8");
+    writeFileSync(join(projectBookDir, "direct56.Book"), "第56章\n第56章正确正文。", "utf8");
+    writeFileSync(join(backupDir, "stale53.Book"), "第53章\n第56章错误正文。", "utf8");
+    writeFileSync(join(backupDir, "stale54.Book"), "第54章\n第53章错误正文。", "utf8");
+    writeFileSync(join(backupDir, "stale56.Book"), "第56章\n第53章错误正文。", "utf8");
+    utimesSync(join(projectBookDir, "direct53.Book"), new Date("2026-05-19T07:00:00.000Z"), new Date("2026-05-19T07:00:00.000Z"));
+    utimesSync(join(projectBookDir, "direct54.Book"), new Date("2026-05-19T07:00:00.000Z"), new Date("2026-05-19T07:00:00.000Z"));
+    utimesSync(join(projectBookDir, "direct56.Book"), new Date("2026-05-19T07:00:00.000Z"), new Date("2026-05-19T07:00:00.000Z"));
+    utimesSync(join(backupDir, "stale53.Book"), new Date("2026-05-19T09:00:00.000Z"), new Date("2026-05-19T09:00:00.000Z"));
+    utimesSync(join(backupDir, "stale54.Book"), new Date("2026-05-19T09:00:00.000Z"), new Date("2026-05-19T09:00:00.000Z"));
+    utimesSync(join(backupDir, "stale56.Book"), new Date("2026-05-19T09:00:00.000Z"), new Date("2026-05-19T09:00:00.000Z"));
+
+    const run = await service.runStartupCatchUpSync(project.id, new Date(2026, 4, 21, 9, 0));
+    const sentBody = sentMessages.join("\n");
+
+    expect(run).toMatchObject({
+      trigger: "startup",
+      scheduledLocalTime: "09:00",
+      status: "completed",
+      candidateCount: 3,
+      sentChapterCount: 3,
+      sentMissingChapterCount: 3
+    });
+    expect(sentBody).toContain("缺失章节：第53章");
+    expect(sentBody).toContain("第53章正确正文。");
+    expect(sentBody).toContain("缺失章节：第54章");
+    expect(sentBody).not.toContain("第54章错误正文。");
+    expect(sentBody).toContain("缺失章节：第56章");
+    expect(sentBody).toContain("第56章正确正文。");
+    expect(sentBody).not.toContain("第56章错误正文。");
+    expect(sentBody).not.toContain("第53章错误正文。");
+  });
+
+  it("ignores Windows Search results from nested project backup folders", async () => {
+    const indexSearch = vi.fn<NonNullable<ExternalBookSyncServiceDeps["searchBookFilesInWindowsIndex"]>>();
+    const { dir, project, chapterRepo, service, sentMessages } = createFixture({
+      searchBookFilesInWindowsIndex: indexSearch
+    });
+    const firstChapter = chapterRepo.listByProject(project.id)[0];
+    chapterRepo.rename(firstChapter.id, "第52章", "2026-05-18T01:00:00.000Z");
+    const projectBookDir = join(dir, "举足无措");
+    const backupDir = join(projectBookDir, "backup");
+    mkdirSync(backupDir, { recursive: true });
+    const directFile = join(projectBookDir, "direct53.Book");
+    const staleFile = join(backupDir, "stale53.Book");
+    writeFileSync(directFile, "第53章\n第53章正确正文。", "utf8");
+    writeFileSync(staleFile, "第53章\n第53章错误正文。", "utf8");
+    utimesSync(directFile, new Date("2026-05-19T07:00:00.000Z"), new Date("2026-05-19T07:00:00.000Z"));
+    utimesSync(staleFile, new Date("2026-05-19T09:00:00.000Z"), new Date("2026-05-19T09:00:00.000Z"));
+    indexSearch.mockResolvedValue({ status: "completed", files: [staleFile] });
+
+    const run = await service.runStartupCatchUpSync(project.id, new Date(2026, 4, 21, 9, 0));
+    const sentBody = sentMessages.join("\n");
+
+    expect(indexSearch).toHaveBeenCalled();
+    expect(run).toMatchObject({ status: "completed", scheduledLocalTime: "09:00", candidateCount: 1, sentChapterCount: 1 });
+    expect(sentBody).toContain("第53章正确正文。");
+    expect(sentBody).not.toContain("第53章错误正文。");
+  });
+
+  it("falls back to global discovery when a saved source folder is now filtered as a nested backup folder", async () => {
+    const { db, dir, project, chapterRepo, service, sentMessages } = createFixture({ rootPath: null });
+    vi.spyOn(os, "homedir").mockReturnValue(dir);
+    const firstChapter = chapterRepo.listByProject(project.id)[0];
+    chapterRepo.rename(firstChapter.id, "第52章", "2026-05-18T01:00:00.000Z");
+    const projectBookDir = join(dir, "举足无措");
+    const backupDir = join(projectBookDir, "backup");
+    mkdirSync(backupDir, { recursive: true });
+    writeFileSync(join(projectBookDir, "direct53.Book"), "第53章\n第53章正确正文。", "utf8");
+    writeFileSync(join(backupDir, "stale53.Book"), "第53章\n第53章错误正文。", "utf8");
+    new SettingsRepository(db).setJson(`externalBookSyncSources:${project.id}`, [
+      {
+        id: "external_book_source_nested",
+        projectId: project.id,
+        bookFolderPath: backupDir,
+        displayName: "stale53.Book",
+        lastKnownSize: 100,
+        lastModifiedAt: "2026-05-19T09:00:00.000Z",
+        lastContentHash: "stale-hash",
+        lastScanAt: "2026-05-19T09:00:00.000Z",
+        confirmedAt: "2026-05-19T09:00:00.000Z",
+        selectionVersion: 2
+      }
+    ]);
+
+    const run = await service.runStartupCatchUpSync(project.id, new Date(2026, 4, 21, 9, 0));
+    const sentBody = sentMessages.join("\n");
+
+    expect(run).toMatchObject({ status: "completed", scheduledLocalTime: "09:00", candidateCount: 1, sentChapterCount: 1 });
+    expect(sentBody).toContain("第53章正确正文。");
+    expect(sentBody).not.toContain("第53章错误正文。");
+  });
+
   it("falls back to global discovery when first automatic quick discovery finds no source", async () => {
     const { dir, project, sourceStore, service, sentMessages } = createFixture({ rootPath: null });
     const fakeHome = join(dir, "home");

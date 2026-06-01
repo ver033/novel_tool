@@ -55,7 +55,7 @@ export type ScanBookFilesInput = {
 type QueueEntry = {
   readonly directoryPath: string;
   readonly currentRoot: string;
-  readonly insideProjectFolder: boolean;
+  readonly isProjectFolder: boolean;
 };
 
 function isExcludedDirectory(name: string): boolean {
@@ -71,7 +71,7 @@ export async function scanBookFiles(input: ScanBookFilesInput): Promise<BookFile
   const queue: QueueEntry[] = input.roots.map((root) => ({
     directoryPath: root,
     currentRoot: root,
-    insideProjectFolder: isProjectBookFolderPath(root, input.projectName)
+    isProjectFolder: isProjectBookFolderPath(root, input.projectName)
   }));
   const files: BookFileScanCandidate[] = [];
   let checkedDirectories = 0;
@@ -127,14 +127,17 @@ export async function scanBookFiles(input: ScanBookFilesInput): Promise<BookFile
           if (isExcludedDirectory(child.name)) {
             continue;
           }
+          if (entry.isProjectFolder) {
+            continue;
+          }
           queue.push({
             directoryPath: childPath,
             currentRoot: entry.currentRoot,
-            insideProjectFolder: entry.insideProjectFolder || isProjectBookFolderPath(childPath, input.projectName)
+            isProjectFolder: isProjectBookFolderPath(childPath, input.projectName)
           });
           continue;
         }
-        if (!child.isFile() || !entry.insideProjectFolder || !isBookFilePath(child.name)) {
+        if (!child.isFile() || !entry.isProjectFolder || !isBookFilePath(child.name)) {
           checkedFiles += child.isFile() ? 1 : 0;
           continue;
         }

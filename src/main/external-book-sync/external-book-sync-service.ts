@@ -24,7 +24,7 @@ import {
 } from "./book-automation-store";
 import { ExternalBookSentChapterStore } from "./book-send-history-store";
 import { CURRENT_EXTERNAL_BOOK_SOURCE_SELECTION_VERSION, ExternalBookSourceStore, type ExternalBookSyncSource } from "./book-source-store";
-import { isBookFilePath, isPathInsideProjectBookFolder } from "./book-project-folder";
+import { isBookFilePath, isProjectBookFolderPath } from "./book-project-folder";
 import { parseChapterOrdinal } from "./book-chapter-ordinal";
 import { scanBookFiles, type BookFileScanProgress, type BookFileScanResult } from "./filesystem-book-scanner";
 import { searchWindowsIndexForBookFiles } from "./windows-index-search";
@@ -615,7 +615,7 @@ export class ExternalBookSyncService {
         ...(savedSources.length > 0 ? {} : { roots: automaticDiscoveryRoots(project?.rootPath ?? null) }),
         searchTrigger: input.trigger
       });
-      if (savedSources.length === 0 && scan.candidates.length === 0) {
+      if (scan.candidates.length === 0) {
         scan = await this.scanProject({
           projectId: input.projectId,
           mode: "global",
@@ -1028,7 +1028,7 @@ export class ExternalBookSyncService {
     } catch {
       return null;
     }
-    if (!isBookFilePath(realFilePath) || !isPathInsideProjectBookFolder(realFilePath, input.projectName)) {
+    if (!isBookFilePath(realFilePath) || !isProjectBookFolderPath(path.dirname(realFilePath), input.projectName)) {
       return null;
     }
     const info = statSync(realFilePath);

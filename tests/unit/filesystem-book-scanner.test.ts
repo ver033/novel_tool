@@ -25,9 +25,11 @@ describe("scanBookFiles", () => {
     const root = mkdtempSync(join(tmpdir(), "book-scan-"));
     tempDirs.push(root);
     mkdirSync(join(root, "举足无措"), { recursive: true });
+    mkdirSync(join(root, "举足无措", "backup"), { recursive: true });
     mkdirSync(join(root, "别的项目"), { recursive: true });
     mkdirSync(join(root, "node_modules"), { recursive: true });
     writeFileSync(join(root, "举足无措", "story.Book"), "第一章\n正文", "utf8");
+    writeFileSync(join(root, "举足无措", "backup", "stale.Book"), "第一章\n不应读取", "utf8");
     writeFileSync(join(root, "别的项目", "ignored.Book"), "第一章\n不应读取", "utf8");
     writeFileSync(join(root, "node_modules", "ignored.Book"), "第一章\n不应读取", "utf8");
 
@@ -40,6 +42,7 @@ describe("scanBookFiles", () => {
     });
 
     expect(result.files.map((file) => file.path.endsWith("story.Book"))).toEqual([true]);
+    expect(result.files.some((file) => file.path.includes("backup"))).toBe(false);
     expect(result.files.some((file) => file.path.includes("别的项目"))).toBe(false);
     expect(result.files.some((file) => file.path.includes("node_modules"))).toBe(false);
   });
