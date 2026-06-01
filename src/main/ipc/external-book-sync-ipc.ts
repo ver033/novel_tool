@@ -2,6 +2,7 @@ import { BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent, type OpenDialo
 import { createId } from "../shared/ids";
 import {
   externalBookSyncCancelScanInputSchema,
+  externalBookSyncClearSentHistoryInputSchema,
   externalBookSyncForgetSourceInputSchema,
   externalBookSyncPreviewCandidateInputSchema,
   externalBookSyncScanInputSchema,
@@ -94,5 +95,9 @@ export function registerExternalBookSyncIpc(service: ExternalBookSyncService): v
   ipcMain.handle(
     ipcChannels.externalBookSync.forgetSource,
     createValidatedIpcHandler(externalBookSyncForgetSourceInputSchema, (input) => service.forgetSource(input.projectId, input.sourceId))
+  );
+  ipcMain.handle(
+    ipcChannels.externalBookSync.clearSentHistory,
+    createValidatedIpcHandler(externalBookSyncClearSentHistoryInputSchema, (input) => service.clearSentHistory(input.projectId))
   );
 }

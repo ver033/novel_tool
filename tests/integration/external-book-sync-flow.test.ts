@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import os, { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -141,6 +142,10 @@ function createChapter(
     createdAt,
     updatedAt: createdAt
   });
+}
+
+function sha256(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
 }
 
 describe("ExternalBookSyncService", () => {
@@ -603,6 +608,95 @@ describe("ExternalBookSyncService", () => {
     expect(sentMessages).toEqual([]);
   });
 
+  it("does not trust legacy whole-file sent hashes after the chapter hash format changes", async () => {
+    const { db, dir, project, service, sentMessages } = createFixture();
+    const projectBookDir = join(dir, "举足无措");
+    mkdirSync(projectBookDir, { recursive: true });
+    const bookText = "更新时间: 2026-05-19 07:00\n\n第二章\n第二章正文。";
+    writeFileSync(join(projectBookDir, "legacy-hash.Book"), bookText, "utf8");
+    new SettingsRepository(db).setJson(`externalBookSyncSentChapters:${project.id}`, [
+      {
+        id: "external_book_sent_legacy",
+        projectId: project.id,
+        chapterIdentity: "ordinal:2",
+        kind: "missing_chapter",
+        title: "第二章",
+        ordinal: 2,
+        sourceContentHash: sha256(bookText),
+        sentAt: "2026-05-19T07:00:00.000Z"
+      }
+    ]);
+
+    const run = await service.runDueAutomaticSync({
+      projectId: project.id,
+      trigger: "scheduled",
+      now: new Date(2026, 4, 19, 9, 0)
+    });
+
+    expect(run).toMatchObject({ status: "completed", scheduledLocalTime: "09:00", sentChapterCount: 1, sentMissingChapterCount: 1 });
+    expect(sentMessages.join("\n")).toContain("缺失章节：第二章");
+    expect(sentMessages.join("\n")).toContain("第二章正文。");
+  });
+
+  it("clears sent chapter hashes so unchanged chapters can be sent again", async () => {
+    const { dir, project, service, sentMessages } = createFixture();
+    const projectBookDir = join(dir, "举足无措");
+    mkdirSync(projectBookDir, { recursive: true });
+    writeFileSync(join(projectBookDir, "clear-hash.Book"), "第二章\n第二章正文。", "utf8");
+
+    const first = await service.runDueAutomaticSync({
+      projectId: project.id,
+      trigger: "scheduled",
+      now: new Date(2026, 4, 19, 7, 0)
+    });
+    const skipped = await service.runDueAutomaticSync({
+      projectId: project.id,
+      trigger: "scheduled",
+      now: new Date(2026, 4, 19, 9, 0)
+    });
+    const cleared = service.clearSentHistory(project.id);
+    const resent = await service.runDueAutomaticSync({
+      projectId: project.id,
+      trigger: "scheduled",
+      now: new Date(2026, 4, 19, 11, 0)
+    });
+
+    expect(first).toMatchObject({ status: "completed", scheduledLocalTime: "07:00", sentChapterCount: 1 });
+    expect(skipped).toMatchObject({ status: "skipped", scheduledLocalTime: "09:00", sentChapterCount: 0 });
+    expect(cleared.deletedCount).toBe(1);
+    expect(resent).toMatchObject({ status: "completed", scheduledLocalTime: "11:00", sentChapterCount: 1 });
+    expect(sentMessages.filter((message) => message.includes("缺失章节：第二章"))).toHaveLength(2);
+  });
+
+  it("does not treat a sent hash as unchanged when the stored chapter title does not match", async () => {
+    const { db, dir, project, service, sentMessages } = createFixture();
+    const projectBookDir = join(dir, "举足无措");
+    mkdirSync(projectBookDir, { recursive: true });
+    const bookText = "第二章\n第二章正文。";
+    writeFileSync(join(projectBookDir, "title-hash.Book"), bookText, "utf8");
+    new SettingsRepository(db).setJson(`externalBookSyncSentChapters:${project.id}`, [
+      {
+        id: "external_book_sent_wrong_title",
+        projectId: project.id,
+        chapterIdentity: "ordinal:2",
+        kind: "missing_chapter",
+        title: "第三章",
+        ordinal: 2,
+        sourceContentHash: sha256(bookText),
+        sentAt: "2026-05-19T07:00:00.000Z"
+      }
+    ]);
+
+    const run = await service.runDueAutomaticSync({
+      projectId: project.id,
+      trigger: "scheduled",
+      now: new Date(2026, 4, 19, 9, 0)
+    });
+
+    expect(run).toMatchObject({ status: "completed", scheduledLocalTime: "09:00", sentChapterCount: 1, sentMissingChapterCount: 1 });
+    expect(sentMessages.join("\n")).toContain("缺失章节：第二章");
+  });
+
   it("sends only the changed one-chapter .Book file after multiple chapters were already sent", async () => {
     const { dir, project, chapterRepo, service, sentMessages } = createFixture();
     const firstChapter = chapterRepo.listByProject(project.id)[0];
@@ -638,6 +732,46 @@ describe("ExternalBookSyncService", () => {
     expect(secondBody).not.toContain("第53章初始正文。");
     expect(secondBody).not.toContain("缺失章节：第55章");
     expect(secondBody).not.toContain("第55章初始正文。");
+  });
+
+  it("revalidates legacy saved source folders instead of staying locked to an old folder", async () => {
+    const { db, dir, project, chapterRepo, service, sentMessages } = createFixture();
+    const firstChapter = chapterRepo.listByProject(project.id)[0];
+    chapterRepo.rename(firstChapter.id, "第55章", "2026-05-18T01:00:00.000Z");
+    const wrongBookDir = join(dir, "archive", "举足无措");
+    const currentBookDir = join(dir, "举足无措");
+    mkdirSync(wrongBookDir, { recursive: true });
+    mkdirSync(currentBookDir, { recursive: true });
+    const wrongBookPath = join(wrongBookDir, "old-random.Book");
+    const currentBookPath = join(currentBookDir, "current-random.Book");
+    writeFileSync(wrongBookPath, "第56章\n旧保存目录里的第56章正文。", "utf8");
+    writeFileSync(currentBookPath, "第56章\n当前目录里的第56章正文。", "utf8");
+    utimesSync(wrongBookPath, new Date("2026-05-19T07:00:00.000Z"), new Date("2026-05-19T07:00:00.000Z"));
+    utimesSync(currentBookPath, new Date("2026-05-19T09:00:00.000Z"), new Date("2026-05-19T09:00:00.000Z"));
+    new SettingsRepository(db).setJson(`externalBookSyncSources:${project.id}`, [
+      {
+        id: "external_book_source_legacy",
+        projectId: project.id,
+        bookFolderPath: wrongBookDir,
+        displayName: "old-random.Book",
+        lastKnownSize: 100,
+        lastModifiedAt: "2026-05-19T07:00:00.000Z",
+        lastContentHash: "legacy-hash",
+        lastScanAt: "2026-05-19T07:00:00.000Z",
+        confirmedAt: "2026-05-19T07:00:00.000Z"
+      }
+    ]);
+
+    const run = await service.runDueAutomaticSync({
+      projectId: project.id,
+      trigger: "scheduled",
+      now: new Date(2026, 4, 19, 9, 0)
+    });
+    const sentBody = sentMessages.join("\n");
+
+    expect(run).toMatchObject({ status: "completed", scheduledLocalTime: "09:00", sentChapterCount: 1, sentMissingChapterCount: 1 });
+    expect(sentBody).toContain("当前目录里的第56章正文。");
+    expect(sentBody).not.toContain("旧保存目录里的第56章正文。");
   });
 
   it("uses the newest .Book file when duplicate random-name files contain the same missing chapter", async () => {

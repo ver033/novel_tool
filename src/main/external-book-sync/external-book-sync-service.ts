@@ -23,7 +23,7 @@ import {
   type ExternalBookSyncAutomaticTrigger
 } from "./book-automation-store";
 import { ExternalBookSentChapterStore } from "./book-send-history-store";
-import { ExternalBookSourceStore, type ExternalBookSyncSource } from "./book-source-store";
+import { CURRENT_EXTERNAL_BOOK_SOURCE_SELECTION_VERSION, ExternalBookSourceStore, type ExternalBookSyncSource } from "./book-source-store";
 import { isBookFilePath, isPathInsideProjectBookFolder } from "./book-project-folder";
 import { parseChapterOrdinal } from "./book-chapter-ordinal";
 import { scanBookFiles, type BookFileScanProgress, type BookFileScanResult } from "./filesystem-book-scanner";
@@ -421,20 +421,31 @@ function recoverSingleChapterBookText(content: string, chapters: readonly Import
   if (lines.length <= 1) {
     return [...chapters];
   }
-  const title = lines[0]?.trim() ?? "";
   const chapter = chapters[0];
-  const titleOrdinal = parseChapterOrdinal(title);
   const chapterOrdinal = parseChapterOrdinal(chapter.title);
-  if (titleOrdinal === null || chapterOrdinal !== titleOrdinal) {
+  const titleIndex = lines.findIndex((line) => {
+    const title = line.trim();
+    if (!title) {
+      return false;
+    }
+    if (title === chapter.title) {
+      return true;
+    }
+    const titleOrdinal = parseChapterOrdinal(title);
+    return titleOrdinal !== null && chapterOrdinal !== null && titleOrdinal === chapterOrdinal;
+  });
+  if (titleIndex < 0) {
     return [...chapters];
   }
-  const text = normalizeTxtContent(lines.slice(1).join("\n"));
+  const title = lines[titleIndex]?.trim() || chapter.title;
+  const text = normalizeTxtContent(lines.slice(titleIndex + 1).join("\n"));
   return [
     {
       ...chapter,
       title,
       text,
       wordCount: countWritingUnits(text),
+      lineStart: titleIndex + 1,
       lineEnd: lines.length
     }
   ];
@@ -471,6 +482,13 @@ export class ExternalBookSyncService {
   forgetSource(projectId: string, sourceId: string): { readonly ok: true } {
     this.deps.sourceStore.forgetSource(projectId, sourceId);
     return { ok: true };
+  }
+
+  clearSentHistory(projectId: string): { readonly ok: true; readonly deletedCount: number } {
+    return {
+      ok: true,
+      deletedCount: this.deps.sentChapterStore.clear(projectId)
+    };
   }
 
   private getActiveSearchStatus(projectId: string): ExternalBookSyncSearchStatus {
@@ -527,7 +545,9 @@ export class ExternalBookSyncService {
   private hasSentUnchanged(projectId: string, entry: ExternalBookChapterSendEntry): boolean {
     return this.deps.sentChapterStore.hasSentUnchanged({
       projectId,
+      kind: entry.kind,
       chapterIdentity: entry.chapterIdentity,
+      title: entry.chapter.title,
       sourceContentHash: entry.sourceContentHash
     });
   }
@@ -801,7 +821,9 @@ export class ExternalBookSyncService {
       const warnings: string[] = [];
       const candidatePaths = new Set<string>();
       const savedSourceRoots: string[] = [];
-      for (const source of this.deps.sourceStore.listSources(input.projectId)) {
+      const savedSources = this.deps.sourceStore.listSources(input.projectId);
+      const hasLegacySavedSources = savedSources.some((source) => source.selectionVersion < CURRENT_EXTERNAL_BOOK_SOURCE_SELECTION_VERSION);
+      for (const source of savedSources) {
         if (source.bookFolderPath) {
           savedSourceRoots.push(source.bookFolderPath);
         }
@@ -822,7 +844,16 @@ export class ExternalBookSyncService {
       }
 
       const hasExplicitRoots = input.roots !== undefined || Boolean(input.directoryPath);
-      const roots = input.roots ?? (input.directoryPath ? [input.directoryPath] : savedSourceRoots.length > 0 ? savedSourceRoots : defaultRoots(project.rootPath));
+      const savedRoots = hasLegacySavedSources ? [...new Set([...savedSourceRoots, ...automaticDiscoveryRoots(project.rootPath)])] : savedSourceRoots;
+      const roots =
+        input.roots ??
+        (input.directoryPath
+          ? [input.directoryPath]
+          : input.mode === "global"
+            ? defaultRoots(project.rootPath)
+            : savedRoots.length > 0
+              ? savedRoots
+              : defaultRoots(project.rootPath));
       const shouldScanFileSystem =
         input.mode === "global" ||
         input.mode === "directory" ||

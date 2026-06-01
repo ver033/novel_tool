@@ -45,6 +45,7 @@ import type {
   exportShareableProjectCopyInputSchema,
   exportTxtInputSchema,
   externalBookSyncCancelScanInputSchema,
+  externalBookSyncClearSentHistoryInputSchema,
   externalBookSyncForgetSourceInputSchema,
   externalBookSyncPreviewCandidateInputSchema,
   externalBookSyncScanInputSchema,
@@ -316,6 +317,7 @@ export type ExternalBookSyncSource = {
   readonly lastContentHash: string | null;
   readonly lastScanAt: string;
   readonly confirmedAt: string | null;
+  readonly selectionVersion: number;
 };
 
 export type ExternalBookMissingChapter = Omit<ImportPreviewChapter, "text"> & {
@@ -794,6 +796,7 @@ export type ExternalBookSyncCancelScanInput = z.input<typeof externalBookSyncCan
 export type ExternalBookSyncPreviewCandidateInput = z.input<typeof externalBookSyncPreviewCandidateInputSchema>;
 export type ExternalBookSyncSendToAiInput = z.input<typeof externalBookSyncSendToAiInputSchema>;
 export type ExternalBookSyncForgetSourceInput = z.input<typeof externalBookSyncForgetSourceInputSchema>;
+export type ExternalBookSyncClearSentHistoryInput = z.input<typeof externalBookSyncClearSentHistoryInputSchema>;
 export type OutlineGetOverviewInput = z.input<typeof outlineGetOverviewInputSchema>;
 export type OutlineListEventsInput = z.input<typeof outlineListEventsInputSchema>;
 export type OutlineCreateEventInput = z.input<typeof outlineCreateEventInputSchema>;
@@ -1124,6 +1127,7 @@ export const ipcChannels = {
     previewCandidate: "novelTool:externalBookSync:previewCandidate",
     sendMissingChaptersToAi: "novelTool:externalBookSync:sendMissingChaptersToAi",
     forgetSource: "novelTool:externalBookSync:forgetSource",
+    clearSentHistory: "novelTool:externalBookSync:clearSentHistory",
     scanProgress: "novelTool:externalBookSync:scanProgress",
     scanDone: "novelTool:externalBookSync:scanDone",
     scanError: "novelTool:externalBookSync:scanError"

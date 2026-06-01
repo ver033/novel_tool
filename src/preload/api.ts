@@ -50,6 +50,7 @@ import type {
   ExternalBookScanProgress,
   ExternalBookSyncCancelScanInput,
   ExternalBookSyncCandidate,
+  ExternalBookSyncClearSentHistoryInput,
   ExternalBookSyncForgetSourceInput,
   ExternalBookSyncPreviewCandidateInput,
   ExternalBookSyncScanInput,
@@ -300,6 +301,7 @@ export type NovelToolApi = {
     readonly previewCandidate: (input: ExternalBookSyncPreviewCandidateInput) => Promise<ExternalBookSyncCandidate>;
     readonly sendMissingChaptersToAi: (input: ExternalBookSyncSendToAiInput) => Promise<ExternalBookSyncSendResult>;
     readonly forgetSource: (input: ExternalBookSyncForgetSourceInput) => Promise<unknown>;
+    readonly clearSentHistory: (input: ExternalBookSyncClearSentHistoryInput) => Promise<{ readonly ok: true; readonly deletedCount: number }>;
     readonly subscribeScan: (requestId: string, handlers: ExternalBookSyncScanHandlers) => () => void;
   };
   readonly export: {
@@ -510,6 +512,7 @@ export const novelToolApi: NovelToolApi = Object.freeze({
     previewCandidate: (input: ExternalBookSyncPreviewCandidateInput) => ipcRenderer.invoke(ipcChannels.externalBookSync.previewCandidate, input),
     sendMissingChaptersToAi: (input: ExternalBookSyncSendToAiInput) => ipcRenderer.invoke(ipcChannels.externalBookSync.sendMissingChaptersToAi, input),
     forgetSource: (input: ExternalBookSyncForgetSourceInput) => ipcRenderer.invoke(ipcChannels.externalBookSync.forgetSource, input),
+    clearSentHistory: (input: ExternalBookSyncClearSentHistoryInput) => ipcRenderer.invoke(ipcChannels.externalBookSync.clearSentHistory, input),
     subscribeScan: (requestId: string, handlers: ExternalBookSyncScanHandlers) => {
       const onProgress = (_event: IpcRendererEvent, payload: ExternalBookSyncScanProgressEvent) => {
         if (payload.requestId === requestId) {

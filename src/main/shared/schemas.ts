@@ -827,6 +827,8 @@ export const externalBookSyncForgetSourceInputSchema = externalBookSyncStatusInp
   })
   .strict();
 
+export const externalBookSyncClearSentHistoryInputSchema = externalBookSyncStatusInputSchema;
+
 export const exportSelectTxtFilePathInputSchema = z
   .object({
     projectId: idSchema,

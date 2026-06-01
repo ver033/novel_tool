@@ -1087,6 +1087,7 @@ function createExternalBookScanRequestId(): string {
 function ExternalBookSyncPane({ currentProject }: ExternalBookSyncPaneProps) {
   const api = useMemo(getNovelToolApi, []);
   const [scanBusy, setScanBusy] = useState(false);
+  const [clearBusy, setClearBusy] = useState(false);
   const [activeScanRequestId, setActiveScanRequestIdState] = useState<string | null>(null);
   const activeScanRequestIdRef = useRef<string | null>(null);
 
@@ -1163,6 +1164,20 @@ function ExternalBookSyncPane({ currentProject }: ExternalBookSyncPaneProps) {
     }
   }
 
+  async function clearOldHash(): Promise<void> {
+    if (!currentProject || clearBusy) {
+      return;
+    }
+    setClearBusy(true);
+    try {
+      await api.externalBookSync.clearSentHistory({ projectId: currentProject.id });
+    } catch (reason) {
+      void reason;
+    } finally {
+      setClearBusy(false);
+    }
+  }
+
   return (
     <div className="settings-card wide external-book-sync-card">
       <div className="settings-card-head">
@@ -1180,6 +1195,9 @@ function ExternalBookSyncPane({ currentProject }: ExternalBookSyncPaneProps) {
         </Button>
         <Button disabled={!currentProject || scanBusy} onClick={() => void runScan("global")} type="button" variant="secondary">
           全局重新扫描
+        </Button>
+        <Button disabled={!currentProject || scanBusy || clearBusy} onClick={() => void clearOldHash()} type="button" variant="ghost">
+          清除旧hash
         </Button>
         {scanBusy && activeScanRequestId ? (
           <Button onClick={() => void cancelActiveScan()} type="button" variant="ghost">

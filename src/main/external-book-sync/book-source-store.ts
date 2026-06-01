@@ -2,6 +2,8 @@ import path from "node:path";
 import { createId } from "../shared/ids";
 import type { SettingsRepository } from "../db/repositories/settings-repo";
 
+export const CURRENT_EXTERNAL_BOOK_SOURCE_SELECTION_VERSION = 2;
+
 export type ExternalBookSyncSource = {
   readonly id: string;
   readonly projectId: string;
@@ -12,14 +14,17 @@ export type ExternalBookSyncSource = {
   readonly lastContentHash: string | null;
   readonly lastScanAt: string;
   readonly confirmedAt: string | null;
+  readonly selectionVersion: number;
 };
 
-export type ExternalBookSyncSourceInput = Omit<ExternalBookSyncSource, "id"> & {
+export type ExternalBookSyncSourceInput = Omit<ExternalBookSyncSource, "id" | "selectionVersion"> & {
   readonly id?: string;
+  readonly selectionVersion?: number;
 };
 
-type StoredExternalBookSyncSource = ExternalBookSyncSource & {
+type StoredExternalBookSyncSource = Omit<ExternalBookSyncSource, "selectionVersion"> & {
   readonly bookFilePath?: string;
+  readonly selectionVersion?: number;
 };
 
 function sourceKey(projectId: string): string {
@@ -49,7 +54,8 @@ export class ExternalBookSourceStore {
     return {
       ...withoutLegacyPath,
       bookFolderPath,
-      displayName
+      displayName,
+      selectionVersion: source.selectionVersion ?? 1
     };
   }
 
@@ -60,7 +66,8 @@ export class ExternalBookSourceStore {
   upsertSource(input: ExternalBookSyncSourceInput): ExternalBookSyncSource {
     const source: ExternalBookSyncSource = {
       ...input,
-      id: input.id ?? createId("external_book_source")
+      id: input.id ?? createId("external_book_source"),
+      selectionVersion: input.selectionVersion ?? CURRENT_EXTERNAL_BOOK_SOURCE_SELECTION_VERSION
     };
     const sources = this.listSources(input.projectId);
     const next = [

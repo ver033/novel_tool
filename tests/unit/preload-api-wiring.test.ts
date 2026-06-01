@@ -77,12 +77,15 @@ describe("summary index preload and IPC wiring", () => {
     expect(types).toContain("ExternalBookSyncScanResult");
     expect(types).toContain('scan: "novelTool:externalBookSync:scan"');
     expect(types).toContain('sendMissingChaptersToAi: "novelTool:externalBookSync:sendMissingChaptersToAi"');
+    expect(types).toContain('clearSentHistory: "novelTool:externalBookSync:clearSentHistory"');
     expect(schemas).toContain("externalBookSyncScanInputSchema");
+    expect(schemas).toContain("externalBookSyncClearSentHistoryInputSchema");
     expect(schemas).toContain("directoryPath is required for directory scan");
     expect(preload).toContain("readonly externalBookSync");
     expect(preload).toContain("subscribeScan: (requestId: string");
     expect(preload).toContain("ipcChannels.externalBookSync.scanProgress");
     expect(preload).toContain("sendMissingChaptersToAi: (input: ExternalBookSyncSendToAiInput)");
+    expect(preload).toContain("clearSentHistory: (input: ExternalBookSyncClearSentHistoryInput)");
     expect(registerIpc).toContain("registerExternalBookSyncIpc(externalBookSyncService)");
     expect(registerIpc).toContain("new ExternalBookSyncService");
     expect(registerIpc).toContain('runDueExternalBookSync("startup")');
@@ -92,6 +95,7 @@ describe("summary index preload and IPC wiring", () => {
     expect(registerIpc).not.toContain('runDueExternalBookSync("shutdown")');
     expect(registerIpc).not.toContain("EXTERNAL_BOOK_SYNC_SHUTDOWN_TIMEOUT_MS");
     expect(externalIpc).toContain("createValidatedIpcHandler(externalBookSyncScanInputSchema");
+    expect(externalIpc).toContain("createValidatedIpcHandler(externalBookSyncClearSentHistoryInputSchema");
     expect(externalIpc).toContain("ipcChannels.externalBookSync.scanDone");
     expect(externalIpc).toContain("ipcChannels.externalBookSync.scanError");
     expect(externalIpc).toContain("dialog.showOpenDialog");

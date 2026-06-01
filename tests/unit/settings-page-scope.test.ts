@@ -115,6 +115,7 @@ describe("settings page scope", () => {
     expect(settings).not.toContain("选择同步目录");
     expect(settings).toContain("api.externalBookSync.scan");
     expect(settings).not.toContain("api.externalBookSync.sendMissingChaptersToAi");
+    expect(settings).toContain("api.externalBookSync.clearSentHistory");
     expect(settings).toContain("api.externalBookSync.selectDirectory");
     expect(settings).toContain("api.externalBookSync.cancelScan");
     expect(settings).toContain("停止扫描");
