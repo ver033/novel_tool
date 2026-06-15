@@ -35,6 +35,7 @@ import type {
   ChapterGetContentInput,
   ChapterListInput,
   ChapterRenameInput,
+  ChapterReviewCancelInput,
   ChapterReviewDeleteRunInput,
   ChapterReviewGetRunInput,
   ChapterReviewListRunsInput,
@@ -182,6 +183,7 @@ export type NovelToolApi = {
   };
   readonly chapterReview: {
     readonly startReview: (input: ChapterReviewStartInput) => Promise<ChapterReviewRunRecord>;
+    readonly cancelReview: (input: ChapterReviewCancelInput) => Promise<unknown>;
     readonly listRuns: (input: ChapterReviewListRunsInput) => Promise<ChapterReviewRunRecord[]>;
     readonly getRun: (input: ChapterReviewGetRunInput) => Promise<ChapterReviewRunRecord>;
     readonly deleteRun: (input: ChapterReviewDeleteRunInput) => Promise<unknown>;
@@ -344,6 +346,7 @@ export const novelToolApi: NovelToolApi = Object.freeze({
   }),
   chapterReview: Object.freeze({
     startReview: (input: ChapterReviewStartInput) => ipcRenderer.invoke(ipcChannels.chapterReview.startReview, input),
+    cancelReview: (input: ChapterReviewCancelInput) => ipcRenderer.invoke(ipcChannels.chapterReview.cancelReview, input),
     listRuns: (input: ChapterReviewListRunsInput) => ipcRenderer.invoke(ipcChannels.chapterReview.listRuns, input),
     getRun: (input: ChapterReviewGetRunInput) => ipcRenderer.invoke(ipcChannels.chapterReview.getRun, input),
     deleteRun: (input: ChapterReviewDeleteRunInput) => ipcRenderer.invoke(ipcChannels.chapterReview.deleteRun, input),

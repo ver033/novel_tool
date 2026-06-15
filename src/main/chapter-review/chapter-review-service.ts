@@ -1,4 +1,4 @@
-import { OpenRouterClient } from "../ai/openrouter-client";
+import { OpenRouterClient, type OpenRouterProviderRouting } from "../ai/openrouter-client";
 import { getTokenBudget } from "../ai/token-budget";
 import { createId as defaultCreateId } from "../shared/ids";
 import { countWritingUnits } from "../shared/text";
@@ -6,7 +6,7 @@ import type { ChapterRepository } from "../db/repositories/chapter-repo";
 import type { ChapterReviewRepository } from "../db/repositories/chapter-review-repo";
 import type { SettingsService } from "../settings/settings-service";
 import type { ChapterReviewModelResponse, ChapterReviewProgressEvent, ChapterReviewProgressPhase, ChapterReviewRunRecord } from "../shared/chapter-review";
-import type { ChapterContent, ChapterReviewStartInput, ChapterReviewDeleteRunInput, ChapterReviewGetRunInput, ChapterReviewListRunsInput } from "../shared/types";
+import type { ChapterContent, ChapterReviewCancelInput, ChapterReviewStartInput, ChapterReviewDeleteRunInput, ChapterReviewGetRunInput, ChapterReviewListRunsInput } from "../shared/types";
 import { buildChapterReviewPrompt, parseChapterReviewModelResponse, splitChapterTextForReview } from "./chapter-review-prompt";
 
 export type ChapterReviewClientInput = {
@@ -17,6 +17,7 @@ export type ChapterReviewClientInput = {
   readonly chunkCount: number;
   readonly chapterText: string;
   readonly nearbyContext: string;
+  readonly signal?: AbortSignal;
 };
 
 export type ChapterReviewClient = {
@@ -36,11 +37,17 @@ type ChapterReviewServiceOptions = {
   readonly createId?: (prefix: string) => string;
 };
 
-const DEFAULT_REVIEW_CHUNK_TOKENS = 12_000;
+const DEFAULT_REVIEW_CHUNK_TOKENS = 32_000;
 const MIN_REVIEW_CHUNK_TOKENS = 4_000;
-const MAX_REVIEW_CHUNK_TOKENS = 14_000;
+const PREFERRED_REVIEW_CHAPTER_TOKENS = 24_000;
+const MAX_REVIEW_CHUNK_TOKENS = 48_000;
 const REVIEW_CHUNK_INPUT_RATIO = 1;
-const MAX_REVIEW_COMPLETION_TOKENS = 8_000;
+const MAX_REVIEW_COMPLETION_TOKENS = 4_000;
+const MAX_PARALLEL_REVIEW_CHAPTERS = 2;
+const REVIEW_CANCELLED_MESSAGE = "AI审稿已停止。";
+const CHAPTER_REVIEW_PROVIDER_ROUTING = {
+  sort: "throughput"
+} as const satisfies OpenRouterProviderRouting;
 const riskRank = {
   none: 0,
   low: 1,
@@ -65,11 +72,35 @@ function riskFromRank(rank: number): ChapterReviewModelResponse["aiToneRisk"] {
   return "none";
 }
 
-function resolveReviewChunkTokens(maxInputTokens: number): number {
+function isReviewCanceledReason(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return String(error) === "canceled" || String(error) === REVIEW_CANCELLED_MESSAGE;
+  }
+  const record = error as { readonly code?: unknown; readonly isCanceled?: unknown; readonly message?: unknown; readonly name?: unknown };
+  return (
+    record.isCanceled === true ||
+    record.code === "canceled" ||
+    record.code === "ERR_CANCELED" ||
+    record.name === "AbortError" ||
+    record.name === "CanceledError" ||
+    record.message === "canceled" ||
+    record.message === "OpenRouter 请求已取消。" ||
+    record.message === REVIEW_CANCELLED_MESSAGE
+  );
+}
+
+function assertReviewNotCanceled(signal: AbortSignal): void {
+  if (signal.aborted) {
+    throw new Error(REVIEW_CANCELLED_MESSAGE);
+  }
+}
+
+function resolveReviewChunkTokens(maxInputTokens: number, options: { readonly enforceBudget?: boolean } = {}): number {
   if (!Number.isFinite(maxInputTokens) || maxInputTokens <= 0) {
     return DEFAULT_REVIEW_CHUNK_TOKENS;
   }
-  return Math.max(MIN_REVIEW_CHUNK_TOKENS, Math.min(MAX_REVIEW_CHUNK_TOKENS, Math.floor(maxInputTokens * REVIEW_CHUNK_INPUT_RATIO)));
+  const resolvedTokens = Math.min(MAX_REVIEW_CHUNK_TOKENS, Math.floor(maxInputTokens * REVIEW_CHUNK_INPUT_RATIO));
+  return Math.max(options.enforceBudget ? MIN_REVIEW_CHUNK_TOKENS : PREFERRED_REVIEW_CHAPTER_TOKENS, resolvedTokens);
 }
 
 function progressPercent(completedChunks: number, totalChunks: number, phase: ChapterReviewProgressPhase): number {
@@ -112,6 +143,30 @@ function mergeChapterResults(results: readonly ChapterReviewModelResponse[]): Pi
   };
 }
 
+async function runWithConcurrency<T>(items: readonly T[], limit: number, worker: (item: T) => Promise<void>): Promise<void> {
+  const workerCount = Math.max(1, Math.min(limit, items.length));
+  let nextIndex = 0;
+  let firstError: unknown = null;
+  const workers = Array.from({ length: workerCount }, async () => {
+    while (!firstError) {
+      const itemIndex = nextIndex;
+      nextIndex += 1;
+      if (itemIndex >= items.length) {
+        return;
+      }
+      try {
+        await worker(items[itemIndex]);
+      } catch (error) {
+        firstError ??= error;
+      }
+    }
+  });
+  await Promise.all(workers);
+  if (firstError) {
+    throw firstError;
+  }
+}
+
 export async function createOpenRouterChapterReviewClient(settingsService: SettingsService): Promise<ChapterReviewClient> {
   const config = await settingsService.getOpenRouterConfigWithModelMetadata();
   const budget = getTokenBudget("proofread", config.contextLength);
@@ -122,7 +177,7 @@ export async function createOpenRouterChapterReviewClient(settingsService: Setti
   });
 
   return {
-    maxChunkTokens: resolveReviewChunkTokens(budget.maxInputTokens),
+    maxChunkTokens: resolveReviewChunkTokens(budget.maxInputTokens, { enforceBudget: Boolean(config.contextLength) }),
     async review(input) {
       const prompt = buildChapterReviewPrompt({
         ...input,
@@ -134,7 +189,9 @@ export async function createOpenRouterChapterReviewClient(settingsService: Setti
         maxCompletionTokens: prompt.maxCompletionTokens,
         temperature: prompt.temperature,
         responseFormat: prompt.responseFormat,
-        reasoning: prompt.reasoning
+        reasoning: prompt.reasoning,
+        provider: CHAPTER_REVIEW_PROVIDER_ROUTING,
+        signal: input.signal
       });
       if (response.truncated) {
         throw new Error("AI审稿结果被截断，请缩小章节范围或换用输出额度更高的模型。");
@@ -147,6 +204,7 @@ export async function createOpenRouterChapterReviewClient(settingsService: Setti
 export class ChapterReviewService {
   private readonly now: () => string;
   private readonly createId: (prefix: string) => string;
+  private readonly activeReviews = new Map<string, AbortController>();
 
   constructor(private readonly options: ChapterReviewServiceOptions) {
     this.now = options.now ?? nowIso;
@@ -176,7 +234,10 @@ export class ChapterReviewService {
     });
 
     try {
+      const abortController = this.registerReview(input.requestId);
+      const signal = abortController.signal;
       const client = await this.options.createClient();
+      assertReviewNotCanceled(signal);
       const projectName = this.options.getProjectName(input.projectId);
       const maxChunkTokens = this.options.maxChunkTokens ?? client.maxChunkTokens ?? DEFAULT_REVIEW_CHUNK_TOKENS;
       const plannedChapters = selectedChapters.map((chapter) => {
@@ -213,9 +274,11 @@ export class ChapterReviewService {
 
       emitProgress("preparing", plannedChapters[0]?.content ?? null, "正在准备章节正文");
 
-      for (const { content, chunks } of plannedChapters) {
+      await runWithConcurrency(plannedChapters, MAX_PARALLEL_REVIEW_CHAPTERS, async ({ content, chunks }) => {
+        assertReviewNotCanceled(signal);
         const results: ChapterReviewModelResponse[] = [];
         for (let index = 0; index < chunks.length; index += 1) {
+          assertReviewNotCanceled(signal);
           emitProgress("reviewing", content, chunks.length > 1 ? `正在审稿：${content.title}（分段 ${index + 1}/${chunks.length}）` : `正在审稿：${content.title}`);
           results.push(await client.review({
             projectName,
@@ -224,11 +287,13 @@ export class ChapterReviewService {
             chunkIndex: index,
             chunkCount: chunks.length,
             chapterText: chunks[index],
-            nearbyContext: this.nearbyContext(input.projectId, content.sortOrder, chapterRepo)
+            nearbyContext: this.nearbyContext(input.projectId, content.sortOrder, chapterRepo),
+            signal
           }));
           completedChunks += 1;
           emitProgress("reviewing", content, chunks.length > 1 ? `已完成分段 ${index + 1}/${chunks.length}` : "已完成模型审稿");
         }
+        assertReviewNotCanceled(signal);
         const merged = mergeChapterResults(results);
         emitProgress("saving", content, `正在保存：${content.title}`);
         reviewRepo.saveChapterResult({
@@ -247,12 +312,13 @@ export class ChapterReviewService {
         });
         completedChapters += 1;
         emitProgress("saving", content, `已保存：${content.title}`);
-      }
+      });
       reviewRepo.completeRun(run.id, input.projectId, this.now());
       emitProgress("completed", null, "审稿完成");
       return this.requireRun(reviewRepo, input.projectId, run.id);
     } catch (error) {
-      reviewRepo.failRun(run.id, input.projectId, error instanceof Error ? error.message : String(error), this.now());
+      const errorMessage = isReviewCanceledReason(error) ? REVIEW_CANCELLED_MESSAGE : error instanceof Error ? error.message : String(error);
+      reviewRepo.failRun(run.id, input.projectId, errorMessage, this.now());
       if (input.requestId) {
         onProgress?.({
           requestId: input.requestId,
@@ -265,10 +331,12 @@ export class ChapterReviewService {
           totalChunks: 1,
           completedChunks: 0,
           progressPercent: 1,
-          message: error instanceof Error ? error.message : String(error)
+          message: errorMessage
         });
       }
-      throw error;
+      throw new Error(errorMessage);
+    } finally {
+      this.unregisterReview(input.requestId);
     }
   }
 
@@ -282,6 +350,15 @@ export class ChapterReviewService {
 
   deleteRun(input: ChapterReviewDeleteRunInput): void {
     this.options.resolveReviewRepo(input.projectId).deleteRun(input.projectId, input.runId);
+  }
+
+  cancelReview(input: ChapterReviewCancelInput): void {
+    const controller = this.activeReviews.get(input.requestId);
+    if (!controller) {
+      return;
+    }
+    controller.abort();
+    this.activeReviews.delete(input.requestId);
   }
 
   private requireRun(reviewRepo: ChapterReviewRepository, projectId: string, runId: string): ChapterReviewRunRecord {
@@ -299,5 +376,22 @@ export class ChapterReviewService {
       .sort((a, b) => a.sortOrder - b.sortOrder)
       .map((chapter) => `${chapter.sortOrder < sortOrder ? "上一章" : "下一章"}：${chapter.title}，约 ${countWritingUnits(chapter.title)} 字标题线索。`)
       .join("\n");
+  }
+
+  private registerReview(requestId: string | undefined): AbortController {
+    const controller = new AbortController();
+    if (!requestId) {
+      return controller;
+    }
+    this.cancelReview({ requestId });
+    this.activeReviews.set(requestId, controller);
+    return controller;
+  }
+
+  private unregisterReview(requestId: string | undefined): void {
+    if (!requestId) {
+      return;
+    }
+    this.activeReviews.delete(requestId);
   }
 }

@@ -826,7 +826,7 @@ describe("ExternalBookSyncService", () => {
       trigger: "scheduled",
       now: new Date(2026, 4, 19, 7, 0)
     });
-    const duplicate = await service.runDueAutomaticSync({
+    const halfHour = await service.runDueAutomaticSync({
       projectId: project.id,
       trigger: "scheduled",
       now: new Date(2026, 4, 19, 7, 30)
@@ -834,12 +834,12 @@ describe("ExternalBookSyncService", () => {
     const second = await service.runDueAutomaticSync({
       projectId: project.id,
       trigger: "scheduled",
-      now: new Date(2026, 4, 19, 9, 0)
+      now: new Date(2026, 4, 19, 8, 0)
     });
 
     expect(first).toMatchObject({ status: "completed", trigger: "scheduled", scheduledLocalTime: "07:00", sentChapterCount: 2, sentMissingChapterCount: 1 });
-    expect(duplicate).toBeNull();
-    expect(second).toMatchObject({ status: "skipped", trigger: "scheduled", scheduledLocalTime: "09:00", candidateCount: 2, sentChapterCount: 0, sentMissingChapterCount: 0 });
+    expect(halfHour).toMatchObject({ status: "skipped", trigger: "scheduled", scheduledLocalTime: "07:30", candidateCount: 2, sentChapterCount: 0, sentMissingChapterCount: 0 });
+    expect(second).toMatchObject({ status: "skipped", trigger: "scheduled", scheduledLocalTime: "08:00", candidateCount: 2, sentChapterCount: 0, sentMissingChapterCount: 0 });
     expect(sentMessages.filter((message) => message.includes("缺失章节：第二章"))).toHaveLength(1);
     expect(sentMessages.join("\n")).toContain("当前项目最新章在 .Book 中的对应内容");
   });
@@ -1343,13 +1343,13 @@ describe("ExternalBookSyncService", () => {
       timeBudgetMs: 10_000
     });
 
-    const previousNight = await service.runStartupCatchUpSync(project.id, new Date(2026, 4, 19, 6, 59));
+    const morning = await service.runStartupCatchUpSync(project.id, new Date(2026, 4, 19, 6, 59));
     const startup = await service.runStartupCatchUpSync(project.id, new Date(2026, 4, 19, 11, 30));
     const duplicateStartup = await service.runStartupCatchUpSync(project.id, new Date(2026, 4, 19, 11, 45));
 
-    expect(previousNight).toMatchObject({ trigger: "startup", scheduledLocalTime: "23:00", scheduledSlotKey: "2026-05-18T23:00", sentChapterCount: 2 });
-    expect(startup).toMatchObject({ trigger: "startup", scheduledLocalTime: "11:00", status: "skipped", candidateCount: 2, sentChapterCount: 0 });
-    expect(duplicateStartup).toMatchObject({ trigger: "startup", scheduledLocalTime: "11:00", status: "skipped", candidateCount: 2, sentChapterCount: 0 });
+    expect(morning).toMatchObject({ trigger: "startup", scheduledLocalTime: "06:30", scheduledSlotKey: "2026-05-19T06:30", sentChapterCount: 2 });
+    expect(startup).toMatchObject({ trigger: "startup", scheduledLocalTime: "11:30", status: "skipped", candidateCount: 2, sentChapterCount: 0 });
+    expect(duplicateStartup).toMatchObject({ trigger: "startup", scheduledLocalTime: "11:30", status: "skipped", candidateCount: 2, sentChapterCount: 0 });
     expect(sentMessages.filter((message) => message.includes("缺失章节：第二章"))).toHaveLength(1);
   });
 });

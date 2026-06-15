@@ -32,6 +32,7 @@ import type {
   chapterGetContentInputSchema,
   chapterListInputSchema,
   chapterRenameInputSchema,
+  chapterReviewCancelInputSchema,
   chapterReviewDeleteRunInputSchema,
   chapterReviewGetRunInputSchema,
   chapterReviewListRunsInputSchema,
@@ -723,6 +724,7 @@ export type ChapterSaveContentInput = z.input<typeof chapterSaveContentInputSche
 export type ChapterCreateSnapshotInput = z.input<typeof chapterCreateSnapshotInputSchema>;
 export type ChapterUpdateTargetWordCountInput = z.input<typeof chapterUpdateTargetWordCountInputSchema>;
 export type ChapterReviewStartInput = z.input<typeof chapterReviewStartInputSchema>;
+export type ChapterReviewCancelInput = z.input<typeof chapterReviewCancelInputSchema>;
 export type ChapterReviewListRunsInput = z.input<typeof chapterReviewListRunsInputSchema>;
 export type ChapterReviewGetRunInput = z.input<typeof chapterReviewGetRunInputSchema>;
 export type ChapterReviewDeleteRunInput = z.input<typeof chapterReviewDeleteRunInputSchema>;
@@ -1004,6 +1006,7 @@ export const ipcChannels = {
   },
   chapterReview: {
     startReview: "novelTool:chapterReview:startReview",
+    cancelReview: "novelTool:chapterReview:cancelReview",
     listRuns: "novelTool:chapterReview:listRuns",
     getRun: "novelTool:chapterReview:getRun",
     deleteRun: "novelTool:chapterReview:deleteRun",

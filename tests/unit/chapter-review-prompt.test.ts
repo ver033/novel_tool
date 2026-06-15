@@ -67,4 +67,35 @@ describe("chapter review prompt", () => {
     expect(chunks.join("\n\n")).toContain("第80段");
     expect(chunks.every((chunk) => chunk.trim().length > 0)).toBe(true);
   });
+
+  it("keeps the review request compact enough for chapter-level latency", () => {
+    const prompt = buildChapterReviewPrompt({
+      projectName: "斗破测试",
+      chapterTitle: "第三十六章 暗潮",
+      chapterOrder: 36,
+      chunkIndex: 0,
+      chunkCount: 1,
+      chapterText: "萧炎停下脚步，心中涌起一种前所未有的复杂情绪。",
+      nearbyContext: "上一章：主角刚得知密信失踪。",
+      maxCompletionTokens: 8000,
+      tokenBudget: {
+        maxInputTokens: 12000,
+        maxOutputTokens: 12000,
+        maxReasoningTokens: 4000
+      }
+    });
+    expect(prompt.responseFormat.type).toBe("json_schema");
+    if (prompt.responseFormat.type !== "json_schema") {
+      throw new Error("chapter review must use json_schema response format");
+    }
+    const schema = prompt.responseFormat.json_schema.schema as {
+      properties: { issues: { maxItems: number } };
+    };
+    const joined = prompt.messages.map((message) => message.content).join("\n");
+
+    expect(prompt.maxCompletionTokens).toBeLessThanOrEqual(4000);
+    expect(prompt.reasoning).toEqual({ max_tokens: 1024, exclude: true });
+    expect(schema.properties.issues.maxItems).toBe(30);
+    expect(joined).toContain("最多 30 个");
+  });
 });

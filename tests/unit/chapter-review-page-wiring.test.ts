@@ -26,18 +26,23 @@ describe("AI chapter review page wiring", () => {
     const types = readSource("src/main/shared/types.ts");
     const preload = readSource("src/preload/api.ts");
     const registerIpc = readSource("src/main/ipc/register-ipc.ts");
+    const chapterReviewIpc = readSource("src/main/ipc/chapter-review-ipc.ts");
 
     expect(types).toContain("chapterReview:");
     expect(types).toContain("novelTool:chapterReview:startReview");
+    expect(types).toContain("novelTool:chapterReview:cancelReview");
     expect(types).toContain("novelTool:chapterReview:listRuns");
     expect(types).toContain("novelTool:chapterReview:getRun");
     expect(types).toContain("novelTool:chapterReview:deleteRun");
     expect(types).toContain("novelTool:chapterReview:progress");
     expect(preload).toContain("chapterReview: Object.freeze");
     expect(preload).toContain("ipcChannels.chapterReview.startReview");
+    expect(preload).toContain("ipcChannels.chapterReview.cancelReview");
     expect(preload).toContain("subscribeProgress");
     expect(registerIpc).toContain("registerChapterReviewIpc");
     expect(registerIpc).toContain("ChapterReviewService");
+    expect(chapterReviewIpc).toContain("chapterReviewCancelInputSchema");
+    expect(chapterReviewIpc).toContain("service.cancelReview");
   });
 
   it("shows review progress and groups issues by category", () => {
@@ -48,5 +53,20 @@ describe("AI chapter review page wiring", () => {
     expect(page).toContain("chapter-review-progress");
     expect(page).toContain("chapter-review-category-tabs");
     expect(page).toContain("groupIssuesForDisplay");
+  });
+
+  it("keeps the chapter picker scrollable and presents review status as a focused workspace", () => {
+    const page = readSource("src/renderer/routes/ChapterReviewPage.tsx");
+    const css = readSource("src/renderer/styles/globals.css");
+
+    expect(page).toContain("chapter-review-focus-panel");
+    expect(page).toContain("chapter-review-selection-meta");
+    expect(page).toContain("chapter-review-progress-stats");
+    expect(page).toContain("停止审稿");
+    expect(page).toContain("cancelActiveReview");
+    expect(css).toContain(".chapter-review-chapter-list");
+    expect(css).toContain("overflow-y: auto");
+    expect(css).toContain("scrollbar-width: thin");
+    expect(css).toContain(".chapter-review-focus-panel");
   });
 });

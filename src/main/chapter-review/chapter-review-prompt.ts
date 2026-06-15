@@ -1,8 +1,7 @@
 import { proofreadIssueCodes } from "../shared/proofread";
 import { chapterReviewModelResponseSchema, type ChapterReviewModelResponse } from "../shared/chapter-review";
-import type { OpenRouterMessage, OpenRouterResponseFormat } from "../ai/openrouter-client";
+import type { OpenRouterMessage, OpenRouterReasoningConfig, OpenRouterResponseFormat } from "../ai/openrouter-client";
 import { estimateTextTokens, truncateTextToTokenBudget } from "../ai/token-estimator";
-import { buildReasoningConfig } from "../ai/reasoning-budget";
 import type { TokenBudget } from "../ai/token-budget";
 
 export type ChapterReviewPromptInput = {
@@ -22,10 +21,13 @@ export type ChapterReviewPrompt = {
   readonly responseFormat: OpenRouterResponseFormat;
   readonly temperature: number;
   readonly maxCompletionTokens: number;
-  readonly reasoning?: ReturnType<typeof buildReasoningConfig>;
+  readonly reasoning?: OpenRouterReasoningConfig;
 };
 
 const reviewEvidenceSourceValues = ["target", "before_context", "after_context", "memory", "chapter_summary"];
+const MAX_CHAPTER_REVIEW_ISSUES = 30;
+const MAX_CHAPTER_REVIEW_COMPLETION_TOKENS = 4_000;
+const MAX_CHAPTER_REVIEW_REASONING_TOKENS = 1_024;
 
 const chapterReviewResponseFormat: OpenRouterResponseFormat = {
   type: "json_schema",
@@ -42,7 +44,7 @@ const chapterReviewResponseFormat: OpenRouterResponseFormat = {
         aiToneRisk: { type: "string", enum: ["none", "low", "medium", "high"] },
         issues: {
           type: "array",
-          maxItems: 80,
+          maxItems: MAX_CHAPTER_REVIEW_ISSUES,
           items: {
             type: "object",
             additionalProperties: false,
@@ -53,7 +55,6 @@ const chapterReviewResponseFormat: OpenRouterResponseFormat = {
               "locationHint",
               "explanation",
               "suggestion",
-              "evidence",
               "canAutoApply",
               "needsAuthorJudgment"
             ],
@@ -88,6 +89,10 @@ const chapterReviewResponseFormat: OpenRouterResponseFormat = {
     }
   }
 };
+
+function resolveChapterReviewCompletionTokens(maxCompletionTokens: number): number {
+  return Math.min(maxCompletionTokens, MAX_CHAPTER_REVIEW_COMPLETION_TOKENS);
+}
 
 function splitOversizedParagraph(paragraph: string, maxTokens: number): string[] {
   const chunks: string[] = [];
@@ -153,7 +158,8 @@ export function buildChapterReviewPrompt(input: ChapterReviewPromptInput): Chapt
         "5. 对网络小说常见节奏、口语化对白、强情绪表达要谨慎，不要为了凑问题而误判。",
         "6. 不改写整章，不自动替作者重写正文。",
         "7. 每条问题必须包含原文 quote、问题类型、严重程度、说明、建议。",
-        "8. 没有明确问题时返回空 issues。"
+        `8. 最多 ${MAX_CHAPTER_REVIEW_ISSUES} 个问题，只返回最值得处理的问题。`,
+        "9. 没有明确问题时返回空 issues。"
       ].join("\n")
     },
     {
@@ -174,7 +180,8 @@ export function buildChapterReviewPrompt(input: ChapterReviewPromptInput): Chapt
         "【输出要求】",
         "只输出符合 JSON Schema 的对象。",
         "summary 用中文概括本段/本章的主要质量问题；readabilityScore 为 1-5 的可读性评分；aiToneRisk 只表示文本机械感/套话感风险，不表示作者是否使用 AI。",
-        "issues 只列明确、值得作者处理的问题；AI味相关问题必须指向具体 quote，并说明为什么读起来机械、空泛或公式化。"
+        `issues 只列明确、值得作者处理的问题，最多 ${MAX_CHAPTER_REVIEW_ISSUES} 个；AI味相关问题必须指向具体 quote，并说明为什么读起来机械、空泛或公式化。`,
+        "除非需要引用邻近上下文证明连续性问题，否则不要输出 evidence。"
       ].join("\n")
     }
   ];
@@ -183,8 +190,8 @@ export function buildChapterReviewPrompt(input: ChapterReviewPromptInput): Chapt
     messages,
     responseFormat: chapterReviewResponseFormat,
     temperature: 0.2,
-    maxCompletionTokens: input.maxCompletionTokens,
-    reasoning: input.tokenBudget ? buildReasoningConfig(input.tokenBudget, { exclude: true, fallbackEffort: "medium" }) : undefined
+    maxCompletionTokens: resolveChapterReviewCompletionTokens(input.maxCompletionTokens),
+    reasoning: { max_tokens: MAX_CHAPTER_REVIEW_REASONING_TOKENS, exclude: true }
   };
 }
 

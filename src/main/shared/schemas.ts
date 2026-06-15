@@ -153,6 +153,12 @@ export const chapterReviewStartInputSchema = z
   })
   .strict();
 
+export const chapterReviewCancelInputSchema = z
+  .object({
+    requestId: idSchema
+  })
+  .strict();
+
 export const chapterReviewListRunsInputSchema = z
   .object({
     projectId: idSchema,

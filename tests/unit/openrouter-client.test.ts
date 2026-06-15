@@ -206,6 +206,39 @@ describe("OpenRouterClient", () => {
     });
   });
 
+  it("passes OpenRouter provider routing preferences for latency-sensitive calls", async () => {
+    const requests: OpenRouterHttpRequest[] = [];
+    const client = new OpenRouterClient({
+      apiKey: "sk-or-v1-test-key",
+      modelName: "openai/gpt-5.2",
+      httpPost: async (request) => {
+        requests.push(request);
+        return {
+          choices: [
+            {
+              message: {
+                content: "OK"
+              }
+            }
+          ]
+        };
+      }
+    });
+
+    await client.createChatCompletion({
+      messages: [{ role: "user", content: "只回复 OK" }],
+      provider: {
+        sort: "throughput",
+        require_parameters: true
+      }
+    });
+
+    expect(requests[0].body.provider).toEqual({
+      sort: "throughput",
+      require_parameters: true
+    });
+  });
+
   it("returns non-streaming reasoning details when OpenRouter provides them", async () => {
     const client = new OpenRouterClient({
       apiKey: "sk-or-v1-test-key",

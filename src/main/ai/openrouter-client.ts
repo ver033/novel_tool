@@ -56,6 +56,19 @@ export type OpenRouterReasoningConfig = {
   readonly enabled?: boolean;
 };
 
+export type OpenRouterProviderRouting = {
+  readonly sort?: "price" | "throughput" | "latency" | {
+    readonly by: "price" | "throughput" | "latency";
+    readonly partition?: "model" | "none";
+  };
+  readonly require_parameters?: boolean;
+  readonly allow_fallbacks?: boolean;
+  readonly order?: readonly string[];
+  readonly only?: readonly string[];
+  readonly ignore?: readonly string[];
+  readonly data_collection?: "allow" | "deny";
+};
+
 export type OpenRouterHttpRequest = {
   readonly url: string;
   readonly headers: Record<string, string>;
@@ -94,6 +107,7 @@ export type OpenRouterChatCompletionInput = {
   readonly temperature?: number;
   readonly responseFormat?: OpenRouterResponseFormat;
   readonly reasoning?: OpenRouterReasoningConfig;
+  readonly provider?: OpenRouterProviderRouting;
   readonly tools?: readonly OpenRouterToolDefinition[];
   readonly toolChoice?: OpenRouterToolChoice;
   readonly parallelToolCalls?: boolean;
@@ -621,6 +635,9 @@ export class OpenRouterClient {
     }
     if (input.reasoning) {
       body.reasoning = input.reasoning;
+    }
+    if (input.provider) {
+      body.provider = input.provider;
     }
     if (input.tools) {
       body.tools = input.tools;

@@ -32,7 +32,10 @@ import { searchWindowsIndexForBookFiles } from "./windows-index-search";
 const DEFAULT_SCAN_BUDGET_MS = 180_000;
 const WINDOWS_INDEX_TIMEOUT_MS = 15_000;
 const MAX_BOOK_BYTES = 20 * 1024 * 1024;
-const AUTOMATIC_SYNC_SCHEDULE_LOCAL_TIMES = ["07:00", "09:00", "11:00", "13:00", "15:00", "17:00", "19:00", "21:00", "23:00"] as const;
+const AUTOMATIC_SYNC_SCHEDULE_LOCAL_TIMES = Array.from({ length: 48 }, (_, index) => {
+  const minutes = index * 30;
+  return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+});
 const RETRYABLE_AUTOMATIC_SYNC_DELAY_MS = 5 * 60 * 1000;
 
 export type ExternalBookSyncMode = "quick" | "global" | "directory";

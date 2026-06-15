@@ -5,6 +5,7 @@ import { proofreadIssueLabels, type ProofreadIssue, type ProofreadIssueCode } fr
 import { ProjectModuleRail, type ProjectModule } from "../layout/ProjectModuleRail";
 import { TopBar } from "../layout/TopBar";
 import { getNovelToolApi } from "../state/app-store";
+import { completeReviewProgress, estimateReviewRemainingMs, formatReviewDuration, formatReviewRemainingText, retainAvailableChapterSelection } from "./chapter-review-view-model";
 
 type ChapterReviewPageProps = {
   readonly currentProject: ProjectRecord | null;
@@ -63,6 +64,7 @@ const issueSeverityRank: Record<ProofreadIssue["severity"], number> = {
   low: 1
 };
 
+const chapterReviewParallelCapacity = 2;
 const textIssueCodes = new Set<ProofreadIssueCode>(["typo", "punctuation", "grammar", "awkward_expression", "repetition", "unclear_reference"]);
 const characterIssueCodes = new Set<ProofreadIssueCode>(["dialogue_voice", "character_state_conflict", "character_knowledge_conflict", "relationship_conflict"]);
 const styleIssueCodes = new Set<ProofreadIssueCode>(["style_drift", "ai_tone"]);
@@ -122,9 +124,17 @@ function statusText(run: ChapterReviewRunRecord): string {
     return "审稿中";
   }
   if (run.status === "failed") {
+    if (run.error === "AI审稿已停止。") {
+      return "已停止";
+    }
     return "失败";
   }
   return "完成";
+}
+
+function isCanceledReviewMessage(reason: unknown): boolean {
+  const message = reason instanceof Error ? reason.message : String(reason);
+  return message.includes("AI审稿已停止") || message.includes("canceled") || message.includes("已取消");
 }
 
 export function ChapterReviewPage({
@@ -149,10 +159,17 @@ export function ChapterReviewPage({
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<ChapterReviewProgressEvent | null>(null);
   const [issueCategory, setIssueCategory] = useState<IssueCategoryId>("all");
+  const [reviewStartedAt, setReviewStartedAt] = useState<number | null>(null);
+  const [reviewClockNow, setReviewClockNow] = useState(() => Date.now());
+  const [activeReviewRequestId, setActiveReviewRequestId] = useState<string | null>(null);
 
   const activeRun = useMemo(() => runs.find((run) => run.id === activeRunId) ?? runs[0] ?? null, [activeRunId, runs]);
   const selectedSet = useMemo(() => new Set(selectedChapterIds), [selectedChapterIds]);
   const selectedCount = selectedChapterIds.length;
+  const selectedWordCount = useMemo(
+    () => sortedChapters.reduce((total, chapter) => total + (selectedSet.has(chapter.id) ? chapter.wordCount : 0), 0),
+    [selectedSet, sortedChapters]
+  );
   const totalIssueCount = activeRun?.chapters.reduce((total, chapter) => total + chapter.issueCount, 0) ?? 0;
   const issueCategoryCounts = useMemo(() => {
     const counts: Record<IssueCategoryId, number> = { all: 0, text: 0, logic: 0, character: 0, style: 0 };
@@ -171,6 +188,21 @@ export function ChapterReviewPage({
   }, "none") ?? "none";
   const progressValue = running ? progress?.progressPercent ?? 1 : progress?.phase === "completed" ? 100 : progress?.progressPercent ?? 0;
   const progressText = progress?.message ?? (running ? "正在启动审稿" : "");
+  const reviewElapsedMs = reviewStartedAt ? Math.max(0, reviewClockNow - reviewStartedAt) : 0;
+  const activeRunChapterCount = activeRun ? activeRun.chapters.length || activeRun.chapterIds.length : 0;
+  const estimatedRemainingMs = progress
+    ? estimateReviewRemainingMs({
+      completedChunks: progress.completedChunks,
+      totalChunks: progress.totalChunks,
+      elapsedMs: reviewElapsedMs,
+      parallelCapacity: chapterReviewParallelCapacity
+    })
+    : null;
+  const remainingTimeText = formatReviewRemainingText({
+    estimatedRemainingMs,
+    completedChunks: progress?.completedChunks ?? 0,
+    totalChunks: progress?.totalChunks ?? 0
+  });
 
   const reloadRuns = useCallback(async () => {
     if (!projectId) {
@@ -192,19 +224,21 @@ export function ChapterReviewPage({
   }, [api, projectId]);
 
   useEffect(() => {
-    setSelectedChapterIds((current) => {
-      const availableIds = new Set(sortedChapters.map((chapter) => chapter.id));
-      const retained = current.filter((id) => availableIds.has(id));
-      if (retained.length > 0) {
-        return retained;
-      }
-      return sortedChapters[0] ? [sortedChapters[0].id] : [];
-    });
+    setSelectedChapterIds((current) => retainAvailableChapterSelection(current, sortedChapters));
   }, [sortedChapters]);
 
   useEffect(() => {
     void reloadRuns();
   }, [reloadRuns]);
+
+  useEffect(() => {
+    if (!running || !reviewStartedAt) {
+      return undefined;
+    }
+    setReviewClockNow(Date.now());
+    const intervalId = window.setInterval(() => setReviewClockNow(Date.now()), 1000);
+    return () => window.clearInterval(intervalId);
+  }, [reviewStartedAt, running]);
 
   function handleNavigate(module: ProjectModule): void {
     if (module === "writing") {
@@ -242,7 +276,10 @@ export function ChapterReviewPage({
     }
     setRunning(true);
     setError(null);
+    setReviewStartedAt(Date.now());
+    setReviewClockNow(Date.now());
     const requestId = createChapterReviewRequestId();
+    setActiveReviewRequestId(requestId);
     setProgress({
       requestId,
       projectId,
@@ -261,12 +298,34 @@ export function ChapterReviewPage({
       const run = await api.chapterReview.startReview({ projectId, chapterIds: [...selectedChapterIds], requestId });
       setRuns((current) => [run, ...current.filter((item) => item.id !== run.id)]);
       setActiveRunId(run.id);
+      setProgress((current) => completeReviewProgress({
+        currentProgress: current,
+        projectId,
+        requestId,
+        run,
+        fallbackTotalChapters: selectedChapterIds.length
+      }));
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
+      setError(isCanceledReviewMessage(reason) ? null : reason instanceof Error ? reason.message : String(reason));
       await reloadRuns();
     } finally {
+      setReviewClockNow(Date.now());
+      setActiveReviewRequestId(null);
       unsubscribe();
       setRunning(false);
+    }
+  }
+
+  async function cancelActiveReview(): Promise<void> {
+    if (!activeReviewRequestId) {
+      return;
+    }
+    setError(null);
+    setProgress((current) => current ? { ...current, message: "正在停止审稿" } : current);
+    try {
+      await api.chapterReview.cancelReview({ requestId: activeReviewRequestId });
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
     }
   }
 
@@ -331,6 +390,11 @@ export function ChapterReviewPage({
               <button className="secondary-button" onClick={() => setSelectedChapterIds([])} disabled={running || selectedCount === 0} type="button">
                 <Square size={18} />清空
               </button>
+              {running && activeReviewRequestId ? (
+                <button className="secondary-button" onClick={() => void cancelActiveReview()} type="button">
+                  <Square size={18} />停止审稿
+                </button>
+              ) : null}
               <button className="primary-button" onClick={() => void startReview()} disabled={running || selectedCount === 0} type="button">
                 <MagnifyingGlass size={18} />{running ? "审稿中" : "开始审稿"}
               </button>
@@ -338,28 +402,50 @@ export function ChapterReviewPage({
           </header>
 
           {error ? <div className="chapter-review-error">{error}</div> : null}
-          {running || progress ? (
-            <div className={`chapter-review-progress ${progress?.phase ?? "preparing"}`} aria-live="polite">
-              <div className="chapter-review-progress-head">
-                <span>{progressText}</span>
-                <strong>{progressValue}%</strong>
-              </div>
-              <div className="chapter-review-progress-track">
-                <span style={{ width: `${progressValue}%` }} />
-              </div>
-              <small>
-                {progress
-                  ? `${progress.completedChapters}/${progress.totalChapters} 章，${progress.completedChunks}/${progress.totalChunks} 段`
-                  : `${selectedCount} 章`}
-              </small>
+          <div className="chapter-review-focus-panel">
+            <div className="chapter-review-selection-meta">
+              <span>已选章节</span>
+              <strong>{selectedCount}</strong>
+              <small>{selectedWordCount.toLocaleString("zh-CN")} 字</small>
             </div>
-          ) : null}
+            <div className="chapter-review-selection-meta">
+              <span>最近结果</span>
+              <strong>{activeRun ? statusText(activeRun) : loading ? "加载中" : "无"}</strong>
+              <small>{activeRun ? `${activeRunChapterCount} 章 / ${totalIssueCount} 问题` : "暂无记录"}</small>
+            </div>
+            {running || progress ? (
+              <div className={`chapter-review-progress ${progress?.phase ?? "preparing"}`} aria-live="polite">
+                <div className="chapter-review-progress-head">
+                  <span>{progressText}</span>
+                  <strong>{progressValue}%</strong>
+                </div>
+                <div className="chapter-review-progress-track">
+                  <span style={{ width: `${progressValue}%` }} />
+                </div>
+                <div className="chapter-review-progress-stats">
+                  <span>
+                    {progress
+                      ? `${progress.completedChapters}/${progress.totalChapters} 章，${progress.completedChunks}/${progress.totalChunks} 段`
+                      : `${selectedCount} 章`}
+                  </span>
+                  <span>已用 {formatReviewDuration(reviewElapsedMs)}</span>
+                  <span>预计剩余：{remainingTimeText}</span>
+                </div>
+              </div>
+            ) : (
+              <div className="chapter-review-idle-panel">
+                <span>审稿状态</span>
+                <strong>{selectedCount > 0 ? "待开始" : "未选择"}</strong>
+                <small>{selectedCount > 0 ? "可以开始审稿" : "从左侧选择章节"}</small>
+              </div>
+            )}
+          </div>
 
           <div className="chapter-review-layout">
             <aside className="chapter-review-sidebar" aria-label="章节选择">
               <div className="chapter-review-panel-head">
                 <h2>章节</h2>
-                <span>{selectedCount}/{sortedChapters.length}</span>
+                <span>{selectedCount}/{sortedChapters.length} · {selectedWordCount.toLocaleString("zh-CN")} 字</span>
               </div>
               <div className="chapter-review-chapter-list">
                 {sortedChapters.map((chapter) => (

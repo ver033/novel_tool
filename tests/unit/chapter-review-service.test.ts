@@ -123,8 +123,8 @@ describe("ChapterReviewService", () => {
     }));
   });
 
-  it("keeps a 10000 character chapter in one default request and emits progress", async () => {
-    const chapter = createChapter("chapter_1", "第一章", 1, "玄".repeat(10000));
+  it("keeps a 20000 character chapter in one default request and emits progress", async () => {
+    const chapter = createChapter("chapter_1", "第一章", 1, "玄".repeat(20000));
     const chapterRepo = {
       listByProject: vi.fn(() => [{ ...chapter, plainText: undefined, contentJson: undefined }]),
       getContent: vi.fn(() => chapter)
@@ -170,5 +170,110 @@ describe("ChapterReviewService", () => {
       totalChunks: 1,
       progressPercent: 100
     });
+  });
+
+  it("can cancel an active review request and abort the model call", async () => {
+    const chapter = createChapter("chapter_1", "第一章", 1, "第一章正文。");
+    const chapterRepo = {
+      listByProject: vi.fn(() => [{ ...chapter, plainText: undefined, contentJson: undefined }]),
+      getContent: vi.fn(() => chapter)
+    } as unknown as ChapterRepository;
+    const reviewRepo = {
+      createRun: vi.fn((input) => ({ ...input, completedAt: null, error: null, issueCount: 0, chapters: [] })),
+      saveChapterResult: vi.fn(),
+      completeRun: vi.fn(),
+      failRun: vi.fn(),
+      getRun: vi.fn(() => ({ id: "chapter_review_run_1", projectId: "project_1", chapterIds: ["chapter_1"], status: "failed", issueCount: 0, chapters: [] }))
+    } as unknown as ChapterReviewRepository;
+    let capturedSignal: AbortSignal | null = null;
+    const client: ChapterReviewClient = {
+      review: vi.fn((input) => new Promise<Awaited<ReturnType<ChapterReviewClient["review"]>>>((_resolve, reject) => {
+        capturedSignal = input.signal ?? null;
+        input.signal?.addEventListener("abort", () => reject(new Error("canceled")), { once: true });
+      }))
+    };
+    const progressEvents: ChapterReviewProgressEvent[] = [];
+    const service = new ChapterReviewService({
+      resolveChapterRepo: () => chapterRepo,
+      resolveReviewRepo: () => reviewRepo,
+      getProjectName: () => "斗破测试",
+      createClient: async () => client,
+      now: () => "2026-05-28T01:00:00.000Z",
+      createId: (prefix) => `${prefix}_1`
+    });
+
+    const reviewPromise = service.startReview(
+      { projectId: "project_1", chapterIds: ["chapter_1"], requestId: "chapter_review_request_1" },
+      (event) => progressEvents.push(event)
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    service.cancelReview({ requestId: "chapter_review_request_1" });
+
+    await expect(reviewPromise).rejects.toThrow("AI审稿已停止。");
+    const signal = capturedSignal as AbortSignal | null;
+    if (!signal) {
+      throw new Error("expected review call to receive an abort signal");
+    }
+    expect(signal.aborted).toBe(true);
+    expect(reviewRepo.saveChapterResult).not.toHaveBeenCalled();
+    expect(reviewRepo.completeRun).not.toHaveBeenCalled();
+    expect(reviewRepo.failRun).toHaveBeenCalledWith("chapter_review_run_1", "project_1", "AI审稿已停止。", "2026-05-28T01:00:00.000Z");
+    expect(progressEvents.at(-1)).toMatchObject({
+      phase: "failed",
+      message: "AI审稿已停止。"
+    });
+  });
+
+  it("reviews different chapters concurrently to avoid adding model wait times together", async () => {
+    const chapters = [
+      createChapter("chapter_1", "第一章", 1, "第一章正文。"),
+      createChapter("chapter_2", "第二章", 2, "第二章正文。")
+    ];
+    const chapterRepo = {
+      listByProject: vi.fn(() => chapters.map(({ plainText, contentJson, ...summary }) => summary)),
+      getContent: vi.fn((chapterId: string) => chapters.find((chapter) => chapter.id === chapterId) ?? null)
+    } as unknown as ChapterRepository;
+    const reviewRepo = {
+      createRun: vi.fn((input) => ({ ...input, completedAt: null, error: null, issueCount: 0, chapters: [] })),
+      saveChapterResult: vi.fn(),
+      completeRun: vi.fn(),
+      failRun: vi.fn(),
+      getRun: vi.fn(() => ({ id: "chapter_review_run_1", projectId: "project_1", chapterIds: ["chapter_1", "chapter_2"], status: "completed", issueCount: 0, chapters: [] }))
+    } as unknown as ChapterReviewRepository;
+    const resolvers = new Map<string, (value: Awaited<ReturnType<ChapterReviewClient["review"]>>) => void>();
+    const client: ChapterReviewClient = {
+      review: vi.fn((input) => new Promise<Awaited<ReturnType<ChapterReviewClient["review"]>>>((resolve) => {
+        resolvers.set(input.chapterTitle, resolve);
+      }))
+    };
+    const service = new ChapterReviewService({
+      resolveChapterRepo: () => chapterRepo,
+      resolveReviewRepo: () => reviewRepo,
+      getProjectName: () => "斗破测试",
+      createClient: async () => client,
+      now: () => "2026-05-28T01:00:00.000Z",
+      createId: (prefix) => `${prefix}_1`
+    });
+
+    const reviewPromise = service.startReview({ projectId: "project_1", chapterIds: ["chapter_1", "chapter_2"] });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(vi.mocked(client.review).mock.calls.map(([input]) => input.chapterTitle)).toEqual(["第一章", "第二章"]);
+
+    for (const resolve of resolvers.values()) {
+      resolve({
+        summary: "本章可读。",
+        readabilityScore: 4,
+        aiToneRisk: "none",
+        issues: []
+      });
+    }
+    await reviewPromise;
+
+    expect(reviewRepo.saveChapterResult).toHaveBeenCalledTimes(2);
+    expect(reviewRepo.completeRun).toHaveBeenCalled();
   });
 });

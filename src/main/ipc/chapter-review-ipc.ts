@@ -1,6 +1,7 @@
 import { ipcMain } from "electron";
 import type { ChapterReviewService } from "../chapter-review/chapter-review-service";
 import {
+  chapterReviewCancelInputSchema,
   chapterReviewDeleteRunInputSchema,
   chapterReviewGetRunInputSchema,
   chapterReviewListRunsInputSchema,
@@ -17,6 +18,13 @@ export function registerChapterReviewIpc(service: ChapterReviewService): void {
         event.sender.send(ipcChannels.chapterReview.progress, progress);
       })
     )
+  );
+  ipcMain.handle(
+    ipcChannels.chapterReview.cancelReview,
+    createValidatedIpcHandler(chapterReviewCancelInputSchema, (input) => {
+      service.cancelReview(input);
+      return { ok: true };
+    })
   );
   ipcMain.handle(
     ipcChannels.chapterReview.listRuns,

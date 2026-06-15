@@ -10,8 +10,11 @@ import type {
 } from "../db/repositories/usage-analytics-repo";
 import type { SettingsService } from "../settings/settings-service";
 
-const DEFAULT_SCHEDULE_LOCAL_TIMES = ["00:00", "09:00", "12:00"] as const;
-const PREVIOUS_DEFAULT_SCHEDULE_LOCAL_TIMES = ["00:00", "09:00"] as const;
+const DEFAULT_SCHEDULE_LOCAL_TIMES = Array.from({ length: 24 }, (_, hour) => `${String(hour).padStart(2, "0")}:00`);
+const PREVIOUS_DEFAULT_SCHEDULE_LOCAL_TIME_SETS = [
+  ["00:00", "09:00"],
+  ["00:00", "09:00", "12:00"]
+] as const;
 const DEFAULT_RANGE_DAYS = 14;
 const MAX_CHAPTER_UPDATES_PER_REPORT = 120;
 
@@ -164,9 +167,9 @@ function minutesToLocalTime(minutes: number): string {
 function normalizeSettings(settings: Partial<UsageAnalyticsSettings> | null): UsageAnalyticsSettings {
   const schedule = settings?.scheduleLocalTimes?.length ? [...settings.scheduleLocalTimes] : [...DEFAULT_SCHEDULE_LOCAL_TIMES];
   const scheduleLocalTimes = [...new Set(schedule)].map((item) => minutesToLocalTime(parseScheduleMinutes(item))).sort();
-  const isPreviousDefaultSchedule =
-    scheduleLocalTimes.length === PREVIOUS_DEFAULT_SCHEDULE_LOCAL_TIMES.length &&
-    PREVIOUS_DEFAULT_SCHEDULE_LOCAL_TIMES.every((item, index) => scheduleLocalTimes[index] === item);
+  const isPreviousDefaultSchedule = PREVIOUS_DEFAULT_SCHEDULE_LOCAL_TIME_SETS.some(
+    (previous) => scheduleLocalTimes.length === previous.length && previous.every((item, index) => scheduleLocalTimes[index] === item)
+  );
   return {
     automaticReportsEnabled: settings?.automaticReportsEnabled ?? true,
     scheduleLocalTimes: isPreviousDefaultSchedule ? [...DEFAULT_SCHEDULE_LOCAL_TIMES] : scheduleLocalTimes,
@@ -223,23 +226,38 @@ function resolveProjectContext(provider?: () => UsageAnalyticsProjectContext | n
 }
 
 export function buildUsageAnalyticsMessages(snapshot: UsageAnalyticsSnapshot): OpenRouterMessage[] {
+  const compactSnapshot = {
+    v: snapshot.appVersion,
+    p: snapshot.platform,
+    at: snapshot.generatedAt,
+    d: snapshot.rangeDays,
+    activeDays: snapshot.activeDays,
+    activeMin: snapshot.totalActiveMinutes,
+    events: snapshot.eventCounts,
+    views: snapshot.pageViews,
+    pageMin: snapshot.pageActiveMinutes,
+    features: snapshot.featureCounts,
+    errors: snapshot.errorCounts,
+    writing: snapshot.writingUpdateSummary,
+    latest: snapshot.latestProjectContext
+      ? {
+          project: snapshot.latestProjectContext.projectName,
+          chapter: snapshot.latestProjectContext.latestChapterTitle,
+          words: snapshot.latestProjectContext.latestChapterWordCount,
+          textChars: snapshot.latestProjectContext.latestChapterText.length
+        }
+      : null
+  };
   return [
     {
       role: "system",
-      content: [
-        "你是墨枢桌面写作工具的产品分析助手。",
-        "你会看到匿名聚合统计、章节更新事件，可能还会看到当前项目名、最新章节标题和最新章节正文。",
-        "只根据这些客户端本地生成的信息提出产品优化建议。",
-        "不要假设你看到了全部作品、其他章节、路径、prompt、API key 或用户身份。"
-      ].join("\n")
+      content: "墨枢匿名产品分析。只基于JSON给3条短建议，勿推测身份、路径或API。"
     },
     {
       role: "user",
       content: [
-        "下面是客户端本地生成的匿名使用统计 JSON。请输出中文产品使用分析报告。",
-        "报告结构：1. 使用概览 2. 高频功能 3. 低频或可能有阻塞的功能 4. 时间节奏 5. 下一版优化建议。",
-        "",
-        JSON.stringify(snapshot, null, 2)
+        "用中文输出极简产品使用分析：概览、异常/阻塞、建议。",
+        JSON.stringify(compactSnapshot)
       ].join("\n")
     }
   ];
@@ -257,7 +275,7 @@ export class OpenRouterUsageAnalyticsReporter implements UsageAnalyticsReporter 
     });
     const result = await client.createChatCompletion({
       messages: buildUsageAnalyticsMessages(snapshot),
-      maxCompletionTokens: 1600,
+      maxCompletionTokens: 600,
       temperature: 0.2
     });
     return result.content.trim();

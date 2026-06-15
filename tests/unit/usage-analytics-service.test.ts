@@ -15,6 +15,7 @@ import {
 
 const tempDirs: string[] = [];
 const databases: SqliteDatabase[] = [];
+const HOURLY_SCHEDULE = Array.from({ length: 24 }, (_, hour) => `${String(hour).padStart(2, "0")}:00`);
 
 afterEach(() => {
   for (const db of databases.splice(0)) {
@@ -102,21 +103,26 @@ describe("UsageAnalyticsService", () => {
     expect(serialized).not.toContain("API Key");
   });
 
-  it("describes the allowed writing context in the LLM prompt", () => {
+  it("builds a compact LLM prompt without sending the latest chapter body", () => {
     const { service } = createHarness(undefined, () => ({
       projectName: "举足无措",
       latestChapterTitle: "第十二章 夜雨",
-      latestChapterText: "雨声里，林远停下脚步。",
-      latestChapterWordCount: 12
+      latestChapterText: "雨声里，林远停下脚步。".repeat(200),
+      latestChapterWordCount: 2400
     }));
     const snapshot = service.buildSnapshot({ now: new Date(2026, 4, 19, 9, 0), rangeDays: 14 });
 
     const [systemMessage, userMessage] = buildUsageAnalyticsMessages(snapshot);
+    const systemContent = systemMessage.content ?? "";
+    const userContent = userMessage.content ?? "";
+    const fullSnapshotJson = JSON.stringify(snapshot);
 
-    expect(systemMessage.content).toContain("当前项目名、最新章节标题和最新章节正文");
-    expect(systemMessage.content).not.toContain("不要假设你看到了正文、章节标题、项目名");
-    expect(userMessage.content).toContain("举足无措");
-    expect(userMessage.content).toContain("雨声里，林远停下脚步。");
+    expect(systemContent.length).toBeLessThan(80);
+    expect(userContent).not.toContain("报告结构");
+    expect(userContent).toContain("举足无措");
+    expect(userContent).toContain("第十二章 夜雨");
+    expect(userContent).not.toContain("雨声里，林远停下脚步。");
+    expect(userContent.length).toBeLessThan(fullSnapshotJson.length / 2);
   });
 
   it("includes lightweight chapter update events without duplicating saved body text", () => {
@@ -198,14 +204,14 @@ describe("UsageAnalyticsService", () => {
     const first = await service.runDueAutomaticReport(new Date(2026, 4, 19, 9, 0));
     const duplicate = await service.runDueAutomaticReport(new Date(2026, 4, 19, 9, 30));
     const status = service.getStatus(new Date(2026, 4, 19, 9, 31));
-    const noon = await service.runDueAutomaticReport(new Date(2026, 4, 19, 12, 0));
+    const ten = await service.runDueAutomaticReport(new Date(2026, 4, 19, 10, 0));
 
     expect(first).toMatchObject({ status: "completed", trigger: "automatic", scheduledLocalTime: "09:00" });
     expect(duplicate).toBeNull();
-    expect(noon).toMatchObject({ status: "completed", trigger: "automatic", scheduledLocalTime: "12:00" });
+    expect(ten).toMatchObject({ status: "completed", trigger: "automatic", scheduledLocalTime: "10:00" });
     expect(snapshots).toHaveLength(2);
-    expect(status.scheduleLocalTimes).toEqual(["00:00", "09:00", "12:00"]);
-    expect(status.nextScheduledAt).toBe(new Date(2026, 4, 19, 12, 0).toISOString());
+    expect(status.scheduleLocalTimes).toEqual(HOURLY_SCHEDULE);
+    expect(status.nextScheduledAt).toBe(new Date(2026, 4, 19, 10, 0).toISOString());
     expect(status.lastSuccessAt).toBe(first?.completedAt);
     expect(status.latestReportText).toBe("产品使用分析报告");
   });
@@ -213,10 +219,10 @@ describe("UsageAnalyticsService", () => {
   it("sends one catch-up report when the app opens after a missed schedule slot", async () => {
     const { service, snapshots } = createHarness();
 
-    const catchUp = await service.runStartupCatchUpReport(new Date(2026, 4, 19, 10, 0));
+    const catchUp = await service.runStartupCatchUpReport(new Date(2026, 4, 19, 10, 30));
     const duplicateOpen = await service.runStartupCatchUpReport(new Date(2026, 4, 19, 10, 30));
 
-    expect(catchUp).toMatchObject({ status: "completed", trigger: "automatic", scheduledLocalTime: "09:00" });
+    expect(catchUp).toMatchObject({ status: "completed", trigger: "automatic", scheduledLocalTime: "10:00" });
     expect(duplicateOpen).toBeNull();
     expect(snapshots).toHaveLength(1);
   });
@@ -226,26 +232,26 @@ describe("UsageAnalyticsService", () => {
 
     const catchUp = await service.runStartupCatchUpReport(new Date(2026, 4, 19, 10, 0));
 
-    expect(catchUp).toMatchObject({ scheduledLocalTime: "09:00" });
+    expect(catchUp).toMatchObject({ scheduledLocalTime: "10:00" });
   });
 
-  it("uses the noon slot when the app opens after the noon schedule was missed", async () => {
+  it("uses the latest hourly slot when the app opens after that schedule was missed", async () => {
     const { service } = createHarness();
 
     const catchUp = await service.runStartupCatchUpReport(new Date(2026, 4, 19, 13, 0));
 
-    expect(catchUp).toMatchObject({ scheduledLocalTime: "12:00" });
+    expect(catchUp).toMatchObject({ scheduledLocalTime: "13:00" });
   });
 
-  it("upgrades the previous default schedule with the noon slot", async () => {
+  it("upgrades the previous default schedule with the hourly schedule", async () => {
     const { service } = createHarness();
 
     service.updateSettings({ scheduleLocalTimes: ["00:00", "09:00"] });
     const status = service.getStatus(new Date(2026, 4, 19, 10, 0));
-    const noon = await service.runDueAutomaticReport(new Date(2026, 4, 19, 12, 0));
+    const ten = await service.runDueAutomaticReport(new Date(2026, 4, 19, 10, 0));
 
-    expect(status.scheduleLocalTimes).toEqual(["00:00", "09:00", "12:00"]);
-    expect(noon).toMatchObject({ scheduledLocalTime: "12:00" });
+    expect(status.scheduleLocalTimes).toEqual(HOURLY_SCHEDULE);
+    expect(ten).toMatchObject({ scheduledLocalTime: "10:00" });
   });
 
   it("does not send a startup catch-up report before the first configured schedule", async () => {
@@ -267,11 +273,11 @@ describe("UsageAnalyticsService", () => {
 
     const first = await service.runDueAutomaticReport(new Date(2026, 4, 19, 9, 0));
     const duplicate = await service.runDueAutomaticReport(new Date(2026, 4, 19, 9, 20));
-    const nextSlot = await service.runDueAutomaticReport(new Date(2026, 4, 19, 12, 0));
+    const nextSlot = await service.runDueAutomaticReport(new Date(2026, 4, 19, 10, 0));
 
     expect(first).toMatchObject({ status: "failed", scheduledLocalTime: "09:00" });
     expect(duplicate).toBeNull();
-    expect(nextSlot).toMatchObject({ status: "failed", scheduledLocalTime: "12:00" });
+    expect(nextSlot).toMatchObject({ status: "failed", scheduledLocalTime: "10:00" });
   });
 
   it("respects the automatic report setting while keeping manual reports available", async () => {
