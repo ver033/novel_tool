@@ -62,7 +62,7 @@ describe("outline migrations", () => {
         "idx_outline_event_threads_thread"
       ])
     );
-    expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").get()).toEqual({ version: 22 });
+    expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").get()).toEqual({ version: 26 });
 
     db.close();
   });

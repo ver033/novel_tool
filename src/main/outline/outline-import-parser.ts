@@ -50,6 +50,16 @@ type MatrixStoryColumn = {
   readonly segmentIndex: number | null;
 };
 
+type XlsxCellFormat = {
+  readonly formatCode: string;
+  readonly isDate: boolean;
+};
+
+type XlsxStyles = {
+  readonly date1904: boolean;
+  readonly cellFormats: readonly XlsxCellFormat[];
+};
+
 const xmlParser = new XMLParser({
   ignoreAttributes: false,
   attributeNamePrefix: "",
@@ -198,6 +208,53 @@ function validLocalDate(value: string): string | null {
   return /^\d{4}-\d{2}-\d{2}$/.test(value.trim()) ? value.trim() : null;
 }
 
+function numericValue(value: string): number | null {
+  const trimmed = value.trim();
+  if (!/^\d+(?:\.\d+)?$/.test(trimmed)) {
+    return null;
+  }
+  const number = Number(trimmed);
+  return Number.isFinite(number) ? number : null;
+}
+
+function excelSerialDateParts(value: string, date1904 = false): { readonly year: number; readonly month: number; readonly day: number } | null {
+  const serial = numericValue(value);
+  if (serial === null || serial < 1) {
+    return null;
+  }
+  const wholeDays = Math.floor(serial);
+  const base = date1904 ? Date.UTC(1904, 0, 1) : Date.UTC(1899, 11, 30);
+  const date = new Date(base + wholeDays * 86_400_000);
+  if (!Number.isFinite(date.getTime())) {
+    return null;
+  }
+  return {
+    year: date.getUTCFullYear(),
+    month: date.getUTCMonth() + 1,
+    day: date.getUTCDate()
+  };
+}
+
+function excelSerialLocalDate(value: string, date1904 = false): string | null {
+  const parts = excelSerialDateParts(value, date1904);
+  if (!parts) {
+    return null;
+  }
+  return `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
+}
+
+function excelSerialDateLabel(value: string, date1904 = false): string | null {
+  const parts = excelSerialDateParts(value, date1904);
+  if (!parts || parts.year < 1900 || parts.year > 2200) {
+    return null;
+  }
+  return `${parts.month}月${parts.day}日`;
+}
+
+function normalizeDateLabel(value: string): string {
+  return excelSerialDateLabel(value) ?? value;
+}
+
 function rowCell(row: readonly string[], index: number | undefined): string {
   return index === undefined ? "" : row[index]?.trim() ?? "";
 }
@@ -217,12 +274,14 @@ function parseRowStyle(rows: readonly (readonly string[])[]): ParsedOutlineImpor
       return [];
     }
     const segment = parseDaySegment(rowCell(row, mapping.daySegment));
-    const storyTimeLabel = rowCell(row, mapping.storyTimeLabel);
+    const rawStoryTimeLabel = rowCell(row, mapping.storyTimeLabel);
+    const rawStoryDate = rowCell(row, mapping.storyDate);
+    const storyTimeLabel = normalizeDateLabel(rawStoryTimeLabel);
     return [
       {
         rowNumber: rowIndex + 2,
         chapterTitle: rowCell(row, mapping.chapter),
-        storyDate: validLocalDate(rowCell(row, mapping.storyDate)) ?? validLocalDate(storyTimeLabel),
+        storyDate: validLocalDate(rawStoryDate) ?? excelSerialLocalDate(rawStoryDate) ?? validLocalDate(storyTimeLabel) ?? excelSerialLocalDate(rawStoryTimeLabel),
         storyTimeLabel,
         weekdayLabel: rowCell(row, mapping.weekdayLabel),
         storyTimeOrder: rowIndex + 1,
@@ -368,7 +427,7 @@ function parseMatrixStyle(rows: readonly (readonly string[])[]): ParsedOutlineIm
   const segmentContexts = new Map<number, SegmentContext>();
   const parsed: ParsedOutlineImportRow[] = [];
   rows.slice(1).forEach((row, rowIndex) => {
-    const time = rowCell(row, dateIndex);
+    const time = normalizeDateLabel(rowCell(row, dateIndex));
     if (time) {
       context.storyTimeLabel = time;
     }
@@ -441,6 +500,7 @@ export function parseOutlineFile(filePath: string): ParsedOutlineImportRow[] {
 function readXlsxRows(bytes: Uint8Array): string[][] {
   const zip = unzipSync(bytes);
   const sharedStrings = readSharedStrings(zip);
+  const styles = readXlsxStyles(zip);
   const worksheetPath = findFirstWorksheetPath(zip);
   const worksheetXml = zip[worksheetPath];
   if (!worksheetXml) {
@@ -455,10 +515,77 @@ function readXlsxRows(bytes: Uint8Array): string[][] {
     for (const cell of cells) {
       const ref = typeof cell.r === "string" ? cell.r : "";
       const columnIndex = columnIndexFromRef(ref);
-      output[columnIndex] = readCellValue(cell, sharedStrings);
+      output[columnIndex] = readCellValue(cell, sharedStrings, styles);
     }
     return output.map((value) => value ?? "");
   });
+}
+
+const builtinDateFormatIds = new Set([14, 15, 16, 17, 22, 27, 30, 36, 50, 57]);
+const builtinNumberFormats = new Map<number, string>([
+  [14, "m/d/yy"],
+  [15, "d-mmm-yy"],
+  [16, "d-mmm"],
+  [17, "mmm-yy"],
+  [22, "m/d/yy h:mm"],
+  [27, "yyyy年m月"],
+  [30, "m/d/yy"],
+  [36, "yyyy年m月d日"],
+  [50, "yyyy年m月d日"],
+  [57, "yyyy年m月d日"]
+]);
+
+function readXlsxStyles(zip: Record<string, Uint8Array>): XlsxStyles {
+  const stylesXml = zip["xl/styles.xml"];
+  const date1904 = readWorkbookDate1904(zip);
+  if (!stylesXml) {
+    return { date1904, cellFormats: [] };
+  }
+  const parsed = xmlParser.parse(Buffer.from(stylesXml).toString("utf8")) as Record<string, unknown>;
+  const styleSheet = (parsed.styleSheet ?? {}) as Record<string, unknown>;
+  const numberFormats = new Map<number, string>();
+  const numFmts = (styleSheet.numFmts ?? {}) as Record<string, unknown>;
+  for (const entry of asArray(numFmts.numFmt as Record<string, unknown> | Record<string, unknown>[] | undefined)) {
+    const id = Number(entry.numFmtId);
+    const formatCode = cellText(entry.formatCode);
+    if (Number.isFinite(id) && formatCode) {
+      numberFormats.set(id, formatCode);
+    }
+  }
+  const cellXfs = (styleSheet.cellXfs ?? {}) as Record<string, unknown>;
+  const xfs = asArray(cellXfs.xf as Record<string, unknown> | Record<string, unknown>[] | undefined);
+  const cellFormats = xfs.map((xf) => {
+    const numFmtId = Number(xf.numFmtId);
+    const formatCode = numberFormats.get(numFmtId) ?? builtinNumberFormats.get(numFmtId) ?? "";
+    return {
+      formatCode,
+      isDate: isExcelDateFormat(numFmtId, formatCode)
+    };
+  });
+  return { date1904, cellFormats };
+}
+
+function readWorkbookDate1904(zip: Record<string, Uint8Array>): boolean {
+  const workbookXml = zip["xl/workbook.xml"];
+  if (!workbookXml) {
+    return false;
+  }
+  const parsed = xmlParser.parse(Buffer.from(workbookXml).toString("utf8")) as Record<string, unknown>;
+  const workbook = (parsed.workbook ?? {}) as Record<string, unknown>;
+  const workbookPr = (workbook.workbookPr ?? {}) as Record<string, unknown>;
+  return workbookPr.date1904 === "1" || workbookPr.date1904 === 1 || workbookPr.date1904 === true;
+}
+
+function isExcelDateFormat(numFmtId: number, formatCode: string): boolean {
+  if (builtinDateFormatIds.has(numFmtId)) {
+    return true;
+  }
+  const normalized = formatCode
+    .replace(/"[^"]*"/g, "")
+    .replace(/\[[^\]]*]/g, "")
+    .replace(/\\./g, "")
+    .toLocaleLowerCase("zh-CN");
+  return /[dy]/.test(normalized) || normalized.includes("月") || normalized.includes("日") || normalized.includes("年");
 }
 
 function readSharedStrings(zip: Record<string, Uint8Array>): string[] {
@@ -485,13 +612,18 @@ function findFirstWorksheetPath(zip: Record<string, Uint8Array>): string {
   return worksheet;
 }
 
-function readCellValue(cell: Record<string, unknown>, sharedStrings: readonly string[]): string {
+function readCellValue(cell: Record<string, unknown>, sharedStrings: readonly string[], styles: XlsxStyles): string {
   const rawValue = cellText(cell.v);
   if (cell.t === "s") {
     return sharedStrings[Number(rawValue)] ?? "";
   }
   if (cell.t === "inlineStr") {
     return cellText(cell.is);
+  }
+  const styleIndex = Number(cell.s);
+  const format = Number.isFinite(styleIndex) ? styles.cellFormats[styleIndex] : undefined;
+  if (format?.isDate) {
+    return excelSerialDateLabel(rawValue, styles.date1904) ?? rawValue;
   }
   return rawValue;
 }

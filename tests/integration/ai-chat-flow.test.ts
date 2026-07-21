@@ -1402,6 +1402,71 @@ describe("AI chat flow", () => {
     db.close();
   });
 
+  it("can send external Book sync messages without local chapter tools or inferred chapter context", async () => {
+    let capturedInput: unknown = null;
+    const chatGenerator: AiChatGenerator = {
+      async sendAgentMessageStream(input) {
+        capturedInput = input;
+        return {
+          role: "assistant",
+          content: "已收到外部同步内容。",
+          createdAt: "2026-05-21T00:00:00.000Z"
+        };
+      }
+    };
+    const { aiTaskRepo, chapterRepo, chatRepo, db, projectService, scratchRepo } = createServices();
+    const { project, initialChapter } = projectService.createProject({ name: "举足无措" });
+    const repo = chapterRepo(project.id);
+    repo.rename(initialChapter.id, "第48章", new Date().toISOString());
+    repo.saveContent(initialChapter.id, emptyChapterContent, "本地第48章正文，不应被外部同步自动读取。", 20, 0, "2026-05-21", new Date().toISOString());
+    const aiTaskService = new AiTaskService(aiTaskRepo, undefined, chatGenerator, chatRepo, scratchRepo, chapterRepo);
+    const session = aiTaskService.getChatSession({ projectId: project.id });
+    chatRepo(project.id).createMessage({
+      projectId: project.id,
+      sessionId: session.id,
+      role: "user",
+      content: "最近对话原文不应进入同步请求。",
+      action: null
+    });
+    const sendWithoutLocalTools = aiTaskService.sendChatMessageStream.bind(aiTaskService) as unknown as (
+      input: Parameters<AiTaskService["sendChatMessageStream"]>[0],
+      handlers: Parameters<AiTaskService["sendChatMessageStream"]>[1],
+      options: { readonly allowTools: false; readonly allowAutoChapterContext: false; readonly allowActions: false; readonly includeHistory: false }
+    ) => ReturnType<AiTaskService["sendChatMessageStream"]>;
+
+    await sendWithoutLocalTools(
+      {
+        requestId: "external_book_sync_no_local_read",
+        projectId: project.id,
+        sessionId: session.id,
+        message: [
+          "【外部写作软件同步检查】",
+          "当前项目最新章节：第48章",
+          "本批缺失章节：第49章 - 第51章",
+          "## 当前项目最新章在 .Book 中的对应内容：第48章",
+          ".Book 里的第48章正文。",
+          "## 缺失章节：第49章",
+          "第49章新增正文。",
+          "## 缺失章节：第50章",
+          "第50章新增正文。",
+          "## 缺失章节：第51章",
+          "第51章新增正文。"
+        ].join("\n")
+      },
+      {},
+      { allowTools: false, allowAutoChapterContext: false, allowActions: false, includeHistory: false }
+    );
+
+    expect(capturedInput).toMatchObject({
+      history: [],
+      tools: []
+    });
+    expect(JSON.stringify(capturedInput)).not.toContain("本地第48章正文");
+    expect(JSON.stringify(capturedInput)).not.toContain("最近对话原文");
+
+    db.close();
+  });
+
   it("does not run the legacy planner before the tool-call agent for natural short-range requests", async () => {
     const capturedInputs: unknown[] = [];
     let plannerCalled = false;

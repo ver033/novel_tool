@@ -32,7 +32,10 @@ import {
   scratchDeleteInputSchema,
   scratchListInputSchema,
   scratchUpdateInputSchema,
-  settingsSaveInputSchema
+  settingsSaveInputSchema,
+  startupLaunchUpdateInputSchema,
+  usageAnalyticsRecordEventInputSchema,
+  usageAnalyticsUpdateSettingsInputSchema
 } from "../../src/main/shared/schemas";
 
 const rootDir = process.cwd();
@@ -59,6 +62,17 @@ describe("phase 2 ipc schemas", () => {
     });
     expect(parseIpcPayload(settingsSaveInputSchema, { editor: { fontSize: 18, lineHeight: 2, autosaveMs: 1000 } })).toMatchObject({
       editor: { fontSize: 18, lineHeight: 2, autosaveMs: 1000 }
+    });
+    expect(parseIpcPayload(usageAnalyticsRecordEventInputSchema, { eventType: "page_active", feature: "writing", durationMs: 60000 })).toEqual({
+      eventType: "page_active",
+      feature: "writing",
+      durationMs: 60000
+    });
+    expect(parseIpcPayload(usageAnalyticsUpdateSettingsInputSchema, { automaticReportsEnabled: false })).toEqual({
+      automaticReportsEnabled: false
+    });
+    expect(parseIpcPayload(startupLaunchUpdateInputSchema, { enabled: true })).toEqual({
+      enabled: true
     });
     expect(
       parseIpcPayload(settingsSaveInputSchema, {
@@ -221,6 +235,10 @@ describe("phase 2 ipc schemas", () => {
       "IPC payload validation failed"
     );
     expect(() => parseIpcPayload(settingsSaveInputSchema, { provider: { apiKey: "secret" } })).toThrow("IPC payload validation failed");
+    expect(() => parseIpcPayload(usageAnalyticsRecordEventInputSchema, { eventType: "page_active", feature: "writing", rawText: "正文" })).toThrow(
+      "IPC payload validation failed"
+    );
+    expect(() => parseIpcPayload(usageAnalyticsUpdateSettingsInputSchema, {})).toThrow("IPC payload validation failed");
   });
 
   it("does not leave phase 2 preload namespaces with untyped unknown input payloads", () => {

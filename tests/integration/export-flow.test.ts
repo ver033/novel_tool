@@ -107,6 +107,112 @@ describe("TXT export flow", () => {
     db.close();
   });
 
+  it("exports a custom inclusive chapter range in chapter order", () => {
+    const { db, dir, projectService, exporter } = createExporter();
+    const { project, initialChapter } = projectService.createProject({ name: "归途" });
+    const chapterRepo = new ChapterRepository(projectService.getProjectDatabaseForProject(project.id));
+    chapterRepo.saveContent(
+      initialChapter.id,
+      { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "第一章正文。" }] }] },
+      "第一章正文。",
+      countWritingUnits("第一章正文。"),
+      0,
+      new Date().toISOString().slice(0, 10),
+      new Date().toISOString()
+    );
+    const secondChapter = chapterRepo.create({
+      id: "chapter_second_range",
+      projectId: project.id,
+      title: "第2章 夜行",
+      volumeTitle: "第一卷",
+      sortOrder: 1,
+      contentJson: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "第二章正文。" }] }] },
+      plainText: "第二章正文。",
+      wordCount: countWritingUnits("第二章正文。"),
+      dailyWordCount: 0,
+      dailyWordCountDate: null,
+      targetWordCount: null,
+      status: "draft",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    });
+    const thirdChapter = chapterRepo.create({
+      id: "chapter_third_range",
+      projectId: project.id,
+      title: "第3章 归来",
+      volumeTitle: "第一卷",
+      sortOrder: 2,
+      contentJson: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "第三章正文。" }] }] },
+      plainText: "第三章正文。",
+      wordCount: countWritingUnits("第三章正文。"),
+      dailyWordCount: 0,
+      dailyWordCountDate: null,
+      targetWordCount: null,
+      status: "draft",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    });
+
+    const filePath = join(dir, "归途-range.txt");
+    const result = exporter.exportTxt({
+      projectId: project.id,
+      filePath,
+      range: {
+        type: "chapter_range",
+        fromChapterId: secondChapter.id,
+        toChapterId: thirdChapter.id
+      },
+      includeChapterTitles: true
+    });
+
+    expect(result).toMatchObject({
+      filePath,
+      chapterCount: 2,
+      wordCount: secondChapter.wordCount + thirdChapter.wordCount
+    });
+    expect(readFileSync(filePath, "utf8")).toBe("第2章 夜行\n\n第二章正文。\n\n第3章 归来\n\n第三章正文。\n");
+    expect(readFileSync(filePath, "utf8")).not.toContain("第一章正文");
+
+    db.close();
+  });
+
+  it("rejects invalid custom chapter ranges", () => {
+    const { db, dir, projectService, exporter } = createExporter();
+    const { project, initialChapter } = projectService.createProject({ name: "归途" });
+    const chapterRepo = new ChapterRepository(projectService.getProjectDatabaseForProject(project.id));
+    const secondChapter = chapterRepo.create({
+      id: "chapter_second_invalid_range",
+      projectId: project.id,
+      title: "第2章 夜行",
+      volumeTitle: "第一卷",
+      sortOrder: 1,
+      contentJson: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "第二章正文。" }] }] },
+      plainText: "第二章正文。",
+      wordCount: countWritingUnits("第二章正文。"),
+      dailyWordCount: 0,
+      dailyWordCountDate: null,
+      targetWordCount: null,
+      status: "draft",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    });
+
+    expect(() =>
+      exporter.exportTxt({
+        projectId: project.id,
+        filePath: join(dir, "归途-invalid-range.txt"),
+        range: {
+          type: "chapter_range",
+          fromChapterId: secondChapter.id,
+          toChapterId: initialChapter.id
+        },
+        includeChapterTitles: true
+      })
+    ).toThrow("起始章节不能晚于结束章节");
+
+    db.close();
+  });
+
   it("rejects empty projects in the exporter even when IPC is called directly", () => {
     const { db, dir, projectService, exporter } = createExporter();
     const { project, initialChapter } = projectService.createProject({ name: "空项目" });

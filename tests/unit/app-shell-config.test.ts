@@ -18,6 +18,16 @@ describe("app shell configuration", () => {
     expect(mainSource).toContain("minHeight: 760");
   });
 
+  it("keeps no-tray hidden startup recoverable through the single-instance entry point", () => {
+    const mainSource = readRepoFile("src/main/index.ts");
+
+    expect(mainSource).toContain("requestSingleInstanceLock");
+    expect(mainSource).toContain('"second-instance"');
+    expect(mainSource).toContain("isNoTrayHiddenStartupLaunch");
+    expect(mainSource).toContain("createMainWindow({ show: false })");
+    expect(mainSource).toContain("windowsTrayBackgroundController.ensureTray");
+  });
+
   it("keeps package metadata aligned with the current release version", () => {
     const packageJson = JSON.parse(readRepoFile("package.json")) as { version?: string };
     const packageLock = JSON.parse(readRepoFile("package-lock.json")) as {
@@ -25,8 +35,8 @@ describe("app shell configuration", () => {
       packages?: { "": { version?: string } };
     };
 
-    expect(packageJson.version).toBe("1.6.0");
-    expect(packageLock.version).toBe("1.6.0");
-    expect(packageLock.packages?.[""].version).toBe("1.6.0");
+    expect(packageJson.version).toBe("1.8.0");
+    expect(packageLock.version).toBe("1.8.0");
+    expect(packageLock.packages?.[""].version).toBe("1.8.0");
   });
 });

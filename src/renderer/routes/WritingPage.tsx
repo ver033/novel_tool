@@ -250,6 +250,7 @@ type WritingPageProps = {
   readonly onOpenFloatingAiChat: () => void;
   readonly onOpenFloatingPanel: (kind: FloatingPanelKind, chapterId?: string | null, scratchNoteId?: string | null, outlineTab?: OutlineFloatingTab) => void;
   readonly onOpenFloatingScratchpad: (chapterId?: string | null, scratchNoteId?: string | null) => void;
+  readonly onOpenChapterReview: () => void;
   readonly onOpenOutline: () => void;
   readonly onOpenRelationshipGraph: () => void;
   readonly onOpenWritingGoals: () => void;
@@ -299,6 +300,7 @@ export function WritingPage({
   onOpenFloatingAiChat,
   onOpenFloatingPanel,
   onOpenFloatingScratchpad,
+  onOpenChapterReview,
   onOpenOutline,
   onOpenRelationshipGraph,
   onOpenWritingGoals,
@@ -591,6 +593,7 @@ export function WritingPage({
     () => flushBeforeNavigation(onOpenRelationshipGraph),
     [flushBeforeNavigation, onOpenRelationshipGraph]
   );
+  const handleOpenOutlinePage = useCallback(() => flushBeforeNavigation(onOpenOutline), [flushBeforeNavigation, onOpenOutline]);
   const handleWelcome = useCallback(() => {
     setConfirmWelcomeOpen(true);
   }, []);
@@ -612,6 +615,10 @@ export function WritingPage({
         flushBeforeNavigation(onOpenOutline);
         return;
       }
+      if (module === "chapterReview") {
+        flushBeforeNavigation(onOpenChapterReview);
+        return;
+      }
       if (module === "goals") {
         flushBeforeNavigation(onOpenWritingGoals);
         return;
@@ -620,7 +627,7 @@ export function WritingPage({
         handleSettings();
       }
     },
-    [flushBeforeNavigation, handleOpenRelationshipGraph, handleSettings, onOpenOutline, onOpenWritingGoals]
+    [flushBeforeNavigation, handleOpenRelationshipGraph, handleSettings, onOpenChapterReview, onOpenOutline, onOpenWritingGoals]
   );
   const handleFocusModeToggle = useCallback(() => {
     setFocusMode((current) => !current);
@@ -1039,6 +1046,7 @@ export function WritingPage({
                 onContentSaved={editorStore.markContentSaved}
                 onMinimizePanel={onMinimizeFloatingPanel}
                 onMovePanel={onMoveFloatingPanel}
+                onOpenOutline={handleOpenOutlinePage}
                 onOpenSettings={handleSettings}
                 onRaisePanel={onRaiseFloatingPanel}
                 onResetPanel={onResetFloatingPanel}
@@ -1072,7 +1080,7 @@ export function WritingPage({
                     closeEditorContextMenu();
                   }}
                   onOpenBookOutline={() => {
-                    onOpenFloatingPanel("outline", null, null, "book");
+                    onOpenFloatingPanel("outline", activeChapterId, null, "book");
                     closeEditorContextMenu();
                   }}
                   onOpenOutline={() => {

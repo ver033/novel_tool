@@ -26,6 +26,7 @@ import {
 type CharacterRelationshipGraphPageProps = {
   readonly currentProject: ProjectRecord | null;
   readonly onOpenChapter: (chapterId: string) => void;
+  readonly onOpenChapterReview: () => void;
   readonly onOpenOutline: () => void;
   readonly onOpenSettings: () => void;
   readonly onOpenWriting: () => void;
@@ -45,6 +46,7 @@ const defaultFilters: RelationshipGraphFilterState = {
 export function CharacterRelationshipGraphPage({
   currentProject,
   onOpenChapter,
+  onOpenChapterReview,
   onOpenOutline,
   onOpenSettings,
   onOpenWriting,
@@ -190,6 +192,10 @@ export function CharacterRelationshipGraphPage({
     }
     if (module === "goals") {
       onOpenWritingGoals();
+      return;
+    }
+    if (module === "chapterReview") {
+      onOpenChapterReview();
       return;
     }
     if (module === "outline") {
@@ -432,6 +438,14 @@ export function CharacterRelationshipGraphPage({
                       projectId: projectId ?? "",
                       ...input,
                       aliases: [...input.aliases]
+                    })
+                  )
+                }
+                onUpdateAuthorRelationship={(input) =>
+                  runAuthorMutation(() =>
+                    api.authorRelationship?.updateRelationship({
+                      projectId: projectId ?? "",
+                      ...input
                     })
                   )
                 }

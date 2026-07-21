@@ -145,6 +145,36 @@ export const chapterCreateSnapshotInputSchema = z
   })
   .strict();
 
+export const chapterReviewStartInputSchema = z
+  .object({
+    projectId: idSchema,
+    chapterIds: z.array(idSchema).min(1).max(200),
+    requestId: idSchema.optional()
+  })
+  .strict();
+
+export const chapterReviewCancelInputSchema = z
+  .object({
+    requestId: idSchema
+  })
+  .strict();
+
+export const chapterReviewListRunsInputSchema = z
+  .object({
+    projectId: idSchema,
+    limit: z.number().int().min(1).max(100).optional()
+  })
+  .strict();
+
+export const chapterReviewGetRunInputSchema = z
+  .object({
+    projectId: idSchema,
+    runId: idSchema
+  })
+  .strict();
+
+export const chapterReviewDeleteRunInputSchema = chapterReviewGetRunInputSchema;
+
 const localDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
 export const writingGoalStatusSchema = z.enum(["active", "paused", "completed", "archived"]);
@@ -274,6 +304,55 @@ export const chapterCacheBuildOrderSchema = z.enum(["latest_first", "front_to_ba
 export const cacheSettingsSchema = z
   .object({
     chapterCacheBuildOrder: chapterCacheBuildOrderSchema.optional()
+  })
+  .strict();
+
+export const usageAnalyticsEventTypeSchema = z.enum(["app_opened", "page_view", "page_active", "feature_used", "error"]);
+export const usageAnalyticsFeatureSchema = z.enum([
+  "app",
+  "welcome",
+  "writing",
+  "relationshipGraph",
+  "outline",
+  "chapterReview",
+  "writingGoals",
+  "settings",
+  "import",
+  "export",
+  "newProject",
+  "ai_task",
+  "ai_chat",
+  "scratchpad",
+  "summary_cache",
+  "relationship_graph",
+  "external_book_sync",
+  "shareable_export",
+  "txt_import",
+  "txt_export",
+  "error"
+]);
+
+export const usageAnalyticsRecordEventInputSchema = z
+  .object({
+    eventType: usageAnalyticsEventTypeSchema,
+    feature: usageAnalyticsFeatureSchema,
+    durationMs: z.number().int().min(0).max(24 * 60 * 60 * 1000).optional(),
+    occurredAt: nonEmptyString.max(80).optional()
+  })
+  .strict();
+
+export const usageAnalyticsUpdateSettingsInputSchema = z
+  .object({
+    automaticReportsEnabled: z.boolean().optional()
+  })
+  .strict()
+  .refine((value) => value.automaticReportsEnabled !== undefined, {
+    message: "at least one usage analytics setting is required"
+  });
+
+export const startupLaunchUpdateInputSchema = z
+  .object({
+    enabled: z.boolean()
   })
   .strict();
 
@@ -525,7 +604,7 @@ export const importConfirmTxtInputSchema = z
 
 export const outlineDaySegmentSchema = z.enum(["day", "night", "custom", "unknown"]);
 export const outlineEventStatusSchema = z.enum(["planned", "drafting", "written", "needs_revision", "done"]);
-export const outlineViewModeSchema = z.enum(["chapter", "timeline", "plotline"]);
+export const outlineViewModeSchema = z.enum(["chapter", "timeline", "plotline", "sheet"]);
 
 const outlineNullableIdSchema = idSchema.nullable().optional();
 const outlineText80Schema = z.string().trim().max(80);
@@ -701,7 +780,7 @@ export const outlineConfirmBulkImportInputSchema = z
   .object({
     projectId: idSchema,
     importBatchId: idSchema,
-    rows: z.array(outlineBulkImportPreviewRowSchema).min(1).max(1000)
+    rows: z.array(outlineBulkImportPreviewRowSchema).min(1).max(5000)
   })
   .strict();
 export const outlineUndoImportBatchInputSchema = z
@@ -710,6 +789,51 @@ export const outlineUndoImportBatchInputSchema = z
     importBatchId: idSchema
   })
   .strict();
+export const outlineClearImportedEventsInputSchema = outlineGetOverviewInputSchema;
+
+export const externalBookSyncStatusInputSchema = z
+  .object({
+    projectId: idSchema
+  })
+  .strict();
+
+export const externalBookSyncScanInputSchema = externalBookSyncStatusInputSchema
+  .extend({
+    requestId: idSchema.optional(),
+    mode: z.enum(["quick", "global", "directory"]),
+    directoryPath: z.string().trim().min(1).max(4096).optional()
+  })
+  .strict()
+  .refine((value) => value.mode !== "directory" || Boolean(value.directoryPath?.trim()), {
+    message: "directoryPath is required for directory scan",
+    path: ["directoryPath"]
+  });
+
+export const externalBookSyncCancelScanInputSchema = z
+  .object({
+    requestId: idSchema
+  })
+  .strict();
+
+export const externalBookSyncPreviewCandidateInputSchema = externalBookSyncStatusInputSchema
+  .extend({
+    candidateId: idSchema
+  })
+  .strict();
+
+export const externalBookSyncSendToAiInputSchema = externalBookSyncPreviewCandidateInputSchema
+  .extend({
+    chapterKeys: z.array(nonEmptyString.max(200)).min(1).max(80)
+  })
+  .strict();
+
+export const externalBookSyncForgetSourceInputSchema = externalBookSyncStatusInputSchema
+  .extend({
+    sourceId: idSchema
+  })
+  .strict();
+
+export const externalBookSyncClearSentHistoryInputSchema = externalBookSyncStatusInputSchema;
 
 export const exportSelectTxtFilePathInputSchema = z
   .object({
@@ -718,11 +842,22 @@ export const exportSelectTxtFilePathInputSchema = z
   })
   .strict();
 
+const exportTxtRangeSchema = z.union([
+  z.literal("all_chapters"),
+  z
+    .object({
+      type: z.literal("chapter_range"),
+      fromChapterId: idSchema,
+      toChapterId: idSchema
+    })
+    .strict()
+]);
+
 export const exportTxtInputSchema = z
   .object({
     projectId: idSchema,
     filePath: nonEmptyString.max(4096),
-    range: z.literal("all_chapters"),
+    range: exportTxtRangeSchema,
     includeChapterTitles: z.boolean()
   })
   .strict();
@@ -827,6 +962,14 @@ export const authorRelationshipCreateRelationshipInputSchema = z
     projectId: idSchema,
     sourceCharacterName: nonEmptyString.max(80),
     targetCharacterName: nonEmptyString.max(80),
+    sourceToTargetLabel: nonEmptyString.max(120),
+    targetToSourceLabel: z.string().trim().max(120).nullable().optional()
+  })
+  .strict();
+export const authorRelationshipUpdateRelationshipInputSchema = z
+  .object({
+    projectId: idSchema,
+    relationshipId: idSchema,
     sourceToTargetLabel: nonEmptyString.max(120),
     targetToSourceLabel: z.string().trim().max(120).nullable().optional()
   })

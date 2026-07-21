@@ -66,6 +66,41 @@ describe("summary index preload and IPC wiring", () => {
     expect(registerIpc).toMatch(/ipcChannels\.summary\.clearAndRetryBookCache[\s\S]*createValidatedIpcHandler/);
   });
 
+  it("exposes external Book sync scan and AI-send APIs through validated IPC", () => {
+    const types = readSource("src/main/shared/types.ts");
+    const schemas = readSource("src/main/shared/schemas.ts");
+    const preload = readSource("src/preload/api.ts");
+    const registerIpc = readSource("src/main/ipc/register-ipc.ts");
+    const externalIpc = readSource("src/main/ipc/external-book-sync-ipc.ts");
+
+    expect(types).toContain("ExternalBookSyncStatusInput");
+    expect(types).toContain("ExternalBookSyncScanResult");
+    expect(types).toContain('scan: "novelTool:externalBookSync:scan"');
+    expect(types).toContain('sendMissingChaptersToAi: "novelTool:externalBookSync:sendMissingChaptersToAi"');
+    expect(types).toContain('clearSentHistory: "novelTool:externalBookSync:clearSentHistory"');
+    expect(schemas).toContain("externalBookSyncScanInputSchema");
+    expect(schemas).toContain("externalBookSyncClearSentHistoryInputSchema");
+    expect(schemas).toContain("directoryPath is required for directory scan");
+    expect(preload).toContain("readonly externalBookSync");
+    expect(preload).toContain("subscribeScan: (requestId: string");
+    expect(preload).toContain("ipcChannels.externalBookSync.scanProgress");
+    expect(preload).toContain("sendMissingChaptersToAi: (input: ExternalBookSyncSendToAiInput)");
+    expect(preload).toContain("clearSentHistory: (input: ExternalBookSyncClearSentHistoryInput)");
+    expect(registerIpc).toContain("registerExternalBookSyncIpc(externalBookSyncService)");
+    expect(registerIpc).toContain("new ExternalBookSyncService");
+    expect(registerIpc).toContain('runDueExternalBookSync("startup")');
+    expect(registerIpc).toContain("EXTERNAL_BOOK_SYNC_INTERVAL_MS");
+    expect(registerIpc).toContain('runDueExternalBookSync("scheduled")');
+    expect(registerIpc).not.toContain('app.on("before-quit"');
+    expect(registerIpc).not.toContain('runDueExternalBookSync("shutdown")');
+    expect(registerIpc).not.toContain("EXTERNAL_BOOK_SYNC_SHUTDOWN_TIMEOUT_MS");
+    expect(externalIpc).toContain("createValidatedIpcHandler(externalBookSyncScanInputSchema");
+    expect(externalIpc).toContain("createValidatedIpcHandler(externalBookSyncClearSentHistoryInputSchema");
+    expect(externalIpc).toContain("ipcChannels.externalBookSync.scanDone");
+    expect(externalIpc).toContain("ipcChannels.externalBookSync.scanError");
+    expect(externalIpc).toContain("dialog.showOpenDialog");
+  });
+
   it("recovers stale running summary jobs once when a project becomes active", () => {
     const registerIpc = readSource("src/main/ipc/register-ipc.ts");
 

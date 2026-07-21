@@ -707,6 +707,127 @@ const migrations: readonly Migration[] = [
   },
   {
     version: 22,
+    name: "usage_analytics",
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS usage_events (
+          id TEXT PRIMARY KEY,
+          event_type TEXT NOT NULL CHECK (event_type IN ('app_opened', 'page_view', 'page_active', 'feature_used', 'error')),
+          feature TEXT NOT NULL,
+          duration_ms INTEGER,
+          occurred_at TEXT NOT NULL,
+          local_date TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_usage_events_local_date
+          ON usage_events(local_date, occurred_at);
+
+        CREATE TABLE IF NOT EXISTS usage_report_runs (
+          id TEXT PRIMARY KEY,
+          trigger_type TEXT NOT NULL CHECK (trigger_type IN ('automatic', 'manual')),
+          scheduled_slot_key TEXT,
+          scheduled_local_time TEXT,
+          status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed')),
+          snapshot_json TEXT,
+          report_text TEXT,
+          error TEXT,
+          requested_at TEXT NOT NULL,
+          completed_at TEXT
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_report_runs_slot
+          ON usage_report_runs(scheduled_slot_key)
+          WHERE scheduled_slot_key IS NOT NULL;
+
+        CREATE INDEX IF NOT EXISTS idx_usage_report_runs_requested
+          ON usage_report_runs(requested_at);
+      `);
+    }
+  },
+  {
+    version: 23,
+    name: "usage_writing_updates",
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS usage_writing_updates (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          project_name TEXT NOT NULL,
+          chapter_id TEXT NOT NULL,
+          chapter_title TEXT NOT NULL,
+          chapter_sort_order INTEGER NOT NULL,
+          source TEXT NOT NULL CHECK (source IN ('manual', 'ai_apply', 'system')),
+          previous_word_count INTEGER NOT NULL,
+          next_word_count INTEGER NOT NULL,
+          word_delta INTEGER NOT NULL,
+          occurred_at TEXT NOT NULL,
+          local_date TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_usage_writing_updates_local_date
+          ON usage_writing_updates(local_date, occurred_at);
+      `);
+    }
+  },
+  {
+    version: 24,
+    name: "usage_analytics_schema_repair",
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS usage_events (
+          id TEXT PRIMARY KEY,
+          event_type TEXT NOT NULL CHECK (event_type IN ('app_opened', 'page_view', 'page_active', 'feature_used', 'error')),
+          feature TEXT NOT NULL,
+          duration_ms INTEGER,
+          occurred_at TEXT NOT NULL,
+          local_date TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_usage_events_local_date
+          ON usage_events(local_date, occurred_at);
+
+        CREATE TABLE IF NOT EXISTS usage_report_runs (
+          id TEXT PRIMARY KEY,
+          trigger_type TEXT NOT NULL CHECK (trigger_type IN ('automatic', 'manual')),
+          scheduled_slot_key TEXT,
+          scheduled_local_time TEXT,
+          status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed')),
+          snapshot_json TEXT,
+          report_text TEXT,
+          error TEXT,
+          requested_at TEXT NOT NULL,
+          completed_at TEXT
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_report_runs_slot
+          ON usage_report_runs(scheduled_slot_key)
+          WHERE scheduled_slot_key IS NOT NULL;
+
+        CREATE INDEX IF NOT EXISTS idx_usage_report_runs_requested
+          ON usage_report_runs(requested_at);
+
+        CREATE TABLE IF NOT EXISTS usage_writing_updates (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          project_name TEXT NOT NULL,
+          chapter_id TEXT NOT NULL,
+          chapter_title TEXT NOT NULL,
+          chapter_sort_order INTEGER NOT NULL,
+          source TEXT NOT NULL CHECK (source IN ('manual', 'ai_apply', 'system')),
+          previous_word_count INTEGER NOT NULL,
+          next_word_count INTEGER NOT NULL,
+          word_delta INTEGER NOT NULL,
+          occurred_at TEXT NOT NULL,
+          local_date TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_usage_writing_updates_local_date
+          ON usage_writing_updates(local_date, occurred_at);
+      `);
+    }
+  },
+  {
+    version: 25,
     name: "author_outline_planning",
     up(db) {
       db.exec(`
@@ -794,6 +915,50 @@ const migrations: readonly Migration[] = [
       `);
     }
   },
+  {
+    version: 26,
+    name: "chapter_review",
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS chapter_review_runs (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          chapter_ids_json TEXT NOT NULL,
+          status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed')),
+          requested_at TEXT NOT NULL,
+          completed_at TEXT,
+          error TEXT,
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_chapter_review_runs_project_requested
+          ON chapter_review_runs(project_id, requested_at DESC);
+
+        CREATE TABLE IF NOT EXISTS chapter_review_chapters (
+          id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL,
+          project_id TEXT NOT NULL,
+          chapter_id TEXT NOT NULL,
+          chapter_title TEXT NOT NULL,
+          chapter_sort_order INTEGER NOT NULL,
+          summary TEXT NOT NULL,
+          readability_score INTEGER NOT NULL CHECK (readability_score BETWEEN 1 AND 5),
+          ai_tone_risk TEXT NOT NULL CHECK (ai_tone_risk IN ('none', 'low', 'medium', 'high')),
+          issues_json TEXT NOT NULL,
+          issue_count INTEGER NOT NULL DEFAULT 0,
+          chunk_count INTEGER NOT NULL DEFAULT 1,
+          reviewed_at TEXT NOT NULL,
+          UNIQUE(run_id, chapter_id),
+          FOREIGN KEY (run_id) REFERENCES chapter_review_runs(id) ON DELETE CASCADE,
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+          FOREIGN KEY (chapter_id) REFERENCES chapters(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_chapter_review_chapters_run_order
+          ON chapter_review_chapters(run_id, chapter_sort_order);
+      `);
+    }
+  },
 ];
 
 function ensureMigrationRecord(db: SqliteDatabase, migration: Migration): void {
@@ -805,7 +970,7 @@ function ensureMigrationRecord(db: SqliteDatabase, migration: Migration): void {
 }
 
 function repairRequiredSchema(db: SqliteDatabase): void {
-  const outlineMigration = migrations.find((migration) => migration.version === 22);
+  const outlineMigration = migrations.find((migration) => migration.name === "author_outline_planning");
   if (!outlineMigration) {
     return;
   }

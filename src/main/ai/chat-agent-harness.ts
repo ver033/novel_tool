@@ -635,14 +635,16 @@ export async function runChatAgentLoop(input: ChatAgentLoopInput, handlers: Chat
         maxCompletionTokens: input.tokenBudget.maxOutputTokens,
         temperature: isProofreadRequest ? CHAT_AGENT_PROOFREAD_TEMPERATURE : CHAT_AGENT_DEFAULT_TEMPERATURE,
         toolChoice:
-          iteration === 0 && shouldForceWritingTool
-            ? {
-                type: "function",
-                function: {
-                  name: "run_writing_operation"
+          preparedInput.tools.length === 0
+            ? "none"
+            : iteration === 0 && shouldForceWritingTool
+              ? {
+                  type: "function",
+                  function: {
+                    name: "run_writing_operation"
+                  }
                 }
-              }
-            : undefined,
+              : undefined,
         reasoning:
           input.reasoning ??
           buildReasoningConfig(input.tokenBudget, {

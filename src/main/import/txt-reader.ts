@@ -10,6 +10,11 @@ export type TxtReadResult = {
   readonly encoding: string;
 };
 
+export type TextReadOptions = {
+  readonly label?: string;
+  readonly maxBytes?: number;
+};
+
 function normalizeEncoding(value: string | null | undefined): string {
   if (!value) {
     return "utf8";
@@ -27,10 +32,12 @@ function normalizeEncoding(value: string | null | undefined): string {
   return value;
 }
 
-export function readTxtFile(filePath: string): TxtReadResult {
+export function readTextFile(filePath: string, options: TextReadOptions = {}): TxtReadResult {
+  const label = options.label ?? "文本文件";
+  const maxBytes = options.maxBytes ?? MAX_TXT_IMPORT_BYTES;
   const stats = statSync(filePath);
-  if (stats.size > MAX_TXT_IMPORT_BYTES) {
-    throw new Error("TXT 文件过大，请选择 20MB 以内的文本文件。");
+  if (stats.size > maxBytes) {
+    throw new Error(`${label}过大，请选择 ${Math.floor(maxBytes / 1024 / 1024)}MB 以内的文本文件。`);
   }
 
   const buffer = readFileSync(filePath);
@@ -41,4 +48,8 @@ export function readTxtFile(filePath: string): TxtReadResult {
     text,
     encoding
   };
+}
+
+export function readTxtFile(filePath: string): TxtReadResult {
+  return readTextFile(filePath, { label: "TXT 文件", maxBytes: MAX_TXT_IMPORT_BYTES });
 }

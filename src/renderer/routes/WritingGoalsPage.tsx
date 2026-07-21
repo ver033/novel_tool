@@ -27,6 +27,7 @@ import { animateGoalSaved, animateWritingGoalCalendar, animateWritingGoalDashboa
 
 type WritingGoalsPageProps = {
   readonly currentProject: ProjectRecord | null;
+  readonly onOpenChapterReview: () => void;
   readonly onOpenOutline: () => void;
   readonly onOpenRelationshipGraph: () => void;
   readonly onOpenSettings: () => void;
@@ -220,6 +221,7 @@ function DayDetailPanel({ detail }: { readonly detail: WritingDayDetail | null }
 
 export function WritingGoalsPage({
   currentProject,
+  onOpenChapterReview,
   onOpenOutline,
   onOpenRelationshipGraph,
   onOpenSettings,
@@ -302,6 +304,10 @@ export function WritingGoalsPage({
     }
     if (module === "outline") {
       onOpenOutline();
+      return;
+    }
+    if (module === "chapterReview") {
+      onOpenChapterReview();
       return;
     }
     if (module === "settings") {

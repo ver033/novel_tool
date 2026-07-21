@@ -9,6 +9,7 @@ import { runMigrations } from "../../src/main/db/migrations";
 import { ChapterRepository } from "../../src/main/db/repositories/chapter-repo";
 import { ProjectRepository } from "../../src/main/db/repositories/project-repo";
 import { WritingGoalRepository } from "../../src/main/db/repositories/writing-goal-repo";
+import { countWritingUnits } from "../../src/main/shared/text";
 import { WritingGoalService } from "../../src/main/writing-goals/writing-goal-service";
 import { createTiptapDocumentFromPlainText } from "../../src/renderer/editor/tiptap/converters";
 
@@ -137,6 +138,60 @@ describe("chapter save and edit flow", () => {
     expect(service.getContent({ projectId: "project_1", chapterId: second.id }).plainText).toBe("第二章不应被修改");
   });
 
+  it("records a lightweight chapter update event after a successful content change", () => {
+    const db = createTestDatabase();
+    const projectRepo = new ProjectRepository(db);
+    const chapterRepo = new ChapterRepository(db);
+    createProject(projectRepo, "project_1");
+    const chapter = createChapter(chapterRepo, { chapterId: "chapter_1", projectId: "project_1", title: "第1章", text: "旧正文" });
+    const updateRecorder = {
+      recordChapterContentUpdate: vi.fn()
+    };
+    const service = new ChapterService(chapterRepo, { contentUpdateRecorder: updateRecorder });
+
+    const saved = service.saveContent({
+      projectId: "project_1",
+      chapterId: chapter.id,
+      contentJson: createTiptapDocumentFromPlainText("新正文\n\n第二段"),
+      plainText: "新正文\n\n第二段",
+      wordCount: 999
+    });
+
+    expect(updateRecorder.recordChapterContentUpdate).toHaveBeenCalledWith({
+      projectId: "project_1",
+      chapterId: "chapter_1",
+      chapterTitle: "第1章",
+      chapterSortOrder: 0,
+      source: "manual",
+      previousWordCount: countWritingUnits("旧正文"),
+      nextWordCount: countWritingUnits("新正文\n\n第二段"),
+      updatedAt: saved.contentUpdatedAt
+    });
+    expect(JSON.stringify(updateRecorder.recordChapterContentUpdate.mock.calls[0])).not.toContain("新正文");
+  });
+
+  it("does not record a chapter update event when saved text is unchanged", () => {
+    const db = createTestDatabase();
+    const projectRepo = new ProjectRepository(db);
+    const chapterRepo = new ChapterRepository(db);
+    createProject(projectRepo, "project_1");
+    const chapter = createChapter(chapterRepo, { chapterId: "chapter_1", projectId: "project_1", title: "第1章", text: "旧正文" });
+    const updateRecorder = {
+      recordChapterContentUpdate: vi.fn()
+    };
+    const service = new ChapterService(chapterRepo, { contentUpdateRecorder: updateRecorder });
+
+    service.saveContent({
+      projectId: "project_1",
+      chapterId: chapter.id,
+      contentJson: createTiptapDocumentFromPlainText("旧正文"),
+      plainText: "旧正文",
+      wordCount: 999
+    });
+
+    expect(updateRecorder.recordChapterContentUpdate).not.toHaveBeenCalled();
+  });
+
   it("recomputes saved word count in main instead of trusting the renderer payload", () => {
     const db = createTestDatabase();
     const projectRepo = new ProjectRepository(db);
@@ -153,8 +208,8 @@ describe("chapter save and edit flow", () => {
       wordCount: 999
     });
 
-    expect(saved.wordCount).toBe(7);
-    expect(service.getContent({ projectId: "project_1", chapterId: chapter.id }).wordCount).toBe(7);
+    expect(saved.wordCount).toBe(8);
+    expect(service.getContent({ projectId: "project_1", chapterId: chapter.id }).wordCount).toBe(8);
   });
 
   it("normalizes legacy stored word counts when reading chapters", () => {
@@ -166,8 +221,10 @@ describe("chapter save and edit flow", () => {
     db.prepare("UPDATE chapters SET word_count = ? WHERE id = ?").run(999, chapter.id);
     const service = new ChapterService(chapterRepo);
 
-    expect(service.getContent({ projectId: "project_1", chapterId: chapter.id }).wordCount).toBe(6);
-    expect(service.listChapters({ projectId: "project_1" })[0]?.wordCount).toBe(6);
+    expect(service.getContent({ projectId: "project_1", chapterId: chapter.id }).wordCount).toBe(7);
+    expect(service.listChapters({ projectId: "project_1" })[0]?.wordCount).toBe(7);
+    expect(chapterRepo.getProjectWordCount("project_1")).toBe(7);
+    expect(new WritingGoalRepository(db).getProjectWordCount("project_1")).toBe(7);
   });
 
   it("self-heals already-open legacy chapter databases before saving content", () => {

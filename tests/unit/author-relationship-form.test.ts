@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildAuthorRelationshipCreateInput } from "../../src/renderer/relationship-graph/author-relationship-form";
+import { buildAuthorRelationshipCreateInput, buildAuthorRelationshipUpdateInput } from "../../src/renderer/relationship-graph/author-relationship-form";
 
 describe("author relationship form payload", () => {
   it("keeps mutual relationships bidirectional when the reverse field is not edited", () => {
@@ -46,6 +46,21 @@ describe("author relationship form payload", () => {
     ).toMatchObject({
       sourceToTargetLabel: "主家与长工",
       targetToSourceLabel: null
+    });
+  });
+
+  it("builds editable relationship labels without changing relationship endpoints", () => {
+    expect(
+      buildAuthorRelationshipUpdateInput({
+        relationshipId: "author_relationship_1",
+        sourceToTargetLabel: " 父亲 ",
+        targetToSourceLabel: " 儿子 ",
+        sameRelationBothWays: false
+      })
+    ).toEqual({
+      relationshipId: "author_relationship_1",
+      sourceToTargetLabel: "父亲",
+      targetToSourceLabel: "儿子"
     });
   });
 });

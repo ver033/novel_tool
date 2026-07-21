@@ -7,7 +7,7 @@ import {
   UploadSimple,
   X
 } from "@phosphor-icons/react";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { RelationshipGraphResult, RelationshipGraphSourceStatus } from "../../main/shared/relationship-graph";
 import type {
   AiProviderSettingsState,
@@ -20,13 +20,16 @@ import type {
   SettingsSaveInput,
   SettingsState,
   SettingsTestConnectionInput,
+  StartupLaunchStatus,
   SummaryArcCacheDetail,
   SummaryArcCacheEntry,
   SummaryBookCacheDetail,
   SummaryChapterCacheDetail,
   SummaryChapterCacheEntry,
   SummaryIndexStatus,
-  TaskPromptPreset
+  TaskPromptPreset,
+  UsageAnalyticsReportRun,
+  UsageAnalyticsStatus
 } from "../../main/shared/types";
 import { Button } from "../components/Button";
 import { IconButton } from "../components/IconButton";
@@ -35,7 +38,7 @@ import { Textarea } from "../components/Textarea";
 import { RelationshipGraphCachePanel } from "../relationship-graph/RelationshipGraphCachePanel";
 import { getNovelToolApi } from "../state/app-store";
 
-export type SettingsCategory = "通用" | "编辑器" | "AI 服务" | "提示词预设" | "章节索引缓存" | "导入导出" | "备份与数据" | "快捷键";
+export type SettingsCategory = "编辑器" | "AI 服务" | "提示词预设" | "章节索引缓存" | "导入导出" | "实验功能" | "备份与数据" | "快捷键";
 
 type SettingsPageProps = {
   readonly activeCategory: SettingsCategory;
@@ -78,7 +81,7 @@ type SettingsContentProps = {
   readonly onSaveSettings: () => void;
 };
 
-const visibleCategories = ["AI 服务", "提示词预设", "章节索引缓存", "导入导出"] as const satisfies readonly SettingsCategory[];
+const visibleCategories = ["AI 服务", "提示词预设", "章节索引缓存", "导入导出", "实验功能"] as const satisfies readonly SettingsCategory[];
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 
 const taskPromptPresetLabels: Record<TaskPromptPreset["taskType"], string> = {
@@ -99,7 +102,8 @@ const categoryIcons: Record<VisibleSettingsCategory, ReactNode> = {
   "AI 服务": <Robot size={20} />,
   提示词预设: <Sliders size={20} />,
   章节索引缓存: <Database size={20} />,
-  导入导出: <UploadSimple size={20} />
+  导入导出: <UploadSimple size={20} />,
+  实验功能: <GearSix size={20} />
 };
 
 function isVisibleCategory(category: SettingsCategory): category is VisibleSettingsCategory {
@@ -229,7 +233,7 @@ function formatCacheState(entry: Pick<SummaryChapterCacheEntry, "cacheState"> | 
   return labels[entry.cacheState];
 }
 
-function formatDateTime(value: string | null): string {
+function formatDateTime(value: string | null | undefined): string {
   if (!value) {
     return "无";
   }
@@ -555,10 +559,10 @@ export function SettingsPage({ activeCategory, currentProject, onCategoryChange,
         </nav>
         <section className="settings-content">
           <SettingsContent
-             apiKeyConfigured={apiKeyConfigured}
-             category={activeVisibleCategory}
-             currentProject={currentProject}
-             form={form}
+            apiKeyConfigured={apiKeyConfigured}
+            category={activeVisibleCategory}
+            currentProject={currentProject}
+            form={form}
             isBusy={isBusy}
             modelListLoaded={modelListLoaded}
             modelOptions={modelOptions}
@@ -569,7 +573,7 @@ export function SettingsPage({ activeCategory, currentProject, onCategoryChange,
             onSaveSettings={() => void saveSettings()}
             onTestConnection={testConnection}
           />
-          {activeVisibleCategory !== "章节索引缓存" && activeVisibleCategory !== "导入导出" ? (
+          {activeVisibleCategory !== "章节索引缓存" && activeVisibleCategory !== "导入导出" && activeVisibleCategory !== "实验功能" ? (
             <>
               <div className="notice">
                 <span>你的作品和设置仅保存在本地设备，不会默认同步到云端。只有在你主动使用 AI 功能时，相关内容才会发送到所选 AI 服务。</span>
@@ -651,7 +655,7 @@ function SettingsContent({
 
     return (
       <div className="settings-grid">
-        <div className="settings-card">
+        <div className="settings-card wide">
           <h3>AI 服务连接</h3>
           <p className="muted">配置大语言模型服务，用于润色、扩写、校对、续写。</p>
           <div className="form-grid">
@@ -812,14 +816,237 @@ function SettingsContent({
   }
 
   if (category === "导入导出") {
-    return <ShareableProjectExportPane currentProject={currentProject} />;
+    return <ImportExportSettingsPane currentProject={currentProject} />;
+  }
+
+  if (category === "实验功能") {
+    return <ExperimentalSettingsPane apiKeyConfigured={apiKeyConfigured} currentProject={currentProject} />;
   }
 
   return null;
 }
 
+function StartupLaunchSettingsPane() {
+  const api = useMemo(getNovelToolApi, []);
+  const [status, setStatus] = useState<StartupLaunchStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function loadStatus(): Promise<void> {
+    try {
+      setError(null);
+      setStatus(await api.startupLaunch.getStatus());
+    } catch (reason) {
+      setError(formatError(reason));
+    }
+  }
+
+  useEffect(() => {
+    void loadStatus();
+  }, [api]);
+
+  async function updateStartupLaunch(enabled: boolean): Promise<void> {
+    setBusy(true);
+    setError(null);
+    try {
+      setStatus(await api.startupLaunch.updateSettings({ enabled }));
+    } catch (reason) {
+      setError(formatError(reason));
+      await loadStatus();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const enabled = Boolean(status?.enabled);
+
+  return (
+    <div className="settings-card wide">
+      <div className="detected-row">
+        <span>
+          <b>开机自启动</b>
+        </span>
+        <button
+          aria-label="开机自启动"
+          className={`toggle ${enabled ? "on" : ""}`}
+          disabled={!status || busy || !status.supported}
+          onClick={() => void updateStartupLaunch(!enabled)}
+          type="button"
+        />
+      </div>
+      {error ? <p className="settings-message error">{error}</p> : null}
+    </div>
+  );
+}
+
+type UsageAnalyticsSettingsPaneProps = {
+  readonly apiKeyConfigured: boolean;
+};
+
+type UsageAnalyticsErrorNoticeProps = {
+  readonly label: string;
+  readonly error: string;
+};
+
+function isUsageAnalyticsRateLimitError(error: string): boolean {
+  return (
+    error.includes("OpenRouter 请求失败 (429)") ||
+    error.includes("rate limited") ||
+    error.includes("Rate limit") ||
+    error.includes("Resource has been exhausted") ||
+    error.includes("限流")
+  );
+}
+
+function UsageAnalyticsErrorNotice({ label, error }: UsageAnalyticsErrorNoticeProps) {
+  const rateLimited = isUsageAnalyticsRateLimitError(error);
+  return (
+    <div className={rateLimited ? "usage-analytics-error-card rate-limited" : "usage-analytics-error-card"} role="status">
+      <b>{label}：{rateLimited ? "OpenRouter 请求被限流" : "产品使用分析失败"}</b>
+      <p>
+        {rateLimited
+          ? "上游模型或 Provider 正在限流。自动分析会等下一个计划时间再尝试；也可以稍后手动重试，或在 AI 服务设置里换用更稳定的模型。"
+          : "下面保留原始错误，方便定位问题。"}
+      </p>
+      <details>
+        <summary>查看原始错误</summary>
+        <code>{error}</code>
+      </details>
+    </div>
+  );
+}
+
+function UsageAnalyticsSettingsPane({ apiKeyConfigured }: UsageAnalyticsSettingsPaneProps) {
+  const api = useMemo(getNovelToolApi, []);
+  const [status, setStatus] = useState<UsageAnalyticsStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function loadStatus(): Promise<void> {
+    try {
+      setStatus((await api.usageAnalytics.getStatus()) as UsageAnalyticsStatus);
+    } catch (reason) {
+      setError(formatError(reason));
+    }
+  }
+
+  useEffect(() => {
+    void loadStatus();
+  }, []);
+
+  async function toggleAutomaticReports(): Promise<void> {
+    if (!status || busy) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      await api.usageAnalytics.updateSettings({ automaticReportsEnabled: !status.automaticReportsEnabled });
+      await loadStatus();
+      setMessage(!status.automaticReportsEnabled ? "已开启自动产品使用分析。" : "已关闭自动产品使用分析。");
+    } catch (reason) {
+      setError(formatError(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function sendNow(): Promise<void> {
+    if (busy) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const result = (await api.usageAnalytics.sendReportNow()) as UsageAnalyticsReportRun;
+      await loadStatus();
+      if (result.status === "completed") {
+        setMessage("已用当前 OpenRouter 配置生成产品使用分析。");
+      } else {
+        setError(result.error ?? "产品使用分析生成失败。");
+      }
+    } catch (reason) {
+      setError(formatError(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const currentError = error && error !== status?.lastError ? error : null;
+
+  return (
+    <div className="settings-card wide">
+      <h3>产品使用分析</h3>
+      <div className="cache-schedule-controls" aria-label="产品使用分析控制">
+        <Button disabled={busy || !status} onClick={() => void toggleAutomaticReports()} type="button" variant={status?.automaticReportsEnabled ? "secondary" : "primary"}>
+          {status?.automaticReportsEnabled ? "关闭自动分析" : "开启自动分析"}
+        </Button>
+        <Button disabled={busy || !apiKeyConfigured} onClick={() => void sendNow()} type="button" variant="secondary">
+          立即生成一次
+        </Button>
+      </div>
+      <div className="summary-cache-status-grid usage-analytics-status-grid">
+        <span>
+          <b>{status?.automaticReportsEnabled ? "已开启" : "已关闭"}</b>
+          自动状态
+        </span>
+        <span>
+          <b>{formatDateTime(status?.nextScheduledAt)}</b>
+          下次计划
+        </span>
+        <span>
+          <b>{formatDateTime(status?.lastSuccessAt)}</b>
+          上次成功
+        </span>
+        <span>
+          <b>{status?.reportRangeDays ?? 14} 天</b>
+          统计范围
+        </span>
+      </div>
+      {!apiKeyConfigured ? <p className="settings-message warning">未配置 OpenRouter API Key，自动分析会记录失败并等下一个计划时间再尝试。</p> : null}
+      {status?.lastError ? <UsageAnalyticsErrorNotice label="上次失败" error={status.lastError} /> : null}
+      {message ? <p className="settings-message success">{message}</p> : null}
+      {currentError ? <UsageAnalyticsErrorNotice label="当前错误" error={currentError} /> : null}
+    </div>
+  );
+}
+
+type ImportExportSettingsPaneProps = {
+  readonly currentProject: ProjectRecord | null;
+};
+
+function ImportExportSettingsPane({ currentProject }: ImportExportSettingsPaneProps) {
+  return <ShareableProjectExportPane currentProject={currentProject} />;
+}
+
+type ExperimentalSettingsPaneProps = {
+  readonly apiKeyConfigured: boolean;
+  readonly currentProject: ProjectRecord | null;
+};
+
+function ExperimentalSettingsPane({ apiKeyConfigured, currentProject }: ExperimentalSettingsPaneProps) {
+  return (
+    <div className="settings-grid experimental-settings">
+      <UsageAnalyticsSettingsPane apiKeyConfigured={apiKeyConfigured} />
+      <StartupLaunchSettingsPane />
+      <ExternalBookSyncPane currentProject={currentProject} />
+    </div>
+  );
+}
+
+type ExternalBookSyncPaneProps = {
+  readonly currentProject: ProjectRecord | null;
+};
+
 type ShareableProjectExportPaneProps = {
   readonly currentProject: ProjectRecord | null;
+};
+
+type ExternalBookSyncSelectedDirectory = {
+  readonly directoryPath: string;
 };
 
 type SelectedShareableProjectPath = {
@@ -848,6 +1075,138 @@ function formatSelectedPath(filePath: string | null): string {
   }
   const parts = filePath.split(/[/\\]/);
   return parts.length > 2 ? `${parts.at(-2)}/${parts.at(-1)}` : filePath;
+}
+
+function createExternalBookScanRequestId(): string {
+  if (globalThis.crypto?.randomUUID) {
+    return `external_book_scan_${globalThis.crypto.randomUUID()}`;
+  }
+  return `external_book_scan_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+function ExternalBookSyncPane({ currentProject }: ExternalBookSyncPaneProps) {
+  const api = useMemo(getNovelToolApi, []);
+  const [scanBusy, setScanBusy] = useState(false);
+  const [clearBusy, setClearBusy] = useState(false);
+  const [activeScanRequestId, setActiveScanRequestIdState] = useState<string | null>(null);
+  const activeScanRequestIdRef = useRef<string | null>(null);
+
+  function setActiveScanRequestId(requestId: string | null): void {
+    activeScanRequestIdRef.current = requestId;
+    setActiveScanRequestIdState(requestId);
+  }
+
+  useEffect(() => {
+    const requestId = activeScanRequestIdRef.current;
+    if (requestId) {
+      void api.externalBookSync.cancelScan({ requestId });
+    }
+    setActiveScanRequestId(null);
+    setScanBusy(false);
+  }, [currentProject?.id]);
+
+  useEffect(() => {
+    return () => {
+      const requestId = activeScanRequestIdRef.current;
+      if (requestId) {
+        void api.externalBookSync.cancelScan({ requestId });
+      }
+    };
+  }, [api]);
+
+  async function runScan(mode: "quick" | "global" | "directory", directoryPath?: string): Promise<void> {
+    if (!currentProject || scanBusy) {
+      return;
+    }
+    const requestId = createExternalBookScanRequestId();
+    setScanBusy(true);
+    setActiveScanRequestId(requestId);
+    try {
+      await api.externalBookSync.scan({
+        projectId: currentProject.id,
+        requestId,
+        mode,
+        ...(directoryPath ? { directoryPath } : {})
+      });
+    } catch (reason) {
+      void reason;
+    } finally {
+      if (activeScanRequestIdRef.current === requestId) {
+        setActiveScanRequestId(null);
+        setScanBusy(false);
+      }
+    }
+  }
+
+  async function cancelActiveScan(): Promise<void> {
+    const requestId = activeScanRequestIdRef.current;
+    if (!requestId) {
+      return;
+    }
+    try {
+      await api.externalBookSync.cancelScan({ requestId });
+    } catch (reason) {
+      void reason;
+    } finally {
+      setActiveScanRequestId(null);
+      setScanBusy(false);
+    }
+  }
+
+  async function scanSelectedDirectory(): Promise<void> {
+    try {
+      const selected = (await api.externalBookSync.selectDirectory()) as ExternalBookSyncSelectedDirectory | null;
+      if (selected) {
+        await runScan("directory", selected.directoryPath);
+      }
+    } catch (reason) {
+      void reason;
+    }
+  }
+
+  async function clearOldHash(): Promise<void> {
+    if (!currentProject || clearBusy) {
+      return;
+    }
+    setClearBusy(true);
+    try {
+      await api.externalBookSync.clearSentHistory({ projectId: currentProject.id });
+    } catch (reason) {
+      void reason;
+    } finally {
+      setClearBusy(false);
+    }
+  }
+
+  return (
+    <div className="settings-card wide external-book-sync-card">
+      <div className="settings-card-head">
+        <div>
+          <h3>同步检查</h3>
+        </div>
+      </div>
+
+      <div className="external-book-sync-actions">
+        <Button disabled={!currentProject || scanBusy} onClick={() => void runScan("quick")} type="button" variant="primary">
+          查找 .Book
+        </Button>
+        <Button disabled={!currentProject || scanBusy} onClick={() => void scanSelectedDirectory()} type="button" variant="secondary">
+          选择检查目录
+        </Button>
+        <Button disabled={!currentProject || scanBusy} onClick={() => void runScan("global")} type="button" variant="secondary">
+          全局重新扫描
+        </Button>
+        <Button disabled={!currentProject || scanBusy || clearBusy} onClick={() => void clearOldHash()} type="button" variant="ghost">
+          清除旧hash
+        </Button>
+        {scanBusy && activeScanRequestId ? (
+          <Button onClick={() => void cancelActiveScan()} type="button" variant="ghost">
+            停止扫描
+          </Button>
+        ) : null}
+      </div>
+    </div>
+  );
 }
 
 function ShareableProjectExportPane({ currentProject }: ShareableProjectExportPaneProps) {

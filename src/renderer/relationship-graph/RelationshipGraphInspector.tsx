@@ -1,6 +1,7 @@
 import { CaretRight, Crosshair, NotePencil } from "@phosphor-icons/react";
 import { useEffect, useState, type FormEvent } from "react";
 import type { RelationshipGraphEdge, RelationshipGraphNode } from "../../main/shared/relationship-graph";
+import { buildAuthorRelationshipUpdateInput, type AuthorRelationshipUpdateInput } from "./author-relationship-form";
 
 type RelationshipGraphInspectorProps = {
   readonly edges: readonly RelationshipGraphEdge[];
@@ -16,6 +17,7 @@ type RelationshipGraphInspectorProps = {
   readonly onHopDepthChange: (hopDepth: 1 | 2) => void;
   readonly onOpenChapter: (chapterId: string) => void;
   readonly onUpdateAuthorCharacter?: (input: AuthorRelationshipCharacterDraftInput) => Promise<void>;
+  readonly onUpdateAuthorRelationship?: (input: AuthorRelationshipUpdateInput) => Promise<void>;
 };
 
 type ChapterActivityItem = {
@@ -35,6 +37,14 @@ type AuthorRelationshipCharacterDraftInput = {
   readonly roleSummary: string | null;
   readonly faction: string | null;
   readonly notes: string | null;
+};
+
+type AuthorRelationshipEdgeSelection = {
+  readonly relationshipId: string;
+  readonly forwardEdge: RelationshipGraphEdge;
+  readonly reverseEdge: RelationshipGraphEdge | null;
+  readonly sourceToTargetLabel: string;
+  readonly targetToSourceLabel: string;
 };
 
 const importanceLabels: Record<RelationshipGraphNode["importance"], string> = {
@@ -93,6 +103,36 @@ function targetToSourceLabel(edge: RelationshipGraphEdge): string {
 
 function labelsMatch(left: string, right: string): boolean {
   return left.toLocaleLowerCase("zh-CN") === right.toLocaleLowerCase("zh-CN");
+}
+
+function isSourceToTargetAuthorEdge(edge: RelationshipGraphEdge): boolean {
+  return edge.id.endsWith(":source_to_target");
+}
+
+function isTargetToSourceAuthorEdge(edge: RelationshipGraphEdge): boolean {
+  return edge.id.endsWith(":target_to_source");
+}
+
+function authorRelationshipSiblings(edge: RelationshipGraphEdge, edges: readonly RelationshipGraphEdge[]): readonly RelationshipGraphEdge[] {
+  const relationshipId = edge.authorRelationshipId;
+  if (!relationshipId) {
+    return [edge];
+  }
+  const siblings = edges.filter((candidate) => candidate.authorRelationshipId === relationshipId);
+  return siblings.length ? siblings : [edge];
+}
+
+function resolveAuthorRelationshipSelection(edge: RelationshipGraphEdge, edges: readonly RelationshipGraphEdge[]): AuthorRelationshipEdgeSelection {
+  const siblings = authorRelationshipSiblings(edge, edges);
+  const forwardEdge = siblings.find(isSourceToTargetAuthorEdge) ?? edge;
+  const reverseEdge = siblings.find(isTargetToSourceAuthorEdge) ?? null;
+  return {
+    relationshipId: edge.authorRelationshipId ?? edge.id,
+    forwardEdge,
+    reverseEdge,
+    sourceToTargetLabel: sourceToTargetLabel(forwardEdge),
+    targetToSourceLabel: reverseEdge ? sourceToTargetLabel(reverseEdge) : targetToSourceLabel(forwardEdge)
+  };
 }
 
 function relationLabelForNode(edge: RelationshipGraphEdge, nodeId: string): string {
@@ -199,7 +239,8 @@ export function RelationshipGraphInspector({
   onReturnGlobal,
   onHopDepthChange,
   onOpenChapter,
-  onUpdateAuthorCharacter
+  onUpdateAuthorCharacter,
+  onUpdateAuthorRelationship
 }: RelationshipGraphInspectorProps) {
   const selectedNode = nodes.find((node) => node.id === selectedId) ?? null;
   const selectedEdge = edges.find((edge) => edge.id === selectedId) ?? null;
@@ -213,6 +254,12 @@ export function RelationshipGraphInspector({
   const [authorNotes, setAuthorNotes] = useState("");
   const [authorSaving, setAuthorSaving] = useState(false);
   const [authorError, setAuthorError] = useState<string | null>(null);
+  const [relationshipForwardLabel, setRelationshipForwardLabel] = useState("");
+  const [relationshipReverseLabel, setRelationshipReverseLabel] = useState("");
+  const [relationshipSameBothWays, setRelationshipSameBothWays] = useState(false);
+  const [relationshipSaving, setRelationshipSaving] = useState(false);
+  const [relationshipError, setRelationshipError] = useState<string | null>(null);
+  const selectedAuthorRelationship = graphSource === "author" && selectedEdge ? resolveAuthorRelationshipSelection(selectedEdge, edges) : null;
 
   useEffect(() => {
     if (graphSource !== "author" || !selectedNode) {
@@ -232,6 +279,18 @@ export function RelationshipGraphInspector({
     selectedNode,
     selectedNodeAliasDraft
   ]);
+
+  useEffect(() => {
+    if (graphSource !== "author" || !selectedEdge) {
+      setRelationshipError(null);
+      return;
+    }
+    const relationship = resolveAuthorRelationshipSelection(selectedEdge, edges);
+    setRelationshipForwardLabel(relationship.sourceToTargetLabel);
+    setRelationshipReverseLabel(relationship.targetToSourceLabel);
+    setRelationshipSameBothWays(Boolean(relationship.targetToSourceLabel && labelsMatch(relationship.sourceToTargetLabel, relationship.targetToSourceLabel)));
+    setRelationshipError(null);
+  }, [edges, graphSource, selectedEdge]);
 
   async function handleSaveAuthorCharacter(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -260,6 +319,33 @@ export function RelationshipGraphInspector({
       setAuthorError(error instanceof Error ? error.message : String(error));
     } finally {
       setAuthorSaving(false);
+    }
+  }
+
+  async function handleSaveAuthorRelationship(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    if (!selectedAuthorRelationship || !onUpdateAuthorRelationship) {
+      return;
+    }
+    if (!relationshipForwardLabel.trim()) {
+      setRelationshipError("关系名称不能为空。");
+      return;
+    }
+    setRelationshipSaving(true);
+    setRelationshipError(null);
+    try {
+      await onUpdateAuthorRelationship(
+        buildAuthorRelationshipUpdateInput({
+          relationshipId: selectedAuthorRelationship.relationshipId,
+          sourceToTargetLabel: relationshipForwardLabel,
+          targetToSourceLabel: relationshipReverseLabel,
+          sameRelationBothWays: relationshipSameBothWays
+        })
+      );
+    } catch (error) {
+      setRelationshipError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRelationshipSaving(false);
     }
   }
 
@@ -441,14 +527,13 @@ export function RelationshipGraphInspector({
   }
 
   if (graphSource === "author" && selectedEdge) {
-    const forwardLabel = sourceToTargetLabel(selectedEdge);
-    const reverseLabel = targetToSourceLabel(selectedEdge);
-    const sameBothWays = Boolean(reverseLabel && labelsMatch(forwardLabel, reverseLabel));
+    const relationship = selectedAuthorRelationship ?? resolveAuthorRelationshipSelection(selectedEdge, edges);
+    const forwardEdge = relationship.forwardEdge;
     return (
       <aside className="relationship-graph-inspector">
         <div className="relationship-inspector-topline">
           <h2>
-            {selectedEdge.sourceName} - {selectedEdge.targetName}
+            {forwardEdge.sourceName} - {forwardEdge.targetName}
           </h2>
           <div className="relationship-inspector-top-actions">
             <CollapseDetailButton onCollapse={onCollapse} />
@@ -458,50 +543,49 @@ export function RelationshipGraphInspector({
           <span>作者关系</span>
           <span>手动设定</span>
         </div>
-        <section>
-          <h3>关系名称</h3>
-          <div className="relationship-author-relation-list">
-            {sameBothWays ? (
-              <div className="relationship-author-relation-row">
-                <b>
-                  {selectedEdge.sourceName} ↔ {selectedEdge.targetName}
-                </b>
-                <span>{forwardLabel}</span>
-                <em>相互关系</em>
-              </div>
-            ) : (
-              <>
-                <div className="relationship-author-relation-row">
-                  <b>
-                    {selectedEdge.sourceName} → {selectedEdge.targetName}
-                  </b>
-                  <span>{forwardLabel}</span>
-                  <em>正向</em>
-                </div>
-                {reverseLabel ? (
-                  <div className="relationship-author-relation-row">
-                    <b>
-                      {selectedEdge.targetName} → {selectedEdge.sourceName}
-                    </b>
-                    <span>{reverseLabel}</span>
-                    <em>反向</em>
-                  </div>
-                ) : null}
-              </>
-            )}
+        <form className="relationship-author-detail-form" onSubmit={(event) => void handleSaveAuthorRelationship(event)}>
+          <label>
+            <span>{forwardEdge.sourceName} 对 {forwardEdge.targetName}</span>
+            <input
+              className="relationship-filter-input"
+              onChange={(event) => setRelationshipForwardLabel(event.target.value)}
+              placeholder="父亲、老师、主家"
+              value={relationshipForwardLabel}
+            />
+          </label>
+          <div className="author-relationship-mutual-row">
+            <label className="relationship-checkline">
+              <input
+                checked={relationshipSameBothWays}
+                onChange={(event) => setRelationshipSameBothWays(event.target.checked)}
+                type="checkbox"
+              />
+              <span>相互关系</span>
+            </label>
           </div>
-        </section>
-        <section>
-          <h3>关系说明</h3>
-          <p>{selectedEdge.baseRelationSummary ?? "作者手动录入的固定关系。"}</p>
-        </section>
+          {!relationshipSameBothWays ? (
+            <label>
+              <span>{forwardEdge.targetName} 对 {forwardEdge.sourceName}</span>
+              <input
+                className="relationship-filter-input"
+                onChange={(event) => setRelationshipReverseLabel(event.target.value)}
+                placeholder="儿子、学生、长工"
+                value={relationshipReverseLabel}
+              />
+            </label>
+          ) : null}
+          {relationshipError ? <p className="author-relationship-error">{relationshipError}</p> : null}
+          <button className="relationship-primary-action full" disabled={relationshipSaving || !relationshipForwardLabel.trim()} type="submit">
+            保存关系
+          </button>
+        </form>
         <section>
           <h3>关系两端</h3>
           <div className="relationship-author-relation-list">
             <div className="relationship-author-relation-row">
-              <b>{selectedEdge.sourceName}</b>
+              <b>{forwardEdge.sourceName}</b>
               <span>指向</span>
-              <em>{selectedEdge.targetName}</em>
+              <em>{forwardEdge.targetName}</em>
             </div>
           </div>
         </section>

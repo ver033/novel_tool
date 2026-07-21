@@ -6,7 +6,8 @@ import {
   authorRelationshipDeleteRelationshipInputSchema,
   authorRelationshipGetGraphInputSchema,
   authorRelationshipUpdateCharacterInputSchema,
-  authorRelationshipUpdateCharacterLayoutInputSchema
+  authorRelationshipUpdateCharacterLayoutInputSchema,
+  authorRelationshipUpdateRelationshipInputSchema
 } from "../shared/schemas";
 import type {
   AuthorRelationshipCreateCharacterInput,
@@ -15,7 +16,8 @@ import type {
   AuthorRelationshipDeleteRelationshipInput,
   AuthorRelationshipGetGraphInput,
   AuthorRelationshipUpdateCharacterInput,
-  AuthorRelationshipUpdateCharacterLayoutInput
+  AuthorRelationshipUpdateCharacterLayoutInput,
+  AuthorRelationshipUpdateRelationshipInput
 } from "../shared/types";
 import { ipcChannels } from "../shared/types";
 import { createValidatedIpcHandler } from "./register-ipc";
@@ -26,6 +28,7 @@ export type AuthorRelationshipIpcService = {
   readonly updateCharacter: (input: AuthorRelationshipUpdateCharacterInput) => unknown;
   readonly updateCharacterLayout: (input: AuthorRelationshipUpdateCharacterLayoutInput) => unknown;
   readonly createRelationship: (input: AuthorRelationshipCreateRelationshipInput) => unknown;
+  readonly updateRelationship: (input: AuthorRelationshipUpdateRelationshipInput) => unknown;
   readonly deleteCharacter: (input: AuthorRelationshipDeleteCharacterInput) => unknown;
   readonly deleteRelationship: (input: AuthorRelationshipDeleteRelationshipInput) => unknown;
 };
@@ -52,6 +55,10 @@ export function registerAuthorRelationshipIpc(serviceFactory: (projectId: string
   ipcMain.handle(
     ipcChannels.authorRelationship.createRelationship,
     createValidatedIpcHandler(authorRelationshipCreateRelationshipInputSchema, (input) => serviceFactory(input.projectId).createRelationship(input))
+  );
+  ipcMain.handle(
+    ipcChannels.authorRelationship.updateRelationship,
+    createValidatedIpcHandler(authorRelationshipUpdateRelationshipInputSchema, (input) => serviceFactory(input.projectId).updateRelationship(input))
   );
   ipcMain.handle(
     ipcChannels.authorRelationship.deleteCharacter,

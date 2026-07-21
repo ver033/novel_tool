@@ -1,11 +1,12 @@
 import "./styles/globals.css";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AppShell } from "./layout/AppShell";
 import type { FloatingPanelGeometry, FloatingPanelKind, FloatingPanelState, OutlineFloatingTab } from "./layout/floating-panel-state";
 import { clampFloatingPanelGeometry, createFloatingPanelId, getDefaultFloatingPanelGeometry, openOrRaiseFloatingPanel } from "./layout/floating-panel-state";
 import type { SidebarTab, TaskType } from "./layout/RightUtilitySidebar";
 import { ExportPage } from "./routes/ExportPage";
 import { ImportWizardPage } from "./routes/ImportWizardPage";
+import { ChapterReviewPage } from "./routes/ChapterReviewPage";
 import { NewProjectPage } from "./routes/NewProjectPage";
 import { OutlinePage } from "./routes/OutlinePage";
 import { CharacterRelationshipGraphPage } from "./relationship-graph/CharacterRelationshipGraphPage";
@@ -14,13 +15,26 @@ import { WelcomePage } from "./routes/WelcomePage";
 import { WritingGoalsPage } from "./routes/WritingGoalsPage";
 import { WritingPage } from "./routes/WritingPage";
 import type { AiChatDraftSeed } from "./sidebar/chat-draft";
-import { useAppStore } from "./state/app-store";
-import type { ImportConfirmResult, ProjectCreateInput, SelectionSnapshot, TaskPromptPreset } from "../main/shared/types";
+import { getNovelToolApi, useAppStore } from "./state/app-store";
+import type { ImportConfirmResult, ProjectCreateInput, SelectionSnapshot, TaskPromptPreset, UsageAnalyticsRecordEventInput } from "../main/shared/types";
 
-type Page = "welcome" | "writing" | "relationshipGraph" | "outline" | "writingGoals" | "settings" | "import" | "export" | "newProject";
+type Page = "welcome" | "writing" | "relationshipGraph" | "outline" | "chapterReview" | "writingGoals" | "settings" | "import" | "export" | "newProject";
 type ImportReturnPage = "welcome" | "writing";
 type ExportReturnPage = "welcome" | "writing";
-type SettingsReturnPage = "welcome" | "writing" | "relationshipGraph" | "outline" | "writingGoals";
+type SettingsReturnPage = "welcome" | "writing" | "relationshipGraph" | "outline" | "chapterReview" | "writingGoals";
+
+const pageUsageFeatures: Record<Page, UsageAnalyticsRecordEventInput["feature"]> = {
+  welcome: "welcome",
+  writing: "writing",
+  relationshipGraph: "relationshipGraph",
+  outline: "outline",
+  chapterReview: "chapterReview",
+  writingGoals: "writingGoals",
+  settings: "settings",
+  import: "import",
+  export: "export",
+  newProject: "newProject"
+};
 
 export function App() {
   const [page, setPage] = useState<Page>("welcome");
@@ -40,6 +54,39 @@ export function App() {
   const [auxiliaryRefreshToken, setAuxiliaryRefreshToken] = useState(0);
   const [floatingPanels, setFloatingPanels] = useState<FloatingPanelState[]>([]);
   const appStore = useAppStore();
+  const usagePageRef = useRef<Page>(page);
+  const usageStartedAtRef = useRef<number | null>(null);
+
+  const recordUsageEvent = useCallback((input: UsageAnalyticsRecordEventInput) => {
+    void getNovelToolApi().usageAnalytics.recordEvent(input).catch(() => undefined);
+  }, []);
+
+  const isUsageActive = useCallback(() => !document.hidden && document.hasFocus(), []);
+
+  const startUsageTimer = useCallback(() => {
+    if (!isUsageActive() || usageStartedAtRef.current !== null) {
+      return;
+    }
+    usageStartedAtRef.current = Date.now();
+  }, [isUsageActive]);
+
+  const flushUsageTimer = useCallback(() => {
+    const startedAt = usageStartedAtRef.current;
+    usageStartedAtRef.current = null;
+    if (startedAt === null) {
+      return;
+    }
+    const durationMs = Date.now() - startedAt;
+    if (durationMs < 1000) {
+      return;
+    }
+    recordUsageEvent({
+      eventType: "page_active",
+      feature: pageUsageFeatures[usagePageRef.current],
+      durationMs,
+      occurredAt: new Date().toISOString()
+    });
+  }, [recordUsageEvent]);
 
   const floatingViewport = useCallback(
     () => ({
@@ -48,6 +95,42 @@ export function App() {
     }),
     [sidebarOpen]
   );
+
+  useEffect(() => {
+    recordUsageEvent({ eventType: "app_opened", feature: "app", occurredAt: new Date().toISOString() });
+    recordUsageEvent({ eventType: "page_view", feature: pageUsageFeatures[usagePageRef.current], occurredAt: new Date().toISOString() });
+    startUsageTimer();
+
+    function handleVisibilityOrFocusChange(): void {
+      if (isUsageActive()) {
+        startUsageTimer();
+      } else {
+        flushUsageTimer();
+      }
+    }
+
+    document.addEventListener("visibilitychange", handleVisibilityOrFocusChange);
+    window.addEventListener("focus", handleVisibilityOrFocusChange);
+    window.addEventListener("blur", handleVisibilityOrFocusChange);
+    window.addEventListener("beforeunload", flushUsageTimer);
+    return () => {
+      flushUsageTimer();
+      document.removeEventListener("visibilitychange", handleVisibilityOrFocusChange);
+      window.removeEventListener("focus", handleVisibilityOrFocusChange);
+      window.removeEventListener("blur", handleVisibilityOrFocusChange);
+      window.removeEventListener("beforeunload", flushUsageTimer);
+    };
+  }, [flushUsageTimer, isUsageActive, recordUsageEvent, startUsageTimer]);
+
+  useEffect(() => {
+    if (usagePageRef.current === page) {
+      return;
+    }
+    flushUsageTimer();
+    usagePageRef.current = page;
+    recordUsageEvent({ eventType: "page_view", feature: pageUsageFeatures[page], occurredAt: new Date().toISOString() });
+    startUsageTimer();
+  }, [flushUsageTimer, page, recordUsageEvent, startUsageTimer]);
 
   useEffect(() => {
     function handleFloatingViewportResize(): void {
@@ -71,12 +154,17 @@ export function App() {
     setPage("writing");
   }, []);
   const openRelationshipGraph = useCallback(() => {
+    recordUsageEvent({ eventType: "feature_used", feature: "relationship_graph", occurredAt: new Date().toISOString() });
     setSidebarOpen(false);
     setPage("relationshipGraph");
-  }, []);
+  }, [recordUsageEvent]);
   const openOutline = useCallback(() => {
     setSidebarOpen(false);
     setPage("outline");
+  }, []);
+  const openChapterReview = useCallback(() => {
+    setSidebarOpen(false);
+    setPage("chapterReview");
   }, []);
   const openWritingGoals = useCallback(() => {
     setSidebarOpen(false);
@@ -96,24 +184,26 @@ export function App() {
     if (category) {
       setSettingsCategory(category);
     }
-    setSettingsReturnPage(page === "writing" || page === "relationshipGraph" || page === "outline" || page === "writingGoals" ? page : "welcome");
+    setSettingsReturnPage(page === "writing" || page === "relationshipGraph" || page === "outline" || page === "chapterReview" || page === "writingGoals" ? page : "welcome");
     setPage("settings");
   }, [page]);
   const returnFromSettings = useCallback(() => {
     setPage(settingsReturnPage);
   }, [settingsReturnPage]);
   const openImport = useCallback(() => {
+    recordUsageEvent({ eventType: "feature_used", feature: "txt_import", occurredAt: new Date().toISOString() });
     setImportStep(1);
     setImportReturnPage(page === "writing" ? "writing" : "welcome");
     setPage("import");
-  }, [page]);
+  }, [page, recordUsageEvent]);
   const returnFromImport = useCallback(() => {
     setPage(importReturnPage);
   }, [importReturnPage]);
   const openExport = useCallback(() => {
+    recordUsageEvent({ eventType: "feature_used", feature: "txt_export", occurredAt: new Date().toISOString() });
     setExportReturnPage(page === "writing" ? "writing" : "welcome");
     setPage("export");
-  }, [page]);
+  }, [page, recordUsageEvent]);
   const returnFromExport = useCallback(() => {
     setPage(exportReturnPage);
   }, [exportReturnPage]);
@@ -168,10 +258,12 @@ export function App() {
     void appStore.deleteChapter(chapterId);
   }, [appStore]);
   const openAiChat = useCallback(() => {
+    recordUsageEvent({ eventType: "feature_used", feature: "ai_chat", occurredAt: new Date().toISOString() });
     setSidebarOpen(true);
     setSidebarTab("chat");
-  }, []);
+  }, [recordUsageEvent]);
   const sendSelectionToChat = useCallback((snapshot: SelectionSnapshot) => {
+    recordUsageEvent({ eventType: "feature_used", feature: "ai_chat", occurredAt: new Date().toISOString() });
     setSelectionSnapshot(snapshot);
     setSidebarOpen(true);
     setSidebarTab("chat");
@@ -179,23 +271,25 @@ export function App() {
       id: (current?.id ?? 0) + 1,
       text: snapshot.text
     }));
-  }, []);
+  }, [recordUsageEvent]);
   const openScratchpad = useCallback(() => {
+    recordUsageEvent({ eventType: "feature_used", feature: "scratchpad", occurredAt: new Date().toISOString() });
     setSidebarOpen(true);
     setSidebarTab("scratch");
     setScratchpadRefreshToken((current) => current + 1);
-  }, []);
+  }, [recordUsageEvent]);
   const handleAuxiliaryChanged = useCallback(() => {
     setAuxiliaryRefreshToken((current) => current + 1);
     setScratchpadRefreshToken((current) => current + 1);
   }, []);
   const runTask = useCallback((task: TaskType, snapshot?: SelectionSnapshot | null, preset?: TaskPromptPreset | null) => {
+    recordUsageEvent({ eventType: "feature_used", feature: "ai_task", occurredAt: new Date().toISOString() });
     setTaskType(task);
     setTaskPromptPreset(preset ?? null);
     setSelectionSnapshot(snapshot ?? null);
     setSidebarOpen(true);
     setSidebarTab("task");
-  }, []);
+  }, [recordUsageEvent]);
   const openFloatingPanel = useCallback(
     (kind: FloatingPanelKind, chapterId: string | null = appStore.activeChapterId, scratchNoteId: string | null = null, outlineTab: OutlineFloatingTab = "chapter") => {
       setFloatingPanels((current) => openOrRaiseFloatingPanel(current, kind, chapterId, floatingViewport(), scratchNoteId, outlineTab));
@@ -203,23 +297,26 @@ export function App() {
     [appStore.activeChapterId, floatingViewport]
   );
   const openFloatingAiChat = useCallback(() => {
+    recordUsageEvent({ eventType: "feature_used", feature: "ai_chat", occurredAt: new Date().toISOString() });
     openFloatingPanel("chat", null);
-  }, [openFloatingPanel]);
+  }, [openFloatingPanel, recordUsageEvent]);
   const openFloatingScratchpad = useCallback(
     (chapterId: string | null = appStore.activeChapterId, scratchNoteId: string | null = null) => {
+      recordUsageEvent({ eventType: "feature_used", feature: "scratchpad", occurredAt: new Date().toISOString() });
       openFloatingPanel("scratch", chapterId, scratchNoteId);
       setScratchpadRefreshToken((current) => current + 1);
     },
-    [appStore.activeChapterId, openFloatingPanel]
+    [appStore.activeChapterId, openFloatingPanel, recordUsageEvent]
   );
   const runFloatingTask = useCallback(
     (task: TaskType, snapshot?: SelectionSnapshot | null, preset?: TaskPromptPreset | null) => {
+      recordUsageEvent({ eventType: "feature_used", feature: "ai_task", occurredAt: new Date().toISOString() });
       setTaskType(task);
       setTaskPromptPreset(preset ?? null);
       setSelectionSnapshot(snapshot ?? null);
       openFloatingPanel("task", snapshot?.chapterId ?? appStore.activeChapterId);
     },
-    [appStore.activeChapterId, openFloatingPanel]
+    [appStore.activeChapterId, openFloatingPanel, recordUsageEvent]
   );
   const closeFloatingPanel = useCallback((panelId: string) => {
     setFloatingPanels((current) => current.filter((panel) => panel.id !== panelId));
@@ -382,6 +479,7 @@ export function App() {
         <CharacterRelationshipGraphPage
           currentProject={appStore.currentProject}
           onOpenChapter={openWritingAtChapter}
+          onOpenChapterReview={openChapterReview}
           onOpenOutline={openOutline}
           onOpenSettings={() => openSettings()}
           onOpenWriting={openWriting}
@@ -399,6 +497,7 @@ export function App() {
           currentProject={appStore.currentProject}
           initialChapterId={appStore.activeChapterId}
           onOpenRelationshipGraph={openRelationshipGraph}
+          onOpenChapterReview={openChapterReview}
           onOpenSettings={() => openSettings()}
           onOpenWriting={openWriting}
           onOpenWritingGoals={openWritingGoals}
@@ -414,9 +513,28 @@ export function App() {
         <WritingGoalsPage
           currentProject={appStore.currentProject}
           onOpenOutline={openOutline}
+          onOpenChapterReview={openChapterReview}
           onOpenRelationshipGraph={openRelationshipGraph}
           onOpenSettings={() => openSettings()}
           onOpenWriting={openWriting}
+          onWelcome={openWelcome}
+        />
+      </AppShell>
+    );
+  }
+
+  if (page === "chapterReview") {
+    return (
+      <AppShell>
+        <ChapterReviewPage
+          chapters={appStore.chapters}
+          currentProject={appStore.currentProject}
+          onOpenChapter={openWritingAtChapter}
+          onOpenOutline={openOutline}
+          onOpenRelationshipGraph={openRelationshipGraph}
+          onOpenSettings={() => openSettings()}
+          onOpenWriting={openWriting}
+          onOpenWritingGoals={openWritingGoals}
           onWelcome={openWelcome}
         />
       </AppShell>
@@ -454,6 +572,7 @@ export function App() {
           onOpenFloatingAiChat={openFloatingAiChat}
           onOpenFloatingPanel={openFloatingPanel}
           onOpenOutline={openOutline}
+          onOpenChapterReview={openChapterReview}
           onOpenFloatingScratchpad={openFloatingScratchpad}
           onOpenRelationshipGraph={openRelationshipGraph}
           onOpenWritingGoals={openWritingGoals}

@@ -1,5 +1,5 @@
 import { BookOpen, CheckCircle, DownloadSimple, FileText } from "@phosphor-icons/react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ChapterSummary, ExportTxtResult, ProjectRecord } from "../../main/shared/types";
 import { Button } from "../components/Button";
 import { getNovelToolApi } from "../state/app-store";
@@ -14,6 +14,8 @@ type SelectedExportPath = {
   readonly filePath: string;
 };
 
+type ExportRangeMode = "all_chapters" | "chapter_range";
+
 function formatNumber(value: number): string {
   return value.toLocaleString("zh-CN");
 }
@@ -25,12 +27,59 @@ function formatPath(filePath: string | null): string {
 export function ExportPage({ chapters, currentProject, onClose }: ExportPageProps) {
   const api = useMemo(getNovelToolApi, []);
   const [includeChapterTitles, setIncludeChapterTitles] = useState(true);
+  const [rangeMode, setRangeMode] = useState<ExportRangeMode>("all_chapters");
+  const [fromChapterId, setFromChapterId] = useState(chapters[0]?.id ?? "");
+  const [toChapterId, setToChapterId] = useState(chapters[chapters.length - 1]?.id ?? "");
   const [filePath, setFilePath] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ExportTxtResult | null>(null);
-  const totalWordCount = chapters.reduce((sum, chapter) => sum + chapter.wordCount, 0);
-  const canExport = Boolean(currentProject && filePath && chapters.length > 0 && !busy);
+
+  useEffect(() => {
+    const chapterIds = new Set(chapters.map((chapter) => chapter.id));
+    const firstChapterId = chapters[0]?.id ?? "";
+    const lastChapterId = chapters[chapters.length - 1]?.id ?? "";
+    if (!chapterIds.has(fromChapterId)) {
+      setFromChapterId(firstChapterId);
+    }
+    if (!chapterIds.has(toChapterId)) {
+      setToChapterId(lastChapterId);
+    }
+  }, [chapters, fromChapterId, toChapterId]);
+
+  const selectedChapters = useMemo(() => {
+    if (rangeMode === "all_chapters") {
+      return chapters;
+    }
+
+    const fromIndex = chapters.findIndex((chapter) => chapter.id === fromChapterId);
+    const toIndex = chapters.findIndex((chapter) => chapter.id === toChapterId);
+    if (fromIndex < 0 || toIndex < 0 || fromIndex > toIndex) {
+      return [];
+    }
+    return chapters.slice(fromIndex, toIndex + 1);
+  }, [chapters, fromChapterId, rangeMode, toChapterId]);
+  const selectedWordCount = selectedChapters.reduce((sum, chapter) => sum + chapter.wordCount, 0);
+  const isInvalidRange = rangeMode === "chapter_range" && chapters.length > 0 && selectedChapters.length === 0;
+  const canExport = Boolean(currentProject && filePath && selectedChapters.length > 0 && !busy);
+
+  function updateRangeMode(mode: ExportRangeMode): void {
+    setRangeMode(mode);
+    setResult(null);
+    setError(null);
+  }
+
+  function updateFromChapterId(chapterId: string): void {
+    setFromChapterId(chapterId);
+    setResult(null);
+    setError(null);
+  }
+
+  function updateToChapterId(chapterId: string): void {
+    setToChapterId(chapterId);
+    setResult(null);
+    setError(null);
+  }
 
   async function selectExportPath(): Promise<void> {
     if (!currentProject) {
@@ -66,6 +115,10 @@ export function ExportPage({ chapters, currentProject, onClose }: ExportPageProp
       setError("请先选择 TXT 保存位置。");
       return;
     }
+    if (selectedChapters.length === 0) {
+      setError("请选择有效的导出章节范围。");
+      return;
+    }
 
     setBusy(true);
     setError(null);
@@ -73,7 +126,14 @@ export function ExportPage({ chapters, currentProject, onClose }: ExportPageProp
       const exported = (await api.export.exportTxt({
         projectId: currentProject.id,
         filePath,
-        range: "all_chapters",
+        range:
+          rangeMode === "all_chapters"
+            ? "all_chapters"
+            : {
+                type: "chapter_range",
+                fromChapterId,
+                toChapterId
+              },
         includeChapterTitles
       })) as ExportTxtResult;
       setResult(exported);
@@ -128,13 +188,61 @@ export function ExportPage({ chapters, currentProject, onClose }: ExportPageProp
 
               <section className="export-section">
                 <span className="export-section-label">范围</span>
-                <div className="export-choice active">
-                  <div>
-                    <strong>全部章节</strong>
-                    <span>按左侧章节顺序导出当前项目的所有正文。</span>
-                  </div>
-                  <span className="tag">{formatNumber(chapters.length)} 章</span>
+                <div className="export-range-options">
+                  <button
+                    className={`export-choice ${rangeMode === "all_chapters" ? "active" : ""}`}
+                    disabled={busy}
+                    onClick={() => updateRangeMode("all_chapters")}
+                    type="button"
+                  >
+                    <div>
+                      <strong>全部章节</strong>
+                      <span>按左侧章节顺序导出当前项目的所有正文。</span>
+                    </div>
+                    <span className="tag">{formatNumber(chapters.length)} 章</span>
+                  </button>
+                  <button
+                    className={`export-choice ${rangeMode === "chapter_range" ? "active" : ""}`}
+                    disabled={busy || chapters.length === 0}
+                    onClick={() => updateRangeMode("chapter_range")}
+                    type="button"
+                  >
+                    <div>
+                      <strong>自定义范围</strong>
+                      <span>选择起始章节和结束章节，按章节顺序导出中间内容。</span>
+                    </div>
+                    <span className="tag">{formatNumber(selectedChapters.length)} 章</span>
+                  </button>
                 </div>
+                {rangeMode === "chapter_range" ? (
+                  <div className="export-range-picker">
+                    <label>
+                      <span>起始章节</span>
+                      <select
+                        disabled={busy}
+                        onChange={(event) => updateFromChapterId(event.target.value)}
+                        value={fromChapterId}
+                      >
+                        {chapters.map((chapter) => (
+                          <option key={chapter.id} value={chapter.id}>
+                            {chapter.title}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      <span>结束章节</span>
+                      <select disabled={busy} onChange={(event) => updateToChapterId(event.target.value)} value={toChapterId}>
+                        {chapters.map((chapter) => (
+                          <option key={chapter.id} value={chapter.id}>
+                            {chapter.title}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    {isInvalidRange ? <span className="export-range-error">起始章节不能晚于结束章节。</span> : null}
+                  </div>
+                ) : null}
               </section>
 
               <section className="export-section">
@@ -173,11 +281,11 @@ export function ExportPage({ chapters, currentProject, onClose }: ExportPageProp
               </div>
               <div className="export-stat-grid">
                 <div>
-                  <b>{formatNumber(chapters.length)}</b>
+                  <b>{formatNumber(selectedChapters.length)}</b>
                   <span>章节</span>
                 </div>
                 <div>
-                  <b>{formatNumber(totalWordCount)}</b>
+                  <b>{formatNumber(selectedWordCount)}</b>
                   <span>正文统计</span>
                 </div>
               </div>

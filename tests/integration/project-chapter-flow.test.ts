@@ -276,7 +276,7 @@ describe("project and chapter lifecycle", () => {
       id: secondChapter.id,
       title: "第2章 晚饭",
       plainText: "母亲停下筷子。",
-      wordCount: 6
+      wordCount: 7
     });
     expect(snapshot).toMatchObject({
       chapterId: secondChapter.id,
@@ -338,7 +338,7 @@ describe("project and chapter lifecycle", () => {
     expect(reopenedChapterService.getContent({ chapterId: initialChapter.id })).toMatchObject({
       id: initialChapter.id,
       plainText: "林远回来了。",
-      wordCount: 5
+      wordCount: 6
     });
 
     db.close();
@@ -451,7 +451,7 @@ describe("project and chapter lifecycle", () => {
       plainText: "母亲停下筷子。He said ok."
     });
 
-    expect(chapterService.getContent({ chapterId: initialChapter.id }).wordCount).toBe(14);
+    expect(chapterService.getContent({ chapterId: initialChapter.id }).wordCount).toBe(16);
 
     db.close();
   });
@@ -485,9 +485,9 @@ describe("project and chapter lifecycle", () => {
       wordCount: 0
     });
 
-    expect(firstSave.dailyWordCount).toBe(5);
-    expect(secondSave.dailyWordCount).toBe(7);
-    expect(deletionSave.dailyWordCount).toBe(4);
+    expect(firstSave.dailyWordCount).toBe(6);
+    expect(secondSave.dailyWordCount).toBe(8);
+    expect(deletionSave.dailyWordCount).toBe(5);
     expect(undoSave.dailyWordCount).toBe(0);
 
     db.close();

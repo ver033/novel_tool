@@ -9,6 +9,7 @@ import { SummaryService } from "../ai/summary-service";
 import { SummaryWorker } from "../ai/summary-worker";
 import { getTokenBudget } from "../ai/token-budget";
 import { WritingOperationRunner } from "../ai/writing-operation-runner";
+import { ChapterReviewService, createOpenRouterChapterReviewClient } from "../chapter-review/chapter-review-service";
 import { createChapterContentInvalidator } from "../chapter/chapter-content-invalidator";
 import { ChapterService } from "../chapter/chapter-service";
 import { createDatabase, resolveDatabasePath, type SqliteDatabase } from "../db/database";
@@ -17,24 +18,33 @@ import { AiChatRepository } from "../db/repositories/ai-chat-repo";
 import { AiTaskRepository } from "../db/repositories/ai-task-repo";
 import { AuthorRelationshipRepository } from "../db/repositories/author-relationship-repo";
 import { ChapterRepository } from "../db/repositories/chapter-repo";
+import { ChapterReviewRepository } from "../db/repositories/chapter-review-repo";
 import { ImportJobRepository } from "../db/repositories/import-job-repo";
 import { OutlineRepository } from "../db/repositories/outline-repo";
 import { ProjectRepository } from "../db/repositories/project-repo";
 import { ScratchNoteRepository } from "../db/repositories/scratch-note-repo";
 import { SettingsRepository } from "../db/repositories/settings-repo";
 import { SummaryRepository } from "../db/repositories/summary-repo";
+import { UsageAnalyticsRepository } from "../db/repositories/usage-analytics-repo";
 import { WritingGoalRepository } from "../db/repositories/writing-goal-repo";
 import { ShareableProjectExporter } from "../export/shareable-project-exporter";
+import { ExternalBookSyncAutomationStore } from "../external-book-sync/book-automation-store";
+import { ExternalBookSentChapterStore } from "../external-book-sync/book-send-history-store";
+import { ExternalBookSourceStore } from "../external-book-sync/book-source-store";
+import { ExternalBookSyncService } from "../external-book-sync/external-book-sync-service";
 import { TxtExporter } from "../export/txt-exporter";
 import { TxtImporter } from "../import/txt-importer";
 import { OutlineService } from "../outline/outline-service";
 import { ProjectService } from "../project/project-service";
 import { AuthorRelationshipGraphService } from "../relationships/author-relationship-graph";
 import { SummaryRelationshipGraphAggregator } from "../relationships/relationship-graph-aggregator";
+import { logMainError } from "../logger";
 import { createElectronSecretStore } from "../settings/electron-secret-store";
 import { SettingsService } from "../settings/settings-service";
 import { ipcChannels } from "../shared/types";
 import type { TaskType } from "../shared/types";
+import { SettingsStartupLaunchPreferenceStore, StartupLaunchService } from "../startup/startup-launch-service";
+import { OpenRouterUsageAnalyticsReporter, UsageAnalyticsService, type UsageAnalyticsProjectContext } from "../usage/usage-analytics-service";
 import { WritingGoalService } from "../writing-goals/writing-goal-service";
 import {
   IpcPayloadValidationError,
@@ -54,6 +64,8 @@ import type { z } from "zod";
 import { registerAiIpc } from "./ai-ipc";
 import { registerAuthorRelationshipIpc } from "./author-relationship-ipc";
 import { registerChapterIpc } from "./chapter-ipc";
+import { registerChapterReviewIpc } from "./chapter-review-ipc";
+import { registerExternalBookSyncIpc } from "./external-book-sync-ipc";
 import { registerExportIpc } from "./export-ipc";
 import { registerImportIpc } from "./import-ipc";
 import { registerOutlineIpc } from "./outline-ipc";
@@ -61,6 +73,7 @@ import { registerProjectIpc } from "./project-ipc";
 import { registerRelationshipGraphIpc } from "./relationship-graph-ipc";
 import { registerScratchIpc } from "./scratch-ipc";
 import { registerSettingsIpc } from "./settings-ipc";
+import { registerUsageAnalyticsIpc } from "./usage-analytics-ipc";
 import { registerWritingGoalIpc } from "./writing-goal-ipc";
 
 type RegisterIpcOptions = {
@@ -83,6 +96,8 @@ type DirectHandler<TResult> = (event: IpcMainInvokeEvent, payload: unknown) => P
 
 let registered = false;
 const SUMMARY_WORKER_INTERVAL_MS = 3_000;
+const USAGE_ANALYTICS_INTERVAL_MS = 60_000;
+const EXTERNAL_BOOK_SYNC_INTERVAL_MS = 60_000;
 
 function useE2eAiGenerators(): boolean {
   return process.env.NODE_ENV === "test" && process.env.NOVEL_TOOL_E2E_AI === "1";
@@ -194,6 +209,16 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
       connectionTester: new DefaultOpenRouterConnectionTester(),
       modelCatalog: new OpenRouterModelCatalogClient()
     });
+    const startupLaunchService = new StartupLaunchService({
+      isPackaged: app.isPackaged,
+      getLoginItemSettings: (options) => app.getLoginItemSettings({ ...options, args: [...options.args] }),
+      setLoginItemSettings: (settings) => app.setLoginItemSettings({ ...settings, args: [...settings.args] })
+    }, {}, new SettingsStartupLaunchPreferenceStore(settingsRepo));
+    try {
+      startupLaunchService.ensureDefaultEnabled();
+    } catch (error) {
+      logMainError("enable default Windows startup launch failed", error);
+    }
     const summaryServices = new Map<string, SummaryService>();
     const recoveredSummaryJobProjects = new Set<string>();
     let activeSummaryWorker:
@@ -217,10 +242,33 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
     const resolveProjectDb = (projectId?: string): SqliteDatabase =>
       projectId ? projectService.getProjectDatabaseForProject(projectId) : projectService.getActiveProjectDatabase();
     const resolveChapterRepo = (projectId: string): ChapterRepository => new ChapterRepository(resolveProjectDb(projectId));
+    const resolveChapterReviewRepo = (projectId: string): ChapterReviewRepository => new ChapterReviewRepository(resolveProjectDb(projectId));
     const resolveSummaryRepo = (projectId: string): SummaryRepository => new SummaryRepository(resolveProjectDb(projectId));
     const resolveAuthorRelationshipRepo = (projectId: string): AuthorRelationshipRepository => new AuthorRelationshipRepository(resolveProjectDb(projectId));
     const resolveWritingGoalRepo = (projectId: string): WritingGoalRepository => new WritingGoalRepository(resolveProjectDb(projectId));
     const resolveWritingGoalService = (projectId: string): WritingGoalService => new WritingGoalService(resolveWritingGoalRepo(projectId));
+    const getUsageAnalyticsProjectContext = (): UsageAnalyticsProjectContext | null => {
+      const currentProject = projectService.getRuntimeActiveProject();
+      if (!currentProject) {
+        return null;
+      }
+      const chapterRepo = resolveChapterRepo(currentProject.id);
+      const latestChapter = chapterRepo.listByProject(currentProject.id).at(-1);
+      const latestContent = latestChapter ? chapterRepo.getContent(latestChapter.id) : null;
+      return {
+        projectName: currentProject.name,
+        latestChapterTitle: latestContent?.title ?? latestChapter?.title ?? null,
+        latestChapterText: latestContent?.plainText ?? "",
+        latestChapterWordCount: latestContent?.wordCount ?? latestChapter?.wordCount ?? 0
+      };
+    };
+    const usageAnalyticsService = new UsageAnalyticsService({
+      repo: new UsageAnalyticsRepository(db),
+      reporter: new OpenRouterUsageAnalyticsReporter({ settingsService }),
+      appVersion: app.getVersion(),
+      platform: process.platform,
+      getProjectContext: getUsageAnalyticsProjectContext
+    });
     const resolveOutlineService = (projectId: string): OutlineService => {
       const projectDb = resolveProjectDb(projectId);
       return new OutlineService(new OutlineRepository(projectDb), new ProjectRepository(projectDb), new ChapterRepository(projectDb));
@@ -247,7 +295,30 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
           }
         }
       }),
-      writingGoalRecorder: resolveWritingGoalService
+      writingGoalRecorder: resolveWritingGoalService,
+      contentUpdateRecorder: {
+        recordChapterContentUpdate(input) {
+          usageAnalyticsService.recordWritingUpdate({
+            projectId: input.projectId,
+            projectName: projectRepo.findById(input.projectId)?.name ?? input.projectId,
+            chapterId: input.chapterId,
+            chapterTitle: input.chapterTitle,
+            chapterSortOrder: input.chapterSortOrder,
+            source: input.source,
+            previousWordCount: input.previousWordCount,
+            nextWordCount: input.nextWordCount,
+            occurredAt: new Date(input.updatedAt)
+          });
+        }
+      }
+    });
+    const chapterReviewService = new ChapterReviewService({
+      resolveChapterRepo,
+      resolveReviewRepo: resolveChapterReviewRepo,
+      getProjectName(projectId) {
+        return projectRepo.findById(projectId)?.name ?? projectService.getRuntimeActiveProject()?.name ?? "当前项目";
+      },
+      createClient: () => createOpenRouterChapterReviewClient(settingsService)
     });
     const aiTaskService = new AiTaskService(
       (projectId) => new AiTaskRepository(resolveProjectDb(projectId)),
@@ -280,6 +351,31 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
     const txtImporter = new TxtImporter(importJobRepo, projectRepo, projectService);
     const txtExporter = new TxtExporter(resolveChapterRepo);
     const shareableProjectExporter = new ShareableProjectExporter((projectId) => resolveProjectDb(projectId));
+    const externalBookSyncService = new ExternalBookSyncService({
+      sourceStore: new ExternalBookSourceStore(settingsRepo),
+      automationStore: new ExternalBookSyncAutomationStore(settingsRepo),
+      sentChapterStore: new ExternalBookSentChapterStore(settingsRepo),
+      resolveChapterRepo,
+      projectRepo,
+      aiSender: {
+        createChatSession(input) {
+          return aiTaskService.createChatSession(input);
+        },
+        async sendChatMessage(input) {
+          await aiTaskService.sendChatMessageStream(input, {}, {
+            allowActions: false,
+            allowTools: false,
+            allowAutoChapterContext: false,
+            allowInlineWritingOperation: false,
+            includeHistory: false
+          });
+        }
+      }
+    });
+    const resolveAutomaticSyncProject = () => {
+      const project = projectService.getRuntimeActiveProject() ?? projectService.getCurrentProject();
+      return project?.rootPath ? project : null;
+    };
     const summaryWorkerInterval = setInterval(() => {
       const currentProject = projectService.getRuntimeActiveProject();
       if (!currentProject?.rootPath) {
@@ -332,6 +428,52 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
 
     }, SUMMARY_WORKER_INTERVAL_MS);
     summaryWorkerInterval.unref?.();
+    if (process.env.NODE_ENV !== "test") {
+      let externalBookSyncRunPromise: Promise<unknown> | null = null;
+      const runDueExternalBookSync = (trigger: "scheduled" | "startup") => {
+        if (externalBookSyncRunPromise) {
+          return externalBookSyncRunPromise;
+        }
+        const project = resolveAutomaticSyncProject();
+        if (!project) {
+          return Promise.resolve(null);
+        }
+        const run =
+          trigger === "startup"
+            ? externalBookSyncService.runStartupCatchUpSync(project.id)
+            : externalBookSyncService.runDueAutomaticSync({ projectId: project.id, trigger });
+        externalBookSyncRunPromise = run
+          .catch((error: unknown) => {
+            console.error("External Book automatic sync failed", error);
+            return null;
+          })
+          .finally(() => {
+            externalBookSyncRunPromise = null;
+          });
+        return externalBookSyncRunPromise;
+      };
+      void runDueExternalBookSync("startup");
+      const externalBookSyncInterval = setInterval(() => void runDueExternalBookSync("scheduled"), EXTERNAL_BOOK_SYNC_INTERVAL_MS);
+      externalBookSyncInterval.unref?.();
+
+      let usageAnalyticsReportRunning = false;
+      const runDueUsageAnalyticsReport = (trigger: "startup" | "interval") => {
+        if (usageAnalyticsReportRunning) {
+          return;
+        }
+        usageAnalyticsReportRunning = true;
+        const reportPromise =
+          trigger === "startup" ? usageAnalyticsService.runStartupCatchUpReport() : usageAnalyticsService.runDueAutomaticReport();
+        void reportPromise
+          .catch(() => undefined)
+          .finally(() => {
+            usageAnalyticsReportRunning = false;
+          });
+      };
+      runDueUsageAnalyticsReport("startup");
+      const usageAnalyticsInterval = setInterval(() => runDueUsageAnalyticsReport("interval"), USAGE_ANALYTICS_INTERVAL_MS);
+      usageAnalyticsInterval.unref?.();
+    }
 
     ipcMain.handle(
       ipcChannels.system.getDatabaseStatus,
@@ -341,6 +483,7 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
     );
     registerProjectIpc(projectService);
     registerChapterIpc(chapterService);
+    registerChapterReviewIpc(chapterReviewService);
     registerWritingGoalIpc((projectId) => {
       const service = resolveWritingGoalService(projectId);
       return {
@@ -397,6 +540,9 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
         },
         createRelationship(input) {
           return repo.createRelationship(input);
+        },
+        updateRelationship(input) {
+          return repo.updateRelationship(input);
         },
         deleteCharacter(input) {
           repo.deleteCharacter(input);
@@ -493,8 +639,10 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
     );
     registerScratchIpc((projectId) => new ScratchNoteRepository(resolveProjectDb(projectId)));
     registerImportIpc(txtImporter);
+    registerExternalBookSyncIpc(externalBookSyncService);
     registerExportIpc(txtExporter, shareableProjectExporter);
-    registerSettingsIpc(settingsService);
+    registerUsageAnalyticsIpc(usageAnalyticsService);
+    registerSettingsIpc(settingsService, startupLaunchService);
     registered = true;
   }
 

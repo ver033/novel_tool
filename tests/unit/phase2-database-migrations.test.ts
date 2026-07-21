@@ -41,6 +41,8 @@ describe("phase 2 database migrations", () => {
       "book_ai_summaries",
       "chapter_ai_summaries",
       "chapter_ai_summary_chunks",
+      "chapter_review_chapters",
+      "chapter_review_runs",
       "chapter_snapshots",
       "chapters",
       "import_jobs",
@@ -54,6 +56,9 @@ describe("phase 2 database migrations", () => {
       "scratch_notes",
       "settings",
       "summary_jobs",
+      "usage_events",
+      "usage_report_runs",
+      "usage_writing_updates",
       "writing_daily_stats",
       "writing_goal_daily_plans",
       "writing_goals",
@@ -78,7 +83,11 @@ describe("phase 2 database migrations", () => {
       { version: 19 },
       { version: 20 },
       { version: 21 },
-      { version: 22 }
+      { version: 22 },
+      { version: 23 },
+      { version: 24 },
+      { version: 25 },
+      { version: 26 }
     ]);
     expect(db.prepare("PRAGMA table_info(import_jobs)").all().find((row) => row.name === "project_id")).toMatchObject({ notnull: 0 });
     expect(db.prepare("PRAGMA table_info(ai_task_candidates)").all().find((row) => row.name === "metadata_json")).toMatchObject({
@@ -102,6 +111,18 @@ describe("phase 2 database migrations", () => {
     expect(db.prepare("PRAGMA table_info(ai_chat_sessions)").all().find((row) => row.name === "memory_compacted_through_message_id")).toMatchObject({
       notnull: 0
     });
+    expect(db.prepare("PRAGMA table_info(usage_writing_updates)").all().map((row) => row.name)).toEqual(
+      expect.arrayContaining([
+        "project_name",
+        "chapter_title",
+        "chapter_sort_order",
+        "previous_word_count",
+        "next_word_count",
+        "word_delta",
+        "occurred_at",
+        "local_date"
+      ])
+    );
 
     db.close();
   });
@@ -112,7 +133,38 @@ describe("phase 2 database migrations", () => {
     runMigrations(db);
     runMigrations(db);
 
-    expect(db.prepare("SELECT COUNT(*) AS count FROM schema_migrations").get()).toEqual({ count: 19 });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM schema_migrations").get()).toEqual({ count: 23 });
+
+    db.close();
+  });
+
+  it("repairs missing usage analytics tables when an older prototype marked v22 applied", () => {
+    const db = createDatabase(createTempDbPath());
+    db.exec(`
+      CREATE TABLE schema_migrations (
+        version INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        applied_at TEXT NOT NULL
+      );
+    `);
+    db.prepare("INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)").run(
+      22,
+      "usage_analytics",
+      "2026-05-19T00:00:00.000Z"
+    );
+
+    runMigrations(db);
+
+    expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'usage_report_runs'").get()).toEqual({
+      name: "usage_report_runs"
+    });
+    expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'usage_events'").get()).toEqual({
+      name: "usage_events"
+    });
+    expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'usage_writing_updates'").get()).toEqual({
+      name: "usage_writing_updates"
+    });
+    expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").get()).toEqual({ version: 26 });
 
     db.close();
   });
@@ -297,7 +349,7 @@ describe("phase 2 database migrations", () => {
     expect(db.prepare("SELECT COUNT(*) AS count FROM arc_ai_summaries").get()).toEqual({ count: 0 });
     expect(db.prepare("SELECT COUNT(*) AS count FROM book_ai_summaries").get()).toEqual({ count: 0 });
     expect(db.prepare("SELECT COUNT(*) AS count FROM summary_jobs").get()).toEqual({ count: 0 });
-    expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").get()).toEqual({ version: 22 });
+    expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").get()).toEqual({ version: 26 });
 
     db.close();
   });
@@ -355,7 +407,7 @@ describe("phase 2 database migrations", () => {
       change_summary: "旧版校对结果已失效，请重新生成。",
       metadata_json: null
     });
-    expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").get()).toEqual({ version: 22 });
+    expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").get()).toEqual({ version: 26 });
 
     db.close();
   });

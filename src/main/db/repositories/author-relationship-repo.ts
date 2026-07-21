@@ -38,6 +38,13 @@ export type AuthorRelationshipCreateInput = {
   readonly targetToSourceLabel?: string | null;
 };
 
+export type AuthorRelationshipUpdateInput = {
+  readonly projectId: string;
+  readonly relationshipId: string;
+  readonly sourceToTargetLabel: string;
+  readonly targetToSourceLabel?: string | null;
+};
+
 export type AuthorRelationshipCharacterCreateInput = {
   readonly projectId: string;
   readonly name: string;
@@ -237,6 +244,10 @@ function isUniqueRelationshipError(error: unknown): boolean {
   return error instanceof Error && error.message.includes("UNIQUE constraint failed: author_relationships.project_id");
 }
 
+function aliasesContainNormalized(aliases: readonly string[], normalizedValue: string): boolean {
+  return aliases.some((alias) => normalizeComparable(alias) === normalizedValue);
+}
+
 export class AuthorRelationshipRepository {
   constructor(private readonly db: SqliteDatabase) {}
 
@@ -258,6 +269,13 @@ export class AuthorRelationshipRepository {
     if (existing && existing.id !== input.characterId) {
       throw new Error("作者人物名称已存在。");
     }
+    const normalizedAliases = normalizeAliases(input.aliases).filter((alias) => normalizeComparable(alias) !== normalizedName);
+    this.validateCharacterNameAndAliases({
+      projectId: input.projectId,
+      characterId: input.characterId,
+      normalizedName,
+      normalizedAliases
+    });
     const updatedAt = nowIso();
     const result = this.db
       .prepare(
@@ -276,7 +294,7 @@ export class AuthorRelationshipRepository {
       .run(
         name,
         normalizedName,
-        JSON.stringify(normalizeAliases(input.aliases).filter((alias) => normalizeComparable(alias) !== normalizedName)),
+        JSON.stringify(normalizedAliases),
         input.entityKind,
         input.importance,
         normalizeNullableText(input.roleSummary),
@@ -335,6 +353,9 @@ export class AuthorRelationshipRepository {
 
       const sourceCharacter = this.getOrCreateCharacter(input.projectId, sourceName);
       const targetCharacter = this.getOrCreateCharacter(input.projectId, targetName);
+      if (sourceCharacter.id === targetCharacter.id) {
+        throw new Error("关系两端不能是同一个人物。");
+      }
       const createdAt = nowIso();
       const relationshipId = createId("author_relationship");
       const normalizedRelationKey = buildNormalizedRelationKey({
@@ -379,6 +400,43 @@ export class AuthorRelationshipRepository {
     });
 
     return transaction();
+  }
+
+  updateRelationship(input: AuthorRelationshipUpdateInput): AuthorRelationshipRecord {
+    const sourceToTargetLabel = normalizeText(input.sourceToTargetLabel);
+    const targetToSourceLabel = normalizeOptionalLabel(input.targetToSourceLabel);
+    if (!sourceToTargetLabel) {
+      throw new Error("关系名称不能为空。");
+    }
+    const existing = this.findRelationshipByProjectAndId(input.projectId, input.relationshipId);
+    const updatedAt = nowIso();
+    const normalizedRelationKey = buildNormalizedRelationKey({
+      sourceCharacterId: existing.sourceCharacterId,
+      targetCharacterId: existing.targetCharacterId,
+      sourceToTargetLabel,
+      targetToSourceLabel
+    });
+    try {
+      const result = this.db
+        .prepare(
+          `UPDATE author_relationships
+           SET source_to_target_label = ?,
+               target_to_source_label = ?,
+               normalized_relation_key = ?,
+               updated_at = ?
+           WHERE project_id = ? AND id = ?`
+        )
+        .run(sourceToTargetLabel, targetToSourceLabel, normalizedRelationKey, updatedAt, input.projectId, input.relationshipId);
+      if (result.changes === 0) {
+        throw new Error("作者关系不存在。");
+      }
+    } catch (error) {
+      if (isUniqueRelationshipError(error)) {
+        throw new Error("这条作者关系已经存在。");
+      }
+      throw error;
+    }
+    return this.findRelationshipByProjectAndId(input.projectId, input.relationshipId);
   }
 
   listCharacters(projectId: string): AuthorRelationshipCharacterRecord[] {
@@ -427,7 +485,7 @@ export class AuthorRelationshipRepository {
 
   private getOrCreateCharacter(projectId: string, name: string): AuthorRelationshipCharacterRecord {
     const normalizedName = normalizeComparable(name);
-    const existing = this.findCharacterByNormalizedName(projectId, normalizedName);
+    const existing = this.findCharacterByNormalizedName(projectId, normalizedName) ?? this.findCharacterByNormalizedAlias(projectId, normalizedName);
     if (existing) {
       return existing;
     }
@@ -445,11 +503,44 @@ export class AuthorRelationshipRepository {
     return this.findCharacterByNormalizedName(projectId, normalizedName) ?? this.findCharacterById(projectId, id);
   }
 
+  private validateCharacterNameAndAliases(input: {
+    readonly projectId: string;
+    readonly characterId: string;
+    readonly normalizedName: string;
+    readonly normalizedAliases: readonly string[];
+  }): void {
+    for (const character of this.listCharacters(input.projectId)) {
+      if (character.id === input.characterId) {
+        continue;
+      }
+      if (aliasesContainNormalized(character.aliases, input.normalizedName)) {
+        throw new Error("作者人物名称与已有别名冲突。");
+      }
+      for (const alias of input.normalizedAliases) {
+        const normalizedAlias = normalizeComparable(alias);
+        if (character.normalizedName === normalizedAlias) {
+          throw new Error("作者人物别名与已有人物名称冲突。");
+        }
+        if (aliasesContainNormalized(character.aliases, normalizedAlias)) {
+          throw new Error("作者人物别名已存在。");
+        }
+      }
+    }
+  }
+
   private findCharacterByNormalizedName(projectId: string, normalizedName: string): AuthorRelationshipCharacterRecord | null {
     const row = this.db
       .prepare("SELECT * FROM author_relationship_characters WHERE project_id = ? AND normalized_name = ?")
       .get(projectId, normalizedName) as AuthorRelationshipCharacterRow | undefined;
     return row ? mapCharacter(row) : null;
+  }
+
+  private findCharacterByNormalizedAlias(projectId: string, normalizedAlias: string): AuthorRelationshipCharacterRecord | null {
+    const matches = this.listCharacters(projectId).filter((character) => aliasesContainNormalized(character.aliases, normalizedAlias));
+    if (matches.length > 1) {
+      throw new Error("作者人物别名存在冲突。");
+    }
+    return matches[0] ?? null;
   }
 
   private findCharacterById(projectId: string, characterId: string): AuthorRelationshipCharacterRecord {

@@ -72,6 +72,7 @@ describe("character relationship graph page wiring", () => {
     expect(page).toContain("api.authorRelationship?.createCharacter");
     expect(page).toContain("api.authorRelationship?.updateCharacter");
     expect(page).toContain("api.authorRelationship?.createRelationship");
+    expect(page).toContain("api.authorRelationship?.updateRelationship");
     expect(page).toContain("api.authorRelationship?.deleteCharacter");
     expect(page).toContain("api.authorRelationship?.deleteRelationship");
     expect(page).toContain("graph?.edges.some((edge) => edge.id === id)");
@@ -89,7 +90,13 @@ describe("character relationship graph page wiring", () => {
     expect(authorControls).toContain("setSameRelationBothWays(false)");
     expect(authorControls).toContain("setReverseLabel(\"\")");
     expect(authorControls).toContain("删除人物");
+    expect(authorControls).toContain("window.confirm");
+    expect(authorControls).toContain("relationshipCountForNode");
     expect(authorControls).toContain("edge.authorRelationshipId ?? edge.id");
+    expect(authorControls).toContain("useState(false)");
+    expect(authorControls).toContain("默认只保存 A 对 B；需要反向关系时再填写 B 对 A。");
+    expect(authorControls).toContain("setSameRelationBothWays(false)");
+    expect(authorControls).toContain('setReverseLabel("")');
     expect(load).toContain("api.authorRelationship?.getGraph");
   });
 
@@ -113,6 +120,8 @@ describe("character relationship graph page wiring", () => {
     expect(inspector).toContain("所属阵营");
     expect(inspector).toContain("作者备注");
     expect(inspector).toContain("保存设定");
+    expect(inspector).toContain("onUpdateAuthorRelationship");
+    expect(inspector).toContain("保存关系");
   });
 
   it("opens source chapters from graph evidence through App navigation", () => {

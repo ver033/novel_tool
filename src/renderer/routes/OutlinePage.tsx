@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type CSSProperties,
+  type FormEvent,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode
+} from "react";
 import {
   CalendarBlank,
   Check,
@@ -30,6 +39,7 @@ import { getNovelToolApi } from "../state/app-store";
 type OutlinePageProps = {
   readonly currentProject: ProjectRecord | null;
   readonly initialChapterId?: string | null;
+  readonly onOpenChapterReview: () => void;
   readonly onOpenRelationshipGraph: () => void;
   readonly onOpenSettings: () => void;
   readonly onOpenWriting: () => void;
@@ -63,7 +73,8 @@ type EventDraft = {
 const viewOptions: Array<{ readonly value: OutlineViewMode; readonly label: string; readonly icon: ReactNode }> = [
   { value: "timeline", label: "时间线", icon: <CalendarBlank size={17} /> },
   { value: "chapter", label: "章节落点", icon: <ListBullets size={17} /> },
-  { value: "plotline", label: "情节线", icon: <GridFour size={17} /> }
+  { value: "plotline", label: "情节线", icon: <GridFour size={17} /> },
+  { value: "sheet", label: "表格", icon: <Rows size={17} /> }
 ];
 
 const statusLabels: Record<OutlineEventStatus, string> = {
@@ -80,6 +91,76 @@ const daySegmentLabels: Record<OutlineDaySegment, string> = {
   custom: "自定义",
   unknown: "未定"
 };
+
+const outlineSheetColumns = [
+  { id: "rowNumber", label: "#", defaultWidth: 46, minWidth: 42, maxWidth: 82, resizable: false },
+  { id: "chapter", label: "章节", defaultWidth: 150, minWidth: 116, maxWidth: 280, resizable: true },
+  { id: "storyTimeLabel", label: "故事时间", defaultWidth: 132, minWidth: 108, maxWidth: 260, resizable: true },
+  { id: "weekdayLabel", label: "星期/备注", defaultWidth: 122, minWidth: 100, maxWidth: 240, resizable: true },
+  { id: "daySegment", label: "时间段", defaultWidth: 106, minWidth: 88, maxWidth: 180, resizable: true },
+  { id: "threadNames", label: "情节线", defaultWidth: 176, minWidth: 124, maxWidth: 320, resizable: true },
+  { id: "summary", label: "场景摘要", defaultWidth: 430, minWidth: 260, maxWidth: 760, resizable: true },
+  { id: "characters", label: "角色", defaultWidth: 170, minWidth: 120, maxWidth: 360, resizable: true },
+  { id: "location", label: "地点", defaultWidth: 150, minWidth: 112, maxWidth: 320, resizable: true },
+  { id: "status", label: "状态", defaultWidth: 112, minWidth: 92, maxWidth: 180, resizable: true },
+  { id: "notes", label: "作者备注", defaultWidth: 190, minWidth: 130, maxWidth: 480, resizable: true }
+] as const;
+
+type OutlineSheetColumnId = (typeof outlineSheetColumns)[number]["id"];
+type OutlineSheetColumnWidths = Record<OutlineSheetColumnId, number>;
+
+const defaultOutlineSheetRowHeight = 48;
+const minOutlineSheetRowHeight = 40;
+const maxOutlineSheetRowHeight = 220;
+
+function clampOutlineSheetSize(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) {
+    return min;
+  }
+  return Math.min(max, Math.max(min, Math.round(value)));
+}
+
+function getDefaultOutlineSheetColumnWidths(): OutlineSheetColumnWidths {
+  return Object.fromEntries(outlineSheetColumns.map((column) => [column.id, column.defaultWidth])) as OutlineSheetColumnWidths;
+}
+
+function parseOutlineSheetColumnWidths(raw: string | null): OutlineSheetColumnWidths {
+  const defaults = getDefaultOutlineSheetColumnWidths();
+  if (!raw) {
+    return defaults;
+  }
+  try {
+    const parsed = JSON.parse(raw) as Partial<Record<OutlineSheetColumnId, number>>;
+    return Object.fromEntries(
+      outlineSheetColumns.map((column) => [
+        column.id,
+        clampOutlineSheetSize(parsed[column.id] ?? column.defaultWidth, column.minWidth, column.maxWidth)
+      ])
+    ) as OutlineSheetColumnWidths;
+  } catch {
+    return defaults;
+  }
+}
+
+function parseOutlineSheetRowHeights(raw: string | null): Record<string, number> {
+  if (!raw) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(raw) as Record<string, number>;
+    return Object.fromEntries(
+      Object.entries(parsed)
+        .filter(([eventId]) => eventId.trim().length > 0)
+        .map(([eventId, height]) => [eventId, clampOutlineSheetSize(height, minOutlineSheetRowHeight, maxOutlineSheetRowHeight)])
+    );
+  } catch {
+    return {};
+  }
+}
+
+function outlineSheetStorageKey(projectId: string, kind: "columns" | "rows"): string {
+  return `novelTool:outlineSheet:${projectId}:${kind}`;
+}
 
 function emptyDraft(chapterId: string | null): EventDraft {
   return {
@@ -173,9 +254,138 @@ function groupBy<T>(items: readonly T[], key: (item: T) => string): Array<{ read
   return [...map.entries()].map(([groupKey, groupItems]) => ({ key: groupKey, items: groupItems }));
 }
 
+export type OutlineSheetField =
+  | "chapterId"
+  | "storyTimeLabel"
+  | "weekdayLabel"
+  | "daySegment"
+  | "threadNames"
+  | "summary"
+  | "characters"
+  | "location"
+  | "status"
+  | "notes";
+
+type OutlineSheetPatch = Partial<{
+  readonly chapterId: string | null;
+  readonly storyTimeLabel: string;
+  readonly weekdayLabel: string;
+  readonly daySegment: OutlineDaySegment;
+  readonly customDaySegment: string | null;
+  readonly threadIds: string[];
+  readonly summary: string;
+  readonly characters: string[];
+  readonly location: string;
+  readonly status: OutlineEventStatus;
+  readonly notes: string;
+}>;
+
+export type OutlineSheetCellPatchResult =
+  | { readonly ok: true; readonly patch: OutlineSheetPatch; readonly missingThreadNames: readonly string[] }
+  | { readonly ok: false; readonly error: string };
+
+function sameStringList(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function statusFromSheetValue(value: string): OutlineEventStatus | null {
+  const trimmed = value.trim();
+  if (trimmed in statusLabels) {
+    return trimmed as OutlineEventStatus;
+  }
+  return (Object.entries(statusLabels).find(([, label]) => label === trimmed)?.[0] as OutlineEventStatus | undefined) ?? null;
+}
+
+function daySegmentFromSheetValue(value: string): { readonly daySegment: OutlineDaySegment; readonly customDaySegment: string | null } {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === "未定" || trimmed === "unknown") {
+    return { daySegment: "unknown", customDaySegment: null };
+  }
+  if (trimmed === "白天" || trimmed === "day") {
+    return { daySegment: "day", customDaySegment: null };
+  }
+  if (trimmed === "晚上" || trimmed === "夜晚" || trimmed === "night") {
+    return { daySegment: "night", customDaySegment: null };
+  }
+  if (trimmed === "custom" || trimmed === "自定义") {
+    return { daySegment: "custom", customDaySegment: "自定义" };
+  }
+  return { daySegment: "custom", customDaySegment: trimmed.slice(0, 80) };
+}
+
+export function getOutlineSheetThreadText(event: OutlineEventRecord, threads: readonly OutlineThreadRecord[]): string {
+  return event.threadIds
+    .map((id) => threads.find((thread) => thread.id === id)?.name)
+    .filter((name): name is string => Boolean(name))
+    .join("、");
+}
+
+export function buildOutlineSheetCellPatch(
+  field: OutlineSheetField,
+  value: string,
+  event: OutlineEventRecord,
+  chapters: readonly ChapterSummary[],
+  threads: readonly OutlineThreadRecord[]
+): OutlineSheetCellPatchResult {
+  const trimmed = value.trim();
+  if (field === "summary") {
+    if (!trimmed) {
+      return { ok: false, error: "场景摘要不能为空。" };
+    }
+    return { ok: true, patch: trimmed === event.summary ? {} : { summary: trimmed }, missingThreadNames: [] };
+  }
+  if (field === "chapterId") {
+    const chapterId = trimmed || null;
+    if (chapterId && !chapters.some((chapter) => chapter.id === chapterId)) {
+      return { ok: false, error: "章节不存在，无法保存章节落点。" };
+    }
+    return { ok: true, patch: chapterId === event.chapterId ? {} : { chapterId }, missingThreadNames: [] };
+  }
+  if (field === "storyTimeLabel") {
+    return { ok: true, patch: trimmed === event.storyTimeLabel ? {} : { storyTimeLabel: trimmed }, missingThreadNames: [] };
+  }
+  if (field === "weekdayLabel") {
+    return { ok: true, patch: trimmed === event.weekdayLabel ? {} : { weekdayLabel: trimmed }, missingThreadNames: [] };
+  }
+  if (field === "daySegment") {
+    const parsed = daySegmentFromSheetValue(trimmed);
+    const customDaySegment = parsed.daySegment === "custom" ? parsed.customDaySegment : null;
+    const unchanged = parsed.daySegment === event.daySegment && customDaySegment === (event.customDaySegment ?? null);
+    return { ok: true, patch: unchanged ? {} : { daySegment: parsed.daySegment, customDaySegment }, missingThreadNames: [] };
+  }
+  if (field === "threadNames") {
+    const names = splitList(trimmed);
+    const existingThreadIds = names
+      .map((name) => threads.find((thread) => thread.name === name)?.id)
+      .filter((id): id is string => Boolean(id));
+    const missingThreadNames = names.filter((name) => !threads.some((thread) => thread.name === name));
+    return {
+      ok: true,
+      patch: sameStringList(existingThreadIds, event.threadIds) && missingThreadNames.length === 0 ? {} : { threadIds: existingThreadIds },
+      missingThreadNames
+    };
+  }
+  if (field === "characters") {
+    const characters = splitList(trimmed);
+    return { ok: true, patch: sameStringList(characters, event.characters) ? {} : { characters }, missingThreadNames: [] };
+  }
+  if (field === "location") {
+    return { ok: true, patch: trimmed === event.location ? {} : { location: trimmed }, missingThreadNames: [] };
+  }
+  if (field === "status") {
+    const status = statusFromSheetValue(trimmed);
+    if (!status) {
+      return { ok: false, error: "状态不存在，无法保存。" };
+    }
+    return { ok: true, patch: status === event.status ? {} : { status }, missingThreadNames: [] };
+  }
+  return { ok: true, patch: trimmed === event.notes ? {} : { notes: trimmed }, missingThreadNames: [] };
+}
+
 export function OutlinePage({
   currentProject,
   initialChapterId = null,
+  onOpenChapterReview,
   onOpenRelationshipGraph,
   onOpenSettings,
   onOpenWriting,
@@ -201,6 +411,8 @@ export function OutlinePage({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [outlineSheetColumnWidths, setOutlineSheetColumnWidths] = useState<OutlineSheetColumnWidths>(() => getDefaultOutlineSheetColumnWidths());
+  const [outlineSheetRowHeights, setOutlineSheetRowHeights] = useState<Record<string, number>>({});
 
   const chapters = overview?.chapters ?? [];
   const threads = overview?.threads ?? [];
@@ -250,19 +462,50 @@ export function OutlinePage({
     setDraft(selectedEvent ? draftFromEvent(selectedEvent) : emptyDraft(selectedChapterId));
   }, [selectedChapterId, selectedEvent]);
 
+  useEffect(() => {
+    if (!projectId) {
+      setOutlineSheetColumnWidths(getDefaultOutlineSheetColumnWidths());
+      setOutlineSheetRowHeights({});
+      return;
+    }
+    setOutlineSheetColumnWidths(parseOutlineSheetColumnWidths(window.localStorage.getItem(outlineSheetStorageKey(projectId, "columns"))));
+    setOutlineSheetRowHeights(parseOutlineSheetRowHeights(window.localStorage.getItem(outlineSheetStorageKey(projectId, "rows"))));
+  }, [projectId]);
+
+  useEffect(() => {
+    if (!projectId) {
+      return;
+    }
+    window.localStorage.setItem(outlineSheetStorageKey(projectId, "columns"), JSON.stringify(outlineSheetColumnWidths));
+  }, [outlineSheetColumnWidths, projectId]);
+
+  useEffect(() => {
+    if (!projectId) {
+      return;
+    }
+    window.localStorage.setItem(outlineSheetStorageKey(projectId, "rows"), JSON.stringify(outlineSheetRowHeights));
+  }, [outlineSheetRowHeights, projectId]);
+
+  const outlineSheetGridTemplate = useMemo(
+    () => outlineSheetColumns.map((column) => `${outlineSheetColumnWidths[column.id]}px`).join(" "),
+    [outlineSheetColumnWidths]
+  );
+
   const navigate = useCallback(
     (module: ProjectModule) => {
       if (module === "writing") {
         onOpenWriting();
       } else if (module === "relationshipGraph") {
         onOpenRelationshipGraph();
+      } else if (module === "chapterReview") {
+        onOpenChapterReview();
       } else if (module === "goals") {
         onOpenWritingGoals();
       } else if (module === "settings") {
         onOpenSettings();
       }
     },
-    [onOpenRelationshipGraph, onOpenSettings, onOpenWriting, onOpenWritingGoals]
+    [onOpenChapterReview, onOpenRelationshipGraph, onOpenSettings, onOpenWriting, onOpenWritingGoals]
   );
 
   function startNewEvent(chapterId: string | null = selectedChapterId, threadId: string | null = null): void {
@@ -272,6 +515,64 @@ export function OutlinePage({
 
   function updateDraft(patch: Partial<EventDraft>): void {
     setDraft((current) => ({ ...current, ...patch }));
+  }
+
+  function startSheetColumnResize(event: ReactPointerEvent<HTMLSpanElement>, columnId: OutlineSheetColumnId): void {
+    const column = outlineSheetColumns.find((item) => item.id === columnId);
+    if (!column?.resizable) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    const startX = event.clientX;
+    const startWidth = outlineSheetColumnWidths[columnId] ?? column.defaultWidth;
+    const previousCursor = document.body.style.cursor;
+    const previousUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+
+    const move = (moveEvent: PointerEvent) => {
+      const nextWidth = clampOutlineSheetSize(startWidth + moveEvent.clientX - startX, column.minWidth, column.maxWidth);
+      setOutlineSheetColumnWidths((current) => ({ ...current, [columnId]: nextWidth }));
+    };
+    const stop = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+      window.removeEventListener("pointercancel", stop);
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousUserSelect;
+    };
+
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop, { once: true });
+    window.addEventListener("pointercancel", stop, { once: true });
+  }
+
+  function startSheetRowResize(event: ReactPointerEvent<HTMLSpanElement>, outlineEventId: string): void {
+    event.preventDefault();
+    event.stopPropagation();
+    const startY = event.clientY;
+    const startHeight = outlineSheetRowHeights[outlineEventId] ?? defaultOutlineSheetRowHeight;
+    const previousCursor = document.body.style.cursor;
+    const previousUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = "row-resize";
+    document.body.style.userSelect = "none";
+
+    const move = (moveEvent: PointerEvent) => {
+      const nextHeight = clampOutlineSheetSize(startHeight + moveEvent.clientY - startY, minOutlineSheetRowHeight, maxOutlineSheetRowHeight);
+      setOutlineSheetRowHeights((current) => ({ ...current, [outlineEventId]: nextHeight }));
+    };
+    const stop = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+      window.removeEventListener("pointercancel", stop);
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousUserSelect;
+    };
+
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop, { once: true });
+    window.addEventListener("pointercancel", stop, { once: true });
   }
 
   async function saveDraft(event: FormEvent): Promise<void> {
@@ -313,6 +614,41 @@ export function OutlinePage({
         : ((await api.outline.createEvent({ projectId, ...payload })) as OutlineEventRecord);
       setNotice(draft.id ? "大纲事件已更新。" : "大纲事件已创建。");
       setSelectedEventId(saved.id);
+      reload();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveSheetCell(outlineEvent: OutlineEventRecord, field: OutlineSheetField, value: string): Promise<void> {
+    if (!projectId) {
+      return;
+    }
+    const result = buildOutlineSheetCellPatch(field, value, outlineEvent, chapters, threads);
+    if (!result.ok) {
+      setError(result.error);
+      return;
+    }
+    if (Object.keys(result.patch).length === 0 && result.missingThreadNames.length === 0) {
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      let patch = result.patch;
+      if (result.missingThreadNames.length > 0) {
+        const createdThreadIds: string[] = [];
+        for (const name of result.missingThreadNames) {
+          const thread = (await api.outline.createThread({ projectId, name })) as OutlineThreadRecord;
+          createdThreadIds.push(thread.id);
+        }
+        patch = { ...patch, threadIds: [...(patch.threadIds ?? outlineEvent.threadIds), ...createdThreadIds] };
+      }
+      await api.outline.updateEvent({ projectId, eventId: outlineEvent.id, patch });
+      setSelectedEventId(outlineEvent.id);
+      setNotice("表格已保存。");
       reload();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
@@ -412,6 +748,28 @@ export function OutlinePage({
     }
   }
 
+  async function clearImportedEvents(): Promise<void> {
+    if (!projectId) {
+      return;
+    }
+    if (!window.confirm("清空导入内容？只会删除通过导入创建的大纲场景，手动创建的大纲不会受影响。")) {
+      return;
+    }
+    try {
+      setImportError(null);
+      const result = (await api.outline.clearImportedEvents({ projectId })) as { readonly deletedCount: number };
+      setNotice(result.deletedCount > 0 ? `已清空 ${result.deletedCount} 条导入的大纲场景。` : "没有需要清空的导入大纲场景。");
+      setImportOpen(false);
+      setImportPreview(null);
+      setImportText("");
+      setImportFileName("");
+      setImportError(null);
+      reload();
+    } catch (reason) {
+      setImportError(reason instanceof Error ? reason.message : String(reason));
+    }
+  }
+
   if (!currentProject) {
     return (
       <div className="outline-page">
@@ -430,6 +788,7 @@ export function OutlinePage({
     count: events.filter((event) => event.chapterId === chapter.id).length
   }));
   const timelineGroups = groupBy(filteredEvents, eventTimeLabel);
+  const sheetEvents = sortEventsByOutlineOrder(filteredEvents);
   const plotlineGroups = threads.map((thread) => ({
     thread,
     events: sortEventsByOutlineOrder(filteredEvents.filter((event) => event.threadIds.includes(thread.id)))
@@ -491,7 +850,7 @@ export function OutlinePage({
             </div>
           )}
 
-          <div className="outline-layout">
+          <div className={viewMode === "sheet" ? "outline-layout outline-layout-sheet" : "outline-layout"}>
             <aside className="outline-chapter-nav">
               <div className="outline-side-head">
                 <span>章节落点</span>
@@ -597,6 +956,130 @@ export function OutlinePage({
                 </div>
               )}
 
+              {viewMode === "sheet" && (
+                <div className="outline-sheet-wrap">
+                  <div className="outline-sheet-note">
+                    <strong>表格浏览模式</strong>
+                    <span>直接修改单元格，离开单元格后自动保存。拖拽表头右侧调整列宽，拖拽行号底部调整行高。</span>
+                    {saving ? <b>保存中</b> : null}
+                  </div>
+                  {sheetEvents.length === 0 ? (
+                    <div className="outline-empty-state">
+                      <Rows size={34} />
+                      <h2>还没有可编辑的大纲事件</h2>
+                      <p>先新增一个场景，或从 Excel / CSV 里导入已有大纲。</p>
+                    </div>
+                  ) : (
+                    <div className="outline-sheet-grid" role="grid" aria-label="大纲表格编辑">
+                      <div className="outline-sheet-row outline-sheet-header" role="row" style={{ gridTemplateColumns: outlineSheetGridTemplate }}>
+                        {outlineSheetColumns.map((column) => (
+                          <div
+                            className={column.id === "rowNumber" ? "outline-sheet-row-number" : "outline-sheet-header-cell"}
+                            key={column.id}
+                          >
+                            <span>{column.label}</span>
+                            {column.resizable ? (
+                              <span
+                                aria-label={`调整${column.label}列宽`}
+                                className="outline-sheet-column-resizer"
+                                onPointerDown={(pointerEvent) => startSheetColumnResize(pointerEvent, column.id)}
+                                role="separator"
+                                title="拖拽调整列宽"
+                              />
+                            ) : null}
+                          </div>
+                        ))}
+                      </div>
+                      {sheetEvents.map((outlineEvent, index) => {
+                        const rowStyle: CSSProperties = {
+                          gridTemplateColumns: outlineSheetGridTemplate,
+                          height: `${outlineSheetRowHeights[outlineEvent.id] ?? defaultOutlineSheetRowHeight}px`
+                        };
+                        return (
+                          <div
+                            className={selectedEventId === outlineEvent.id ? "outline-sheet-row active" : "outline-sheet-row"}
+                            key={outlineEvent.id}
+                            onClick={() => setSelectedEventId(outlineEvent.id)}
+                            role="row"
+                            style={rowStyle}
+                          >
+                            <div className="outline-sheet-row-number">
+                              <span>{index + 1}</span>
+                              <span
+                                aria-label={`调整第${index + 1}行高度`}
+                                className="outline-sheet-row-resizer"
+                                onPointerDown={(pointerEvent) => startSheetRowResize(pointerEvent, outlineEvent.id)}
+                                role="separator"
+                                title="拖拽调整行高"
+                              />
+                            </div>
+                            <select
+                              className="outline-sheet-cell"
+                              defaultValue={outlineEvent.chapterId ?? ""}
+                              onChange={(inputEvent) => { void saveSheetCell(outlineEvent, "chapterId", inputEvent.currentTarget.value); }}
+                            >
+                              <option value="">未安排章节</option>
+                              {chapters.map((chapter) => (
+                                <option key={chapter.id} value={chapter.id}>{chapter.title}</option>
+                              ))}
+                            </select>
+                            <input
+                              className="outline-sheet-cell"
+                              defaultValue={outlineEvent.storyTimeLabel}
+                              onBlur={(inputEvent) => { void saveSheetCell(outlineEvent, "storyTimeLabel", inputEvent.currentTarget.value); }}
+                            />
+                            <input
+                              className="outline-sheet-cell"
+                              defaultValue={outlineEvent.weekdayLabel}
+                              onBlur={(inputEvent) => { void saveSheetCell(outlineEvent, "weekdayLabel", inputEvent.currentTarget.value); }}
+                            />
+                            <input
+                              className="outline-sheet-cell"
+                              defaultValue={outlineEvent.daySegment === "custom" ? outlineEvent.customDaySegment ?? "" : daySegmentLabels[outlineEvent.daySegment]}
+                              onBlur={(inputEvent) => { void saveSheetCell(outlineEvent, "daySegment", inputEvent.currentTarget.value); }}
+                            />
+                            <input
+                              className="outline-sheet-cell"
+                              defaultValue={getOutlineSheetThreadText(outlineEvent, threads)}
+                              onBlur={(inputEvent) => { void saveSheetCell(outlineEvent, "threadNames", inputEvent.currentTarget.value); }}
+                            />
+                            <textarea
+                              className="outline-sheet-cell outline-sheet-summary-cell"
+                              defaultValue={outlineEvent.summary}
+                              onBlur={(inputEvent) => { void saveSheetCell(outlineEvent, "summary", inputEvent.currentTarget.value); }}
+                            />
+                            <input
+                              className="outline-sheet-cell"
+                              defaultValue={outlineEvent.characters.join("、")}
+                              onBlur={(inputEvent) => { void saveSheetCell(outlineEvent, "characters", inputEvent.currentTarget.value); }}
+                            />
+                            <input
+                              className="outline-sheet-cell"
+                              defaultValue={outlineEvent.location}
+                              onBlur={(inputEvent) => { void saveSheetCell(outlineEvent, "location", inputEvent.currentTarget.value); }}
+                            />
+                            <select
+                              className="outline-sheet-cell"
+                              defaultValue={outlineEvent.status}
+                              onChange={(inputEvent) => { void saveSheetCell(outlineEvent, "status", inputEvent.currentTarget.value); }}
+                            >
+                              {Object.entries(statusLabels).map(([value, label]) => (
+                                <option key={value} value={value}>{label}</option>
+                              ))}
+                            </select>
+                            <input
+                              className="outline-sheet-cell"
+                              defaultValue={outlineEvent.notes}
+                              onBlur={(inputEvent) => { void saveSheetCell(outlineEvent, "notes", inputEvent.currentTarget.value); }}
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {viewMode === "plotline" && (
                 <div className="outline-plotline-board">
                   {plotlineGroups.length === 0 && unthreadedPlotlineEvents.length === 0 ? (
@@ -657,7 +1140,7 @@ export function OutlinePage({
               )}
             </section>
 
-            <aside className="outline-inspector">
+            {viewMode !== "sheet" && <aside className="outline-inspector">
               <form onSubmit={(event) => { void saveDraft(event); }}>
                 <div className="outline-inspector-head">
                   <div>
@@ -795,7 +1278,7 @@ export function OutlinePage({
                   </button>
                 </div>
               </form>
-            </aside>
+            </aside>}
           </div>
         </section>
       </main>
@@ -839,6 +1322,7 @@ export function OutlinePage({
                 <div className="outline-import-summary">
                   <strong>{importPreview.rows.length} 条可导入</strong>
                   <span>{importPreview.newThreadNames.length} 条新情节线</span>
+                  {importPreview.skippedRows.length > 0 && <span>{importPreview.skippedRows.length} 行已跳过</span>}
                 </div>
                 <div className="outline-import-preview-list">
                   {importPreview.rows.slice(0, 8).map((row) => (
@@ -848,10 +1332,19 @@ export function OutlinePage({
                       {row.warnings.length > 0 && <small>{row.warnings.join("；")}</small>}
                     </div>
                   ))}
+                  {importPreview.skippedRows.slice(0, 3).map((row) => (
+                    <div key={`skipped:${row.rowNumber}`}>
+                      <b>第 {row.rowNumber} 行已跳过</b>
+                      <span>{row.reason}</span>
+                    </div>
+                  ))}
                 </div>
               </div>
             )}
             <footer>
+              <button className="outline-danger-button" onClick={() => { void clearImportedEvents(); }} type="button">
+                清空导入内容
+              </button>
               <Button onClick={() => { setImportOpen(false); setImportError(null); }} variant="secondary">取消</Button>
               <button className="outline-primary-button" disabled={!importPreview || importPreview.rows.length === 0} onClick={() => { void confirmImport(); }} type="button">
                 <Check size={17} />

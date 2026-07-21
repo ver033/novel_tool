@@ -25,12 +25,18 @@ import type {
   authorRelationshipGetGraphInputSchema,
   authorRelationshipUpdateCharacterInputSchema,
   authorRelationshipUpdateCharacterLayoutInputSchema,
+  authorRelationshipUpdateRelationshipInputSchema,
   chapterCreateInputSchema,
   chapterCreateSnapshotInputSchema,
   chapterDeleteInputSchema,
   chapterGetContentInputSchema,
   chapterListInputSchema,
   chapterRenameInputSchema,
+  chapterReviewCancelInputSchema,
+  chapterReviewDeleteRunInputSchema,
+  chapterReviewGetRunInputSchema,
+  chapterReviewListRunsInputSchema,
+  chapterReviewStartInputSchema,
   chapterSaveContentInputSchema,
   chapterUpdateTargetWordCountInputSchema,
   chapterCacheBuildOrderSchema,
@@ -39,6 +45,13 @@ import type {
   exportSelectTxtFilePathInputSchema,
   exportShareableProjectCopyInputSchema,
   exportTxtInputSchema,
+  externalBookSyncCancelScanInputSchema,
+  externalBookSyncClearSentHistoryInputSchema,
+  externalBookSyncForgetSourceInputSchema,
+  externalBookSyncPreviewCandidateInputSchema,
+  externalBookSyncScanInputSchema,
+  externalBookSyncSendToAiInputSchema,
+  externalBookSyncStatusInputSchema,
   importConfirmTxtInputSchema,
   importPreviewTxtInputSchema,
   importUpdatePreviewInputSchema,
@@ -59,6 +72,7 @@ import type {
   outlinePreviewImportFileInputSchema,
   outlineReorderEventsInputSchema,
   outlineSaveChapterNoteInputSchema,
+  outlineClearImportedEventsInputSchema,
   outlineUndoImportBatchInputSchema,
   outlineUpdateEventInputSchema,
   outlineUpdateThreadInputSchema,
@@ -79,6 +93,7 @@ import type {
   scratchUpdateInputSchema,
   settingsSaveInputSchema,
   settingsListModelsInputSchema,
+  startupLaunchUpdateInputSchema,
   settingsTestConnectionInputSchema,
   summaryCancelCurrentJobInputSchema,
   summaryClearAndRetryArcCacheInputSchema,
@@ -99,12 +114,15 @@ import type {
   writingGoalStatusSchema,
   writingGoalTypeSchema,
   writingGoalUpdateInputSchema,
-  writingWordEventSourceSchema
+  writingWordEventSourceSchema,
+  usageAnalyticsRecordEventInputSchema,
+  usageAnalyticsUpdateSettingsInputSchema
 } from "./schemas";
 import type { ProofreadIssue } from "./proofread";
 import type { RelationshipGraphPosition, RelationshipGraphResult, RelationshipGraphSourceStatus } from "./relationship-graph";
 import type { WritingContextPlanMetadata } from "./ai-candidate-metadata";
 import type { ArcAiSummaryPayload, BookAiSummaryPayload, ChapterAiSummaryChunkPayload, ChapterAiSummaryPayload, SummaryJobStatus, SummaryJobType, SummaryStatus } from "./summary-index";
+import type { ChapterReviewProgressEvent, ChapterReviewRunRecord } from "./chapter-review";
 
 export type TaskType = "polish" | "expand" | "proofread" | "continue";
 export type PromptPresetTaskType = "polish" | "expand" | "continue";
@@ -288,6 +306,120 @@ export type ImportPreview = {
   readonly chapters: readonly ImportPreviewChapter[];
   readonly createdAt: string;
   readonly updatedAt: string;
+};
+
+export type ExternalBookSyncSource = {
+  readonly id: string;
+  readonly projectId: string;
+  readonly bookFolderPath: string;
+  readonly displayName: string;
+  readonly lastKnownSize: number;
+  readonly lastModifiedAt: string | null;
+  readonly lastContentHash: string | null;
+  readonly lastScanAt: string;
+  readonly confirmedAt: string | null;
+  readonly selectionVersion: number;
+};
+
+export type ExternalBookMissingChapter = Omit<ImportPreviewChapter, "text"> & {
+  readonly ordinal: number | null;
+  readonly key: string;
+  readonly textLength: number;
+};
+
+export type ExternalBookReferenceChapter = Omit<ImportPreviewChapter, "text"> & {
+  readonly ordinal: number | null;
+  readonly key: string;
+  readonly projectChapterTitle: string;
+  readonly textLength: number;
+};
+
+export type ExternalBookComparisonResult = {
+  readonly currentLatestOrdinal: number | null;
+  readonly currentChapterCount: number;
+  readonly externalLatestOrdinal: number | null;
+  readonly externalChapterCount: number;
+  readonly latestProjectChapterInExternal: ExternalBookReferenceChapter | null;
+  readonly missingChapters: readonly ExternalBookMissingChapter[];
+  readonly warnings: readonly string[];
+};
+
+export type ExternalBookSyncCandidate = {
+  readonly id: string;
+  readonly projectId: string;
+  readonly filePath: string;
+  readonly fileName: string;
+  readonly size: number;
+  readonly modifiedAt: string | null;
+  readonly contentHash: string;
+  readonly encoding: string;
+  readonly reasons: readonly string[];
+  readonly warnings: readonly string[];
+  readonly detectedChapterCount: number;
+  readonly comparison: ExternalBookComparisonResult;
+};
+
+export type ExternalBookSyncStatus = {
+  readonly projectId: string;
+  readonly sources: readonly ExternalBookSyncSource[];
+  readonly search: {
+    readonly isRunning: boolean;
+    readonly mode: "quick" | "global" | "directory" | null;
+    readonly trigger: "manual" | "scheduled" | "startup" | null;
+    readonly startedAt: string | null;
+  };
+  readonly latestAutomaticRun: {
+    readonly id: string;
+    readonly trigger: "scheduled" | "startup";
+    readonly scheduledSlotKey: string;
+    readonly scheduledLocalTime: string;
+    readonly status: "running" | "completed" | "skipped" | "failed";
+    readonly candidateCount: number;
+    readonly sentMessageCount: number;
+    readonly sentChapterCount: number;
+    readonly sentMissingChapterCount: number;
+    readonly sentLatestProjectChapter: boolean;
+    readonly error: string | null;
+    readonly requestedAt: string;
+    readonly completedAt: string | null;
+  } | null;
+};
+
+export type ExternalBookScanProgress = {
+  readonly phase: "scanning";
+  readonly currentRoot: string | null;
+  readonly checkedDirectories: number;
+  readonly checkedFiles: number;
+  readonly candidatesFound: number;
+  readonly skippedErrors: number;
+  readonly elapsedMs: number;
+};
+
+export type ExternalBookSyncScanResult = {
+  readonly requestId: string;
+  readonly projectId: string;
+  readonly candidates: readonly ExternalBookSyncCandidate[];
+  readonly scan: {
+    readonly files: readonly { readonly path: string; readonly size: number; readonly modifiedAt: string | null }[];
+    readonly checkedDirectories: number;
+    readonly checkedFiles: number;
+    readonly skippedErrors: number;
+    readonly timedOut: boolean;
+    readonly cancelled: boolean;
+    readonly elapsedMs: number;
+  } | null;
+  readonly warnings: readonly string[];
+  readonly searchedRoots: readonly string[];
+  readonly completedAt: string;
+};
+
+export type ExternalBookSyncSendResult = {
+  readonly sessionId: string;
+  readonly sessionTitle: string;
+  readonly sentMessageCount: number;
+  readonly sentChapterCount: number;
+  readonly sentMissingChapterCount: number;
+  readonly sentLatestProjectChapter: boolean;
 };
 
 export type ImportConfirmResult = {
@@ -591,6 +723,12 @@ export type ChapterGetContentInput = z.input<typeof chapterGetContentInputSchema
 export type ChapterSaveContentInput = z.input<typeof chapterSaveContentInputSchema>;
 export type ChapterCreateSnapshotInput = z.input<typeof chapterCreateSnapshotInputSchema>;
 export type ChapterUpdateTargetWordCountInput = z.input<typeof chapterUpdateTargetWordCountInputSchema>;
+export type ChapterReviewStartInput = z.input<typeof chapterReviewStartInputSchema>;
+export type ChapterReviewCancelInput = z.input<typeof chapterReviewCancelInputSchema>;
+export type ChapterReviewListRunsInput = z.input<typeof chapterReviewListRunsInputSchema>;
+export type ChapterReviewGetRunInput = z.input<typeof chapterReviewGetRunInputSchema>;
+export type ChapterReviewDeleteRunInput = z.input<typeof chapterReviewDeleteRunInputSchema>;
+export type { ChapterReviewProgressEvent, ChapterReviewRunRecord };
 export type WritingGoalOverviewInput = z.input<typeof writingGoalOverviewInputSchema>;
 export type WritingGoalCreateInput = z.input<typeof writingGoalCreateInputSchema>;
 export type WritingGoalUpdateInput = z.input<typeof writingGoalUpdateInputSchema>;
@@ -600,6 +738,36 @@ export type WritingGoalDayDetailInput = z.input<typeof writingGoalDayDetailInput
 export type SettingsSaveInput = z.input<typeof settingsSaveInputSchema>;
 export type SettingsTestConnectionInput = z.input<typeof settingsTestConnectionInputSchema>;
 export type SettingsListModelsInput = z.input<typeof settingsListModelsInputSchema>;
+export type StartupLaunchStatus = {
+  readonly supported: boolean;
+  readonly enabled: boolean;
+  readonly reason: "not_windows" | "not_packaged" | null;
+};
+export type StartupLaunchUpdateInput = z.input<typeof startupLaunchUpdateInputSchema>;
+export type UsageAnalyticsRecordEventInput = z.input<typeof usageAnalyticsRecordEventInputSchema>;
+export type UsageAnalyticsUpdateSettingsInput = z.input<typeof usageAnalyticsUpdateSettingsInputSchema>;
+export type UsageAnalyticsStatus = {
+  readonly automaticReportsEnabled: boolean;
+  readonly scheduleLocalTimes: readonly string[];
+  readonly reportRangeDays: number;
+  readonly nextScheduledAt: string | null;
+  readonly lastAttemptAt: string | null;
+  readonly lastSuccessAt: string | null;
+  readonly lastError: string | null;
+  readonly latestReportText: string | null;
+};
+export type UsageAnalyticsReportRun = {
+  readonly id: string;
+  readonly trigger: "automatic" | "manual";
+  readonly scheduledSlotKey: string | null;
+  readonly scheduledLocalTime: string | null;
+  readonly status: "running" | "completed" | "failed";
+  readonly snapshotJson: string | null;
+  readonly reportText: string | null;
+  readonly error: string | null;
+  readonly requestedAt: string;
+  readonly completedAt: string | null;
+};
 export type AiCreateTaskInput = z.input<typeof aiCreateTaskInputSchema>;
 export type AiUpdateTaskInput = z.input<typeof aiUpdateTaskInputSchema>;
 export type AiGeneratePreviewStreamInput = z.input<typeof aiGeneratePreviewStreamInputSchema>;
@@ -624,6 +792,13 @@ export type ScratchDeleteInput = z.input<typeof scratchDeleteInputSchema>;
 export type ImportPreviewTxtInput = z.input<typeof importPreviewTxtInputSchema>;
 export type ImportUpdatePreviewInput = z.input<typeof importUpdatePreviewInputSchema>;
 export type ImportConfirmTxtInput = z.input<typeof importConfirmTxtInputSchema>;
+export type ExternalBookSyncStatusInput = z.input<typeof externalBookSyncStatusInputSchema>;
+export type ExternalBookSyncScanInput = z.input<typeof externalBookSyncScanInputSchema>;
+export type ExternalBookSyncCancelScanInput = z.input<typeof externalBookSyncCancelScanInputSchema>;
+export type ExternalBookSyncPreviewCandidateInput = z.input<typeof externalBookSyncPreviewCandidateInputSchema>;
+export type ExternalBookSyncSendToAiInput = z.input<typeof externalBookSyncSendToAiInputSchema>;
+export type ExternalBookSyncForgetSourceInput = z.input<typeof externalBookSyncForgetSourceInputSchema>;
+export type ExternalBookSyncClearSentHistoryInput = z.input<typeof externalBookSyncClearSentHistoryInputSchema>;
 export type OutlineGetOverviewInput = z.input<typeof outlineGetOverviewInputSchema>;
 export type OutlineListEventsInput = z.input<typeof outlineListEventsInputSchema>;
 export type OutlineCreateEventInput = z.input<typeof outlineCreateEventInputSchema>;
@@ -641,6 +816,7 @@ export type OutlinePreviewImportFileInput = z.input<typeof outlinePreviewImportF
 export type OutlinePreviewBulkImportInput = z.input<typeof outlinePreviewBulkImportInputSchema>;
 export type OutlineConfirmBulkImportInput = z.input<typeof outlineConfirmBulkImportInputSchema>;
 export type OutlineUndoImportBatchInput = z.input<typeof outlineUndoImportBatchInputSchema>;
+export type OutlineClearImportedEventsInput = z.input<typeof outlineClearImportedEventsInputSchema>;
 export type ExportSelectTxtFilePathInput = z.input<typeof exportSelectTxtFilePathInputSchema>;
 export type ExportTxtInput = z.input<typeof exportTxtInputSchema>;
 export type ExportTxtResult = {
@@ -679,6 +855,7 @@ export type AuthorRelationshipCreateCharacterInput = z.input<typeof authorRelati
 export type AuthorRelationshipUpdateCharacterInput = z.input<typeof authorRelationshipUpdateCharacterInputSchema>;
 export type AuthorRelationshipUpdateCharacterLayoutInput = z.input<typeof authorRelationshipUpdateCharacterLayoutInputSchema>;
 export type AuthorRelationshipCreateRelationshipInput = z.input<typeof authorRelationshipCreateRelationshipInputSchema>;
+export type AuthorRelationshipUpdateRelationshipInput = z.input<typeof authorRelationshipUpdateRelationshipInputSchema>;
 export type AuthorRelationshipDeleteCharacterInput = z.input<typeof authorRelationshipDeleteCharacterInputSchema>;
 export type AuthorRelationshipDeleteRelationshipInput = z.input<typeof authorRelationshipDeleteRelationshipInputSchema>;
 export type { RelationshipGraphResult, RelationshipGraphSourceStatus };
@@ -827,11 +1004,29 @@ export const ipcChannels = {
     updateTargetWordCount: "novelTool:chapter:updateTargetWordCount",
     createSnapshot: "novelTool:chapter:createSnapshot"
   },
+  chapterReview: {
+    startReview: "novelTool:chapterReview:startReview",
+    cancelReview: "novelTool:chapterReview:cancelReview",
+    listRuns: "novelTool:chapterReview:listRuns",
+    getRun: "novelTool:chapterReview:getRun",
+    deleteRun: "novelTool:chapterReview:deleteRun",
+    progress: "novelTool:chapterReview:progress"
+  },
   settings: {
     get: "novelTool:settings:get",
     save: "novelTool:settings:save",
     testConnection: "novelTool:settings:testConnection",
     listModels: "novelTool:settings:listModels"
+  },
+  startupLaunch: {
+    getStatus: "novelTool:startupLaunch:getStatus",
+    updateSettings: "novelTool:startupLaunch:updateSettings"
+  },
+  usageAnalytics: {
+    getStatus: "novelTool:usageAnalytics:getStatus",
+    updateSettings: "novelTool:usageAnalytics:updateSettings",
+    recordEvent: "novelTool:usageAnalytics:recordEvent",
+    sendReportNow: "novelTool:usageAnalytics:sendReportNow"
   },
   ai: {
     createTask: "novelTool:ai:createTask",
@@ -880,6 +1075,7 @@ export const ipcChannels = {
     updateCharacter: "novelTool:authorRelationship:updateCharacter",
     updateCharacterLayout: "novelTool:authorRelationship:updateCharacterLayout",
     createRelationship: "novelTool:authorRelationship:createRelationship",
+    updateRelationship: "novelTool:authorRelationship:updateRelationship",
     deleteCharacter: "novelTool:authorRelationship:deleteCharacter",
     deleteRelationship: "novelTool:authorRelationship:deleteRelationship"
   },
@@ -901,7 +1097,8 @@ export const ipcChannels = {
     previewImportFile: "novelTool:outline:previewImportFile",
     previewBulkImport: "novelTool:outline:previewBulkImport",
     confirmBulkImport: "novelTool:outline:confirmBulkImport",
-    undoImportBatch: "novelTool:outline:undoImportBatch"
+    undoImportBatch: "novelTool:outline:undoImportBatch",
+    clearImportedEvents: "novelTool:outline:clearImportedEvents"
   },
   writingGoals: {
     getOverview: "novelTool:writingGoals:getOverview",
@@ -924,6 +1121,19 @@ export const ipcChannels = {
     previewTxt: "novelTool:import:previewTxt",
     updatePreview: "novelTool:import:updatePreview",
     confirmTxtImport: "novelTool:import:confirmTxtImport"
+  },
+  externalBookSync: {
+    getStatus: "novelTool:externalBookSync:getStatus",
+    scan: "novelTool:externalBookSync:scan",
+    cancelScan: "novelTool:externalBookSync:cancelScan",
+    selectDirectory: "novelTool:externalBookSync:selectDirectory",
+    previewCandidate: "novelTool:externalBookSync:previewCandidate",
+    sendMissingChaptersToAi: "novelTool:externalBookSync:sendMissingChaptersToAi",
+    forgetSource: "novelTool:externalBookSync:forgetSource",
+    clearSentHistory: "novelTool:externalBookSync:clearSentHistory",
+    scanProgress: "novelTool:externalBookSync:scanProgress",
+    scanDone: "novelTool:externalBookSync:scanDone",
+    scanError: "novelTool:externalBookSync:scanError"
   },
   export: {
     selectTxtFilePath: "novelTool:export:selectTxtFilePath",

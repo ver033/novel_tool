@@ -8,6 +8,7 @@ import type {
   OutlineBulkImportPreview,
   OutlineBulkImportPreviewRow,
   OutlineChapterNoteRecord,
+  OutlineClearImportedEventsInput,
   OutlineConfirmBulkImportInput,
   OutlineCreateEventInput,
   OutlineCreateThreadInput,
@@ -47,18 +48,72 @@ function uniqueStrings(values: readonly string[]): string[] {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
 }
 
+const previewLimits = {
+  chapterTitle: 160,
+  text80: 80,
+  text120: 120,
+  summary: 1000,
+  warning: 300,
+  maxWarnings: 20,
+  maxThreads: 50,
+  maxCharacters: 30,
+  maxImportRows: 5000
+} as const;
+
+function addWarning(warnings: string[], message: string): void {
+  if (warnings.length < previewLimits.maxWarnings) {
+    warnings.push(message.slice(0, previewLimits.warning));
+  }
+}
+
+function clampText(value: string, maxLength: number, fieldName: string, warnings: string[]): string {
+  const trimmed = value.trim();
+  if (trimmed.length <= maxLength) {
+    return trimmed;
+  }
+  addWarning(warnings, `${fieldName}过长，已截断到 ${maxLength} 字。`);
+  return trimmed.slice(0, maxLength);
+}
+
+function sanitizeWarnings(values: readonly string[]): string[] {
+  return uniqueStrings(values).slice(0, previewLimits.maxWarnings).map((value) => value.slice(0, previewLimits.warning));
+}
+
+function sanitizeStringList(values: readonly string[], maxItems: number, maxLength: number, fieldName: string, warnings: string[]): string[] {
+  const sanitized: string[] = [];
+  for (const value of values) {
+    const next = clampText(value, maxLength, fieldName, warnings);
+    if (next && !sanitized.includes(next)) {
+      sanitized.push(next);
+    }
+    if (sanitized.length >= maxItems) {
+      break;
+    }
+  }
+  if (uniqueStrings(values).length > maxItems) {
+    addWarning(warnings, `${fieldName}数量过多，仅保留前 ${maxItems} 个。`);
+  }
+  return sanitized;
+}
+
 function normalizeRow(row: ParsedOutlineImportRow, chapters: readonly ChapterSummary[]): OutlineBulkImportPreviewRow {
   const chapterByTitle = new Map(chapters.map((chapter) => [normalizeName(chapter.title), chapter]));
   const chapter = row.chapterTitle ? chapterByTitle.get(normalizeName(row.chapterTitle)) : undefined;
-  const warnings: string[] = [...row.warnings];
+  const warnings = sanitizeWarnings(row.warnings);
   if (row.chapterTitle && !chapter) {
-    warnings.push(`未找到章节：${row.chapterTitle}`);
+    addWarning(warnings, `未找到章节：${row.chapterTitle}`);
   }
   return {
     ...row,
+    chapterTitle: clampText(row.chapterTitle, previewLimits.chapterTitle, "章节名", warnings),
     chapterId: chapter?.id ?? null,
-    threadNames: uniqueStrings(row.threadNames),
-    characters: uniqueStrings(row.characters),
+    storyTimeLabel: clampText(row.storyTimeLabel, previewLimits.text80, "故事时间", warnings),
+    weekdayLabel: clampText(row.weekdayLabel, previewLimits.text80, "星期/备注", warnings),
+    customDaySegment: row.customDaySegment ? clampText(row.customDaySegment, previewLimits.text80, "自定义时间段", warnings) : null,
+    threadNames: sanitizeStringList(row.threadNames, previewLimits.maxThreads, previewLimits.text80, "情节线", warnings),
+    summary: clampText(row.summary, previewLimits.summary, "场景摘要", warnings),
+    characters: sanitizeStringList(row.characters, previewLimits.maxCharacters, previewLimits.text80, "角色", warnings),
+    location: clampText(row.location, previewLimits.text120, "地点", warnings),
     warnings
   };
 }
@@ -276,16 +331,25 @@ export class OutlineService {
     return { deletedCount: this.repo.deleteImportBatch(input.projectId, input.importBatchId) };
   }
 
+  clearImportedEvents(input: OutlineClearImportedEventsInput): { deletedCount: number } {
+    this.ensureProject(input.projectId);
+    return { deletedCount: this.repo.deleteImportedEvents(input.projectId) };
+  }
+
   private buildPreview(projectId: string, rows: readonly ParsedOutlineImportRow[]): OutlineBulkImportPreview {
     const chapters = this.chapterRepo.listByProject(projectId);
-    const normalizedRows = rows.map((row) => normalizeRow(row, chapters));
+    const importableRows = rows.slice(0, previewLimits.maxImportRows);
+    const normalizedRows = importableRows.map((row) => normalizeRow(row, chapters));
     const existingThreadNames = new Set(this.repo.listThreads(projectId).map((thread) => normalizeName(thread.name)));
     const newThreadNames = uniqueStrings(normalizedRows.flatMap((row) => row.threadNames)).filter((threadName) => !existingThreadNames.has(normalizeName(threadName)));
     return {
       importBatchId: createId("outline_import"),
       rows: normalizedRows,
       newThreadNames,
-      skippedRows: []
+      skippedRows: rows.slice(previewLimits.maxImportRows).map((row) => ({
+        rowNumber: row.rowNumber,
+        reason: `超过单次导入上限 ${previewLimits.maxImportRows} 条，请拆分文件后再导入。`
+      }))
     };
   }
 

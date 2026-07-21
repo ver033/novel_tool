@@ -71,6 +71,23 @@ function normalizeRelationLabel(value: string | null | undefined): string {
   return value?.replace(/\s+/g, " ").trim() ?? "";
 }
 
+function relationshipCountForNode(nodeId: string, edges: readonly RelationshipGraphEdge[]): number {
+  const relationshipIds = new Set<string>();
+  for (const edge of edges) {
+    if (edge.sourceId !== nodeId && edge.targetId !== nodeId) {
+      continue;
+    }
+    relationshipIds.add(edge.authorRelationshipId ?? edge.id);
+  }
+  return relationshipIds.size;
+}
+
+function confirmDeleteCharacter(node: RelationshipGraphNode, edges: readonly RelationshipGraphEdge[]): boolean {
+  const relationshipCount = relationshipCountForNode(node.id, edges);
+  const cascadeHint = relationshipCount > 0 ? `，并删除 ${relationshipCount} 条相关关系` : "";
+  return window.confirm(`删除人物“${node.name}”${cascadeHint}？`);
+}
+
 export function AuthorRelationshipControls({
   edges,
   loading,
@@ -311,7 +328,12 @@ export function AuthorRelationshipControls({
                       aria-label={`删除${node.name}`}
                       className="relationship-panel-icon-button subtle-danger"
                       disabled={submitting}
-                      onClick={() => void runAction(() => onDeleteCharacter(node.id))}
+                      onClick={() => {
+                        if (!confirmDeleteCharacter(node, edges)) {
+                          return;
+                        }
+                        void runAction(() => onDeleteCharacter(node.id));
+                      }}
                       title="删除人物"
                       type="button"
                     >

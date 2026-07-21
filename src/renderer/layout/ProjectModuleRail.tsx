@@ -1,7 +1,7 @@
-import { BookOpen, ChartBar, Files, GearSix, Graph, ListBullets, Target, Trash } from "@phosphor-icons/react";
+import { BookOpen, ChartBar, Files, GearSix, Graph, ListBullets, MagnifyingGlass, Target, Trash } from "@phosphor-icons/react";
 import type { ReactNode } from "react";
 
-export type ProjectModule = "writing" | "relationshipGraph" | "outline" | "materials" | "goals" | "stats" | "trash" | "settings";
+export type ProjectModule = "writing" | "relationshipGraph" | "outline" | "chapterReview" | "materials" | "goals" | "stats" | "trash" | "settings";
 
 type ProjectModuleItem = {
   readonly id: ProjectModule;
@@ -21,6 +21,7 @@ const moduleItems: readonly ProjectModuleItem[] = [
   { id: "writing", label: "正文", icon: <BookOpen size={22} /> },
   { id: "relationshipGraph", label: "人物关系图", icon: <Graph size={22} />, title: "查看人物关系" },
   { id: "outline", label: "大纲", icon: <ListBullets size={22} />, title: "维护全书大纲" },
+  { id: "chapterReview", label: "AI审稿", icon: <MagnifyingGlass size={22} />, title: "审阅章节质量" },
   { id: "materials", label: "资料", icon: <Files size={22} />, disabled: true, title: "规划中" },
   { id: "goals", label: "写作目标", icon: <Target size={22} />, title: "查看写作目标" },
   { id: "stats", label: "统计", icon: <ChartBar size={22} />, disabled: true, title: "规划中" },

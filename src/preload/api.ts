@@ -28,22 +28,43 @@ import type {
   AuthorRelationshipGetGraphInput,
   AuthorRelationshipUpdateCharacterInput,
   AuthorRelationshipUpdateCharacterLayoutInput,
+  AuthorRelationshipUpdateRelationshipInput,
   ChapterCreateInput,
   ChapterCreateSnapshotInput,
   ChapterDeleteInput,
   ChapterGetContentInput,
   ChapterListInput,
   ChapterRenameInput,
+  ChapterReviewCancelInput,
+  ChapterReviewDeleteRunInput,
+  ChapterReviewGetRunInput,
+  ChapterReviewListRunsInput,
+  ChapterReviewProgressEvent,
+  ChapterReviewRunRecord,
+  ChapterReviewStartInput,
   ChapterSaveContentInput,
   ChapterUpdateTargetWordCountInput,
   ExportSelectShareableProjectFilePathInput,
   ExportSelectTxtFilePathInput,
   ExportShareableProjectCopyInput,
   ExportTxtInput,
+  ExternalBookScanProgress,
+  ExternalBookSyncCancelScanInput,
+  ExternalBookSyncCandidate,
+  ExternalBookSyncClearSentHistoryInput,
+  ExternalBookSyncForgetSourceInput,
+  ExternalBookSyncPreviewCandidateInput,
+  ExternalBookSyncScanInput,
+  ExternalBookSyncScanResult,
+  ExternalBookSyncSendResult,
+  ExternalBookSyncSendToAiInput,
+  ExternalBookSyncStatus,
+  ExternalBookSyncStatusInput,
   ImportConfirmTxtInput,
   ImportPreviewTxtInput,
   ImportUpdatePreviewInput,
   OutlineConfirmBulkImportInput,
+  OutlineClearImportedEventsInput,
   OutlineCreateEventInput,
   OutlineCreateThreadInput,
   OutlineDeleteEventInput,
@@ -76,6 +97,8 @@ import type {
   SettingsListModelsInput,
   SettingsSaveInput,
   SettingsTestConnectionInput,
+  StartupLaunchStatus,
+  StartupLaunchUpdateInput,
   SummaryCancelCurrentJobInput,
   SummaryClearAndRetryArcCacheInput,
   SummaryClearAndRetryBookCacheInput,
@@ -86,6 +109,10 @@ import type {
   SummaryIndexStatusInput,
   SummaryListCacheEntriesInput,
   SummaryRebuildProjectIndexInput,
+  UsageAnalyticsRecordEventInput,
+  UsageAnalyticsReportRun,
+  UsageAnalyticsStatus,
+  UsageAnalyticsUpdateSettingsInput,
   WritingGoalCreateInput,
   WritingGoalDayDetailInput,
   WritingGoalListDailyStatsInput,
@@ -102,6 +129,27 @@ type AiStreamHandlers = {
   readonly onDone?: (event: AiStreamDoneEvent) => void;
   readonly onError?: (event: AiStreamErrorEvent) => void;
 };
+
+type ExternalBookSyncScanProgressEvent = ExternalBookScanProgress & {
+  readonly requestId: string;
+};
+
+type ExternalBookSyncScanErrorEvent = {
+  readonly requestId: string;
+  readonly error: string;
+};
+
+type ExternalBookSyncScanDoneEvent = ExternalBookSyncScanResult & {
+  readonly requestId: string;
+};
+
+type ExternalBookSyncScanHandlers = {
+  readonly onProgress?: (event: ExternalBookSyncScanProgressEvent) => void;
+  readonly onDone?: (event: ExternalBookSyncScanDoneEvent) => void;
+  readonly onError?: (event: ExternalBookSyncScanErrorEvent) => void;
+};
+
+type ChapterReviewProgressHandler = (event: ChapterReviewProgressEvent) => void;
 
 export type NovelToolApi = {
   readonly platform: {
@@ -133,11 +181,29 @@ export type NovelToolApi = {
     readonly updateTargetWordCount: (input: ChapterUpdateTargetWordCountInput) => Promise<unknown>;
     readonly createSnapshot: (input: ChapterCreateSnapshotInput) => Promise<unknown>;
   };
+  readonly chapterReview: {
+    readonly startReview: (input: ChapterReviewStartInput) => Promise<ChapterReviewRunRecord>;
+    readonly cancelReview: (input: ChapterReviewCancelInput) => Promise<unknown>;
+    readonly listRuns: (input: ChapterReviewListRunsInput) => Promise<ChapterReviewRunRecord[]>;
+    readonly getRun: (input: ChapterReviewGetRunInput) => Promise<ChapterReviewRunRecord>;
+    readonly deleteRun: (input: ChapterReviewDeleteRunInput) => Promise<unknown>;
+    readonly subscribeProgress: (requestId: string, handler: ChapterReviewProgressHandler) => () => void;
+  };
   readonly settings: {
     readonly get: () => Promise<unknown>;
     readonly save: (input: SettingsSaveInput) => Promise<unknown>;
     readonly testConnection: (input?: SettingsTestConnectionInput) => Promise<unknown>;
     readonly listModels: (input?: SettingsListModelsInput) => Promise<unknown>;
+  };
+  readonly startupLaunch: {
+    readonly getStatus: () => Promise<StartupLaunchStatus>;
+    readonly updateSettings: (input: StartupLaunchUpdateInput) => Promise<StartupLaunchStatus>;
+  };
+  readonly usageAnalytics: {
+    readonly getStatus: () => Promise<UsageAnalyticsStatus>;
+    readonly updateSettings: (input: UsageAnalyticsUpdateSettingsInput) => Promise<unknown>;
+    readonly recordEvent: (input: UsageAnalyticsRecordEventInput) => Promise<unknown>;
+    readonly sendReportNow: () => Promise<UsageAnalyticsReportRun>;
   };
   readonly summary: {
     readonly getIndexStatus: (input: SummaryIndexStatusInput) => Promise<unknown>;
@@ -162,6 +228,7 @@ export type NovelToolApi = {
     readonly updateCharacter: (input: AuthorRelationshipUpdateCharacterInput) => Promise<unknown>;
     readonly updateCharacterLayout: (input: AuthorRelationshipUpdateCharacterLayoutInput) => Promise<unknown>;
     readonly createRelationship: (input: AuthorRelationshipCreateRelationshipInput) => Promise<unknown>;
+    readonly updateRelationship: (input: AuthorRelationshipUpdateRelationshipInput) => Promise<unknown>;
     readonly deleteCharacter: (input: AuthorRelationshipDeleteCharacterInput) => Promise<unknown>;
     readonly deleteRelationship: (input: AuthorRelationshipDeleteRelationshipInput) => Promise<unknown>;
   };
@@ -184,6 +251,7 @@ export type NovelToolApi = {
     readonly previewBulkImport: (input: OutlinePreviewBulkImportInput) => Promise<unknown>;
     readonly confirmBulkImport: (input: OutlineConfirmBulkImportInput) => Promise<unknown>;
     readonly undoImportBatch: (input: OutlineUndoImportBatchInput) => Promise<unknown>;
+    readonly clearImportedEvents: (input: OutlineClearImportedEventsInput) => Promise<unknown>;
   };
   readonly writingGoals: {
     readonly getOverview: (input: WritingGoalOverviewInput) => Promise<unknown>;
@@ -227,6 +295,17 @@ export type NovelToolApi = {
     readonly updatePreview: (input: ImportUpdatePreviewInput) => Promise<unknown>;
     readonly confirmTxtImport: (input: ImportConfirmTxtInput) => Promise<unknown>;
   };
+  readonly externalBookSync: {
+    readonly getStatus: (input: ExternalBookSyncStatusInput) => Promise<ExternalBookSyncStatus>;
+    readonly scan: (input: ExternalBookSyncScanInput) => Promise<ExternalBookSyncScanResult>;
+    readonly cancelScan: (input: ExternalBookSyncCancelScanInput) => Promise<unknown>;
+    readonly selectDirectory: () => Promise<{ readonly directoryPath: string } | null>;
+    readonly previewCandidate: (input: ExternalBookSyncPreviewCandidateInput) => Promise<ExternalBookSyncCandidate>;
+    readonly sendMissingChaptersToAi: (input: ExternalBookSyncSendToAiInput) => Promise<ExternalBookSyncSendResult>;
+    readonly forgetSource: (input: ExternalBookSyncForgetSourceInput) => Promise<unknown>;
+    readonly clearSentHistory: (input: ExternalBookSyncClearSentHistoryInput) => Promise<{ readonly ok: true; readonly deletedCount: number }>;
+    readonly subscribeScan: (requestId: string, handlers: ExternalBookSyncScanHandlers) => () => void;
+  };
   readonly export: {
     readonly selectTxtFilePath: (input: ExportSelectTxtFilePathInput) => Promise<unknown>;
     readonly exportTxt: (input: ExportTxtInput) => Promise<unknown>;
@@ -265,11 +344,39 @@ export const novelToolApi: NovelToolApi = Object.freeze({
     updateTargetWordCount: (input: ChapterUpdateTargetWordCountInput) => ipcRenderer.invoke(ipcChannels.chapter.updateTargetWordCount, input),
     createSnapshot: (input: ChapterCreateSnapshotInput) => ipcRenderer.invoke(ipcChannels.chapter.createSnapshot, input)
   }),
+  chapterReview: Object.freeze({
+    startReview: (input: ChapterReviewStartInput) => ipcRenderer.invoke(ipcChannels.chapterReview.startReview, input),
+    cancelReview: (input: ChapterReviewCancelInput) => ipcRenderer.invoke(ipcChannels.chapterReview.cancelReview, input),
+    listRuns: (input: ChapterReviewListRunsInput) => ipcRenderer.invoke(ipcChannels.chapterReview.listRuns, input),
+    getRun: (input: ChapterReviewGetRunInput) => ipcRenderer.invoke(ipcChannels.chapterReview.getRun, input),
+    deleteRun: (input: ChapterReviewDeleteRunInput) => ipcRenderer.invoke(ipcChannels.chapterReview.deleteRun, input),
+    subscribeProgress: (requestId: string, handler: ChapterReviewProgressHandler) => {
+      const onProgress = (_event: IpcRendererEvent, payload: ChapterReviewProgressEvent) => {
+        if (payload.requestId === requestId) {
+          handler(payload);
+        }
+      };
+      ipcRenderer.on(ipcChannels.chapterReview.progress, onProgress);
+      return () => {
+        ipcRenderer.off(ipcChannels.chapterReview.progress, onProgress);
+      };
+    }
+  }),
   settings: Object.freeze({
     get: () => ipcRenderer.invoke(ipcChannels.settings.get),
     save: (input: SettingsSaveInput) => ipcRenderer.invoke(ipcChannels.settings.save, input),
     testConnection: (input?: SettingsTestConnectionInput) => ipcRenderer.invoke(ipcChannels.settings.testConnection, input),
     listModels: (input?: SettingsListModelsInput) => ipcRenderer.invoke(ipcChannels.settings.listModels, input)
+  }),
+  startupLaunch: Object.freeze({
+    getStatus: () => ipcRenderer.invoke(ipcChannels.startupLaunch.getStatus),
+    updateSettings: (input: StartupLaunchUpdateInput) => ipcRenderer.invoke(ipcChannels.startupLaunch.updateSettings, input)
+  }),
+  usageAnalytics: Object.freeze({
+    getStatus: () => ipcRenderer.invoke(ipcChannels.usageAnalytics.getStatus),
+    updateSettings: (input: UsageAnalyticsUpdateSettingsInput) => ipcRenderer.invoke(ipcChannels.usageAnalytics.updateSettings, input),
+    recordEvent: (input: UsageAnalyticsRecordEventInput) => ipcRenderer.invoke(ipcChannels.usageAnalytics.recordEvent, input),
+    sendReportNow: () => ipcRenderer.invoke(ipcChannels.usageAnalytics.sendReportNow)
   }),
   summary: Object.freeze({
     getIndexStatus: (input: SummaryIndexStatusInput) => ipcRenderer.invoke(ipcChannels.summary.getIndexStatus, input),
@@ -295,6 +402,7 @@ export const novelToolApi: NovelToolApi = Object.freeze({
     updateCharacterLayout: (input: AuthorRelationshipUpdateCharacterLayoutInput) =>
       ipcRenderer.invoke(ipcChannels.authorRelationship.updateCharacterLayout, input),
     createRelationship: (input: AuthorRelationshipCreateRelationshipInput) => ipcRenderer.invoke(ipcChannels.authorRelationship.createRelationship, input),
+    updateRelationship: (input: AuthorRelationshipUpdateRelationshipInput) => ipcRenderer.invoke(ipcChannels.authorRelationship.updateRelationship, input),
     deleteCharacter: (input: AuthorRelationshipDeleteCharacterInput) => ipcRenderer.invoke(ipcChannels.authorRelationship.deleteCharacter, input),
     deleteRelationship: (input: AuthorRelationshipDeleteRelationshipInput) => ipcRenderer.invoke(ipcChannels.authorRelationship.deleteRelationship, input)
   }),
@@ -316,7 +424,8 @@ export const novelToolApi: NovelToolApi = Object.freeze({
     previewImportFile: (input: OutlinePreviewImportFileInput) => ipcRenderer.invoke(ipcChannels.outline.previewImportFile, input),
     previewBulkImport: (input: OutlinePreviewBulkImportInput) => ipcRenderer.invoke(ipcChannels.outline.previewBulkImport, input),
     confirmBulkImport: (input: OutlineConfirmBulkImportInput) => ipcRenderer.invoke(ipcChannels.outline.confirmBulkImport, input),
-    undoImportBatch: (input: OutlineUndoImportBatchInput) => ipcRenderer.invoke(ipcChannels.outline.undoImportBatch, input)
+    undoImportBatch: (input: OutlineUndoImportBatchInput) => ipcRenderer.invoke(ipcChannels.outline.undoImportBatch, input),
+    clearImportedEvents: (input: OutlineClearImportedEventsInput) => ipcRenderer.invoke(ipcChannels.outline.clearImportedEvents, input)
   }),
   writingGoals: Object.freeze({
     getOverview: (input: WritingGoalOverviewInput) => ipcRenderer.invoke(ipcChannels.writingGoals.getOverview, input),
@@ -397,6 +506,41 @@ export const novelToolApi: NovelToolApi = Object.freeze({
     previewTxt: (input: ImportPreviewTxtInput) => ipcRenderer.invoke(ipcChannels.import.previewTxt, input),
     updatePreview: (input: ImportUpdatePreviewInput) => ipcRenderer.invoke(ipcChannels.import.updatePreview, input),
     confirmTxtImport: (input: ImportConfirmTxtInput) => ipcRenderer.invoke(ipcChannels.import.confirmTxtImport, input)
+  }),
+  externalBookSync: Object.freeze({
+    getStatus: (input: ExternalBookSyncStatusInput) => ipcRenderer.invoke(ipcChannels.externalBookSync.getStatus, input),
+    scan: (input: ExternalBookSyncScanInput) => ipcRenderer.invoke(ipcChannels.externalBookSync.scan, input),
+    cancelScan: (input: ExternalBookSyncCancelScanInput) => ipcRenderer.invoke(ipcChannels.externalBookSync.cancelScan, input),
+    selectDirectory: () => ipcRenderer.invoke(ipcChannels.externalBookSync.selectDirectory),
+    previewCandidate: (input: ExternalBookSyncPreviewCandidateInput) => ipcRenderer.invoke(ipcChannels.externalBookSync.previewCandidate, input),
+    sendMissingChaptersToAi: (input: ExternalBookSyncSendToAiInput) => ipcRenderer.invoke(ipcChannels.externalBookSync.sendMissingChaptersToAi, input),
+    forgetSource: (input: ExternalBookSyncForgetSourceInput) => ipcRenderer.invoke(ipcChannels.externalBookSync.forgetSource, input),
+    clearSentHistory: (input: ExternalBookSyncClearSentHistoryInput) => ipcRenderer.invoke(ipcChannels.externalBookSync.clearSentHistory, input),
+    subscribeScan: (requestId: string, handlers: ExternalBookSyncScanHandlers) => {
+      const onProgress = (_event: IpcRendererEvent, payload: ExternalBookSyncScanProgressEvent) => {
+        if (payload.requestId === requestId) {
+          handlers.onProgress?.(payload);
+        }
+      };
+      const onDone = (_event: IpcRendererEvent, payload: ExternalBookSyncScanResult) => {
+        if (payload.requestId === requestId) {
+          handlers.onDone?.(payload);
+        }
+      };
+      const onError = (_event: IpcRendererEvent, payload: ExternalBookSyncScanErrorEvent) => {
+        if (payload.requestId === requestId) {
+          handlers.onError?.(payload);
+        }
+      };
+      ipcRenderer.on(ipcChannels.externalBookSync.scanProgress, onProgress);
+      ipcRenderer.on(ipcChannels.externalBookSync.scanDone, onDone);
+      ipcRenderer.on(ipcChannels.externalBookSync.scanError, onError);
+      return () => {
+        ipcRenderer.off(ipcChannels.externalBookSync.scanProgress, onProgress);
+        ipcRenderer.off(ipcChannels.externalBookSync.scanDone, onDone);
+        ipcRenderer.off(ipcChannels.externalBookSync.scanError, onError);
+      };
+    }
   }),
   export: Object.freeze({
     selectTxtFilePath: (input: ExportSelectTxtFilePathInput) => ipcRenderer.invoke(ipcChannels.export.selectTxtFilePath, input),
