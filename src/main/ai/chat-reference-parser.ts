@@ -63,7 +63,7 @@ export function parseChineseOrdinal(value: string): number | null {
 
 export function parseChapterOrdinalFromText(value: string): number | null {
   const normalized = normalizeFullWidthDigits(value);
-  const match = new RegExp(`(?:第\\s*)?(${NUMERAL})\\s*[章节回]`).exec(normalized);
+  const match = new RegExp(`(?:第\\s*)?(${NUMERAL})\\s*[章节回話]`).exec(normalized);
   return match ? parseChineseOrdinal(match[1]) : null;
 }
 
@@ -93,28 +93,28 @@ export function parseChatAtReference(message: string): ChatAtReference | null {
     }
   }
 
-  const allMatch = /@(?:全部章节|所有章节|全文|全书|整本书)/.exec(normalized);
+  const allMatch = /@(?:全部章节|所有章节|全文|全书|整本书|全章|すべての章|全ての章|全編|作品全体)/.exec(normalized);
   if (allMatch) {
     return buildReference(message, allMatch.index, allMatch[0].length, {
       type: "all_chapters"
     });
   }
 
-  const selectionMatch = /@(?:选区|选中文本|当前选区)/.exec(normalized);
+  const selectionMatch = /@(?:选区|选中文本|当前选区|選択範囲|選択テキスト|現在の選択範囲)/.exec(normalized);
   if (selectionMatch) {
     return buildReference(message, selectionMatch.index, selectionMatch[0].length, {
       type: "selection"
     });
   }
 
-  const currentMatch = /@(?:本章|当前章节|当前章|这一章|这章)/.exec(normalized);
+  const currentMatch = /@(?:本章|当前章节|当前章|这一章|这章|現在の章|この章|今の章)/.exec(normalized);
   if (currentMatch) {
     return buildReference(message, currentMatch.index, currentMatch[0].length, {
       type: "current_chapter"
     });
   }
 
-  const chapterMatch = new RegExp(`@(?:第\\s*)?(${NUMERAL})\\s*[章节回]`).exec(normalized);
+  const chapterMatch = new RegExp(`@(?:第\\s*)?(${NUMERAL})\\s*[章节回話]`).exec(normalized);
   if (chapterMatch) {
     const ordinal = parseChineseOrdinal(chapterMatch[1]);
     if (ordinal) {
@@ -131,7 +131,7 @@ export function parseChatAtReference(message: string): ChatAtReference | null {
 function parseRangeMatch(message: string, requireAt: boolean): RegExpExecArray | null {
   const prefix = requireAt ? "@" : "";
   return new RegExp(
-    `${prefix}(?:第\\s*)?(${NUMERAL})\\s*[章节回]?\\s*(?:-|到|至|~|—|－)\\s*(?:第\\s*)?(${NUMERAL})\\s*[章节回]?`
+    `${prefix}(?:第\\s*)?(${NUMERAL})\\s*[章节回話]?\\s*(?:-|到|至|~|—|－|から)\\s*(?:第\\s*)?(${NUMERAL})\\s*[章节回話]?(?:まで)?`
   ).exec(message);
 }
 
@@ -151,7 +151,7 @@ function parseNaturalReference(message: string): ChatAtReference | null {
   }
 
   const pairedChapterMatch = new RegExp(
-    `(?:第\\s*)?(${NUMERAL})\\s*[章节回]\\s*(?:和|与|及|、|跟|同)\\s*(?:第\\s*)?(${NUMERAL})\\s*[章节回]`
+    `(?:第\\s*)?(${NUMERAL})\\s*[章节回話]\\s*(?:和|与|及|、|跟|同|と)\\s*(?:第\\s*)?(${NUMERAL})\\s*[章节回話]`
   ).exec(normalized);
   if (pairedChapterMatch) {
     const left = parseChineseOrdinal(pairedChapterMatch[1]);
@@ -165,7 +165,7 @@ function parseNaturalReference(message: string): ChatAtReference | null {
     }
   }
 
-  const leadingRangeMatch = new RegExp(`前\\s*(${NUMERAL})\\s*[章节回]`).exec(normalized);
+  const leadingRangeMatch = new RegExp(`(?:前\\s*|最初の|冒頭)(${NUMERAL})\\s*[章节回話]`).exec(normalized);
   if (leadingRangeMatch) {
     const to = parseChineseOrdinal(leadingRangeMatch[1]);
     if (to) {
@@ -177,28 +177,28 @@ function parseNaturalReference(message: string): ChatAtReference | null {
     }
   }
 
-  const allMatch = /全部章节|所有章节|全文|全书|整本书/.exec(normalized);
+  const allMatch = /全部章节|所有章节|全文|全书|整本书|全章|すべての章|全ての章|全編|作品全体/.exec(normalized);
   if (allMatch) {
     return buildReference(message, allMatch.index, allMatch[0].length, {
       type: "all_chapters"
     });
   }
 
-  const selectionMatch = /选区|选中文本|当前选区/.exec(normalized);
+  const selectionMatch = /选区|选中文本|当前选区|選択範囲|選択テキスト|現在の選択範囲/.exec(normalized);
   if (selectionMatch) {
     return buildReference(message, selectionMatch.index, selectionMatch[0].length, {
       type: "selection"
     });
   }
 
-  const currentMatch = /本章|当前章节|当前章|这一章|这章/.exec(normalized);
+  const currentMatch = /本章|当前章节|当前章|这一章|这章|現在の章|この章|今の章/.exec(normalized);
   if (currentMatch) {
     return buildReference(message, currentMatch.index, currentMatch[0].length, {
       type: "current_chapter"
     });
   }
 
-  const chapterMatch = new RegExp(`(?:第\\s*)(${NUMERAL})\\s*[章节回]`).exec(normalized);
+  const chapterMatch = new RegExp(`(?:第\\s*)(${NUMERAL})\\s*[章节回話]`).exec(normalized);
   if (chapterMatch) {
     const ordinal = parseChineseOrdinal(chapterMatch[1]);
     if (ordinal) {

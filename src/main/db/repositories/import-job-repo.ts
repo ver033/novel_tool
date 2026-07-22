@@ -1,5 +1,6 @@
 import { createId } from "../../shared/ids";
 import type { ImportPreview, ImportPreviewChapter } from "../../shared/types";
+import { contentLanguageSchema, DEFAULT_CONTENT_LANGUAGE, type ContentLanguage } from "../../shared/language";
 import type { SqliteDatabase } from "../database";
 
 type ImportJobRow = {
@@ -17,6 +18,7 @@ type ImportJobRow = {
 type ImportJobPayload = {
   readonly fileName: string;
   readonly encoding: string;
+  readonly contentLanguage?: ContentLanguage;
   readonly rawText: string;
   readonly totalWordCount: number;
   readonly chapters: readonly ImportPreviewChapter[];
@@ -40,6 +42,7 @@ function mapPreview(row: ImportJobRow): ImportPreview {
     filePath: row.source_path,
     fileName: payload.fileName,
     encoding: payload.encoding,
+    contentLanguage: contentLanguageSchema.catch(DEFAULT_CONTENT_LANGUAGE).parse(payload.contentLanguage),
     totalWordCount: payload.totalWordCount,
     chapters: payload.chapters,
     createdAt: row.created_at,
@@ -67,6 +70,7 @@ export class ImportJobRepository {
     readonly filePath: string;
     readonly fileName: string;
     readonly encoding: string;
+    readonly contentLanguage: ContentLanguage;
     readonly rawText: string;
     readonly totalWordCount: number;
     readonly chapters: readonly ImportPreviewChapter[];
@@ -86,6 +90,7 @@ export class ImportJobRepository {
         JSON.stringify({
           fileName: input.fileName,
           encoding: input.encoding,
+          contentLanguage: input.contentLanguage,
           rawText: input.rawText,
           totalWordCount: input.totalWordCount,
           chapters: input.chapters
@@ -129,6 +134,7 @@ export class ImportJobRepository {
         JSON.stringify({
           fileName: current.fileName,
           encoding: current.encoding,
+          contentLanguage: current.contentLanguage,
           rawText,
           totalWordCount: chapters.reduce((total, chapter) => total + chapter.wordCount, 0),
           chapters

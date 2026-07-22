@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChapterSummary, ScratchNoteRecord } from "../../main/shared/types";
 import { Button } from "../components/Button";
 import { getNovelToolApi } from "../state/app-store";
-import { filterScratchNotes, getScratchNoteChapterLabel, getScratchNoteSourceLabel, scratchpadFilters, sortScratchNotes } from "./scratchpad-utils";
+import { filterScratchNotes, getLocalizedScratchNoteChapterLabel, getLocalizedScratchNoteSourceLabel, getScratchNoteSourceLabel, getScratchpadFilterLabel, scratchpadFilters, sortScratchNotes } from "./scratchpad-utils";
+import { useI18n } from "../i18n";
 
 type ScratchpadTabProps = {
   readonly chapterId: string | null;
@@ -13,6 +14,8 @@ type ScratchpadTabProps = {
 };
 
 export function ScratchpadTab({ chapterId, chapters, onNotesChanged, projectId, refreshToken }: ScratchpadTabProps) {
+  const { locale, t } = useI18n();
+  const japanese = locale === "ja-JP";
   const api = useMemo(getNovelToolApi, []);
   const [activeFilter, setActiveFilter] = useState<(typeof scratchpadFilters)[number]>("全部");
   const [draft, setDraft] = useState("");
@@ -41,13 +44,13 @@ export function ScratchpadTab({ chapterId, chapters, onNotesChanged, projectId, 
       setNotes(sortScratchNotes(result));
       setError(null);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "读取草稿纸失败");
+      setError(reason instanceof Error ? reason.message : japanese ? "下書きメモの読み込みに失敗しました" : "读取草稿纸失败");
     } finally {
       if (latestProjectId.current === projectId) {
         setLoading(false);
       }
     }
-  }, [api, projectId]);
+  }, [api, japanese, projectId]);
 
   useEffect(() => {
     void loadNotes();
@@ -74,7 +77,7 @@ export function ScratchpadTab({ chapterId, chapters, onNotesChanged, projectId, 
       setError(null);
       onNotesChanged?.();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "创建草稿失败");
+      setError(reason instanceof Error ? reason.message : japanese ? "下書きメモの作成に失敗しました" : "创建草稿失败");
     }
   }
 
@@ -98,7 +101,7 @@ export function ScratchpadTab({ chapterId, chapters, onNotesChanged, projectId, 
       setError(null);
       onNotesChanged?.();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "更新草稿失败");
+      setError(reason instanceof Error ? reason.message : japanese ? "下書きメモの更新に失敗しました" : "更新草稿失败");
     }
   }
 
@@ -107,7 +110,7 @@ export function ScratchpadTab({ chapterId, chapters, onNotesChanged, projectId, 
     if (!targetProjectId) {
       return;
     }
-    if (!window.confirm("删除这条草稿？")) {
+    if (!window.confirm(japanese ? "この下書きメモを削除しますか？" : "删除这条草稿？")) {
       return;
     }
 
@@ -120,7 +123,7 @@ export function ScratchpadTab({ chapterId, chapters, onNotesChanged, projectId, 
       setError(null);
       onNotesChanged?.();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "删除草稿失败");
+      setError(reason instanceof Error ? reason.message : japanese ? "下書きメモの削除に失敗しました" : "删除草稿失败");
     }
   }
 
@@ -130,54 +133,54 @@ export function ScratchpadTab({ chapterId, chapters, onNotesChanged, projectId, 
     <section className="scratch">
       <div className="scratch-head">
         <div>
-          <h2 className="task-title">草稿纸汇总</h2>
-          <p className="muted">汇总所有灵感、AI 输出、浮窗草稿和场景备注，不会自动写入正文。</p>
+          <h2 className="task-title">{japanese ? "下書きメモ一覧" : "草稿纸汇总"}</h2>
+          <p className="muted">{japanese ? "アイデア、AI 出力、フローティングメモ、場面メモをまとめます。本文には自動反映されません。" : "汇总所有灵感、AI 输出、浮窗草稿和场景备注，不会自动写入正文。"}</p>
         </div>
-        <span className="count-pill">{visibleNotes.length} 条</span>
+        <span className="count-pill">{visibleNotes.length} {japanese ? "件" : "条"}</span>
       </div>
       <div className="scratch-compose">
-        <textarea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="快速记录灵感、场景或细节..." />
+        <textarea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder={japanese ? "アイデア、場面、細部をすばやく記録..." : "快速记录灵感、场景或细节..."} />
         <div className="scratch-compose-bottom">
-          <span className="muted">{error ?? "默认保存为灵感便签"}</span>
+          <span className="muted">{error ?? (japanese ? "既定ではアイデアメモとして保存します" : "默认保存为灵感便签")}</span>
           <Button disabled={!projectId || !draft.trim()} onClick={() => void createNote()} variant="secondary">
-            记录
+            {japanese ? "記録" : "记录"}
           </Button>
         </div>
       </div>
       <div className="scratch-filter">
         {scratchpadFilters.map((filter) => (
           <button className={`filter-chip ${activeFilter === filter ? "active" : ""}`} key={filter} onClick={() => setActiveFilter(filter)} type="button">
-            {filter}
+            {getScratchpadFilterLabel(filter, locale)}
           </button>
         ))}
       </div>
       <div className="scratch-list">
         {loading ? (
           <div className="scratch-empty" role="status">
-            正在读取草稿纸...
+            {japanese ? "下書きメモを読み込んでいます..." : "正在读取草稿纸..."}
           </div>
         ) : null}
         {!loading ? visibleNotes.map((note) => (
           <div className="note" key={note.id}>
             <div className="note-head">
               <span className="note-tags">
-                <span className={`mini-tag ${getScratchNoteSourceLabel(note) === "AI 输出" ? "green" : ""}`}>{getScratchNoteSourceLabel(note)}</span>
-                <span className="mini-tag subtle note-chapter-tag" title={getScratchNoteChapterLabel(note, chapters)}>
-                  {getScratchNoteChapterLabel(note, chapters)}
+                <span className={`mini-tag ${getScratchNoteSourceLabel(note) === "AI 输出" ? "green" : ""}`}>{getLocalizedScratchNoteSourceLabel(note, locale)}</span>
+                <span className="mini-tag subtle note-chapter-tag" title={getLocalizedScratchNoteChapterLabel(note, chapters, locale)}>
+                  {getLocalizedScratchNoteChapterLabel(note, chapters, locale)}
                 </span>
-                {note.pinned ? <span className="mini-tag orange">置顶</span> : null}
+                {note.pinned ? <span className="mini-tag orange">{japanese ? "固定" : "置顶"}</span> : null}
               </span>
-              <span className="note-time">{new Date(note.updatedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}</span>
+              <span className="note-time">{new Date(note.updatedAt).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" })}</span>
             </div>
             <div className="note-body">{note.content}</div>
             <div className="note-actions">
-              <button className="note-action" onClick={() => void togglePin(note)} type="button">{note.pinned ? "取消置顶" : "置顶"}</button>
-              <button className="note-action" onClick={() => void deleteNote(note)} type="button">删除</button>
+              <button className="note-action" onClick={() => void togglePin(note)} type="button">{note.pinned ? (japanese ? "固定を解除" : "取消置顶") : (japanese ? "固定" : "置顶")}</button>
+              <button className="note-action" onClick={() => void deleteNote(note)} type="button">{t("delete")}</button>
             </div>
           </div>
         )) : null}
-        {!loading && notes.length === 0 ? <div className="scratch-empty">暂无草稿。记录灵感后会随项目保存。</div> : null}
-        {!loading && notes.length > 0 && visibleNotes.length === 0 ? <div className="scratch-empty">当前筛选下暂无草稿。</div> : null}
+        {!loading && notes.length === 0 ? <div className="scratch-empty">{japanese ? "下書きメモはありません。記録するとプロジェクトと一緒に保存されます。" : "暂无草稿。记录灵感后会随项目保存。"}</div> : null}
+        {!loading && notes.length > 0 && visibleNotes.length === 0 ? <div className="scratch-empty">{japanese ? "この条件に一致する下書きメモはありません。" : "当前筛选下暂无草稿。"}</div> : null}
       </div>
     </section>
   );

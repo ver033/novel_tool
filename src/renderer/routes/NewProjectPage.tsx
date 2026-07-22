@@ -1,8 +1,10 @@
 import { BookOpen, FolderOpen } from "@phosphor-icons/react";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import type { ProjectCreateInput } from "../../main/shared/types";
+import type { ContentLanguage } from "../../main/shared/language";
 import { Button } from "../components/Button";
 import { Input } from "../components/Input";
+import { useI18n } from "../i18n";
 
 const DEFAULT_TARGET_WORD_COUNT = "3000";
 const MIN_TARGET_WORD_COUNT = 100;
@@ -15,15 +17,11 @@ type NewProjectPageProps = {
   readonly onSuggestProjectPath: (suggestedName: string) => Promise<string>;
 };
 
-const steps = [
-  ["项目信息", "小说名称和目标字数"],
-  ["保存位置", "确认项目文件"],
-  ["确认创建", "开始写作"]
-] as const;
-
 export function NewProjectPage({ onCancel, onCreate, onSelectProjectSavePath, onSuggestProjectPath }: NewProjectPageProps) {
+  const { locale, t } = useI18n();
   const [name, setName] = useState("");
   const [targetWordCount, setTargetWordCount] = useState(DEFAULT_TARGET_WORD_COUNT);
+  const [contentLanguage, setContentLanguage] = useState<ContentLanguage>("zh-CN");
   const [customRootPath, setCustomRootPath] = useState<string | null>(null);
   const [suggestedRootPath, setSuggestedRootPath] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -34,7 +32,12 @@ export function NewProjectPage({ onCancel, onCreate, onSelectProjectSavePath, on
   const targetValid = Number.isInteger(targetValue) && targetValue >= MIN_TARGET_WORD_COUNT && targetValue <= MAX_TARGET_WORD_COUNT;
   const activeStep = !trimmedName || !targetValid ? 1 : !resolvedRootPath ? 2 : 3;
   const canCreate = Boolean(trimmedName && targetValid && resolvedRootPath && !busy);
-  const statusText = error ?? (busy ? "正在创建项目" : null);
+  const statusText = error ?? (busy ? t("creatingProject") : null);
+  const steps = [
+    [t("projectInfo"), t("projectInfoDescription")],
+    [t("saveLocation"), t("saveLocationDescription")],
+    [t("confirmCreation"), t("startWriting")]
+  ] as const;
 
   useEffect(() => {
     if (!trimmedName) {
@@ -63,17 +66,17 @@ export function NewProjectPage({ onCancel, onCreate, onSelectProjectSavePath, on
 
   const pathModeLabel = useMemo(() => {
     if (customRootPath) {
-      return "自定义位置";
+      return t("customLocation");
     }
     if (suggestedRootPath) {
-      return "默认位置";
+      return t("defaultLocation");
     }
-    return "等待小说名称";
-  }, [customRootPath, suggestedRootPath]);
+    return t("waitingForNovelName");
+  }, [customRootPath, suggestedRootPath, t]);
 
   async function chooseProjectPath(): Promise<void> {
     if (!trimmedName) {
-      setError("请先输入小说名称。");
+      setError(t("enterNovelNameFirst"));
       return;
     }
 
@@ -91,15 +94,15 @@ export function NewProjectPage({ onCancel, onCreate, onSelectProjectSavePath, on
   async function submitProject(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     if (!trimmedName) {
-      setError("请输入小说名称。");
+      setError(t("enterNovelName"));
       return;
     }
     if (!targetValid) {
-      setError("每章目标字数需要在 100 到 500000 之间。");
+      setError(t("invalidTargetCount"));
       return;
     }
     if (!resolvedRootPath) {
-      setError("请确认项目文件保存位置。");
+      setError(t("confirmProjectLocation"));
       return;
     }
 
@@ -109,6 +112,7 @@ export function NewProjectPage({ onCancel, onCreate, onSelectProjectSavePath, on
       await onCreate({
         name: trimmedName,
         targetWordCount: targetValue,
+        contentLanguage,
         ...(customRootPath ? { rootPath: customRootPath } : {})
       });
     } catch (reason) {
@@ -121,20 +125,20 @@ export function NewProjectPage({ onCancel, onCreate, onSelectProjectSavePath, on
   return (
     <div className="import-shell">
       <header className="settings-top">
-        <button className="brand brand-button" onClick={onCancel} title="返回开始页" type="button">
+        <button className="brand brand-button" onClick={onCancel} title={t("backToStart")} type="button">
           <span className="line-icon">
             <BookOpen size={24} />
           </span>
-          <span>新建作品</span>
+          <span>{t("newProjectTitle")}</span>
         </button>
         <div className="top-actions">
-          <IconCloseButton onClick={onCancel} label="关闭新建作品" />
+          <IconCloseButton onClick={onCancel} label={t("closeNewProject")} />
         </div>
       </header>
 
       <main className="import-page">
         <section className="panel wizard new-project-wizard">
-          <div className="steps" aria-label="新建项目步骤">
+          <div className="steps" aria-label={t("newProjectSteps")}>
             {steps.map(([title, description], index) => {
               const number = index + 1;
               return (
@@ -153,17 +157,17 @@ export function NewProjectPage({ onCancel, onCreate, onSelectProjectSavePath, on
           <form className="new-project-page-form" onSubmit={submitProject}>
             <section className="new-project-section">
               <div>
-                <h2>项目信息</h2>
-                <p className="muted">先确定这本小说的基础写作目标。</p>
+                <h2>{t("projectInfo")}</h2>
+                <p className="muted">{t("basicWritingGoal")}</p>
               </div>
               <div className="new-project-fields">
                 <label className="field-label" htmlFor="new-project-name">
-                  小说名称
+                  {t("novelName")}
                 </label>
                 <Input
                   autoFocus
                   id="new-project-name"
-                  placeholder="例如：长夜归途"
+                  placeholder={t("novelNameExample")}
                   value={name}
                   onChange={(event) => {
                     setName(event.target.value);
@@ -173,7 +177,7 @@ export function NewProjectPage({ onCancel, onCreate, onSelectProjectSavePath, on
                 />
 
                 <label className="field-label" htmlFor="new-project-target">
-                  每章目标字数
+                  {t("targetCharactersPerChapter")}
                 </label>
                 <Input
                   id="new-project-target"
@@ -188,35 +192,49 @@ export function NewProjectPage({ onCancel, onCreate, onSelectProjectSavePath, on
                     setError(null);
                   }}
                 />
+
+                <label className="field-label" htmlFor="new-project-language">
+                  {t("workLanguage")}
+                </label>
+                <select
+                  className="input"
+                  id="new-project-language"
+                  value={contentLanguage}
+                  onChange={(event) => setContentLanguage(event.target.value as ContentLanguage)}
+                >
+                  <option value="zh-CN">{t("zhCN")}</option>
+                  <option value="ja-JP">{t("jaJP")}</option>
+                </select>
               </div>
             </section>
 
             <section className="new-project-section">
               <div>
-                <h2>项目文件位置</h2>
-                <p className="muted">项目文件会保存章节、草稿纸和 AI 记录。</p>
+                <h2>{t("projectFileLocation")}</h2>
+                <p className="muted">{t("projectFileDescription")}</p>
               </div>
               <div className="new-project-location">
                 <span className="mini-tag">{pathModeLabel}</span>
                 <div className={`path-value ${resolvedRootPath ? "" : "empty"}`}>
-                  {resolvedRootPath ?? "输入小说名称后生成默认项目文件路径"}
+                  {resolvedRootPath ?? t("generatedPathHint")}
                 </div>
                 <Button disabled={!trimmedName || busy} onClick={chooseProjectPath} type="button" variant="ghost">
                   <FolderOpen size={18} />
-                  选择其他位置
+                  {t("chooseAnotherLocation")}
                 </Button>
               </div>
             </section>
 
             <section className="new-project-section">
               <div>
-                <h2>确认创建</h2>
-                <p className="muted">同名默认项目会自动使用新的文件名。</p>
+                <h2>{t("confirmCreation")}</h2>
+                <p className="muted">{t("duplicateFileHint")}</p>
               </div>
               <div className="new-project-confirm">
-                <SummaryRow label="小说名称" value={trimmedName || "未填写"} />
-                <SummaryRow label="每章目标" value={targetValid ? `${targetValue.toLocaleString("zh-CN")} 字` : "未设置"} />
-                <SummaryRow label="项目文件" value={resolvedRootPath ?? "未确认"} />
+                <SummaryRow label={t("novelName")} value={trimmedName || t("notEntered")} />
+                <SummaryRow label={t("perChapterTarget")} value={targetValid ? `${targetValue.toLocaleString(locale)} ${t("words")}` : t("notSet")} />
+                <SummaryRow label={t("workLanguage")} value={contentLanguage === "ja-JP" ? t("jaJP") : t("zhCN")} />
+                <SummaryRow label={t("projectFile")} value={resolvedRootPath ?? t("notConfirmed")} />
               </div>
             </section>
 
@@ -228,10 +246,10 @@ export function NewProjectPage({ onCancel, onCreate, onSelectProjectSavePath, on
 
             <div className="wizard-actions">
               <Button disabled={busy} onClick={onCancel} type="button" variant="ghost">
-                返回
+                {t("back")}
               </Button>
               <Button disabled={!canCreate} type="submit" variant="primary">
-                {busy ? "创建中" : "创建并开始写作"}
+                {busy ? t("creating") : t("createAndStart")}
               </Button>
             </div>
           </form>

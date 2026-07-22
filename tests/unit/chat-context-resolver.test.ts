@@ -7,5 +7,6 @@ describe("chat context resolver", () => {
     expect(parseExplicitChapterOrdinal("总结第四章")).toBe(4);
     expect(parseExplicitChapterOrdinal("总结第十二回")).toBe(12);
     expect(parseExplicitChapterOrdinal("总结第一百零三章")).toBe(103);
+    expect(parseExplicitChapterOrdinal("第12話を要約して")).toBe(12);
   });
 });

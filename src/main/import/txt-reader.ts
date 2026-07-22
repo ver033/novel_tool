@@ -13,6 +13,7 @@ export type TxtReadResult = {
 export type TextReadOptions = {
   readonly label?: string;
   readonly maxBytes?: number;
+  readonly encoding?: string;
 };
 
 function normalizeEncoding(value: string | null | undefined): string {
@@ -29,6 +30,12 @@ function normalizeEncoding(value: string | null | undefined): string {
   if (normalized === "big5") {
     return "big5";
   }
+  if (normalized === "shiftjis" || normalized === "sjis" || normalized === "cp932" || normalized === "windows31j") {
+    return "shift_jis";
+  }
+  if (normalized === "eucjp") {
+    return "euc-jp";
+  }
   return value;
 }
 
@@ -41,7 +48,11 @@ export function readTextFile(filePath: string, options: TextReadOptions = {}): T
   }
 
   const buffer = readFileSync(filePath);
-  const encoding = normalizeEncoding(chardet.detect(buffer));
+  const requestedEncoding = options.encoding && options.encoding !== "auto" ? options.encoding : null;
+  const encoding = normalizeEncoding(requestedEncoding ?? chardet.detect(buffer));
+  if (!iconv.encodingExists(encoding)) {
+    throw new Error(`${label}编码不受支持：${encoding}`);
+  }
   const text = normalizeTxtContent(iconv.decode(buffer, encoding));
 
   return {
@@ -50,6 +61,6 @@ export function readTextFile(filePath: string, options: TextReadOptions = {}): T
   };
 }
 
-export function readTxtFile(filePath: string): TxtReadResult {
-  return readTextFile(filePath, { label: "TXT 文件", maxBytes: MAX_TXT_IMPORT_BYTES });
+export function readTxtFile(filePath: string, options: Pick<TextReadOptions, "encoding"> = {}): TxtReadResult {
+  return readTextFile(filePath, { label: "TXT 文件", maxBytes: MAX_TXT_IMPORT_BYTES, ...options });
 }

@@ -135,7 +135,7 @@ test.describe("AI task Electron flow", () => {
           await app.close();
           app = await launchNovelTool(homeDir);
           const relaunchedPage = await firstPage(app);
-          await expect(relaunchedPage.getByRole("button", { name: /继续写作/ })).toBeVisible();
+          await expect(relaunchedPage.getByRole("button", { name: /^(打开项目|继续写作)\s/ })).toBeVisible();
           await expect(relaunchedPage.locator(".project-main-button", { hasText: "《我的小说》" })).toHaveCount(1);
           await relaunchedPage.locator(".project-main-button", { hasText: "《我的小说》" }).click();
           await expect(relaunchedPage.locator(".tiptap-manuscript")).toContainText(taskCase.expectedText);

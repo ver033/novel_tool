@@ -16,7 +16,7 @@ describe("editor global style controls", () => {
     const topBar = readSource("src/renderer/layout/TopBar.tsx");
     const editorStore = readSource("src/renderer/state/editor-store.ts");
 
-    expect(topBar).toContain("页面与排版");
+    expect(topBar).toContain('t("pageAndTypography")');
     expect(topBar).toContain("global-style-panel");
     expect(topBar).toContain("data-editor-preset");
     expect(writingPage).toContain("editorSettings={editorStore.editorSettings}");
@@ -71,7 +71,7 @@ describe("editor global style controls", () => {
     expect(settingsPage).not.toContain('firstLineIndent: "two",');
   });
 
-  it("uses a real wide writing canvas with optional ruled paper lines", () => {
+  it("uses restrained editorial defaults while keeping wide canvas and ruled paper controls available", () => {
     const result = editorSettingsSchema.parse({
       fontSize: 20,
       lineHeight: 2.08,
@@ -94,17 +94,17 @@ describe("editor global style controls", () => {
     const css = readSource("src/renderer/styles/globals.css");
 
     expect(result).toMatchObject({ pageWidth: "screen", ruledPaper: true });
-    expect(editorStore).toContain('pageWidth: "screen"');
-    expect(editorStore).toContain('editorPadding: "compact"');
-    expect(editorStore).toContain("ruledPaper: true");
-    expect(editorStore).toContain('ruledPaperIntensity: "standard"');
-    expect(settingsService).toContain('pageWidth: "screen"');
-    expect(settingsService).toContain('editorPadding: "compact"');
-    expect(settingsService).toContain("ruledPaper: true");
-    expect(settingsService).toContain('ruledPaperIntensity: "standard"');
-    expect(topBar).toContain("宽屏");
-    expect(topBar).toContain("正文边距");
-    expect(topBar).toContain("稿纸横格");
+    expect(editorStore).toContain('pageWidth: "narrow"');
+    expect(editorStore).toContain('editorPadding: "standard"');
+    expect(editorStore).toContain("ruledPaper: false");
+    expect(editorStore).toContain('ruledPaperIntensity: "soft"');
+    expect(settingsService).toContain('pageWidth: "narrow"');
+    expect(settingsService).toContain('editorPadding: "standard"');
+    expect(settingsService).toContain("ruledPaper: false");
+    expect(settingsService).toContain('ruledPaperIntensity: "soft"');
+    expect(topBar).toContain('{ value: "screen", label: "宽屏", jaLabel: "全幅" }');
+    expect(topBar).toContain('t("bodyPadding")');
+    expect(topBar).toContain('t("ruledPaper")');
     expect(topBar).toContain("ruledPaperIntensityOptions");
     expect(topBar).toContain("ruledPaper");
     expect(topBar).toContain("fontSizeOptions = Array.from");
@@ -113,7 +113,7 @@ describe("editor global style controls", () => {
     expect(topBar).toContain("fontSize: Number(event.target.value)");
     expect(css).toContain(".global-style-select");
     expect(topBar).toContain("{ value: 2.6");
-    expect(topBar).toContain("楷体感");
+    expect(topBar).toContain('{ value: "kai", label: "楷体感", jaLabel: "楷書体" }');
     expect(writingPage).toContain("--editor-shell-padding-x");
     expect(writingPage).toContain("editorPaddingBySetting");
     expect(writingPage).toContain('screen: "none"');
@@ -146,10 +146,10 @@ describe("editor global style controls", () => {
     expect(canShowLayoutPanelLine).not.toContain("!focusMode");
     expect(topBar).toContain("layoutPanelMode");
     expect(topBar).toContain("focus-mode-style-panel");
-    expect(topBar).toContain("专注排版");
-    expect(topBar).toContain("专注模式下正文区域自动铺满");
+    expect(topBar).toContain('t("focusTypography")');
+    expect(topBar).toContain('t("focusTypographyNote")');
     expect(topBar).toContain("!focusMode ? (");
-    expect(topBar).toContain("页面宽度");
+    expect(topBar).toContain('t("pageWidth")');
     expect(writingPage).toContain("editorUsesFullWidth = focusMode || chapterListHidden || !sidebarOpen");
     expect(writingPage).toContain('maxWidth: editorUsesFullWidth ? "none"');
     expect(css).toMatch(/\.global-style-panel\s*{[\s\S]*position:\s*fixed/);

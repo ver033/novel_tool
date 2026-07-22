@@ -27,7 +27,7 @@ export const DEFAULT_TOKEN_BUDGETS: Record<AiBudgetedTaskType, TokenBudget> = {
   proofread: {
     maxInputTokens: 12_000,
     maxOutputTokens: 12_000,
-    maxReasoningTokens: 4_000
+    maxReasoningTokens: 1_200
   },
   continue: {
     maxInputTokens: 12_000,

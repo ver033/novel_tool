@@ -50,6 +50,14 @@ function createHarness(reporter?: UsageAnalyticsReporter, getProjectContext?: ()
 }
 
 describe("UsageAnalyticsService", () => {
+  it("keeps automatic product analysis disabled until the user enables it", async () => {
+    const { service, snapshots } = createHarness();
+
+    expect(service.getStatus(new Date(2026, 4, 19, 9, 0)).automaticReportsEnabled).toBe(false);
+    await expect(service.runDueAutomaticReport(new Date(2026, 4, 19, 9, 0))).resolves.toBeNull();
+    expect(snapshots).toHaveLength(0);
+  });
+
   it("builds an anonymized usage snapshot from local events", () => {
     const { service } = createHarness();
 
@@ -199,6 +207,7 @@ describe("UsageAnalyticsService", () => {
 
   it("runs each automatic schedule slot once and stores the local report", async () => {
     const { service, snapshots } = createHarness();
+    service.updateSettings({ automaticReportsEnabled: true });
     service.recordEvent({ eventType: "page_active", feature: "writing", durationMs: 60_000, occurredAt: new Date(2026, 4, 19, 8, 58) });
 
     const first = await service.runDueAutomaticReport(new Date(2026, 4, 19, 9, 0));
@@ -218,6 +227,7 @@ describe("UsageAnalyticsService", () => {
 
   it("sends one catch-up report when the app opens after a missed schedule slot", async () => {
     const { service, snapshots } = createHarness();
+    service.updateSettings({ automaticReportsEnabled: true });
 
     const catchUp = await service.runStartupCatchUpReport(new Date(2026, 4, 19, 10, 30));
     const duplicateOpen = await service.runStartupCatchUpReport(new Date(2026, 4, 19, 10, 30));
@@ -229,6 +239,7 @@ describe("UsageAnalyticsService", () => {
 
   it("uses the latest missed schedule slot when both midnight and morning were missed", async () => {
     const { service } = createHarness();
+    service.updateSettings({ automaticReportsEnabled: true });
 
     const catchUp = await service.runStartupCatchUpReport(new Date(2026, 4, 19, 10, 0));
 
@@ -237,6 +248,7 @@ describe("UsageAnalyticsService", () => {
 
   it("uses the latest hourly slot when the app opens after that schedule was missed", async () => {
     const { service } = createHarness();
+    service.updateSettings({ automaticReportsEnabled: true });
 
     const catchUp = await service.runStartupCatchUpReport(new Date(2026, 4, 19, 13, 0));
 
@@ -246,7 +258,7 @@ describe("UsageAnalyticsService", () => {
   it("upgrades the previous default schedule with the hourly schedule", async () => {
     const { service } = createHarness();
 
-    service.updateSettings({ scheduleLocalTimes: ["00:00", "09:00"] });
+    service.updateSettings({ automaticReportsEnabled: true, scheduleLocalTimes: ["00:00", "09:00"] });
     const status = service.getStatus(new Date(2026, 4, 19, 10, 0));
     const ten = await service.runDueAutomaticReport(new Date(2026, 4, 19, 10, 0));
 
@@ -256,7 +268,7 @@ describe("UsageAnalyticsService", () => {
 
   it("does not send a startup catch-up report before the first configured schedule", async () => {
     const { service, snapshots } = createHarness();
-    service.updateSettings({ scheduleLocalTimes: ["09:00"] });
+    service.updateSettings({ automaticReportsEnabled: true, scheduleLocalTimes: ["09:00"] });
 
     const earlyOpen = await service.runStartupCatchUpReport(new Date(2026, 4, 19, 8, 30));
 
@@ -270,6 +282,7 @@ describe("UsageAnalyticsService", () => {
         throw new Error("OpenRouter API Key 未配置。");
       }
     });
+    service.updateSettings({ automaticReportsEnabled: true });
 
     const first = await service.runDueAutomaticReport(new Date(2026, 4, 19, 9, 0));
     const duplicate = await service.runDueAutomaticReport(new Date(2026, 4, 19, 9, 20));

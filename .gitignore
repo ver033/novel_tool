@@ -28,6 +28,11 @@ docs/*
 !docs/USER_GUIDE_V1.md
 !docs/USER_MANUAL.md
 
+# Deferred Novel Knowledge Workspace design work
+/CONTEXT.md
+/docs/implementation/novel-knowledge-workspace.md
+/artifacts/
+
 # Local app data and user project files
 *.noveltool
 *.sqlite3

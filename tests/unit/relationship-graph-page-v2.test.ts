@@ -247,9 +247,11 @@ describe("relationship graph page v2 renderer wiring", () => {
     expect(page).toContain("setDetailPanelCollapsed(false)");
     expect(filters).toContain("onCollapse");
     expect(filters).toContain("CaretLeft");
-    expect(filters).toContain('aria-label="收起显示设置"');
+    expect(filters).toContain('collapse: "收起显示设置"');
+    expect(filters).toContain("aria-label={copy.collapse}");
     expect(page).toContain("CaretRight");
-    expect(page).toContain('aria-label="展开显示设置"');
+    expect(page).toContain('expandDisplay: "展开显示设置"');
+    expect(page).toContain("aria-label={copy.expandDisplay}");
     expect(inspector).toContain("onCollapse");
     expect(inspector).toContain("CaretRight");
     expect(inspector).toContain('aria-label="收起人物信息"');

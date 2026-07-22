@@ -5,6 +5,7 @@ import { Input } from "../components/Input";
 import { Modal } from "../components/Modal";
 import { TopBar } from "../layout/TopBar";
 import type { ProjectRecord, RecentProjectEntry } from "../../main/shared/types";
+import { useI18n, type TranslationKey } from "../i18n";
 
 type WelcomePageProps = {
   readonly onContinueWriting: () => void;
@@ -18,8 +19,8 @@ type WelcomePageProps = {
   readonly welcomeNotice: string | null;
 };
 
-function formatProjectTime(value: string): string {
-  return new Intl.DateTimeFormat("zh-CN", {
+function formatProjectTime(value: string, locale: string): string {
+  return new Intl.DateTimeFormat(locale, {
     month: "numeric",
     day: "numeric",
     hour: "2-digit",
@@ -27,14 +28,14 @@ function formatProjectTime(value: string): string {
   }).format(new Date(value));
 }
 
-function getProjectAvailabilityLabel(entry: RecentProjectEntry): string {
+function getProjectAvailabilityLabel(entry: RecentProjectEntry, t: (key: TranslationKey) => string): string {
   if (entry.availability === "missing") {
-    return "项目文件不可用";
+    return t("missingProject");
   }
   if (entry.availability === "invalid_path") {
-    return "项目路径无效";
+    return t("invalidProjectPath");
   }
-  return "本地项目";
+  return t("localProject");
 }
 
 export function WelcomePage({
@@ -48,10 +49,11 @@ export function WelcomePage({
   recentProjects,
   welcomeNotice
 }: WelcomePageProps) {
+  const { locale, t } = useI18n();
   const [menuProjectId, setMenuProjectId] = useState<string | null>(null);
   const [renameProjectDraft, setRenameProjectDraft] = useState<{ id: string; name: string } | null>(null);
   const [renameProjectName, setRenameProjectName] = useState("");
-  const continueHint = welcomeNotice ?? "选择项目文件，或从下方最近项目继续写作。";
+  const continueHint = welcomeNotice ?? t("chooseProjectHint");
 
   function toggleProjectMenu(event: MouseEvent, projectId: string): void {
     event.stopPropagation();
@@ -95,22 +97,22 @@ export function WelcomePage({
 
   return (
     <div className="welcome-page" onClick={() => setMenuProjectId(null)}>
-      <TopBar title="墨枢" subtitle="专注创作，静心成书" mode="welcome" onWelcome={() => undefined} onSettings={onSettings} />
+      <TopBar title="墨枢" subtitle={t("brandTagline")} mode="welcome" onWelcome={() => undefined} onSettings={onSettings} />
 
       <main className="main welcome-grid">
         <section>
           <div className="panel welcome-hero">
             <div>
-              <h1 className="section-title">开始创作</h1>
+              <h1 className="section-title">{t("startCreating")}</h1>
               <div className="start-list">
                 <button className="start-card" onClick={onContinueWriting} type="button">
                   <span className="start-icon blue">
                     <FileText size={28} />
                   </span>
                   <span>
-                    <span className="start-main">继续写作</span>
+                    <span className="start-main">{t("continueWriting")}</span>
                     <br />
-                    <span className="start-sub">打开已有作品，继续你的故事</span>
+                    <span className="start-sub">{t("continueWritingDescription")}</span>
                   </span>
                   <ArrowRight size={22} />
                 </button>
@@ -119,9 +121,9 @@ export function WelcomePage({
                     <Plus size={28} />
                   </span>
                   <span>
-                    <span className="start-main">新建作品</span>
+                    <span className="start-main">{t("newWork")}</span>
                     <br />
-                    <span className="start-sub">从空白开始，创建新的小说</span>
+                    <span className="start-sub">{t("newWorkDescription")}</span>
                   </span>
                   <ArrowRight size={22} />
                 </button>
@@ -130,9 +132,9 @@ export function WelcomePage({
                     <UploadSimple size={29} />
                   </span>
                   <span>
-                    <span className="start-main">导入小说</span>
+                    <span className="start-main">{t("importNovel")}</span>
                     <br />
-                    <span className="start-sub">导入本地文档，继续创作</span>
+                    <span className="start-sub">{t("importNovelDescription")}</span>
                   </span>
                   <ArrowRight size={22} />
                 </button>
@@ -151,9 +153,9 @@ export function WelcomePage({
 
           <div className="panel recent">
             <div className="recent-head">
-              <h2 className="section-title">最近项目</h2>
+              <h2 className="section-title">{t("recentProjects")}</h2>
             </div>
-            {recentProjects.length === 0 ? <p className="muted">暂无最近项目。可以新建作品，或从 TXT 导入开始。</p> : null}
+            {recentProjects.length === 0 ? <p className="muted">{t("noRecentProjectsHint")}</p> : null}
             {recentProjects.map((entry) => {
               const project = entry.project;
               const available = entry.availability === "available";
@@ -164,21 +166,21 @@ export function WelcomePage({
                   <span>
                     <span className="project-title">《{project.name}》</span>
                     <br />
-                    <span className="muted">上次编辑：{formatProjectTime(project.updatedAt)}</span>
+                    <span className="muted">{t("lastEdited")}：{formatProjectTime(project.updatedAt, locale)}</span>
                   </span>
-                  <span className="muted">{getProjectAvailabilityLabel(entry)}</span>
+                  <span className="muted">{getProjectAvailabilityLabel(entry, t)}</span>
                 </button>
                 <span className="project-actions">
-                  <button className="project-menu-button" onClick={(event) => toggleProjectMenu(event, project.id)} type="button" aria-label={`打开《${project.name}》项目菜单`}>
+                  <button className="project-menu-button" onClick={(event) => toggleProjectMenu(event, project.id)} type="button" aria-label={`${t("openProjectMenu")}：${project.name}`}>
                     <DotsThree size={24} weight="bold" />
                   </button>
                   {menuProjectId === project.id ? (
                     <span className="project-menu">
                       <button onClick={() => startProjectRename(project)} type="button">
-                        重命名
+                        {t("rename")}
                       </button>
                       <button className="danger" onClick={() => runProjectAction(() => onDeleteProject(project.id, project.name))} type="button">
-                        删除项目
+                        {t("deleteProject")}
                       </button>
                     </span>
                   ) : null}
@@ -186,22 +188,22 @@ export function WelcomePage({
               </div>
               );
             })}
-            <p className="muted">点击项目可直接打开</p>
+            <p className="muted">{t("clickProjectToOpen")}</p>
           </div>
         </section>
 
         <aside className="side-stack">
           <div className="panel side-panel">
-            <h2 className="section-title">开始建议</h2>
+            <h2 className="section-title">{t("gettingStartedTips")}</h2>
             <div className="tips">
-              <Tip icon={<Plus size={22} />} title="先定大纲，再落笔成章" description="清晰的结构能让你的故事更有张力" />
-              <Tip icon={<FileText size={22} />} title="保持定期备份" description="在「设置」中开启自动备份，安心创作" />
-              <Tip icon={<BookOpen size={22} />} title="设定写作目标" description="每天进步一点点，积累成就感" />
+              <Tip icon={<Plus size={22} />} title={t("tipOutlineTitle")} description={t("tipOutlineDescription")} />
+              <Tip icon={<FileText size={22} />} title={t("tipBackupTitle")} description={t("tipBackupDescription")} />
+              <Tip icon={<BookOpen size={22} />} title={t("tipGoalTitle")} description={t("tipGoalDescription")} />
             </div>
           </div>
           <div className="panel side-panel">
             <div className="panel-head">
-              <h2 className="section-title">最近打开</h2>
+              <h2 className="section-title">{t("recentlyOpened")}</h2>
             </div>
             <div className="tips compact">
               {recentProjects.slice(0, 2).map((entry) => (
@@ -218,7 +220,7 @@ export function WelcomePage({
                   <span>
                     《{entry.project.name}》
                     <br />
-                    <span className="muted">{entry.availability === "available" ? formatProjectTime(entry.project.updatedAt) : getProjectAvailabilityLabel(entry)}</span>
+                    <span className="muted">{entry.availability === "available" ? formatProjectTime(entry.project.updatedAt, locale) : getProjectAvailabilityLabel(entry, t)}</span>
                   </span>
                 </button>
               ))}
@@ -228,9 +230,9 @@ export function WelcomePage({
                     <FileText size={21} />
                   </span>
                   <span>
-                    暂无最近打开
+                    {t("noRecentlyOpened")}
                     <br />
-                    <span className="muted">新建作品或导入 TXT 后会显示在这里</span>
+                    <span className="muted">{t("recentlyOpenedHint")}</span>
                   </span>
                 </button>
               ) : null}
@@ -239,10 +241,10 @@ export function WelcomePage({
         </aside>
       </main>
 
-      <Modal open={Boolean(renameProjectDraft)} title="重命名项目" onClose={cancelProjectRename}>
+      <Modal open={Boolean(renameProjectDraft)} title={t("renameProject")} onClose={cancelProjectRename}>
         <form className="rename-form" onSubmit={submitProjectRename}>
           <label className="field-label" htmlFor="project-rename-input">
-            项目名称
+            {t("projectName")}
           </label>
           <Input
             autoFocus
@@ -252,10 +254,10 @@ export function WelcomePage({
           />
           <div className="modal-actions">
             <Button onClick={cancelProjectRename} type="button" variant="ghost">
-              取消
+              {t("cancel")}
             </Button>
             <Button disabled={!renameProjectName.trim() || renameProjectName.trim() === renameProjectDraft?.name} type="submit" variant="primary">
-              保存
+              {t("save")}
             </Button>
           </div>
         </form>

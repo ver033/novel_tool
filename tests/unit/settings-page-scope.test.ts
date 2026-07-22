@@ -20,10 +20,10 @@ describe("settings page scope", () => {
     const settings = readSource("src/renderer/routes/SettingsPage.tsx");
     const app = readSource("src/renderer/App.tsx");
 
-    expect(settings).toContain('const visibleCategories = ["AI 服务", "提示词预设", "章节索引缓存", "导入导出", "实验功能"] as const satisfies readonly SettingsCategory[];');
+    expect(settings).toContain('const visibleCategories = ["language", "ai", "prompts", "chapter-cache", "import-export", "experimental"] as const satisfies readonly SettingsCategory[];');
     expect(settings).toContain("visibleCategories.map");
     expect(settings).toContain("activeVisibleCategory");
-    expect(app).toContain('useState<SettingsCategory>("AI 服务")');
+    expect(app).toContain('useState<SettingsCategory>("ai")');
   });
 
   it("exposes Windows startup launch on the experimental settings page with a dedicated IPC surface", () => {
@@ -47,7 +47,7 @@ describe("settings page scope", () => {
     expect(ipcTypes).toContain("novelTool:startupLaunch:updateSettings");
     expect(settingsIpc).toContain("startupLaunchService.getStatus");
     expect(settingsIpc).toContain("startupLaunchService.setEnabled");
-    expect(registerIpc).toContain("startupLaunchService.ensureDefaultEnabled");
+    expect(registerIpc).toContain("startupLaunchService.ensureDefaultDisabled");
   });
 
   it("does not show disabled placeholder AI behavior controls in the visible AI settings", () => {
@@ -88,20 +88,22 @@ describe("settings page scope", () => {
 
   it("keeps prototype and product analysis tools on the experimental settings page", () => {
     const settings = readSource("src/renderer/routes/SettingsPage.tsx");
-    const aiBranch = settings.slice(settings.indexOf('if (category === "AI 服务")'), settings.indexOf('if (category === "提示词预设")'));
+    const aiBranch = settings.slice(settings.indexOf('if (category === "ai")'), settings.indexOf('if (category === "prompts")'));
     const importExportPane = readFunctionBlock(settings, "ImportExportSettingsPane");
     const experimentalPane = readFunctionBlock(settings, "ExperimentalSettingsPane");
 
-    expect(settings).toContain("实验功能");
-    expect(settings).toContain('if (category === "实验功能")');
+    expect(settings).toContain('experimental: t("experimental")');
+    expect(settings).toContain('if (category === "experimental")');
     expect(settings).toContain("<ExperimentalSettingsPane apiKeyConfigured={apiKeyConfigured} currentProject={currentProject} />");
-    expect(settings).toContain('activeVisibleCategory !== "章节索引缓存" && activeVisibleCategory !== "导入导出" && activeVisibleCategory !== "实验功能"');
+    expect(settings).toContain('activeVisibleCategory !== "chapter-cache" && activeVisibleCategory !== "import-export" && activeVisibleCategory !== "experimental"');
     expect(aiBranch).not.toContain("UsageAnalyticsSettingsPane");
     expect(importExportPane).not.toContain("ExternalBookSyncPane");
     expect(experimentalPane).toContain("<UsageAnalyticsSettingsPane apiKeyConfigured={apiKeyConfigured} />");
     expect(experimentalPane).toContain("<StartupLaunchSettingsPane />");
     expect(experimentalPane).toContain("<ExternalBookSyncPane currentProject={currentProject} />");
-    expect(settings).toContain("<h3>同步检查</h3>");
+    expect(settings).toContain('japanese ? "外部 .Book の同期確認" : "同步检查"');
+    expect(settings).toContain("externalBookSyncAutomaticEnabled: next");
+    expect(settings).toContain("默认关闭");
     expect(settings).not.toContain("外部 .Book 同步检查");
     expect(settings).not.toContain("只读取项目同名文件夹下的 .Book 文件");
     expect(settings).not.toContain("查看保存路径");
@@ -195,7 +197,7 @@ describe("settings page scope", () => {
     const settings = readSource("src/renderer/routes/SettingsPage.tsx");
     const importExportPane = readFunctionBlock(settings, "ImportExportSettingsPane");
 
-    expect(settings).toContain("导入导出");
+    expect(settings).toContain('"import-export": t("importExport")');
     expect(settings).toContain("ImportExportSettingsPane");
     expect(importExportPane).not.toContain("ExternalBookSyncPane");
     expect(settings).toContain("ShareableProjectExportPane");

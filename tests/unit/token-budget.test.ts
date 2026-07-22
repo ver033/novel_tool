@@ -7,7 +7,7 @@ describe("AI token budgets", () => {
       chat: { maxInputTokens: 12000, maxOutputTokens: 24000, maxReasoningTokens: 4000 },
       polish: { maxInputTokens: 8000, maxOutputTokens: 8000, maxReasoningTokens: 2000 },
       expand: { maxInputTokens: 10000, maxOutputTokens: 12000, maxReasoningTokens: 3000 },
-      proofread: { maxInputTokens: 12000, maxOutputTokens: 12000, maxReasoningTokens: 4000 },
+      proofread: { maxInputTokens: 12000, maxOutputTokens: 12000, maxReasoningTokens: 1200 },
       continue: { maxInputTokens: 12000, maxOutputTokens: 12000, maxReasoningTokens: 3000 }
     });
   });

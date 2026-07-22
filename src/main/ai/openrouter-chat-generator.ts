@@ -22,6 +22,7 @@ import {
   type ContinuityCheckInput
 } from "./summary-prompts";
 import { runChatAgentLoop, type ChatAgentModel } from "./chat-agent-harness";
+import type { NovelAgentRuntimeHandlers } from "./agent-runtime/novel-agent-runtime";
 import { buildChatAgentMemoryText } from "./chat-agent-memory";
 import type {
   ChatAgentContext,
@@ -653,7 +654,7 @@ export class OpenRouterChatGenerator implements AiChatGenerator {
 
   async sendAgentMessageStream(
     input: AiChatAgentGenerationInput,
-    handlers: AiChatStreamHandlers,
+    handlers: NovelAgentRuntimeHandlers,
     options: AiGenerationOptions = {}
   ): Promise<AiChatMessageResult> {
     const { chatBudget, client, contextLength, modelName } = await this.createClient();
@@ -710,7 +711,14 @@ export class OpenRouterChatGenerator implements AiChatGenerator {
         currentChapterTitle: input.currentChapterTitle,
         selectionText: input.selectionText,
         chapterDirectory: input.chapterDirectory,
-        tools: input.tools,
+        tools: input.tools.map((tool) => ({
+          type: "function" as const,
+          function: {
+            name: tool.name,
+            description: tool.description,
+            parameters: tool.parameters
+          }
+        })),
         executeTool: input.executeTool,
         model,
         tokenBudget: chatBudget,

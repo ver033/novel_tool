@@ -1,8 +1,8 @@
 import { useEffect, useRef } from "react";
 import { BookOpen, CaretLeft, FileText, PencilSimple, Plus, SidebarSimple, Trash } from "@phosphor-icons/react";
-import { Button } from "../components/Button";
 import { IconButton } from "../components/IconButton";
 import type { ChapterSummary } from "../../main/shared/types";
+import { useI18n } from "../i18n";
 
 export type ChapterAuxiliaryInfo = {
   readonly hasOutline: boolean;
@@ -14,6 +14,7 @@ type LeftChapterTreeProps = {
   readonly activeChapterId: string | null;
   readonly auxiliaryInfoByChapterId?: Readonly<Record<string, ChapterAuxiliaryInfo>>;
   readonly chapters: readonly ChapterSummary[];
+  readonly projectTitle: string;
   readonly onCreateChapter: () => void;
   readonly onCreateChapterAfter: (chapterId: string) => void;
   readonly onDeleteChapter: (chapterId: string) => void;
@@ -26,6 +27,7 @@ export function LeftChapterTree({
   activeChapterId,
   auxiliaryInfoByChapterId = {},
   chapters,
+  projectTitle,
   onCreateChapter,
   onCreateChapterAfter,
   onDeleteChapter,
@@ -33,6 +35,7 @@ export function LeftChapterTree({
   onRenameChapter,
   onSelectChapter
 }: LeftChapterTreeProps) {
+  const { t } = useI18n();
   const activeItemRef = useRef<HTMLDivElement | null>(null);
   const lastChapterId = chapters.length > 0 ? chapters[chapters.length - 1]?.id ?? null : null;
 
@@ -42,25 +45,30 @@ export function LeftChapterTree({
 
   return (
     <aside className="chapter-tree">
-      <div className="chapter-title-row">
-        <span className="tree-title">正文</span>
-        <div className="chapter-title-actions">
-          <IconButton className="chapter-collapse-button" label="折叠章节列表" onClick={onHideChapters}>
-            <SidebarSimple size={20} />
-            <CaretLeft className="chapter-collapse-caret" size={13} />
+      <div className="chapter-project-block">
+        <span className="chapter-project-eyebrow">{t("work")}</span>
+        <div className="chapter-project-row">
+          <strong title={projectTitle}>{projectTitle}</strong>
+          <IconButton className="chapter-collapse-button" label={t("collapseChapterList")} onClick={onHideChapters}>
+            <SidebarSimple size={19} />
+            <CaretLeft className="chapter-collapse-caret" size={11} />
           </IconButton>
-          <Button onClick={onCreateChapter} variant="secondary">
+        </div>
+      </div>
+      <div className="chapter-title-row">
+        <span className="tree-title">{t("structure")}</span>
+        <div className="chapter-title-actions">
+          <IconButton className="chapter-add-button" label={t("addChapter")} onClick={onCreateChapter}>
             <Plus size={18} />
-            新建章节
-          </Button>
+          </IconButton>
         </div>
       </div>
       <div className="volume">
         <BookOpen size={20} />
-        <span>第一卷</span>
+        <span>{t("firstVolume")}</span>
       </div>
       <div className="chapter-list">
-        {chapters.length === 0 ? <p className="empty-chapters muted">暂无章节，点击上方按钮新建。</p> : null}
+        {chapters.length === 0 ? <p className="empty-chapters muted">{t("noChapterHint")}</p> : null}
         {chapters.map((chapter) => {
           const auxiliaryInfo = auxiliaryInfoByChapterId[chapter.id] ?? { hasOutline: false, scratchCount: 0, scratchNoteIds: [] };
           const hasAuxiliaryInfo = auxiliaryInfo.hasOutline || auxiliaryInfo.scratchCount > 0;
@@ -75,20 +83,20 @@ export function LeftChapterTree({
                 <span className="chapter-select-text">
                   <span className="chapter-name">{chapter.title}</span>
                   <span className={`chapter-aux-meta ${hasAuxiliaryInfo ? "" : "empty"}`}>
-                    {auxiliaryInfo.hasOutline ? <span className="chapter-aux-chip">细纲</span> : null}
-                    {auxiliaryInfo.scratchCount > 0 ? <span className="chapter-aux-chip">草稿 {auxiliaryInfo.scratchCount}</span> : null}
-                    {!hasAuxiliaryInfo ? <span className="chapter-aux-empty">无辅助资料</span> : null}
+                    {auxiliaryInfo.hasOutline ? <span className="chapter-aux-chip">{t("detailedOutline")}</span> : null}
+                    {auxiliaryInfo.scratchCount > 0 ? <span className="chapter-aux-chip">{t("draft")} {auxiliaryInfo.scratchCount}</span> : null}
+                    {!hasAuxiliaryInfo ? <span className="chapter-aux-empty">{t("noSupportingInfo")}</span> : null}
                   </span>
                 </span>
               </button>
-              <div className="chapter-actions" aria-label={`${chapter.title} 操作`}>
+              <div className="chapter-actions" aria-label={`${chapter.title} · ${t("chapterActions")}`}>
                 {chapter.id === lastChapterId ? (
                   <button
                     className="chapter-action"
                     onClick={() => onCreateChapterAfter(chapter.id)}
                     type="button"
-                    aria-label={`在 ${chapter.title} 后新建章节`}
-                    title="在最后一章后新建"
+                    aria-label={`${chapter.title} · ${t("addAfterChapter")}`}
+                    title={t("addAfterLastChapter")}
                   >
                     <Plus size={15} />
                   </button>
@@ -97,8 +105,8 @@ export function LeftChapterTree({
                   className="chapter-action"
                   onClick={() => onRenameChapter(chapter.id, chapter.title)}
                   type="button"
-                  aria-label={`重命名 ${chapter.title}`}
-                  title="重命名"
+                  aria-label={`${t("rename")} · ${chapter.title}`}
+                  title={t("rename")}
                 >
                   <PencilSimple size={15} />
                 </button>
@@ -106,8 +114,8 @@ export function LeftChapterTree({
                   className="chapter-action danger"
                   onClick={() => onDeleteChapter(chapter.id)}
                   type="button"
-                  aria-label={`删除 ${chapter.title}`}
-                  title="删除"
+                  aria-label={`${t("delete")} · ${chapter.title}`}
+                  title={t("delete")}
                 >
                   <Trash size={15} />
                 </button>

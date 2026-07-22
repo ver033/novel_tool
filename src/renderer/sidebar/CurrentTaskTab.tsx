@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Editor } from "@tiptap/react";
 import { Check, CopySimple } from "@phosphor-icons/react";
-import { proofreadIssueLabels, type ProofreadIssue } from "../../main/shared/proofread";
+import { proofreadIssueLabels, proofreadIssueLabelsJa, type ProofreadIssue } from "../../main/shared/proofread";
 import type { ChapterContent, SelectionSnapshot, TaskPromptPreset, TaskType } from "../../main/shared/types";
 import { Button } from "../components/Button";
 import { IconButton } from "../components/IconButton";
@@ -10,6 +10,7 @@ import type { SettingsCategory } from "../routes/SettingsPage";
 import { candidateStatusLabels, taskLabels, taskStatusLabels } from "../state/sidebar-store";
 import { useTaskStore } from "../state/task-store";
 import type { SavedChapterVersion } from "../state/editor-store";
+import { useI18n } from "../i18n";
 
 type CurrentTaskTabProps = {
   readonly activeEditorChapterId: string | null;
@@ -32,8 +33,15 @@ const defaultInstruction: Record<TaskType, string> = {
   continue: "从当前最后一句自然接续，只生成插入选区下方的新正文。"
 };
 
-function initialInstructionForTask(taskType: TaskType, taskPromptPreset: TaskPromptPreset | null): string {
-  return taskPromptPreset ? "" : defaultInstruction[taskType];
+const defaultInstructionJa: Record<TaskType, string> = {
+  polish: "原文の文体を保ちながら軽く推敲し、読みにくさ、重複、リズムを優先して整えてください。",
+  expand: "現在の場面と人物の認識を保ち、選択範囲を置き換えられる完成した文章へ加筆してください。",
+  proofread: "明確な問題を校正し、断定できない論理上の懸念は作者の判断が必要だと示してください。",
+  continue: "現在の最後の一文から自然に続け、選択範囲の下へ挿入する新しい本文だけを生成してください。"
+};
+
+function initialInstructionForTask(taskType: TaskType, taskPromptPreset: TaskPromptPreset | null, japanese = false): string {
+  return taskPromptPreset ? "" : (japanese ? defaultInstructionJa : defaultInstruction)[taskType];
 }
 
 function applyModeForTask(taskType: TaskType) {
@@ -73,38 +81,56 @@ const proofreadSeverityLabels: Record<ProofreadIssue["severity"], string> = {
   critical: "严重"
 };
 
-function taskErrorTitle(error: string, taskType: TaskType): string {
+const proofreadSeverityLabelsJa: Record<ProofreadIssue["severity"], string> = {
+  low: "低", medium: "中", high: "高", critical: "重大"
+};
+
+function taskErrorTitle(error: string, taskType: TaskType, japanese: boolean): string {
   if (isAiSettingsError(error)) {
-    return "AI 服务未配置";
+    return japanese ? "AI サービスが未設定です" : "AI 服务未配置";
   }
   if (isOpenRouterRateLimitError(error)) {
-    return "OpenRouter 请求被限流";
+    return japanese ? "OpenRouter のレート制限に達しました" : "OpenRouter 请求被限流";
   }
   if (isTruncatedAiOutputError(error)) {
-    return taskType === "proofread" ? "校对结果被截断" : "AI 输出被截断";
+    return japanese ? (taskType === "proofread" ? "校正結果が途中で切れました" : "AI の出力が途中で切れました") : taskType === "proofread" ? "校对结果被截断" : "AI 输出被截断";
   }
-  return "AI 任务失败";
+  return japanese ? "AI タスクに失敗しました" : "AI 任务失败";
 }
 
-function taskErrorHint(error: string, taskType: TaskType): string | null {
+function taskErrorHint(error: string, taskType: TaskType, japanese: boolean): string | null {
   if (isAiSettingsError(error)) {
-    return "请先填写 OpenRouter API Key 和模型名称，并测试保存。";
+    return japanese ? "OpenRouter API キーとモデル名を入力し、接続テスト後に保存してください。" : "请先填写 OpenRouter API Key 和模型名称，并测试保存。";
   }
   if (isOpenRouterRateLimitError(error)) {
-    return "当前模型或上游 Provider 正在限流。请稍后重试，或在 AI 服务设置中换用其他模型。";
+    return japanese ? "現在のモデルまたは上流プロバイダーが制限中です。しばらく待つか、AI サービス設定で別のモデルを選んでください。" : "当前模型或上游 Provider 正在限流。请稍后重试，或在 AI 服务设置中换用其他模型。";
   }
   if (isTruncatedAiOutputError(error)) {
-    return taskType === "proofread"
-      ? "模型已返回结果，但校对内容被截断。请缩短选区后重试。"
-      : "模型已返回部分结果。可以点击继续生成，或缩短选区后重新生成。";
+    return japanese
+      ? taskType === "proofread" ? "校正結果の一部は返されましたが途中で切れています。選択範囲を短くして再試行してください。" : "一部の結果は返されています。続きを生成するか、選択範囲を短くして再生成してください。"
+      : taskType === "proofread" ? "模型已返回结果，但校对内容被截断。请缩短选区后重试。" : "模型已返回部分结果。可以点击继续生成，或缩短选区后重新生成。";
   }
   return null;
 }
 
-function formatProofreadIssueDraft(issue: ProofreadIssue): string {
-  const label = proofreadIssueLabels[issue.code];
+function formatProofreadIssueDraft(issue: ProofreadIssue, japanese = false): string {
+  const label = japanese ? proofreadIssueLabelsJa[issue.code] : proofreadIssueLabels[issue.code];
+  const severity = japanese ? proofreadSeverityLabelsJa[issue.severity] : proofreadSeverityLabels[issue.severity];
+  if (japanese) {
+    const lines = [
+      `校正提案：${label}｜${severity}`,
+      `原文：${issue.quote || "未記載"}`,
+      `位置：${issue.locationHint || "未記載"}`,
+      `修正案：${issue.suggestion || "未記載"}`,
+      `説明：${issue.explanation || "未記載"}`
+    ];
+    if (issue.suggestedReplacement) lines.push(`置換候補：${issue.suggestedReplacement}`);
+    if (issue.evidence.length) lines.push(`根拠：${issue.evidence.map((item) => `${item.note}：${item.quote}`).join("；")}`);
+    lines.push(`扱い：${issue.canAutoApply ? "手動修正の参考にできます" : "診断のみ。作者が判断してください"}${issue.needsAuthorJudgment ? "。作者の判断が必要です" : ""}`);
+    return lines.join("\n");
+  }
   const lines = [
-    `校对建议：${label}｜${proofreadSeverityLabels[issue.severity]}`,
+    `校对建议：${label}｜${severity}`,
     `原文片段：${issue.quote || "未提供"}`,
     `位置：${issue.locationHint || "未提供"}`,
     `建议改法：${issue.suggestion || "未提供"}`,
@@ -120,12 +146,12 @@ function formatProofreadIssueDraft(issue: ProofreadIssue): string {
   return lines.join("\n");
 }
 
-function formatAllProofreadIssues(issues: readonly ProofreadIssue[]): string {
+function formatAllProofreadIssues(issues: readonly ProofreadIssue[], japanese = false): string {
   if (issues.length === 0) {
-    return "未发现明显问题。";
+    return japanese ? "明確な問題は見つかりませんでした。" : "未发现明显问题。";
   }
 
-  return issues.map((issue, index) => `${index + 1}. ${formatProofreadIssueDraft(issue)}`).join("\n\n");
+  return issues.map((issue, index) => `${index + 1}. ${formatProofreadIssueDraft(issue, japanese)}`).join("\n\n");
 }
 
 export function CurrentTaskTab({
@@ -141,21 +167,65 @@ export function CurrentTaskTab({
   onContentSaved,
   onOpenSettings
 }: CurrentTaskTabProps) {
-  const [instruction, setInstruction] = useState(initialInstructionForTask(taskType, taskPromptPreset));
+  const { t, locale } = useI18n();
+  const japanese = locale === "ja-JP";
+  const ui = japanese
+    ? {
+        selectTextFirst: "先に本文を選択し、選択ツールバーから AI 操作を選んでください。", replaceOriginal: "原文を置換", insertBelow: "下に挿入", applyReplacement: "置換を適用",
+        processing: "処理中", waitingSelection: "選択待ち", openAiSettings: "AI サービス設定を開く", copyFailed: "コピーに失敗しました",
+        clipboardUnavailable: "システムのクリップボードを利用できません。", noCopyContent: "コピーできる内容がありません。", currentTask: "現在のタスク",
+        status: "状態", currentChapter: "現在の章", noSelectedChapter: "章が選択されていません", result: "結果", request: "今回の要望",
+        originalExcerpt: "原文の抜粋", proofreadFindings: "校正結果", copyAllProofread: "校正結果をすべてコピー", generatingProofread: "AI が校正結果を生成しています...",
+        proofreadNotStarted: "校正はまだ開始されていません。", incompleteProofread: "校正結果の形式が不完全です", incompleteProofreadHint: "構造化された校正項目がありません。もう一度校正してください。",
+        noIssues: "明確な問題は見つかりませんでした", noIssuesHint: "現在の選択範囲に明確な校正提案はありません。原文を維持できます。",
+        noLocation: "位置未記載", authorJudgment: "作者の判断が必要", quote: "原文", location: "位置", suggestion: "修正案", explanation: "説明",
+        replacement: "置換候補", evidence: "根拠", handling: "扱い", manualReference: "置換候補を手動修正の参考にできます", diagnosisOnly: "診断のみ。作者が判断してください",
+        copyIssue: "この校正提案をコピー", addScratchpad: "下書きメモへ追加", copied: "コピー済み", stopGeneration: "生成を停止", reproofread: "再校正",
+        startProofread: "校正を開始", closeResult: "結果を閉じる", target: "対象", currentSelection: "現在の選択範囲", presetRequest: "プリセットの要望",
+        optionalRequest: "任意：今回だけの追加要望です。プリセットは変更されません。", previewResult: "プレビュー結果", copyCandidate: "本文候補をコピー",
+        generating: "AI が生成しています", noPreview: "プレビューはまだありません。", regenerate: "再生成", generatePreview: "プレビューを生成", continueGeneration: "続きを生成",
+        ignoreCandidate: "候補を破棄"
+      }
+    : {
+        selectTextFirst: "请先在正文中选中文本，再从选区工具条选择 AI 任务。", replaceOriginal: "替换原文", insertBelow: "插入下方", applyReplacement: "应用替换",
+        processing: "处理中", waitingSelection: "等待选区", openAiSettings: "打开 AI 服务设置", copyFailed: "复制失败",
+        clipboardUnavailable: "系统剪贴板不可用。", noCopyContent: "当前没有可复制的内容。", currentTask: "当前任务",
+        status: "状态", currentChapter: "当前章节", noSelectedChapter: "未选择章节", result: "结果", request: "本次要求",
+        originalExcerpt: "原文节选", proofreadFindings: "校对发现", copyAllProofread: "复制全部校对结果", generatingProofread: "AI 正在生成校对结果...",
+        proofreadNotStarted: "尚未开始校对。", incompleteProofread: "校对结果格式不完整", incompleteProofreadHint: "当前候选没有结构化校对问题，请重新校对。",
+        noIssues: "未发现明显问题", noIssuesHint: "当前选区没有明确的校对建议，原文可以保持不变。",
+        noLocation: "未提供位置", authorJudgment: "需要作者判断", quote: "原文片段", location: "位置", suggestion: "建议改法", explanation: "说明",
+        replacement: "建议替换", evidence: "证据", handling: "处理方式", manualReference: "建议替换可作为手动修改参考", diagnosisOnly: "仅供诊断，建议作者手动判断",
+        copyIssue: "复制这条校对建议", addScratchpad: "加入草稿纸", copied: "已复制", stopGeneration: "停止生成", reproofread: "重新校对",
+        startProofread: "开始校对", closeResult: "关闭结果", target: "目标", currentSelection: "当前选区", presetRequest: "预设要求",
+        optionalRequest: "可选：只补充这一次任务的要求，不会改动预设。", previewResult: "预览结果", copyCandidate: "复制候选正文",
+        generating: "AI 正在生成", noPreview: "尚未生成预览。", regenerate: "重新生成", generatePreview: "生成预览", continueGeneration: "继续生成",
+        ignoreCandidate: "忽略候选"
+      };
+  const localizedTaskLabels: Record<TaskType, string> = japanese
+    ? { polish: "推敲", expand: "加筆", proofread: "校正", continue: "続きを書く" }
+    : taskLabels;
+  const localizedTaskStatusLabels: typeof taskStatusLabels = japanese
+    ? { empty: "未設定", configured: "設定済み", generating: "生成中", preview_ready: "プレビュー完了", failed: "生成失敗", applied: "適用済み", inserted: "挿入済み", saved_to_scratchpad: "下書きメモへ追加済み" }
+    : taskStatusLabels;
+  const localizedCandidateStatusLabels: typeof candidateStatusLabels = japanese
+    ? { preview: "プレビュー", applied: "置換済み", inserted: "挿入済み", rejected: "破棄済み", copied: "コピー済み", inserted_to_scratchpad: "下書きメモへ追加済み" }
+    : candidateStatusLabels;
+  const [instruction, setInstruction] = useState(initialInstructionForTask(taskType, taskPromptPreset, japanese));
   const [copiedIssueIndex, setCopiedIssueIndex] = useState<number | null>(null);
   const [copiedCandidate, setCopiedCandidate] = useState(false);
   const [copiedAllProofread, setCopiedAllProofread] = useState(false);
   const [copyError, setCopyError] = useState<string | null>(null);
   useEffect(() => {
-    setInstruction(initialInstructionForTask(taskType, taskPromptPreset));
+    setInstruction(initialInstructionForTask(taskType, taskPromptPreset, japanese));
     setCopiedIssueIndex(null);
     setCopiedCandidate(false);
     setCopiedAllProofread(false);
     setCopyError(null);
-  }, [taskType, taskPromptPreset?.id, selectionSnapshot?.selectionHash]);
+  }, [japanese, taskType, taskPromptPreset?.id, selectionSnapshot?.selectionHash]);
 
-  const selectedText = selectionSnapshot?.text ?? "请先在正文中选中文本，再从选区工具条选择 AI 任务。";
-  const label = taskLabels[taskType];
+  const selectedText = selectionSnapshot?.text ?? ui.selectTextFirst;
+  const label = localizedTaskLabels[taskType];
   const taskStore = useTaskStore({
     projectId,
     chapterId,
@@ -168,32 +238,32 @@ export function CurrentTaskTab({
     flushPendingSave,
     onContentSaved
   });
-  const primaryLabel = taskType === "expand" ? "替换原文" : taskType === "continue" ? "插入下方" : "应用替换";
+  const primaryLabel = taskType === "expand" ? ui.replaceOriginal : taskType === "continue" ? ui.insertBelow : ui.applyReplacement;
   const hasCandidateText = Boolean(taskStore.candidate?.generatedText.trim());
   const candidateCopyText = taskStore.streamingText || taskStore.candidate?.generatedText || taskStore.task?.outputText || "";
   const partialTruncatedText = taskStore.streamingText || taskStore.task?.outputText || "";
   const canContinueTruncated = Boolean(taskStore.task && taskStore.error?.includes("截断") && partialTruncatedText.trim() && taskType !== "proofread");
   const statusText = useMemo(() => {
     if (taskStore.busy) {
-      return "处理中";
+      return ui.processing;
     }
-    return taskStore.task ? taskStatusLabels[taskStore.task.status] : "等待选区";
-  }, [taskStore.busy, taskStore.error, taskStore.task]);
+    return taskStore.task ? localizedTaskStatusLabels[taskStore.task.status] : ui.waitingSelection;
+  }, [localizedTaskStatusLabels, taskStore.busy, taskStore.task, ui.processing, ui.waitingSelection]);
   const errorPanel = taskStore.error ? (
     <div className="task-error-panel" role="alert">
-      <b>{taskErrorTitle(taskStore.error, taskType)}</b>
+      <b>{taskErrorTitle(taskStore.error, taskType, japanese)}</b>
       <p>{taskStore.error}</p>
-      {taskErrorHint(taskStore.error, taskType) ? <p className="task-error-hint">{taskErrorHint(taskStore.error, taskType)}</p> : null}
+      {taskErrorHint(taskStore.error, taskType, japanese) ? <p className="task-error-hint">{taskErrorHint(taskStore.error, taskType, japanese)}</p> : null}
       {isAiSettingsError(taskStore.error) ? (
-        <Button onClick={() => onOpenSettings("AI 服务")} type="button" variant="secondary">
-          打开 AI 服务设置
+        <Button onClick={() => onOpenSettings("ai")} type="button" variant="secondary">
+          {ui.openAiSettings}
         </Button>
       ) : null}
     </div>
   ) : null;
   const copyErrorPanel = copyError ? (
     <div className="task-error-panel" role="alert">
-      <b>复制失败</b>
+      <b>{ui.copyFailed}</b>
       <p>{copyError}</p>
     </div>
   ) : null;
@@ -222,13 +292,13 @@ export function CurrentTaskTab({
   async function copyText(text: string, onCopied: () => void): Promise<void> {
     setCopyError(null);
     if (!navigator.clipboard) {
-      setCopyError("系统剪贴板不可用。");
+      setCopyError(ui.clipboardUnavailable);
       return;
     }
 
     const trimmedText = text.trim();
     if (!trimmedText) {
-      setCopyError("当前没有可复制的内容。");
+      setCopyError(ui.noCopyContent);
       return;
     }
 
@@ -236,7 +306,7 @@ export function CurrentTaskTab({
       await navigator.clipboard.writeText(trimmedText);
       onCopied();
     } catch (reason) {
-      setCopyError(reason instanceof Error ? reason.message : "复制失败");
+      setCopyError(reason instanceof Error ? reason.message : ui.copyFailed);
     }
   }
 
@@ -245,11 +315,11 @@ export function CurrentTaskTab({
   }
 
   async function copyAllProofreadIssues(issues: readonly ProofreadIssue[]): Promise<void> {
-    await copyText(formatAllProofreadIssues(issues), () => markCopied("proofread-all"));
+    await copyText(formatAllProofreadIssues(issues, japanese), () => markCopied("proofread-all"));
   }
 
   async function copyProofreadIssue(issue: ProofreadIssue, issueIndex: number): Promise<void> {
-    await copyText(formatProofreadIssueDraft(issue), () => markCopied("proofread-issue", issueIndex));
+    await copyText(formatProofreadIssueDraft(issue, japanese), () => markCopied("proofread-issue", issueIndex));
   }
 
   if (taskType === "proofread") {
@@ -257,43 +327,43 @@ export function CurrentTaskTab({
     return (
       <div className="task-card">
         <h2 className="task-title">
-          当前任务 <span className="mini-tag">校对</span>
+          {ui.currentTask} <span className="mini-tag">{localizedTaskLabels.proofread}</span>
         </h2>
         <div className="task-meta">
-          <div>状态：{statusText}</div>
-          <div>当前章节：{currentChapterTitle ?? "未选择章节"}</div>
-          {taskStore.candidate ? <div>结果：{candidateStatusLabels[taskStore.candidate.status]}</div> : null}
+          <div>{ui.status}：{statusText}</div>
+          <div>{ui.currentChapter}：{currentChapterTitle ?? ui.noSelectedChapter}</div>
+          {taskStore.candidate ? <div>{ui.result}：{localizedCandidateStatusLabels[taskStore.candidate.status]}</div> : null}
         </div>
         {errorPanel}
         {copyErrorPanel}
-        <label className="field-label">本次要求</label>
+        <label className="field-label">{ui.request}</label>
         <Textarea value={instruction} onChange={(event) => setInstruction(event.target.value)} />
-        <label className="field-label">原文节选</label>
+        <label className="field-label">{ui.originalExcerpt}</label>
         <div className="preview-box">{selectedText}</div>
         <div className="field-label-row">
-          <label className="field-label">校对发现</label>
+          <label className="field-label">{ui.proofreadFindings}</label>
           <IconButton
             className={`copy-icon-button ${copiedAllProofread ? "copied" : ""}`}
             disabled={taskStore.busy || !taskStore.candidate || taskStore.candidate.proofreadIssues === null}
-            label="复制全部校对结果"
+            label={ui.copyAllProofread}
             onClick={() => void copyAllProofreadIssues(proofreadIssues)}
           >
             {copiedAllProofread ? <Check size={17} weight="bold" /> : <CopySimple size={17} />}
           </IconButton>
         </div>
         {taskStore.busy && !taskStore.candidate ? (
-          <div className="preview-box result" role="status">AI 正在生成校对结果...</div>
+          <div className="preview-box result" role="status">{ui.generatingProofread}</div>
         ) : !taskStore.candidate ? (
-          <div className="preview-box result">尚未开始校对。</div>
+          <div className="preview-box result">{ui.proofreadNotStarted}</div>
         ) : taskStore.candidate.proofreadIssues === null ? (
           <div className="task-error-panel" role="alert">
-            <b>校对结果格式不完整</b>
-            <p>当前候选没有结构化校对问题，请重新校对。</p>
+            <b>{ui.incompleteProofread}</b>
+            <p>{ui.incompleteProofreadHint}</p>
           </div>
         ) : proofreadIssues.length === 0 ? (
           <div className="proofread-clean-state">
-            <b>未发现明显问题</b>
-            <p>当前选区没有明确的校对建议，原文可以保持不变。</p>
+            <b>{ui.noIssues}</b>
+            <p>{ui.noIssuesHint}</p>
           </div>
         ) : (
           <div className="proofread-issue-list">
@@ -303,41 +373,41 @@ export function CurrentTaskTab({
                   <div className="proofread-issue-primary">
                     <span className="issue-number">{index + 1}</span>
                     <div>
-                      <b>{proofreadIssueLabels[issue.code]}</b>
-                      <span>{issue.locationHint || "未提供位置"}</span>
+                      <b>{japanese ? proofreadIssueLabelsJa[issue.code] : proofreadIssueLabels[issue.code]}</b>
+                      <span>{issue.locationHint || ui.noLocation}</span>
                     </div>
                   </div>
                   <div className="issue-meta-row">
-                    <span className="mini-tag subtle">{proofreadSeverityLabels[issue.severity]}</span>
-                    {issue.needsAuthorJudgment ? <span className="mini-tag warning">需要作者判断</span> : null}
+                    <span className="mini-tag subtle">{japanese ? proofreadSeverityLabelsJa[issue.severity] : proofreadSeverityLabels[issue.severity]}</span>
+                    {issue.needsAuthorJudgment ? <span className="mini-tag warning">{ui.authorJudgment}</span> : null}
                   </div>
                 </div>
                 <div className="issue-body">
                   <div>
-                    <span className="issue-label">原文片段</span>
+                    <span className="issue-label">{ui.quote}</span>
                     <p>{issue.quote || selectedText}</p>
                   </div>
                   <div>
-                    <span className="issue-label">位置</span>
-                    <p>{issue.locationHint || "未提供"}</p>
+                    <span className="issue-label">{ui.location}</span>
+                    <p>{issue.locationHint || ui.noLocation}</p>
                   </div>
                   <div>
-                    <span className="issue-label">建议改法</span>
-                    <p>{issue.suggestion || "未提供"}</p>
+                    <span className="issue-label">{ui.suggestion}</span>
+                    <p>{issue.suggestion || ui.noLocation}</p>
                   </div>
                   <div>
-                    <span className="issue-label">说明</span>
-                    <p>{issue.explanation || "未提供"}</p>
+                    <span className="issue-label">{ui.explanation}</span>
+                    <p>{issue.explanation || ui.noLocation}</p>
                   </div>
                   {issue.suggestedReplacement ? (
                     <div>
-                      <span className="issue-label">建议替换</span>
+                      <span className="issue-label">{ui.replacement}</span>
                       <p>{issue.suggestedReplacement}</p>
                     </div>
                   ) : null}
                   {issue.evidence.length ? (
                     <div>
-                      <span className="issue-label">证据</span>
+                      <span className="issue-label">{ui.evidence}</span>
                       <ul className="issue-evidence-list">
                         {issue.evidence.map((item, evidenceIndex) => (
                           <li key={`${item.source}-${evidenceIndex}`}>
@@ -349,10 +419,10 @@ export function CurrentTaskTab({
                     </div>
                   ) : null}
                   <div>
-                    <span className="issue-label">处理方式</span>
+                    <span className="issue-label">{ui.handling}</span>
                     <p>
-                      {issue.canAutoApply ? "建议替换可作为手动修改参考" : "仅供诊断，建议作者手动判断"}
-                      {issue.needsAuthorJudgment ? "，需要作者判断" : ""}
+                      {issue.canAutoApply ? ui.manualReference : ui.diagnosisOnly}
+                      {issue.needsAuthorJudgment ? `，${ui.authorJudgment}` : ""}
                     </p>
                   </div>
                 </div>
@@ -360,13 +430,13 @@ export function CurrentTaskTab({
                   <IconButton
                     className={`copy-icon-button ${copiedIssueIndex === index ? "copied" : ""}`}
                     disabled={taskStore.busy}
-                    label="复制这条校对建议"
+                    label={ui.copyIssue}
                     onClick={() => void copyProofreadIssue(issue, index)}
                   >
                     {copiedIssueIndex === index ? <Check size={17} weight="bold" /> : <CopySimple size={17} />}
                   </IconButton>
-                  <button className="small-button" disabled={taskStore.busy} onClick={() => void taskStore.saveTextToScratchpad(formatProofreadIssueDraft(issue))} type="button">加入草稿纸</button>
-                  {copiedIssueIndex === index ? <span className="issue-copy-status">已复制</span> : null}
+                  <button className="small-button" disabled={taskStore.busy} onClick={() => void taskStore.saveTextToScratchpad(formatProofreadIssueDraft(issue, japanese))} type="button">{ui.addScratchpad}</button>
+                  {copiedIssueIndex === index ? <span className="issue-copy-status">{ui.copied}</span> : null}
                 </div>
               </div>
             ))}
@@ -375,14 +445,14 @@ export function CurrentTaskTab({
         <div className="task-actions two">
           {taskStore.busy ? (
             <Button onClick={() => taskStore.cancelActiveStream()} variant="secondary">
-              停止生成
+              {ui.stopGeneration}
             </Button>
           ) : null}
           <Button disabled={!taskStore.task || taskStore.busy} onClick={() => void taskStore.generatePreview()} variant="ghost">
-            {taskStore.candidate ? "重新校对" : "开始校对"}
+            {taskStore.candidate ? ui.reproofread : ui.startProofread}
           </Button>
           <Button disabled={!taskStore.candidate || taskStore.busy} onClick={() => void taskStore.rejectCandidate()} variant="secondary">
-            关闭结果
+            {ui.closeResult}
           </Button>
         </div>
       </div>
@@ -392,35 +462,35 @@ export function CurrentTaskTab({
   return (
     <div className="task-card">
       <h2 className="task-title">
-        当前任务 <span className="mini-tag">{label}</span>
+        {ui.currentTask} <span className="mini-tag">{label}</span>
         {taskPromptPreset ? <span className="mini-tag">{taskPromptPreset.name}</span> : null}
       </h2>
       <div className="task-meta">
-        <div>状态：{statusText}</div>
-        <div>当前章节：{currentChapterTitle ?? "未选择章节"}</div>
-        <div>目标：当前选区</div>
+        <div>{ui.status}：{statusText}</div>
+        <div>{ui.currentChapter}：{currentChapterTitle ?? ui.noSelectedChapter}</div>
+        <div>{ui.target}：{ui.currentSelection}</div>
       </div>
       {errorPanel}
       {taskPromptPreset ? (
         <>
-          <label className="field-label">预设要求</label>
+          <label className="field-label">{ui.presetRequest}</label>
           <div className="preview-box preset-preview">{taskPromptPreset.instruction}</div>
         </>
       ) : null}
-      <label className="field-label">本次要求</label>
+      <label className="field-label">{ui.request}</label>
       <Textarea
         value={instruction}
-        placeholder={taskPromptPreset ? "可选：只补充这一次任务的要求，不会改动预设。" : undefined}
+        placeholder={taskPromptPreset ? ui.optionalRequest : undefined}
         onChange={(event) => setInstruction(event.target.value)}
       />
-      <label className="field-label">原文节选</label>
+      <label className="field-label">{ui.originalExcerpt}</label>
       <div className="preview-box">{selectedText}</div>
       <div className="field-label-row">
-        <label className="field-label">预览结果</label>
+        <label className="field-label">{ui.previewResult}</label>
         <IconButton
           className={`copy-icon-button ${copiedCandidate ? "copied" : ""}`}
           disabled={!candidateCopyText.trim()}
-          label="复制候选正文"
+          label={ui.copyCandidate}
           onClick={() => void copyGeneratedCandidate()}
         >
           {copiedCandidate ? <Check size={17} weight="bold" /> : <CopySimple size={17} />}
@@ -429,32 +499,32 @@ export function CurrentTaskTab({
       <div className="preview-box result">
         {taskStore.streamingText ? (
           <>
-            <span className="streaming-label">AI 正在生成</span>
+            <span className="streaming-label">{ui.generating}</span>
             {taskStore.streamingText}
           </>
         ) : (
-          taskStore.candidate?.generatedText || taskStore.candidate?.changeSummary || taskStore.task?.outputText || "尚未生成预览。"
+          taskStore.candidate?.generatedText || taskStore.candidate?.changeSummary || taskStore.task?.outputText || ui.noPreview
         )}
       </div>
       <div className="task-actions">
         {taskStore.busy ? (
           <Button onClick={() => taskStore.cancelActiveStream()} variant="secondary">
-            停止生成
+            {ui.stopGeneration}
           </Button>
         ) : null}
         <Button disabled={!taskStore.task || taskStore.busy} onClick={() => void taskStore.generatePreview()} variant="ghost">
-          {taskStore.candidate ? "重新生成" : "生成预览"}
+          {taskStore.candidate ? ui.regenerate : ui.generatePreview}
         </Button>
         {canContinueTruncated ? (
           <Button disabled={taskStore.busy} onClick={() => void taskStore.continuePreview()} variant="ghost">
-            继续生成
+            {ui.continueGeneration}
           </Button>
         ) : null}
         <Button disabled={!taskStore.candidate || taskStore.busy} onClick={() => void taskStore.rejectCandidate()} variant="ghost">
-          忽略候选
+          {ui.ignoreCandidate}
         </Button>
         <Button disabled={!taskStore.candidate || !hasCandidateText || taskStore.busy} onClick={() => void taskStore.saveCandidateToScratchpad()} variant="ghost">
-          加入草稿纸
+          {ui.addScratchpad}
         </Button>
         <Button disabled={!taskStore.candidate || !hasCandidateText || taskStore.busy} onClick={() => void taskStore.applyCandidate(applyModeForTask(taskType))} variant="primary">
           {primaryLabel}

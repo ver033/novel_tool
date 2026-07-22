@@ -1,5 +1,7 @@
 import { CaretLeft } from "@phosphor-icons/react";
 import type { RelationshipGraphSourceStatus } from "../../main/shared/relationship-graph";
+import { useI18n } from "../i18n";
+import { useLocalizedCopy } from "../i18n/localized-copy";
 import {
   defaultRelationshipGraphDisplaySettings,
   type RelationshipGraphDisplaySettings,
@@ -30,17 +32,8 @@ type RelationshipGraphFiltersProps = {
   readonly onResetDisplaySettings: () => void;
 };
 
-const roleScopeOptions: ReadonlyArray<{ readonly value: RelationshipGraphFilterState["roleScope"]; readonly label: string }> = [
-  { value: "main", label: "主要角色" },
-  { value: "supporting", label: "配角" },
-  { value: "all", label: "全部" }
-];
-
-const labelDensityOptions: ReadonlyArray<{ readonly value: RelationshipGraphLabelDensity; readonly label: string }> = [
-  { value: "essential", label: "重点" },
-  { value: "balanced", label: "均衡" },
-  { value: "full", label: "完整" }
-];
+const roleScopeOptions: ReadonlyArray<RelationshipGraphFilterState["roleScope"]> = ["main", "supporting", "all"];
+const labelDensityOptions: ReadonlyArray<RelationshipGraphLabelDensity> = ["essential", "balanced", "full"];
 
 function formatPercent(value: number): string {
   return `${Math.round(value * 100)}%`;
@@ -70,39 +63,58 @@ export function RelationshipGraphFilters({
   onRefresh,
   onResetDisplaySettings
 }: RelationshipGraphFiltersProps) {
-  const indexLabel = status ? `图谱：${status.message}` : "图谱：正在读取";
+  const { locale } = useI18n();
+  const copy = useLocalizedCopy({
+    "zh-CN": {
+      graph: "图谱", reading: "正在读取", ready: "来源已就绪", heading: "筛选与显示", loading: "读取中", refresh: "刷新图谱",
+      collapse: "收起显示设置", note: "只调整当前图谱视图，不改动章节内容或缓存结果。", search: "搜索",
+      searchPlaceholder: "人物、关系或章节", roleScope: "角色范围", roles: { main: "主要角色", supporting: "配角", all: "全部" },
+      chapterRange: "章节范围", from: "起始章节", fromPlaceholder: "第1章", to: "结束章节", toPlaceholder: "第10章",
+      confidence: "最低置信度", uncertain: "显示不确定关系", repulsion: "节点排斥力", linkLength: "连线长度",
+      density: "标签密度", densities: { essential: "重点", balanced: "均衡", full: "完整" }, reset: "重置布局"
+    },
+    "ja-JP": {
+      graph: "関係図", reading: "読み込み中", ready: "取得元を確認済み", heading: "絞り込みと表示", loading: "読み込み中", refresh: "関係図を更新",
+      collapse: "表示設定を閉じる", note: "現在の表示だけを調整します。章の本文やキャッシュ結果は変更しません。", search: "検索",
+      searchPlaceholder: "人物・関係・章", roleScope: "人物の範囲", roles: { main: "主要人物", supporting: "脇役", all: "すべて" },
+      chapterRange: "章の範囲", from: "開始章", fromPlaceholder: "第1章", to: "終了章", toPlaceholder: "第10章",
+      confidence: "最低信頼度", uncertain: "不確かな関係も表示", repulsion: "ノード間の反発", linkLength: "線の長さ",
+      density: "ラベル密度", densities: { essential: "重要", balanced: "標準", full: "すべて" }, reset: "配置をリセット"
+    }
+  });
+  const indexLabel = status ? `${copy.graph}：${locale === "ja-JP" ? copy.ready : status.message}` : `${copy.graph}：${copy.reading}`;
   const displaySettingsChanged = !isDefaultDisplaySettings(displaySettings);
 
   return (
     <aside className="relationship-graph-filters relationship-display-controls">
       <div className="relationship-graph-filter-head">
-        <h1>筛选与显示</h1>
+        <h1>{copy.heading}</h1>
         <div className="relationship-filter-actions">
           <button className="small-button" disabled={loading} onClick={onRefresh} type="button">
-            {loading ? "读取中" : "刷新图谱"}
+            {loading ? copy.loading : copy.refresh}
           </button>
           <button
-            aria-label="收起显示设置"
+            aria-label={copy.collapse}
             className="relationship-panel-icon-button"
             onClick={onCollapse}
-            title="收起显示设置"
+            title={copy.collapse}
             type="button"
           >
             <CaretLeft size={16} weight="bold" />
           </button>
         </div>
       </div>
-      <p className="relationship-filter-note">只调整当前图谱视图，不改动章节内容或缓存结果。</p>
+      <p className="relationship-filter-note">{copy.note}</p>
 
       <div className="relationship-filter-group">
         <label className="relationship-filter-label" htmlFor="relationship-graph-query">
-          搜索
+          {copy.search}
         </label>
         <input
           className="relationship-filter-input"
           id="relationship-graph-query"
           onChange={(event) => onChange({ ...filters, query: event.target.value })}
-          placeholder="人物、关系或章节"
+          placeholder={copy.searchPlaceholder}
           value={filters.query}
         />
       </div>
@@ -110,47 +122,47 @@ export function RelationshipGraphFilters({
       {graphSource === "ai" ? (
         <>
           <div className="relationship-filter-group">
-            <span className="relationship-filter-label">角色范围</span>
-            <div className="relationship-segmented role-scope" role="group" aria-label="角色范围">
+            <span className="relationship-filter-label">{copy.roleScope}</span>
+            <div className="relationship-segmented role-scope" role="group" aria-label={copy.roleScope}>
               {roleScopeOptions.map((option) => (
                 <button
-                  className={filters.roleScope === option.value ? "active" : ""}
-                  key={option.value}
-                  onClick={() => onChange({ ...filters, roleScope: option.value })}
+                  className={filters.roleScope === option ? "active" : ""}
+                  key={option}
+                  onClick={() => onChange({ ...filters, roleScope: option })}
                   type="button"
                 >
-                  {option.label}
+                  {copy.roles[option]}
                 </button>
               ))}
             </div>
           </div>
 
           <div className="relationship-filter-group">
-            <span className="relationship-filter-label">章节范围</span>
+            <span className="relationship-filter-label">{copy.chapterRange}</span>
             <div className="relationship-range-inputs">
               <input
-                aria-label="起始章节"
+                aria-label={copy.from}
                 className="relationship-filter-input"
                 inputMode="numeric"
                 onChange={(event) => onChange({ ...filters, chapterFrom: event.target.value })}
-                placeholder="第1章"
+                placeholder={copy.fromPlaceholder}
                 value={filters.chapterFrom}
               />
               <input
-                aria-label="结束章节"
+                aria-label={copy.to}
                 className="relationship-filter-input"
                 inputMode="numeric"
                 onChange={(event) => onChange({ ...filters, chapterTo: event.target.value })}
-                placeholder="第10章"
+                placeholder={copy.toPlaceholder}
                 value={filters.chapterTo}
               />
             </div>
           </div>
 
           <div className="relationship-filter-group">
-            <span className="relationship-filter-label">最低置信度 {formatPercent(filters.minConfidence)}</span>
+            <span className="relationship-filter-label">{copy.confidence} {formatPercent(filters.minConfidence)}</span>
             <input
-              aria-label="最低置信度"
+              aria-label={copy.confidence}
               className="relationship-filter-slider"
               max="1"
               min="0"
@@ -165,16 +177,16 @@ export function RelationshipGraphFilters({
                 onChange={(event) => onChange({ ...filters, includeUncertain: event.target.checked })}
                 type="checkbox"
               />
-              显示不确定关系
+              {copy.uncertain}
             </label>
           </div>
         </>
       ) : null}
 
       <div className="relationship-filter-group relationship-display-tuning">
-        <span className="relationship-filter-label">节点排斥力 {formatMultiplier(displaySettings.nodeRepulsionScale)}</span>
+        <span className="relationship-filter-label">{copy.repulsion} {formatMultiplier(displaySettings.nodeRepulsionScale)}</span>
         <input
-          aria-label="节点排斥力"
+          aria-label={copy.repulsion}
           className="relationship-filter-slider"
           max="4"
           min="0.4"
@@ -185,9 +197,9 @@ export function RelationshipGraphFilters({
           type="range"
           value={displaySettings.nodeRepulsionScale}
         />
-        <span className="relationship-filter-label">连线长度 {formatMultiplier(displaySettings.linkDistanceScale)}</span>
+        <span className="relationship-filter-label">{copy.linkLength} {formatMultiplier(displaySettings.linkDistanceScale)}</span>
         <input
-          aria-label="连线长度"
+          aria-label={copy.linkLength}
           className="relationship-filter-slider"
           max="1.8"
           min="0.8"
@@ -198,16 +210,16 @@ export function RelationshipGraphFilters({
           type="range"
           value={displaySettings.linkDistanceScale}
         />
-        <span className="relationship-filter-label">标签密度</span>
-        <div className="relationship-segmented density" role="group" aria-label="标签密度">
+        <span className="relationship-filter-label">{copy.density}</span>
+        <div className="relationship-segmented density" role="group" aria-label={copy.density}>
           {labelDensityOptions.map((option) => (
             <button
-              className={displaySettings.labelDensity === option.value ? "active" : ""}
-              key={option.value}
-              onClick={() => onDisplaySettingsChange({ ...displaySettings, labelDensity: option.value })}
+              className={displaySettings.labelDensity === option ? "active" : ""}
+              key={option}
+              onClick={() => onDisplaySettingsChange({ ...displaySettings, labelDensity: option })}
               type="button"
             >
-              {option.label}
+              {copy.densities[option]}
             </button>
           ))}
         </div>
@@ -217,7 +229,7 @@ export function RelationshipGraphFilters({
           onClick={onResetDisplaySettings}
           type="button"
         >
-          重置布局
+          {copy.reset}
         </button>
       </div>
 

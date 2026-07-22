@@ -1,5 +1,6 @@
 import { BookOpen, ChartBar, Files, GearSix, Graph, ListBullets, MagnifyingGlass, Target, Trash } from "@phosphor-icons/react";
 import type { ReactNode } from "react";
+import { useI18n } from "../i18n";
 
 export type ProjectModule = "writing" | "relationshipGraph" | "outline" | "chapterReview" | "materials" | "goals" | "stats" | "trash" | "settings";
 
@@ -16,18 +17,6 @@ type ProjectModuleRailProps = {
   readonly activeModule: ProjectModule;
   readonly onNavigate: (module: ProjectModule) => void;
 };
-
-const moduleItems: readonly ProjectModuleItem[] = [
-  { id: "writing", label: "正文", icon: <BookOpen size={22} /> },
-  { id: "relationshipGraph", label: "人物关系图", icon: <Graph size={22} />, title: "查看人物关系" },
-  { id: "outline", label: "大纲", icon: <ListBullets size={22} />, title: "维护全书大纲" },
-  { id: "chapterReview", label: "AI审稿", icon: <MagnifyingGlass size={22} />, title: "审阅章节质量" },
-  { id: "materials", label: "资料", icon: <Files size={22} />, disabled: true, title: "规划中" },
-  { id: "goals", label: "写作目标", icon: <Target size={22} />, title: "查看写作目标" },
-  { id: "stats", label: "统计", icon: <ChartBar size={22} />, disabled: true, title: "规划中" },
-  { id: "trash", label: "回收站", icon: <Trash size={22} />, disabled: true, title: "规划中" },
-  { id: "settings", label: "设置", icon: <GearSix size={22} />, group: "bottom" }
-];
 
 function renderModuleButton(item: ProjectModuleItem, activeModule: ProjectModule, onNavigate: (module: ProjectModule) => void) {
   const active = item.id === activeModule;
@@ -50,11 +39,23 @@ function renderModuleButton(item: ProjectModuleItem, activeModule: ProjectModule
 }
 
 export function ProjectModuleRail({ activeModule, onNavigate }: ProjectModuleRailProps) {
+  const { t } = useI18n();
+  const moduleItems: readonly ProjectModuleItem[] = [
+    { id: "writing", label: t("manuscript"), icon: <BookOpen size={22} /> },
+    { id: "relationshipGraph", label: t("relationshipGraph"), icon: <Graph size={22} /> },
+    { id: "outline", label: t("outline"), icon: <ListBullets size={22} /> },
+    { id: "chapterReview", label: t("aiReview"), icon: <MagnifyingGlass size={22} /> },
+    { id: "materials", label: t("materials"), icon: <Files size={22} />, disabled: true, title: t("planning") },
+    { id: "goals", label: t("writingGoals"), icon: <Target size={22} /> },
+    { id: "stats", label: t("statistics"), icon: <ChartBar size={22} />, disabled: true, title: t("planning") },
+    { id: "trash", label: t("trash"), icon: <Trash size={22} />, disabled: true, title: t("planning") },
+    { id: "settings", label: t("settings"), icon: <GearSix size={22} />, group: "bottom" }
+  ];
   const mainItems = moduleItems.filter((item) => item.group !== "bottom");
   const bottomItems = moduleItems.filter((item) => item.group === "bottom");
 
   return (
-    <nav className="project-module-rail" aria-label="项目模块">
+    <nav className="project-module-rail" aria-label={t("projectModules")}>
       <div className="project-module-group">
         {mainItems.map((item) => renderModuleButton(item, activeModule, onNavigate))}
       </div>

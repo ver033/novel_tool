@@ -27,7 +27,7 @@ describe("phase 3 renderer project and chapter wiring", () => {
     expect(chapterTree).toContain("chapters.map");
     expect(chapterTree).toContain("onCreateChapter");
     expect(chapterTree).toContain("onCreateChapterAfter");
-    expect(chapterTree).toContain("在最后一章后新建");
+    expect(chapterTree).toContain('t("addAfterLastChapter")');
     expect(chapterTree).toContain("onSelectChapter");
     expect(chapterTree).toContain("onRenameChapter");
     expect(chapterTree).toContain("onDeleteChapter");
@@ -45,7 +45,7 @@ describe("phase 3 renderer project and chapter wiring", () => {
 
     expect(chapterTree).toContain("lastChapterId");
     expect(chapterTree).toContain("chapter.id === lastChapterId");
-    expect(chapterTree).toContain("在最后一章后新建");
+    expect(chapterTree).toContain('t("addAfterLastChapter")');
     expect(appStore).toContain("requestedAfterChapter");
     expect(appStore).toContain("requestedAfterChapter?.id === lastChapter?.id");
   });
@@ -66,11 +66,11 @@ describe("phase 3 renderer project and chapter wiring", () => {
     expect(packageJson.dependencies?.["react-resizable-panels"]).toBe("4.9.0");
     expect(writingPage).toContain("PanelGroup");
     expect(writingPage).toContain("PanelResizeHandle");
-    expect(writingPage).toContain('id="moshu-writing-sidebar-v2"');
+    expect(writingPage).toContain('id="moshu-writing-sidebar-v3"');
     expect(writingPage).toContain("useDefaultLayout");
-    expect(writingPage).toContain('defaultSize="520px"');
+    expect(writingPage).toContain('defaultSize="400px"');
     expect(writingPage).toContain('minSize="360px"');
-    expect(writingPage).toContain('maxSize="75%"');
+    expect(writingPage).toContain('maxSize="520px"');
     expect(writingPage).not.toContain("defaultSize={34}");
     expect(writingPage).not.toContain("maxSize={48}");
     expect(writingPage).toContain('className="sidebar-resize-handle"');

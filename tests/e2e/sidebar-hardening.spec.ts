@@ -74,4 +74,35 @@ test.describe("Phase 11 sidebar hardening", () => {
       rmSync(homeDir, { force: true, recursive: true });
     }
   });
+
+  test("Japanese questions keep the Agent UI and reply in Japanese", async () => {
+    const homeDir = mkdtempSync(path.join(tmpdir(), "novel-tool-e2e-home-"));
+    let app: ElectronApplication | null = null;
+    try {
+      app = await launchNovelTool(homeDir);
+      const page = await firstPage(app);
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await page.evaluate(async () => {
+        await window.api!.settings.save({ appLocale: "ja-JP" });
+      });
+      await page.reload();
+
+      await page.getByRole("button", { name: /新しい作品/ }).click();
+      await page.getByPlaceholder("例：長い夜の帰路").fill("雨の境界");
+      await page.locator("#new-project-language").selectOption("ja-JP");
+      await page.getByRole("button", { name: "作成して執筆を始める" }).click();
+      await page.getByRole("button", { name: "AI チャットを開く" }).click();
+
+      await expect(page.getByRole("heading", { name: "執筆アシスタント" })).toBeVisible();
+      const input = page.getByRole("textbox", { name: /AI チャット入力/ });
+      await input.fill("この章の冒頭を、もっと静かな雰囲気にする方法を教えてください。");
+      await input.press("Enter");
+
+      await expect(page.getByText(/E2E AI 返信/)).toBeVisible();
+      await expect(page.getByText(/E2E AI 回复/)).toHaveCount(0);
+    } finally {
+      await app?.close();
+      rmSync(homeDir, { force: true, recursive: true });
+    }
+  });
 });

@@ -48,6 +48,29 @@ export const proofreadIssueLabels: Record<ProofreadIssueCode, string> = {
   ai_tone: "AI 味 / 套话感"
 };
 
+export const proofreadIssueLabelsJa: Record<ProofreadIssueCode, string> = {
+  typo: "誤字脱字",
+  punctuation: "句読点",
+  grammar: "文法",
+  awkward_expression: "不自然な表現",
+  repetition: "表現の重複",
+  unclear_reference: "指示対象が不明",
+  dialogue_voice: "不自然な台詞",
+  pov_leak: "視点の逸脱",
+  timeline_conflict: "時系列の矛盾",
+  spatial_logic: "空間関係の矛盾",
+  character_state_conflict: "人物状態の矛盾",
+  character_knowledge_conflict: "人物認識の矛盾",
+  relationship_conflict: "関係性の矛盾",
+  prop_state_conflict: "小道具状態の矛盾",
+  world_rule_conflict: "世界設定の矛盾",
+  causality_gap: "因果関係の欠落",
+  motivation_gap: "動機の不足",
+  continuity_risk: "連続性の懸念",
+  style_drift: "文体のぶれ",
+  ai_tone: "AI 的な定型表現"
+};
+
 export const proofreadEvidenceSourceSchema = z.enum([
   "target",
   "before_context",

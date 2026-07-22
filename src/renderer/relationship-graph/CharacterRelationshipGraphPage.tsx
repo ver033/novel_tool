@@ -4,6 +4,7 @@ import type { ProjectRecord } from "../../main/shared/types";
 import type { RelationshipGraphNode, RelationshipGraphResult, RelationshipGraphSourceStatus } from "../../main/shared/relationship-graph";
 import { ProjectModuleRail, type ProjectModule } from "../layout/ProjectModuleRail";
 import { TopBar } from "../layout/TopBar";
+import { useLocalizedCopy } from "../i18n/localized-copy";
 import { getNovelToolApi } from "../state/app-store";
 import { AuthorRelationshipControls } from "./AuthorRelationshipControls";
 import { RelationshipGraphCanvas } from "./RelationshipGraphCanvas";
@@ -43,6 +44,31 @@ const defaultFilters: RelationshipGraphFilterState = {
   query: ""
 };
 
+const relationshipPageCopy = {
+  "zh-CN": {
+    defaultTitle: "我的小说",
+    search: "搜索人物、关系或章节",
+    surface: "人物关系图",
+    expandDisplay: "展开显示设置",
+    view: "图谱视图",
+    aiView: "AI 分析图谱",
+    authorView: "作者设定图谱",
+    aiHint: "AI 图谱来自阶段摘要和全书摘要；手工设定不会改写缓存。",
+    openProject: "请先打开项目"
+  },
+  "ja-JP": {
+    defaultTitle: "私の小説",
+    search: "人物・関係・章を検索",
+    surface: "人物関係図",
+    expandDisplay: "表示設定を開く",
+    view: "関係図の種類",
+    aiView: "AI 分析",
+    authorView: "作者設定",
+    aiHint: "AI 分析は章・作品の要約を使用します。作者設定がキャッシュを書き換えることはありません。",
+    openProject: "先にプロジェクトを開いてください"
+  }
+} as const;
+
 export function CharacterRelationshipGraphPage({
   currentProject,
   onOpenChapter,
@@ -54,6 +80,7 @@ export function CharacterRelationshipGraphPage({
   onWelcome
 }: CharacterRelationshipGraphPageProps) {
   const api = useMemo(getNovelToolApi, []);
+  const copy = useLocalizedCopy(relationshipPageCopy);
   const mountedRef = useRef(true);
   const loadRequestIdRef = useRef(0);
   const statusRequestIdRef = useRef(0);
@@ -305,9 +332,9 @@ export function CharacterRelationshipGraphPage({
     <div className="relationship-graph-page">
       <TopBar
         mode="writing"
-        title={currentProject?.name ?? "我的小说"}
+        title={currentProject?.name ?? copy.defaultTitle}
         searchValue={filters.query}
-        searchPlaceholder="搜索人物、关系或章节"
+        searchPlaceholder={copy.search}
         showEditorHistoryControls={false}
         showSaveStatus={false}
         onSearchChange={handleSearchChange}
@@ -316,14 +343,14 @@ export function CharacterRelationshipGraphPage({
       />
       <main className="relationship-graph-shell">
         <ProjectModuleRail activeModule="relationshipGraph" onNavigate={handleNavigate} />
-        <section className={workspaceClassName} aria-label="人物关系图">
+        <section className={workspaceClassName} aria-label={copy.surface}>
           <div className="relationship-graph-display-panel">
             {displayPanelCollapsed ? (
               <button
-                aria-label="展开显示设置"
+                aria-label={copy.expandDisplay}
                 className="relationship-panel-rail-button"
                 onClick={() => setDisplayPanelCollapsed(false)}
-                title="展开显示设置"
+                title={copy.expandDisplay}
                 type="button"
               >
                 <CaretRight size={18} weight="bold" />
@@ -349,13 +376,13 @@ export function CharacterRelationshipGraphPage({
           <div className="relationship-graph-main-area">
             <div className="relationship-graph-view-toolbar">
               <div className="relationship-view-switcher">
-                <span>图谱视图</span>
-                <div className="relationship-segmented relationship-view-tabs" role="group" aria-label="图谱视图">
+                <span>{copy.view}</span>
+                <div className="relationship-segmented relationship-view-tabs" role="group" aria-label={copy.view}>
                   <button className={graphSource === "ai" ? "active" : ""} onClick={() => handleGraphSourceChange("ai")} type="button">
-                    AI 分析图谱
+                    {copy.aiView}
                   </button>
                   <button className={graphSource === "author" ? "active" : ""} onClick={() => handleGraphSourceChange("author")} type="button">
-                    作者设定图谱
+                    {copy.authorView}
                   </button>
                 </div>
               </div>
@@ -384,10 +411,10 @@ export function CharacterRelationshipGraphPage({
                   }
                 />
               ) : (
-                <span className="relationship-view-toolbar-hint">AI 图谱来自阶段摘要和全书摘要；手工设定不会改写缓存。</span>
+                <span className="relationship-view-toolbar-hint">{copy.aiHint}</span>
               )}
             </div>
-            {!currentProject ? <p className="relationship-no-project">请先打开项目</p> : null}
+            {!currentProject ? <p className="relationship-no-project">{copy.openProject}</p> : null}
             <RelationshipGraphCanvas
               displaySettings={displaySettings}
               edges={graph?.edges ?? []}

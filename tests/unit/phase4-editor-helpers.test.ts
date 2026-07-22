@@ -15,6 +15,10 @@ describe("phase 4 editor helpers", () => {
     expect(countWritingUnits("林远ＡＢ１２𠀀，！")).toBe(9);
   });
 
+  it("counts hiragana and katakana instead of treating Japanese text as empty", () => {
+    expect(countWritingUnits("雨の匂いがした。カナも数える。")).toBe(15);
+  });
+
   it("extracts plain text from Tiptap JSON with paragraph breaks and hard breaks", () => {
     const doc = {
       type: "doc",

@@ -2,6 +2,7 @@ import type { ChapterRepository } from "../db/repositories/chapter-repo";
 import type { SummaryRepository } from "../db/repositories/summary-repo";
 import type { SettingsService } from "../settings/settings-service";
 import type { AiTaskRecord, TaskPromptPreset } from "../shared/types";
+import { DEFAULT_CONTENT_LANGUAGE, needsJapaneseResponseCorrection, resolveInlineContentLanguage, type ContentLanguage } from "../shared/language";
 import type { AiGenerationOptions, AiTaskStreamHandlers } from "./ai-task-service";
 import { logDevLlmPrompt } from "./dev-prompt-logger";
 import {
@@ -15,7 +16,7 @@ import { planWritingOperationContext } from "./writing-context-planner";
 import { getWritingOperationDefinition } from "./writing-operation-registry";
 import { buildWritingOperationPrompt, parseWritingOperationResponse } from "./writing-operation-prompt";
 import { loadWritingSkill } from "./writing-skill-loader";
-import type { WritingOperationRequest, WritingOperationResult, WritingOperationTarget } from "./writing-operation-types";
+import type { WritingOperationOutputKind, WritingOperationRequest, WritingOperationResult, WritingOperationTarget } from "./writing-operation-types";
 
 type OpenRouterClientLike = {
   readonly createChatCompletion: (input: OpenRouterChatCompletionInput) => Promise<OpenRouterChatCompletionResult>;
@@ -36,7 +37,10 @@ type WritingOperationRunnerOptions = {
     readonly contextLength: number | null;
   }>;
   readonly createClient?: (config: { readonly apiKey: string; readonly baseUrl?: string; readonly modelName: string }) => OpenRouterClientLike;
+  readonly resolveContentLanguage?: (projectId: string) => ContentLanguage;
 };
+
+const WRITING_BLOCKING_COMPLETION_TIMEOUT_MS = 60_000;
 
 function taskTarget(task: AiTaskRecord): WritingOperationTarget {
   if (task.selection) {
@@ -63,19 +67,32 @@ function buildTruncatedResult(taskType: AiTaskRecord["taskType"], content: strin
   };
 }
 
-function buildContinuationMessages(prompt: { readonly messages: readonly OpenRouterChatCompletionInput["messages"][number][] }, partialText: string): readonly OpenRouterChatCompletionInput["messages"][number][] {
+function buildContinuationMessages(
+  prompt: { readonly messages: readonly OpenRouterChatCompletionInput["messages"][number][] },
+  partialText: string,
+  language: ContentLanguage
+): readonly OpenRouterChatCompletionInput["messages"][number][] {
   return [
     ...prompt.messages,
     {
       role: "user",
-      content: [
-        "上一次输出已被截断。请继续输出同一份候选正文。",
-        "不要重复已输出内容，不要解释，不要总结，不要使用建议清单。",
-        "只输出从以下已输出候选稿末尾继续的正文。",
-        "",
-        "【已输出候选稿】",
-        partialText.trim()
-      ].join("\n")
+      content: language === "ja-JP"
+        ? [
+            "前回の出力は途中で切れました。同じ候補本文の続きを出力してください。",
+            "出力済みの部分を繰り返さず、説明、要約、提案一覧を付けないでください。",
+            "以下の候補本文の末尾から続く本文だけを出力してください。",
+            "",
+            "【出力済み候補本文】",
+            partialText.trim()
+          ].join("\n")
+        : [
+            "上一次输出已被截断。请继续输出同一份候选正文。",
+            "不要重复已输出内容，不要解释，不要总结，不要使用建议清单。",
+            "只输出从以下已输出候选稿末尾继续的正文。",
+            "",
+            "【已输出候选稿】",
+            partialText.trim()
+          ].join("\n")
     }
   ];
 }
@@ -84,8 +101,23 @@ function stripContinuationDraftLabel(content: string): string {
   return content
     .trim()
     .replace(/^【(?:润色稿|改写稿|扩写稿|续写稿|候选正文)】\s*/u, "")
+    .replace(/^【(?:推敲案|リライト案|加筆案|続きの本文|候補本文)】\s*/u, "")
     .replace(/^(?:润色稿|改写稿|扩写稿|续写稿|候选正文)[:：]\s*/u, "")
     .trim();
+}
+
+function writingResultNeedsJapaneseCorrection(result: Omit<WritingOperationResult, "contextPlan">): boolean {
+  const visibleText = result.generatedText.trim() || (result.proofreadIssues ?? [])
+    .flatMap((issue) => [issue.explanation, issue.suggestion])
+    .join("\n")
+    .trim();
+  return Boolean(visibleText) && needsJapaneseResponseCorrection(visibleText);
+}
+
+function japaneseCorrectionInstruction(outputKind: WritingOperationOutputKind): string {
+  return outputKind === "proofread_issues"
+    ? "直前の校正結果は中国語に偏っています。同じ指摘内容を保ち、explanation、suggestion、locationHint、evidence.note を自然な日本語に直し、指定済みの JSON Schema に一致する JSON だけを返してください。"
+    : "直前の候補本文は中国語になっています。内容、視点、事実関係を変えず、自然な日本語の小説本文に直してください。説明や見出しを付けず、候補本文だけを返してください。";
 }
 
 export class WritingOperationRunner {
@@ -94,11 +126,13 @@ export class WritingOperationRunner {
   static fromSettings(
     settingsService: SettingsService,
     resolveChapterRepo: (projectId: string) => ChapterRepository,
-    resolveSummaryRepo?: (projectId: string) => SummaryRepository
+    resolveSummaryRepo?: (projectId: string) => SummaryRepository,
+    resolveContentLanguage?: (projectId: string) => ContentLanguage
   ): WritingOperationRunner {
     return new WritingOperationRunner({
       resolveChapterRepo,
       resolveSummaryRepo,
+      resolveContentLanguage,
       resolveTaskPreset: (presetId, taskType) => settingsService.getTaskPromptPresetForTask(presetId, taskType),
       resolveModelConfig: async () => {
         const config = await settingsService.getOpenRouterConfigWithModelMetadata();
@@ -116,9 +150,103 @@ export class WritingOperationRunner {
     return this.options.createClient?.(config) ?? new OpenRouterClient(config);
   }
 
+  private async createCompletionWithDeadline(
+    client: OpenRouterClientLike,
+    request: OpenRouterChatCompletionInput,
+    language: ContentLanguage
+  ): Promise<OpenRouterChatCompletionResult> {
+    const controller = new AbortController();
+    const abortFromCaller = (): void => controller.abort(request.signal?.reason);
+    if (request.signal?.aborted) {
+      abortFromCaller();
+    } else {
+      request.signal?.addEventListener("abort", abortFromCaller, { once: true });
+    }
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timeout = setTimeout(() => {
+        reject(new Error(language === "ja-JP"
+          ? "AI の執筆操作が 60 秒以内に完了しませんでした。上流モデルが混雑している可能性があります。もう一度お試しください。"
+          : "AI 写作操作未能在 60 秒内完成。上游模型可能繁忙，请重试。"));
+        controller.abort();
+      }, WRITING_BLOCKING_COMPLETION_TIMEOUT_MS);
+    });
+
+    try {
+      return await Promise.race([
+        client.createChatCompletion({ ...request, signal: controller.signal }),
+        deadline
+      ]);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+      request.signal?.removeEventListener("abort", abortFromCaller);
+    }
+  }
+
+  private async generateOperationResult(input: {
+    readonly client: OpenRouterClientLike;
+    readonly contentLanguage: ContentLanguage;
+    readonly operation: ReturnType<typeof getWritingOperationDefinition>;
+    readonly prompt: ReturnType<typeof buildWritingOperationPrompt>;
+    readonly signal?: AbortSignal;
+    readonly handlers?: AiTaskStreamHandlers;
+  }): Promise<Omit<WritingOperationResult, "contextPlan">> {
+    const request = {
+      messages: input.prompt.messages,
+      maxCompletionTokens: input.prompt.maxCompletionTokens,
+      temperature: input.prompt.temperature,
+      responseFormat: input.prompt.responseFormat,
+      reasoning: input.prompt.reasoning,
+      signal: input.signal
+    };
+    const streamCandidate = input.operation.outputKind === "candidate_text" && input.contentLanguage !== "ja-JP";
+    let response = streamCandidate
+      ? await input.client.streamChatCompletion(request, {
+          onToken(token) {
+            input.handlers?.onChunk?.({ requestId: "", content: token });
+          },
+          onReasoning(token) {
+            input.handlers?.onReasoning?.({ requestId: "", content: token });
+          }
+        })
+      : await this.createCompletionWithDeadline(input.client, request, input.contentLanguage);
+    let result = response.truncated
+      ? buildTruncatedResult(input.operation.id, response.content)
+      : parseWritingOperationResponse(input.operation, response.content);
+
+    if (!response.truncated && input.contentLanguage === "ja-JP" && writingResultNeedsJapaneseCorrection(result)) {
+      response = await this.createCompletionWithDeadline(input.client, {
+        ...request,
+        messages: [
+          ...input.prompt.messages,
+          { role: "assistant", content: response.content },
+          { role: "user", content: japaneseCorrectionInstruction(input.operation.outputKind) }
+        ],
+        temperature: Math.min(input.prompt.temperature, 0.25),
+        reasoning: { effort: "low", exclude: true }
+      }, input.contentLanguage);
+      result = response.truncated
+        ? buildTruncatedResult(input.operation.id, response.content)
+        : parseWritingOperationResponse(input.operation, response.content);
+      if (!response.truncated && writingResultNeedsJapaneseCorrection(result)) {
+        throw new Error("日本語の候補を生成できませんでした。中国語の結果は表示せず停止しました。もう一度お試しください。");
+      }
+    }
+
+    if (!streamCandidate && input.operation.outputKind === "candidate_text" && result.generatedText.trim()) {
+      input.handlers?.onChunk?.({ requestId: "", content: result.generatedText });
+    }
+    return result;
+  }
+
   private async buildPromptForRequest(request: WritingOperationRequest) {
     const config = await this.options.resolveModelConfig();
     const operation = getWritingOperationDefinition(request.operation);
+    const projectLanguage = this.options.resolveContentLanguage?.(request.projectId) ?? DEFAULT_CONTENT_LANGUAGE;
+    const targetText = request.target.kind === "inline_text" || request.target.kind === "selection"
+      ? request.target.text
+      : "";
+    const contentLanguage = targetText ? resolveInlineContentLanguage(targetText, projectLanguage) : projectLanguage;
     const tokenBudget = getTokenBudget(operation.tokenBudgetTaskType, config.contextLength);
     const contextPlan = planWritingOperationContext({
       projectId: request.projectId,
@@ -135,10 +263,11 @@ export class WritingOperationRunner {
       userInstruction: request.userInstruction,
       preset: request.preset ?? null,
       tokenBudget,
-      source: request.source
+      source: request.source,
+      contentLanguage
     });
 
-    return { config, contextPlan, operation, prompt };
+    return { config, contentLanguage, contextPlan, operation, prompt };
   }
 
   private async buildPromptForTask(task: AiTaskRecord) {
@@ -157,7 +286,7 @@ export class WritingOperationRunner {
     options: AiGenerationOptions = {},
     handlers: AiTaskStreamHandlers = {}
   ): Promise<WritingOperationResult> {
-    const { config, contextPlan, operation, prompt } = await this.buildPromptForRequest(request);
+    const { config, contentLanguage, contextPlan, operation, prompt } = await this.buildPromptForRequest(request);
     const client = this.createClient(config);
     handlers.onContext?.({
       requestId: "",
@@ -187,32 +316,18 @@ export class WritingOperationRunner {
       }
     });
 
-    const response = await client.streamChatCompletion(
-      {
-        messages: prompt.messages,
-        maxCompletionTokens: prompt.maxCompletionTokens,
-        temperature: prompt.temperature,
-        responseFormat: prompt.responseFormat,
-        reasoning: prompt.reasoning,
-        signal: options.signal
-      },
-      {
-        onToken(token) {
-          if (operation.outputKind === "candidate_text") {
-            handlers.onChunk?.({ requestId: "", content: token });
-          }
-        },
-        onReasoning(token) {
-          handlers.onReasoning?.({ requestId: "", content: token });
-        }
-      }
-    );
-    const parsed = response.truncated ? buildTruncatedResult(operation.id, response.content) : parseWritingOperationResponse(operation, response.content);
+    const parsed = await this.generateOperationResult({
+      client,
+      contentLanguage,
+      operation,
+      prompt,
+      signal: options.signal,
+      handlers
+    });
 
     return {
       ...parsed,
-      contextPlan,
-      truncated: response.truncated
+      contextPlan
     };
   }
 
@@ -222,12 +337,12 @@ export class WritingOperationRunner {
     handlers: AiTaskStreamHandlers,
     options: AiGenerationOptions = {}
   ): Promise<WritingOperationResult> {
-    const { config, contextPlan, operation, prompt } = await this.buildPromptForTask(task);
+    const { config, contentLanguage, contextPlan, operation, prompt } = await this.buildPromptForTask(task);
     if (operation.outputKind !== "candidate_text") {
       throw new Error("校对结果不能继续生成，请缩小校对范围后重试。");
     }
     const client = this.createClient(config);
-    const messages = buildContinuationMessages(prompt, partialText);
+    const messages = buildContinuationMessages(prompt, partialText, contentLanguage);
     handlers.onContext?.({
       requestId: "",
       estimatedInputTokens: contextPlan.estimatedInputTokens,
@@ -291,7 +406,7 @@ export class WritingOperationRunner {
     handlers: AiTaskStreamHandlers,
     options: AiGenerationOptions = {}
   ): Promise<WritingOperationResult> {
-    const { config, contextPlan, operation, prompt } = await this.buildPromptForTask(task);
+    const { config, contentLanguage, contextPlan, operation, prompt } = await this.buildPromptForTask(task);
     const client = this.createClient(config);
     handlers.onContext?.({
       requestId: "",
@@ -323,29 +438,18 @@ export class WritingOperationRunner {
       }
     });
 
-    const response = await client.streamChatCompletion(
-      {
-        messages: prompt.messages,
-        maxCompletionTokens: prompt.maxCompletionTokens,
-        temperature: prompt.temperature,
-        responseFormat: prompt.responseFormat,
-        reasoning: prompt.reasoning,
-        signal: options.signal
-      },
-      {
-        onToken(token) {
-          if (operation.outputKind === "candidate_text") {
-            handlers.onChunk?.({ requestId: "", content: token });
-          }
-        }
-      }
-    );
-    const parsed = response.truncated ? buildTruncatedResult(task.taskType, response.content) : parseWritingOperationResponse(operation, response.content);
+    const parsed = await this.generateOperationResult({
+      client,
+      contentLanguage,
+      operation,
+      prompt,
+      signal: options.signal,
+      handlers
+    });
 
     return {
       ...parsed,
-      contextPlan,
-      truncated: response.truncated
+      contextPlan
     };
   }
 }

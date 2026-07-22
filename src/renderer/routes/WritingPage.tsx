@@ -15,6 +15,7 @@ import type { FloatingPanelGeometry, FloatingPanelKind, FloatingPanelState, Outl
 import { LeftChapterTree, type ChapterAuxiliaryInfo } from "../layout/LeftChapterTree";
 import { ProjectModuleRail, type ProjectModule } from "../layout/ProjectModuleRail";
 import { RightUtilitySidebar, type SidebarTab, type TaskType } from "../layout/RightUtilitySidebar";
+import { CurrentTaskTab } from "../sidebar/CurrentTaskTab";
 import type { AiChatDraftSeed } from "../sidebar/chat-draft";
 import { TopBar } from "../layout/TopBar";
 import { getNovelToolApi } from "../state/app-store";
@@ -23,6 +24,7 @@ import { useEditorStore } from "../state/editor-store";
 import { formatIpcErrorMessage } from "../state/ipc-error";
 import type { SettingsCategory } from "./SettingsPage";
 import type { ChapterContent, ChapterSummary, ProjectRecord, ScratchNoteRecord, SelectionSnapshot, TaskPromptPreset } from "../../main/shared/types";
+import { useI18n } from "../i18n";
 
 type EditorInnerStyle = CSSProperties & {
   readonly maxWidth: string;
@@ -152,7 +154,8 @@ export function findChapterSearchMatches(
   title: string,
   contentJson: unknown,
   plainText: string,
-  query: string
+  query: string,
+  titleMatchLabel = "匹配章节标题"
 ): ChapterSearchMatch[] {
   const trimmedQuery = query.trim();
   if (!trimmedQuery) {
@@ -166,7 +169,7 @@ export function findChapterSearchMatches(
       matchId: "title",
       paragraphId: null,
       paragraphIndex: null,
-      snippet: "匹配章节标题"
+      snippet: titleMatchLabel
     });
   }
 
@@ -317,6 +320,7 @@ export function WritingPage({
   onWelcome,
   onSettings
 }: WritingPageProps) {
+  const { locale, t } = useI18n();
   const api = useMemo(getNovelToolApi, []);
   const editorStore = useEditorStore(activeChapter, onChapterSaved);
   const [editor, setEditor] = useState<Editor | null>(null);
@@ -362,13 +366,13 @@ export function WritingPage({
     const remaining = targetWordCount - editorStore.wordCount;
     const progress = Math.min(999, Math.round((editorStore.wordCount / targetWordCount) * 100));
     if (remaining > 0) {
-      return `还差 ${remaining.toLocaleString("zh-CN")} 字 · ${progress}%`;
+      return t("remainingCharacters", { count: remaining.toLocaleString(locale), progress });
     }
     if (remaining < 0) {
-      return `已超过 ${Math.abs(remaining).toLocaleString("zh-CN")} 字 · ${progress}%`;
+      return t("exceededCharacters", { count: Math.abs(remaining).toLocaleString(locale), progress });
     }
-    return "已达成本章目标 · 100%";
-  }, [editorStore.wordCount, targetWordCount]);
+    return t("chapterGoalReached");
+  }, [editorStore.wordCount, locale, t, targetWordCount]);
   const editorUsesFullWidth = focusMode || chapterListHidden || !sidebarOpen;
   const editorInnerStyle: EditorInnerStyle = {
     maxWidth: editorUsesFullWidth ? "none" : pageWidthBySetting[editorStore.editorSettings.pageWidth] ?? pageWidthBySetting.medium
@@ -381,19 +385,19 @@ export function WritingPage({
     () => (!focusMode ? [chapterListHidden ? "chapter-rail" : "chapter-tree", "chapter-workspace"] : ["chapter-workspace"]),
     [chapterListHidden, focusMode]
   );
-  const chapterLayout = useDefaultLayout({ id: "moshu-writing-chapters-v1", panelIds: chapterLayoutPanelIds });
+  const chapterLayout = useDefaultLayout({ id: "moshu-writing-chapters-v2", panelIds: chapterLayoutPanelIds });
   const sidebarLayoutPanelIds = useMemo(() => (!focusMode && sidebarOpen ? ["editor", "right-sidebar"] : ["editor"]), [focusMode, sidebarOpen]);
-  const sidebarLayout = useDefaultLayout({ id: "moshu-writing-sidebar-v2", panelIds: sidebarLayoutPanelIds });
+  const sidebarLayout = useDefaultLayout({ id: "moshu-writing-sidebar-v3", panelIds: sidebarLayoutPanelIds });
   const flushBeforeNavigation = useCallback(
     (next: () => void) => {
       setNavigationError(null);
       void editorStore.flushPendingSave()
         .then(next)
         .catch((reason: unknown) => {
-          setNavigationError(formatIpcErrorMessage(reason, "保存失败，已留在当前页面。"));
+          setNavigationError(formatIpcErrorMessage(reason, t("saveBeforeNavigationFailed")));
         });
     },
-    [editorStore]
+    [editorStore, t]
   );
   useEffect(() => {
     let cancelled = false;
@@ -485,10 +489,11 @@ export function WritingPage({
     }
 
     const updateUndoRedoState = () => {
-      setUndoRedoState({
-        canRedo: editor.can().redo(),
-        canUndo: editor.can().undo()
-      });
+      const nextCanRedo = editor.can().redo();
+      const nextCanUndo = editor.can().undo();
+      setUndoRedoState((current) => current.canRedo === nextCanRedo && current.canUndo === nextCanUndo
+        ? current
+        : { canRedo: nextCanRedo, canUndo: nextCanUndo });
     };
 
     updateUndoRedoState();
@@ -539,7 +544,7 @@ export function WritingPage({
           | { contentJson?: unknown; plainText?: string }
           | undefined;
         const plainText = content?.plainText ?? "";
-        const matches = findChapterSearchMatches(chapter.title, content?.contentJson, plainText, query);
+        const matches = findChapterSearchMatches(chapter.title, content?.contentJson, plainText, query, t("matchChapterTitle"));
         return matches.map((match) => ({
           chapterId: chapter.id,
           matchId: match.matchId,
@@ -569,7 +574,7 @@ export function WritingPage({
     return () => {
       cancelled = true;
     };
-  }, [api, chapters, currentProject, searchValue]);
+  }, [api, chapters, currentProject, searchValue, t]);
   const handleCreateChapter = useCallback(() => flushBeforeNavigation(() => onCreateChapter()), [flushBeforeNavigation, onCreateChapter]);
   const handleCreateChapterAfter = useCallback(
     (chapterId: string) => flushBeforeNavigation(() => onCreateChapter({ afterChapterId: chapterId })),
@@ -708,10 +713,10 @@ export function WritingPage({
         onOpenFloatingScratchpad(snapshot.chapterId, (created as ScratchNoteRecord).id);
       })
       .catch((reason: unknown) => {
-        setNavigationError(formatIpcErrorMessage(reason, "加入草稿纸失败。"));
+        setNavigationError(formatIpcErrorMessage(reason, t("addToScratchpadFailed")));
       });
     closeEditorContextMenu();
-  }, [api, closeEditorContextMenu, currentProject, onAuxiliaryChanged, onOpenFloatingScratchpad, selectionSnapshotFromEditor]);
+  }, [api, closeEditorContextMenu, currentProject, onAuxiliaryChanged, onOpenFloatingScratchpad, selectionSnapshotFromEditor, t]);
   const handleContextCopy = useCallback(() => {
     document.execCommand("copy");
     closeEditorContextMenu();
@@ -729,10 +734,10 @@ export function WritingPage({
         }
       })
       .catch((reason: unknown) => {
-        setNavigationError(formatIpcErrorMessage(reason, "读取剪贴板失败。"));
+        setNavigationError(formatIpcErrorMessage(reason, t("readClipboardFailed")));
       });
     closeEditorContextMenu();
-  }, [closeEditorContextMenu, editor]);
+  }, [closeEditorContextMenu, editor, t]);
   const handleSearchResultSelect = useCallback(
     (result: EditorSearchResult) => {
       const query = searchValue;
@@ -755,7 +760,7 @@ export function WritingPage({
   const handleSelectionToScratchpad = useCallback(
     async (snapshot: SelectionSnapshot) => {
       if (!currentProject) {
-        throw new Error("当前项目不可用，无法加入草稿纸。");
+        throw new Error(t("unavailableProjectScratchpad"));
       }
 
       await api.scratch.create({
@@ -767,7 +772,7 @@ export function WritingPage({
       onAuxiliaryChanged();
       onOpenScratchpad();
     },
-    [api, currentProject, onAuxiliaryChanged, onOpenScratchpad]
+    [api, currentProject, onAuxiliaryChanged, onOpenScratchpad, t]
   );
   const startChapterRename = useCallback((chapterId: string, currentTitle: string) => {
     setRenameChapterDraft({ id: chapterId, title: currentTitle });
@@ -854,7 +859,7 @@ export function WritingPage({
       const trimmed = targetWordCountDraft.trim();
       const nextTargetWordCount = trimmed ? Number.parseInt(trimmed, 10) : null;
       if (trimmed && (!/^\d+$/.test(trimmed) || !nextTargetWordCount || nextTargetWordCount < 100 || nextTargetWordCount > 500000)) {
-        setTargetWordCountError("目标字数需要在 100 到 500,000 之间。");
+        setTargetWordCountError(t("invalidChapterTarget"));
         return;
       }
 
@@ -870,14 +875,14 @@ export function WritingPage({
         setTargetWordCountSaving(false);
       }
     },
-    [activeChapter, onUpdateChapterTargetWordCount, targetWordCountDraft, targetWordCountSaving]
+    [activeChapter, onUpdateChapterTargetWordCount, t, targetWordCountDraft, targetWordCountSaving]
   );
 
   return (
     <div className="writing-page">
       <TopBar
         focusMode={focusMode}
-        title={currentProject?.name ?? "我的小说"}
+        title="墨枢"
         saveStatus={editorStore.saveStatus}
         searchValue={searchValue}
         editorSettings={editorStore.editorSettings}
@@ -899,9 +904,9 @@ export function WritingPage({
         </div>
       ) : null}
       {searchValue.trim() && !focusMode ? (
-        <div className="search-result-list" role="listbox" aria-label="搜索结果">
-          {searchBusy ? <div className="search-result-empty">正在搜索...</div> : null}
-          {!searchBusy && searchResults.length === 0 ? <div className="search-result-empty">没有找到匹配内容</div> : null}
+        <div className="search-result-list" role="listbox" aria-label={t("searchResults")}>
+          {searchBusy ? <div className="search-result-empty">{t("searching")}</div> : null}
+          {!searchBusy && searchResults.length === 0 ? <div className="search-result-empty">{t("noSearchResults")}</div> : null}
           {searchResults.map((result) => (
             <button key={`${result.chapterId}:${result.matchId}`} onClick={() => handleSearchResultSelect(result)} type="button">
               <strong>{renderHighlightedSearchText(result.title, searchValue)}</strong>
@@ -920,27 +925,28 @@ export function WritingPage({
         <PanelGroup
           className="workspace-shell-panels"
           defaultLayout={chapterLayout.defaultLayout}
-          id="moshu-writing-chapters-v1"
+          id="moshu-writing-chapters-v2"
           onLayoutChanged={chapterLayout.onLayoutChanged}
           orientation="horizontal"
         >
           {!focusMode && chapterListHidden ? (
             <Panel className="chapter-rail-panel" defaultSize="58px" groupResizeBehavior="preserve-pixel-size" id="chapter-rail" maxSize="58px" minSize="58px">
-              <aside className="chapter-rail" aria-label="章节列表已隐藏">
-                <button className="chapter-rail-button" onClick={() => setChapterListHidden(false)} title="展开章节列表" type="button">
+              <aside className="chapter-rail" aria-label={t("chapterListHidden")}>
+                <button className="chapter-rail-button" onClick={() => setChapterListHidden(false)} title={t("expandChapterList")} type="button">
                   <SidebarSimple size={20} />
                   <CaretRight className="chapter-collapse-caret" size={13} />
                 </button>
-                <span className="rail-meta">{activeChapter?.title ?? "未选章节"}</span>
+                <span className="rail-meta">{activeChapter?.title ?? t("noSelectedChapter")}</span>
               </aside>
             </Panel>
           ) : !focusMode ? (
             <>
-              <Panel className="chapter-tree-panel" defaultSize="322px" groupResizeBehavior="preserve-pixel-size" id="chapter-tree" maxSize="520px" minSize="220px">
+              <Panel className="chapter-tree-panel" defaultSize="284px" groupResizeBehavior="preserve-pixel-size" id="chapter-tree" maxSize="380px" minSize="240px">
                 <LeftChapterTree
                   activeChapterId={activeChapterId}
                   auxiliaryInfoByChapterId={chapterAuxiliaryInfoById}
                   chapters={chapters}
+                  projectTitle={currentProject?.name ?? t("myNovel")}
                   onCreateChapter={handleCreateChapter}
                   onCreateChapterAfter={handleCreateChapterAfter}
                   onDeleteChapter={handleDeleteChapter}
@@ -957,7 +963,7 @@ export function WritingPage({
             <PanelGroup
               className="workspace-main-panels"
               defaultLayout={sidebarLayout.defaultLayout}
-              id="moshu-writing-sidebar-v2"
+              id="moshu-writing-sidebar-v3"
               onLayoutChanged={sidebarLayout.onLayoutChanged}
               orientation="horizontal"
             >
@@ -967,7 +973,7 @@ export function WritingPage({
                 <div className="editor-inner" style={editorInnerStyle}>
                   {taskPromptPresetError ? (
                     <div className="inline-error-banner" role="alert">
-                      提示词预设加载失败：{taskPromptPresetError}
+                      {t("promptPresetLoadFailed")}：{taskPromptPresetError}
                     </div>
                   ) : null}
                   {editorStore.pendingDraftRecovery ? (
@@ -993,11 +999,11 @@ export function WritingPage({
                             }}
                           />
                           <button className="small-button blue" disabled={!inlineChapterTitle.trim()} type="submit">
-                            保存
+                            {t("save")}
                           </button>
                         </form>
                       ) : (
-                        <button className="chapter-heading chapter-heading-button" onClick={startInlineChapterRename} title="点击重命名章节" type="button">
+                        <button className="chapter-heading chapter-heading-button" onClick={startInlineChapterRename} title={t("clickToRenameChapter")} type="button">
                           {activeChapter.title}
                         </button>
                       )}
@@ -1018,13 +1024,30 @@ export function WritingPage({
                         }}
                         onTask={onTask}
                       />
+                      {!focusMode && sidebarOpen && sidebarTab === "task" ? (
+                        <section className="inline-task-dock" aria-label={t("currentTask")}>
+                          <CurrentTaskTab
+                            activeEditorChapterId={activeChapter?.id ?? null}
+                            chapterId={activeChapter?.id ?? null}
+                            currentChapterTitle={activeChapter?.title ?? null}
+                            projectId={currentProject?.id ?? null}
+                            selectionSnapshot={selectionSnapshot}
+                            taskPromptPreset={taskPromptPreset}
+                            taskType={taskType}
+                            editor={editor}
+                            flushPendingSave={editorStore.flushPendingSave}
+                            onContentSaved={editorStore.markContentSaved}
+                            onOpenSettings={handleSettings}
+                          />
+                        </section>
+                      ) : null}
                     </>
                   ) : (
                     <div className="empty-editor-state">
-                      <h1 className="chapter-heading">请选择或新建章节</h1>
-                      <p>从左侧章节列表选择一个章节，或新建章节后开始写作。</p>
+                      <h1 className="chapter-heading">{t("chooseOrCreateChapter")}</h1>
+                      <p>{t("chooseChapterHint")}</p>
                       <button className="small-button blue" onClick={handleCreateChapter} type="button">
-                        新建章节
+                        {t("addChapter")}
                       </button>
                     </div>
                   )}
@@ -1113,15 +1136,15 @@ export function WritingPage({
               <footer className="bottom-metrics">
                 <div className="metrics-inner">
                   <div className="metric-left">
-                    <span>字数：{editorStore.wordCount.toLocaleString("zh-CN")}</span>
-                    <span>今日：{editorStore.dailyWordCount.toLocaleString("zh-CN")}</span>
+                    <span>{t("characterCount")}：{editorStore.wordCount.toLocaleString(locale)}</span>
+                    <span>{t("today")}：{editorStore.dailyWordCount.toLocaleString(locale)}</span>
                     <button className="metric-button" disabled={!activeChapter} onClick={openTargetWordCountModal} type="button">
-                      本章目标：{targetWordCount ? targetWordCount.toLocaleString("zh-CN") : "设置"}
+                      {t("chapterTarget")}：{targetWordCount ? targetWordCount.toLocaleString(locale) : t("set")}
                     </button>
                     {targetProgressLabel ? <span className="metric-progress">{targetProgressLabel}</span> : null}
                   </div>
                   <div className="metric-right">
-                    <span>{editorStore.saveStatusLabel}</span>
+                    <span>{editorStore.saveStatus === "failed" ? t("saveFailed") : editorStore.saveStatus === "saving" ? t("saving") : editorStore.saveStatus === "dirty" ? t("editing") : t("autosaved")}</span>
                   </div>
                 </div>
               </footer>
@@ -1131,7 +1154,7 @@ export function WritingPage({
           {!focusMode && sidebarOpen ? (
             <>
               <PanelResizeHandle className="sidebar-resize-handle" />
-              <Panel className="right-sidebar-panel" defaultSize="520px" groupResizeBehavior="preserve-pixel-size" id="right-sidebar" maxSize="75%" minSize="360px">
+              <Panel className="right-sidebar-panel" defaultSize="400px" groupResizeBehavior="preserve-pixel-size" id="right-sidebar" maxSize="520px" minSize="360px">
                 <RightUtilitySidebar
                   activeTab={sidebarTab}
                   aiChatDraftSeed={aiChatDraftSeed}
@@ -1144,10 +1167,7 @@ export function WritingPage({
                   selectionSnapshot={selectionSnapshot}
                   taskPromptPreset={taskPromptPreset}
                   taskType={taskType}
-                  editor={editor}
-                  flushPendingSave={editorStore.flushPendingSave}
                   onAuxiliaryChanged={onAuxiliaryChanged}
-                  onContentSaved={editorStore.markContentSaved}
                   onTabChange={onSidebarTabChange}
                   onClose={onCloseSidebar}
                   onOpenSettings={handleSettings}
@@ -1160,10 +1180,10 @@ export function WritingPage({
         </PanelGroup>
       </main>
 
-      <Modal open={Boolean(renameChapterDraft)} title="重命名章节" onClose={cancelChapterRename}>
+      <Modal open={Boolean(renameChapterDraft)} title={t("renameChapter")} onClose={cancelChapterRename}>
         <form className="rename-form" onSubmit={submitChapterRename}>
           <label className="field-label" htmlFor="chapter-rename-input">
-            章节名称
+            {t("chapterName")}
           </label>
           <Input
             autoFocus
@@ -1173,24 +1193,24 @@ export function WritingPage({
           />
           <div className="modal-actions">
             <Button onClick={cancelChapterRename} type="button" variant="ghost">
-              取消
+              {t("cancel")}
             </Button>
             <Button disabled={!renameChapterTitle.trim() || renameChapterTitle.trim() === renameChapterDraft?.title} type="submit" variant="primary">
-              保存
+              {t("save")}
             </Button>
           </div>
         </form>
       </Modal>
-      <Modal open={targetWordCountModalOpen} title="设置本章目标" onClose={closeTargetWordCountModal}>
+      <Modal open={targetWordCountModalOpen} title={t("setChapterTarget")} onClose={closeTargetWordCountModal}>
         <form className="rename-form" onSubmit={submitTargetWordCount}>
           <label className="field-label" htmlFor="chapter-target-input">
-            目标字数
+            {t("targetCharacters")}
           </label>
           <Input
             autoFocus
             id="chapter-target-input"
             inputMode="numeric"
-            placeholder="例如 3000，留空表示不设置"
+            placeholder={t("targetCharactersPlaceholder")}
             value={targetWordCountDraft}
             onChange={(event) => setTargetWordCountDraft(event.target.value)}
           />
@@ -1201,23 +1221,23 @@ export function WritingPage({
           ) : null}
           <div className="modal-actions">
             <Button disabled={targetWordCountSaving} onClick={closeTargetWordCountModal} type="button" variant="ghost">
-              取消
+              {t("cancel")}
             </Button>
             <Button disabled={targetWordCountSaving} type="submit" variant="primary">
-              保存
+              {t("save")}
             </Button>
           </div>
         </form>
       </Modal>
-      <Modal open={confirmWelcomeOpen} title="返回开始页？" onClose={closeConfirmWelcome}>
+      <Modal open={confirmWelcomeOpen} title={t("returnToStartQuestion")} onClose={closeConfirmWelcome}>
         <div className="confirm-dialog-body">
-          <p>当前项目会保留在最近项目中，编辑内容会先保存。确认返回开始页吗？</p>
+          <p>{t("returnToStartDescription")}</p>
           <div className="modal-actions">
             <Button onClick={closeConfirmWelcome} type="button" variant="ghost">
-              继续写作
+              {t("keepWriting")}
             </Button>
             <Button onClick={confirmWelcome} type="button" variant="primary">
-              返回开始页
+              {t("backToStart")}
             </Button>
           </div>
         </div>

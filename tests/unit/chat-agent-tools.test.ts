@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { emptyChapterContent } from "../../src/main/chapter/default-content";
 import { createDatabase } from "../../src/main/db/database";
 import { runMigrations } from "../../src/main/db/migrations";
@@ -117,6 +117,8 @@ describe("chat agent tools", () => {
     expect(parameters).toContain('"operation"');
     expect(parameters).toContain('"polish"');
     expect(parameters).toContain('"target"');
+    expect(parameters).toContain('"kind"');
+    expect(parameters).toContain('"required":["operation"]');
     expect(parameters).toContain("用户当前消息里直接粘贴的正文必须原样放入 text");
     expect(parameters).not.toContain("add_to_scratchpad");
   });
@@ -221,6 +223,94 @@ describe("chat agent tools", () => {
     });
     expect(result.action).toBeUndefined();
 
+    db.close();
+  });
+
+  it("accepts the flattened selection arguments emitted by OpenRouter models", async () => {
+    const { chapterRepo, db, scratchRepo } = createRepos();
+    const projectId = "project_flat_selection_writing_tool";
+    createProject(new ProjectRepository(db), projectId);
+    const chapter = createChapter(chapterRepo, {
+      projectId,
+      title: "第1章 起点",
+      sortOrder: 0,
+      plainText: "彼は古い扉の前で足を止めた。"
+    });
+    const executeWritingOperation = vi.fn(async (input) => ({
+      operation: input.operation,
+      outputKind: "candidate_text" as const,
+      generatedText: "彼は古びた扉の前で、息を殺すように足を止めた。",
+      changeSummary: "OpenRouter expand candidate",
+      proofreadIssues: null,
+      contextPlan: {
+        targetText: "彼は古い扉の前で足を止めた。",
+        supportingContext: [],
+        mode: "direct" as const,
+        estimatedInputTokens: 120,
+        maxInputTokens: 8000,
+        reason: "当前选区"
+      }
+    }));
+
+    const result = parseToolJson(
+      await executeChatAgentTool({
+        name: "run_writing_operation",
+        argumentsJson: JSON.stringify({
+          operation: "expand",
+          kind: "selection",
+          instruction: "情景描写を補ってください。"
+        }),
+        runtime: {
+          projectId,
+          currentChapterId: chapter.id,
+          selectionText: "彼は古い扉の前で足を止めた。",
+          userMessage: "@選択範囲 を加筆してください",
+          chapterRepo,
+          scratchRepo,
+          tokenBudget: getTokenBudget("chat"),
+          executeWritingOperation
+        }
+      })
+    );
+
+    expect(result).toMatchObject({
+      operation: "expand",
+      generatedText: "彼は古びた扉の前で、息を殺すように足を止めた。"
+    });
+    expect(executeWritingOperation).toHaveBeenCalledWith({
+      operation: "expand",
+      target: expect.objectContaining({ kind: "selection", chapterId: chapter.id }),
+      instruction: "情景描写を補ってください。"
+    });
+
+    for (const argumentsJson of [
+      JSON.stringify({
+        operation: "expand",
+        target: { kind: "selection", text: "彼は古い扉の前で足を止めた。" },
+        instruction: "情景描写を補ってください。"
+      }),
+      JSON.stringify({
+        operation: "expand",
+        target: "selection",
+        instruction: "情景描写を補ってください。"
+      })
+    ]) {
+      await executeChatAgentTool({
+        name: "run_writing_operation",
+        argumentsJson,
+        runtime: {
+          projectId,
+          currentChapterId: chapter.id,
+          selectionText: "彼は古い扉の前で足を止めた。",
+          userMessage: "@選択範囲 を加筆してください",
+          chapterRepo,
+          scratchRepo,
+          tokenBudget: getTokenBudget("chat"),
+          executeWritingOperation
+        }
+      });
+    }
+    expect(executeWritingOperation).toHaveBeenCalledTimes(3);
     db.close();
   });
 
@@ -1326,6 +1416,31 @@ describe("chat agent tools", () => {
     expect(result.contextText).toContain("斗之力，三段");
     expect(result.contextText).toBe(pastedText);
 
+    db.close();
+  });
+
+  it("accepts kana-rich Japanese inline text as an explicit selection source", async () => {
+    const { chapterRepo, db, scratchRepo } = createRepos();
+    const projectId = "project_japanese_inline_selection";
+    createProject(new ProjectRepository(db), projectId);
+    const pastedText = "雨は静かに降り続いていた。彼女は傘も差さず、遠ざかる背中を見送った。";
+
+    const result = parseToolJson(
+      await executeChatAgentTool({
+        name: "read_selection",
+        argumentsJson: JSON.stringify({ inlineText: pastedText }),
+        runtime: {
+          projectId,
+          userMessage: `${pastedText}\nこの文章を推敲してください`,
+          chapterRepo,
+          scratchRepo,
+          tokenBudget: getTokenBudget("chat")
+        }
+      })
+    );
+
+    expect(result.scopeLabel).toBe("对话内粘贴文本");
+    expect(result.contextText).toBe(pastedText);
     db.close();
   });
 

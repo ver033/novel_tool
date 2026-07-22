@@ -87,6 +87,12 @@ describe("editor writing experience optimizations", () => {
     expect(novelEditor).toMatch(/if \(!range\) \{\s*return;\s*\}[\s\S]*onSearchTargetResolved\?\.\(searchTarget\.id\);/);
   });
 
+  it("does not rerender the writing page when undo and redo availability is unchanged", () => {
+    const writingPage = readSource("src/renderer/routes/WritingPage.tsx");
+
+    expect(writingPage).toMatch(/setUndoRedoState\(\(current\) =>[\s\S]*current\.canRedo === nextCanRedo[\s\S]*current\.canUndo === nextCanUndo[\s\S]*\? current/);
+  });
+
   it("does not pass a search jump to stale editor content while a new chapter is still loading", () => {
     const editorStore = readSource("src/renderer/state/editor-store.ts");
     const writingPage = readSource("src/renderer/routes/WritingPage.tsx");
@@ -134,7 +140,7 @@ describe("editor writing experience optimizations", () => {
     expect(leftChapterTree).toContain("IconButton");
     expect(leftChapterTree).toContain("SidebarSimple");
     expect(leftChapterTree).toContain("CaretLeft");
-    expect(leftChapterTree).toContain("折叠章节列表");
+    expect(leftChapterTree).toContain('t("collapseChapterList")');
     expect(leftChapterTree).not.toContain(">隐藏章节<");
     expect(writingPage).toContain("chapterListHidden");
     expect(writingPage).toContain("chapterLayoutPanelIds");
@@ -171,8 +177,8 @@ describe("editor writing experience optimizations", () => {
     expect(writingPage).toContain("auxiliaryInfoByChapterId={chapterAuxiliaryInfoById}");
     expect(leftChapterTree).toContain("auxiliaryInfoByChapterId");
     expect(leftChapterTree).toContain("chapter-aux-meta");
-    expect(leftChapterTree).toContain("细纲");
-    expect(leftChapterTree).toContain("草稿");
+    expect(leftChapterTree).toContain('t("detailedOutline")');
+    expect(leftChapterTree).toContain('t("draft")');
     expect(utilityPanel).toContain("onAuxiliaryChanged");
     expect(outlinePanel).toContain("onAuxiliaryChanged?.()");
     expect(scratchpad).toContain("onNotesChanged?.()");
@@ -242,7 +248,7 @@ describe("editor writing experience optimizations", () => {
     expect(editorContextMenu).toContain("canOpenAllAssist ?");
     expect(editorContextMenu).not.toContain("打开当前章节任务");
     expect(editorContextMenu).not.toContain("onOpenTask");
-    expect(editorContextMenu).toContain("复制");
+    expect(editorContextMenu).toContain('t("copy")');
     expect(css).toContain(".floating-workspace-layer");
     expect(css).toContain(".editor-context-menu");
     expect(css).toContain(".editor-context-menu-section");
@@ -380,8 +386,8 @@ describe("editor writing experience optimizations", () => {
     const writingPage = readSource("src/renderer/routes/WritingPage.tsx");
 
     expect(writingPage).toContain("targetProgressLabel");
-    expect(writingPage).toContain("还差");
-    expect(writingPage).toContain("已超过");
+    expect(writingPage).toContain('t("remainingCharacters"');
+    expect(writingPage).toContain('t("exceededCharacters"');
   });
 
   it("only shows the manuscript placeholder at the start of an empty chapter", () => {

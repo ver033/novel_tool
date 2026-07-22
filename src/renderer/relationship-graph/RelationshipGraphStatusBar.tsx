@@ -1,4 +1,7 @@
 import type { RelationshipGraphSourceStatus, RelationshipGraphStats } from "../../main/shared/relationship-graph";
+import type { AppLocale } from "../../main/shared/language";
+import { useI18n } from "../i18n";
+import { useLocalizedCopy } from "../i18n/localized-copy";
 
 type RelationshipGraphStatusBarProps = {
   readonly status: RelationshipGraphSourceStatus | null;
@@ -8,30 +11,40 @@ type RelationshipGraphStatusBarProps = {
   readonly onOpenSettings: () => void;
 };
 
-function statusText(status: RelationshipGraphSourceStatus | null, loading: boolean, error: string | null): string {
+function statusText(status: RelationshipGraphSourceStatus | null, loading: boolean, error: string | null, locale: AppLocale, copy: {
+  readonly failed: string;
+  readonly loading: string;
+  readonly noStatus: string;
+  readonly ready: string;
+}): string {
   if (error) {
-    return `读取失败：${error}`;
+    return `${copy.failed}：${error}`;
   }
   if (loading && !status) {
-    return "正在读取人物关系图";
+    return copy.loading;
   }
   if (!status) {
-    return "还没有读取图谱来源状态";
+    return copy.noStatus;
   }
-  return status.message;
+  return locale === "ja-JP" ? copy.ready : status.message;
 }
 
 export function RelationshipGraphStatusBar({ status, stats, loading, error, onOpenSettings }: RelationshipGraphStatusBarProps) {
+  const { locale } = useI18n();
+  const copy = useLocalizedCopy({
+    "zh-CN": { failed: "读取失败", loading: "正在读取人物关系图", noStatus: "还没有读取图谱来源状态", ready: "图谱来源已就绪", visible: "当前显示", chapters: "章，使用", evidence: "条关系证据", settings: "缓存设置" },
+    "ja-JP": { failed: "読み込み失敗", loading: "人物関係図を読み込んでいます", noStatus: "関係図の取得元を確認しています", ready: "関係図の取得元を確認しました", visible: "現在", chapters: "章を表示、", evidence: "件の関係根拠を使用", settings: "キャッシュ設定" }
+  });
   return (
     <div className="relationship-status-bar" aria-live="polite">
-      <span>{statusText(status, loading, error)}</span>
+      <span>{statusText(status, loading, error, locale, copy)}</span>
       {stats ? (
         <span>
-          当前显示 {stats.visibleChapterCount} 章，使用 {stats.usedMentionCount}/{stats.totalMentionCount} 条关系证据
+          {copy.visible} {stats.visibleChapterCount} {copy.chapters} {stats.usedMentionCount}/{stats.totalMentionCount} {copy.evidence}
         </span>
       ) : null}
       <button onClick={onOpenSettings} type="button">
-        缓存设置
+        {copy.settings}
       </button>
     </div>
   );

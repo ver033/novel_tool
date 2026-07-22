@@ -17,6 +17,7 @@ import type {
   RecentProjectAvailability,
   RecentProjectEntry
 } from "../shared/types";
+import { DEFAULT_CONTENT_LANGUAGE, initialChapterTitle, initialVolumeTitle } from "../shared/language";
 import {
   isNovelToolProjectFile,
   openExistingProjectDatabase,
@@ -70,18 +71,20 @@ export class ProjectService {
       }
 
       const createdAt = nowIso();
+      const contentLanguage = input.contentLanguage ?? DEFAULT_CONTENT_LANGUAGE;
       const project = projectRepo.create({
         id: createId("project"),
         name: input.name,
         rootPath: projectFilePath,
+        contentLanguage,
         createdAt,
         updatedAt: createdAt
       });
       const initialChapter = chapterRepo.create({
         id: createId("chapter"),
         projectId: project.id,
-        title: "第1章",
-        volumeTitle: "第一卷",
+        title: initialChapterTitle(contentLanguage),
+        volumeTitle: initialVolumeTitle(contentLanguage),
         sortOrder: 0,
         contentJson: emptyChapterContent,
         plainText: "",

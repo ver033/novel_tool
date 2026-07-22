@@ -1,6 +1,6 @@
 import { BookOpen } from "@phosphor-icons/react";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import type { ImportConfirmResult, ImportPreview } from "../../main/shared/types";
+import type { ImportConfirmResult, ImportPreview, TxtImportEncoding } from "../../main/shared/types";
 import { Button } from "../components/Button";
 import { Input } from "../components/Input";
 import { Modal } from "../components/Modal";
@@ -8,11 +8,14 @@ import { ImportConfirmStep } from "../import/ImportConfirmStep";
 import { ImportFileStep } from "../import/ImportFileStep";
 import { ImportPreviewStep } from "../import/ImportPreviewStep";
 import { getNovelToolApi } from "../state/app-store";
+import type { ContentLanguage } from "../../main/shared/language";
+import { useI18n } from "../i18n";
 
 type ImportMode = "create_new_project" | "import_into_current_project";
 
 type ImportWizardPageProps = {
   readonly currentProjectId: string | null;
+  readonly currentProjectLanguage: ContentLanguage | null;
   readonly step: number;
   readonly onBack: () => void;
   readonly onNext: () => void;
@@ -22,36 +25,44 @@ type ImportWizardPageProps = {
   readonly initialMode: ImportMode;
 };
 
-const steps = [
-  ["选择文件", "选择要导入的小说文件"],
-  ["识别章节", "自动识别章节结构"],
-  ["预览与调整", "预览内容并调整章节"],
-  ["完成导入", "开始导入到项目中"]
-] as const;
-
-export function ImportWizardPage({ currentProjectId, step, onBack, onNext, onStepChange, onCancel, onFinish, initialMode }: ImportWizardPageProps) {
+export function ImportWizardPage({ currentProjectId, currentProjectLanguage, step, onBack, onNext, onStepChange, onCancel, onFinish, initialMode }: ImportWizardPageProps) {
+  const { t } = useI18n();
   const api = useMemo(getNovelToolApi, []);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [mode, setMode] = useState<ImportMode>(initialMode);
+  const [contentLanguage, setContentLanguage] = useState<ContentLanguage>(currentProjectLanguage ?? "zh-CN");
+  const [encoding, setEncoding] = useState<TxtImportEncoding>("auto");
   const [preview, setPreview] = useState<ImportPreview | null>(null);
   const [result, setResult] = useState<ImportConfirmResult | null>(null);
   const [renameChapterDraft, setRenameChapterDraft] = useState<{ index: number; title: string } | null>(null);
   const [renameChapterTitle, setRenameChapterTitle] = useState("");
-  const primaryLabel = step === 4 ? "打开项目" : step === 3 ? "导入并打开" : step === 2 ? "查看识别结果" : preview ? "下一步" : "选择并识别";
+  const steps = [
+    [t("fileSelection"), t("selectNovelFile")],
+    [t("detectChapters"), t("detectChapterStructure")],
+    [t("previewAndAdjust"), t("previewAndAdjustDescription")],
+    [t("completeImport"), t("importIntoProjectDescription")]
+  ] as const;
+  const primaryLabel = step === 4 ? t("openProject") : step === 3 ? t("importAndOpen") : step === 2 ? t("viewDetection") : preview ? t("next") : t("selectAndDetect");
   const busyStatus =
     step === 1
-      ? "正在读取并识别 TXT 文件"
+      ? t("readingAndDetecting")
       : step === 2
-        ? "正在更新章节识别结果"
+        ? t("updatingDetection")
         : step === 3
-          ? "正在写入项目"
-          : "正在处理导入结果";
+          ? t("writingProject")
+          : t("processingImport");
   const statusText = error ?? (busy ? busyStatus : null);
 
   useEffect(() => {
     setMode(initialMode);
   }, [initialMode]);
+
+  useEffect(() => {
+    if (initialMode === "import_into_current_project" && currentProjectLanguage) {
+      setContentLanguage(currentProjectLanguage);
+    }
+  }, [currentProjectLanguage, initialMode]);
 
   async function selectAndPreviewTxt(): Promise<void> {
     setBusy(true);
@@ -61,12 +72,12 @@ export function ImportWizardPage({ currentProjectId, step, onBack, onNext, onSte
       if (!selected) {
         return;
       }
-      const nextPreview = (await api.import.previewTxt({ filePath: selected.filePath })) as ImportPreview;
+      const nextPreview = (await api.import.previewTxt({ filePath: selected.filePath, contentLanguage, encoding })) as ImportPreview;
       setPreview(nextPreview);
       setResult(null);
       onStepChange(2);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "读取 TXT 文件失败");
+      setError(reason instanceof Error ? reason.message : t("readTxtFailed"));
     } finally {
       setBusy(false);
     }
@@ -86,7 +97,7 @@ export function ImportWizardPage({ currentProjectId, step, onBack, onNext, onSte
       })) as ImportPreview;
       setPreview(nextPreview);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "更新导入预览失败");
+      setError(reason instanceof Error ? reason.message : t("updatePreviewFailed"));
     } finally {
       setBusy(false);
     }
@@ -94,11 +105,11 @@ export function ImportWizardPage({ currentProjectId, step, onBack, onNext, onSte
 
   async function confirmImport(): Promise<void> {
     if (!preview) {
-      setError("请先选择 TXT 文件");
+      setError(t("selectTxtFirst"));
       return;
     }
     if (mode === "import_into_current_project" && !currentProjectId) {
-      setError("需要先从编辑器打开导入入口，才能追加到当前作品");
+      setError(t("appendRequiresProject"));
       return;
     }
 
@@ -109,12 +120,13 @@ export function ImportWizardPage({ currentProjectId, step, onBack, onNext, onSte
         importJobId: preview.importJobId,
         mode,
         projectId: mode === "import_into_current_project" ? currentProjectId ?? undefined : undefined,
-        projectName: mode === "create_new_project" ? preview.fileName.replace(/\.txt$/i, "") : undefined
+        projectName: mode === "create_new_project" ? preview.fileName.replace(/\.txt$/i, "") : undefined,
+        contentLanguage: mode === "create_new_project" ? contentLanguage : undefined
       })) as ImportConfirmResult;
       setResult(confirmed);
       onStepChange(4);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "确认导入失败");
+      setError(reason instanceof Error ? reason.message : t("confirmImportFailed"));
     } finally {
       setBusy(false);
     }
@@ -170,20 +182,20 @@ export function ImportWizardPage({ currentProjectId, step, onBack, onNext, onSte
   return (
     <div className="import-shell">
       <header className="settings-top">
-        <button className="brand brand-button" onClick={onCancel} title="返回上一页" type="button">
+        <button className="brand brand-button" onClick={onCancel} title={t("previous")} type="button">
           <span className="line-icon">
             <BookOpen size={24} />
           </span>
-          <span>导入小说</span>
+          <span>{t("importNovelTitle")}</span>
         </button>
         <div className="top-actions">
-          <IconCloseButton onClick={onCancel} label="关闭导入" />
+          <IconCloseButton onClick={onCancel} label={t("closeImport")} />
         </div>
       </header>
 
       <main className="import-page">
         <section className="panel wizard">
-          <div className="steps" aria-label="导入步骤">
+          <div className="steps" aria-label={t("importSteps")}>
             {steps.map(([title, description], index) => {
               const number = index + 1;
               return (
@@ -207,8 +219,8 @@ export function ImportWizardPage({ currentProjectId, step, onBack, onNext, onSte
 
           {mode === "import_into_current_project" ? (
             <div className="import-mode-banner append" role="status">
-              <b>当前为追加模式</b>
-              <span>识别到的章节会追加到当前作品末尾，不会新建项目。</span>
+              <b>{t("appendMode")}</b>
+              <span>{t("appendModeDescription")}</span>
             </div>
           ) : null}
 
@@ -219,6 +231,10 @@ export function ImportWizardPage({ currentProjectId, step, onBack, onNext, onSte
               error={error}
               mode={mode}
               preview={preview}
+              contentLanguage={contentLanguage}
+              encoding={encoding}
+              onContentLanguageChange={setContentLanguage}
+              onEncodingChange={setEncoding}
               onSelectFile={selectAndPreviewTxt}
             />
           ) : null}
@@ -233,7 +249,7 @@ export function ImportWizardPage({ currentProjectId, step, onBack, onNext, onSte
                   onSplit={(chapterIndex, lineNumber) => void updatePreview([{ type: "split_from_line", chapterIndex, lineNumber }])}
                 />
               ) : null}
-              {!preview ? <ImportFileStep busy={busy} currentProjectId={currentProjectId} error={error} mode={mode} preview={preview} onSelectFile={selectAndPreviewTxt} /> : null}
+              {!preview ? <ImportFileStep busy={busy} currentProjectId={currentProjectId} error={error} mode={mode} preview={preview} contentLanguage={contentLanguage} encoding={encoding} onContentLanguageChange={setContentLanguage} onEncodingChange={setEncoding} onSelectFile={selectAndPreviewTxt} /> : null}
             </>
           ) : null}
           {step === 3 ? (
@@ -245,7 +261,7 @@ export function ImportWizardPage({ currentProjectId, step, onBack, onNext, onSte
                 onRename={renameChapter}
                 onSplit={(chapterIndex, lineNumber) => void updatePreview([{ type: "split_from_line", chapterIndex, lineNumber }])}
               />
-              <ImportFileStep busy={busy} currentProjectId={currentProjectId} error={error} mode={mode} preview={preview} showDropZone={false} onSelectFile={selectAndPreviewTxt} />
+              <ImportFileStep busy={busy} currentProjectId={currentProjectId} error={error} mode={mode} preview={preview} contentLanguage={contentLanguage} encoding={encoding} onContentLanguageChange={setContentLanguage} onEncodingChange={setEncoding} showDropZone={false} onSelectFile={selectAndPreviewTxt} />
             </>
           ) : null}
           {step === 4 ? <ImportConfirmStep preview={preview} result={result} /> : null}
@@ -257,19 +273,19 @@ export function ImportWizardPage({ currentProjectId, step, onBack, onNext, onSte
           ) : null}
 
           <div className="wizard-actions">
-            <Button disabled={busy || step === 1} variant="ghost" onClick={onBack}>上一步</Button>
+            <Button disabled={busy || step === 1} variant="ghost" onClick={onBack}>{t("previous")}</Button>
             <Button disabled={busy || !preview} variant="ghost" onClick={() => void updatePreview([{ type: "redetect" }])}>
-              重新识别
+              {t("redetect")}
             </Button>
-            <Button disabled={busy || (step > 1 && !preview)} variant="primary" onClick={handlePrimary}>{busy ? "处理中" : primaryLabel}</Button>
+            <Button disabled={busy || (step > 1 && !preview)} variant="primary" onClick={handlePrimary}>{busy ? t("processing") : primaryLabel}</Button>
           </div>
         </section>
       </main>
 
-      <Modal open={Boolean(renameChapterDraft)} title="重命名章节" onClose={cancelRenameChapter}>
+      <Modal open={Boolean(renameChapterDraft)} title={t("renameChapter")} onClose={cancelRenameChapter}>
         <form className="rename-form" onSubmit={submitRenameChapter}>
           <label className="field-label" htmlFor="import-chapter-rename-input">
-            章节名称
+            {t("chapterName")}
           </label>
           <Input
             autoFocus
@@ -279,10 +295,10 @@ export function ImportWizardPage({ currentProjectId, step, onBack, onNext, onSte
           />
           <div className="modal-actions">
             <Button onClick={cancelRenameChapter} type="button" variant="ghost">
-              取消
+              {t("cancel")}
             </Button>
             <Button disabled={!renameChapterTitle.trim() || renameChapterTitle.trim() === renameChapterDraft?.title} type="submit" variant="primary">
-              保存
+              {t("save")}
             </Button>
           </div>
         </form>

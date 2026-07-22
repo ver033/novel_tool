@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { applyImportPreviewOperations, detectTxtChapters, normalizeTxtContent } from "../../src/main/import/chapter-detector";
 import { readTextFile, readTxtFile } from "../../src/main/import/txt-reader";
+import iconv from "iconv-lite";
 
 const bailuyuanTxtPath = resolve(process.cwd(), "../test_novel/《白鹿原》全集.txt");
 const tempDirs: string[] = [];
@@ -33,6 +34,18 @@ describe("TXT chapter detector", () => {
     expect(result.encoding).toBeTruthy();
   });
 
+  it("reads Japanese CP932 files when the user selects Shift_JIS explicitly", () => {
+    const dir = mkdtempSync(join(tmpdir(), "japanese-txt-reader-"));
+    tempDirs.push(dir);
+    const filePath = join(dir, "novel.txt");
+    writeFileSync(filePath, iconv.encode("プロローグ\r\n雨の匂いがした。", "cp932"));
+
+    const result = readTxtFile(filePath, { encoding: "shift_jis" });
+
+    expect(result.encoding).toBe("shift_jis");
+    expect(result.text).toBe("プロローグ\n雨の匂いがした。");
+  });
+
   it("detects common Chinese novel chapter headings", () => {
     const detected = detectTxtChapters(`
 序章
@@ -54,6 +67,20 @@ describe("TXT chapter detector", () => {
     expect(detected.map((chapter) => chapter.title)).toEqual(["序章", "第一章 归途", "第12章 夜谈", "卷一 少年", "第一卷 山河旧梦", "番外 雪夜", "后记"]);
     expect(detected[1].text).toContain("他终于回到了村口。");
     expect(detected.every((chapter, index) => chapter.order === index)).toBe(true);
+  });
+
+  it("detects Japanese chapter, episode, prologue, and epilogue headings", () => {
+    const detected = detectTxtChapters(
+      `プロローグ\n雨の匂いがした。\n\n第1話 帰郷\n彼は駅に降りた。\n\n第二幕・夜明け\n空が白み始めた。\n\nエピローグ\n春になった。`,
+      "ja-JP"
+    );
+
+    expect(detected.map((chapter) => chapter.title)).toEqual(["プロローグ", "第1話 帰郷", "第二幕・夜明け", "エピローグ"]);
+    expect(detected.every((chapter) => chapter.wordCount > 0)).toBe(true);
+  });
+
+  it("uses the Japanese fallback title when a Japanese text has no headings", () => {
+    expect(detectTxtChapters("見出しのない本文です。", "ja-JP")[0].title).toBe("本文");
   });
 
   it("detects spaced chapter number headings from legacy TXT files", () => {

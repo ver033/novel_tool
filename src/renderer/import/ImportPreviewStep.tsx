@@ -1,5 +1,6 @@
 import type { ImportPreview } from "../../main/shared/types";
 import { useEffect, useState } from "react";
+import { useI18n } from "../i18n";
 
 type ImportPreviewStepProps = {
   readonly preview: ImportPreview | null;
@@ -10,6 +11,7 @@ type ImportPreviewStepProps = {
 };
 
 export function ImportPreviewStep({ preview, onMerge, onRedetect, onRename, onSplit }: ImportPreviewStepProps) {
+  const { locale, t } = useI18n();
   const [activeChapterIndex, setActiveChapterIndex] = useState(0);
   const chapterCount = preview?.chapters.length ?? 0;
 
@@ -24,8 +26,8 @@ export function ImportPreviewStep({ preview, onMerge, onRedetect, onRename, onSp
       <div className="drop-zone">
         <div>
           <span className="file-icon">TXT</span>
-          <h2 className="section-title">还没有导入预览</h2>
-          <p className="muted">请先选择 TXT 文件。</p>
+          <h2 className="section-title">{t("noImportPreview")}</h2>
+          <p className="muted">{t("selectTxtFirst")}</p>
         </div>
       </div>
     );
@@ -50,31 +52,31 @@ export function ImportPreviewStep({ preview, onMerge, onRedetect, onRename, onSp
       <div className="import-split">
         <div className="detected-list">
           <div className="box-header">
-            <span>识别到的章节（{preview.chapters.length} 章）</span>
-            <button className="link-button" onClick={onRedetect} type="button">重新识别</button>
+            <span>{t("detectedChapters")}（{preview.chapters.length}）</span>
+            <button className="link-button" onClick={onRedetect} type="button">{t("redetect")}</button>
           </div>
           {preview.chapters.map((chapter, index) => (
             <div className={`detected-row ${index === activeChapterIndex ? "active" : ""}`} key={`${chapter.order}-${chapter.title}`}>
               <button className="detected-main" onClick={() => setActiveChapterIndex(index)} type="button">
                 <b>{chapter.title}</b>
                 <br />
-                <span className="muted">{chapter.wordCount.toLocaleString("zh-CN")} 字</span>
+                <span className="muted">{chapter.wordCount.toLocaleString(locale)} {t("words")}</span>
               </button>
               <span className="row-actions">
-                <button disabled={index === 0} onClick={() => onMerge(index)} type="button">合并</button>
-                <button onClick={() => splitChapter(index)} type="button">拆分</button>
-                <button onClick={() => onRename(index, chapter.title)} type="button">重命名</button>
+                <button disabled={index === 0} onClick={() => onMerge(index)} type="button">{t("merge")}</button>
+                <button onClick={() => splitChapter(index)} type="button">{t("split")}</button>
+                <button onClick={() => onRename(index, chapter.title)} type="button">{t("rename")}</button>
               </span>
             </div>
           ))}
         </div>
         <div className="preview-pane">
           <div className="box-header">
-            <span>内容预览 · {activeChapter?.title ?? "未选择章节"}（{(activeChapter?.wordCount ?? 0).toLocaleString("zh-CN")} 字）</span>
-            <span className="muted">可滚动全文预览</span>
+            <span>{t("contentPreview")} · {activeChapter?.title ?? t("noChapterSelected")}（{(activeChapter?.wordCount ?? 0).toLocaleString(locale)} {t("words")}）</span>
+            <span className="muted">{t("scrollFullPreview")}</span>
           </div>
           <div className="preview-text">
-            {(activeChapter?.text.split(/\n{2,}/) ?? ["暂无内容"]).map((paragraph, index) => (
+            {(activeChapter?.text.split(/\n{2,}/) ?? [t("noContent")]).map((paragraph, index) => (
               <p key={`${index}-${paragraph.slice(0, 12)}`}>{paragraph}</p>
             ))}
           </div>
@@ -85,6 +87,7 @@ export function ImportPreviewStep({ preview, onMerge, onRedetect, onRename, onSp
 }
 
 export function ImportSummary({ preview }: { readonly preview: ImportPreview }) {
+  const { locale, t } = useI18n();
   return (
     <div className="import-summary">
       <div className="file-block">
@@ -96,17 +99,17 @@ export function ImportSummary({ preview }: { readonly preview: ImportPreview }) 
         </span>
       </div>
       <div>
-        <span className="muted">识别章节</span>
+        <span className="muted">{t("detectedChapters")}</span>
         <br />
-        <b>{preview.chapters.length} 章</b>
+        <b>{preview.chapters.length}</b>
       </div>
       <div>
-        <span className="muted">总字数</span>
+        <span className="muted">{t("totalCharacters")}</span>
         <br />
-        <b>{preview.totalWordCount.toLocaleString("zh-CN")} 字</b>
+        <b>{preview.totalWordCount.toLocaleString(locale)} {t("words")}</b>
       </div>
       <div>
-        <span className="muted">导入文件</span>
+        <span className="muted">{t("importFile")}</span>
         <br />
         <b>{preview.fileName}</b>
       </div>

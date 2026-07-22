@@ -111,6 +111,18 @@ describe("project and chapter lifecycle", () => {
     db.close();
   });
 
+  it("stores Japanese as project content language and uses a Japanese volume title", () => {
+    const { db, projectService } = createServices();
+
+    const created = projectService.createProject({ name: "雨の町", contentLanguage: "ja-JP" });
+
+    expect(created.project.contentLanguage).toBe("ja-JP");
+    expect(created.initialChapter).toMatchObject({ title: "第1章", volumeTitle: "第一巻" });
+    expect(projectService.getCurrentProject()?.contentLanguage).toBe("ja-JP");
+
+    db.close();
+  });
+
   it("persists recent projects and current project across service recreation", () => {
     const { db, dir, projectService } = createServices();
 

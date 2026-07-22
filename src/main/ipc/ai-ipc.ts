@@ -91,6 +91,9 @@ export function registerAiIpc(aiTaskService: AiTaskService): void {
         onReasoning(payload) {
           sendToLiveSender(event, ipcChannels.ai.streamReasoning, payload);
         },
+        onActivity(payload) {
+          sendToLiveSender(event, ipcChannels.ai.streamAgentActivity, payload);
+        },
         onContext(payload) {
           sendToLiveSender(event, ipcChannels.ai.streamContext, payload);
         },
@@ -112,6 +115,9 @@ export function registerAiIpc(aiTaskService: AiTaskService): void {
         },
         onReasoning(payload) {
           sendToLiveSender(event, ipcChannels.ai.streamReasoning, payload);
+        },
+        onActivity(payload) {
+          sendToLiveSender(event, ipcChannels.ai.streamAgentActivity, payload);
         },
         onContext(payload) {
           sendToLiveSender(event, ipcChannels.ai.streamContext, payload);

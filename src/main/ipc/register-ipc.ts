@@ -1,7 +1,16 @@
 import { app, ipcMain, type IpcMainInvokeEvent } from "electron";
 import path from "node:path";
-import { AiTaskService, type AiChatGenerator, type AiTaskGenerator } from "../ai/ai-task-service";
+import {
+  AiTaskService,
+  type AiChatAgentGenerationInput,
+  type AiChatGenerator,
+  type AiChatMessageResult,
+  type AiTaskGenerator
+} from "../ai/ai-task-service";
 import { OpenRouterChatGenerator } from "../ai/openrouter-chat-generator";
+import { LegacyNovelAgentRuntime } from "../ai/agent-runtime/legacy-novel-agent-runtime";
+import { PiNovelAgentRuntime } from "../ai/agent-runtime/pi-novel-agent-runtime";
+import type { NovelAgentRuntimeHandlers } from "../ai/agent-runtime/novel-agent-runtime";
 import { DefaultOpenRouterConnectionTester } from "../ai/openrouter-connection-tester";
 import { OpenRouterModelCatalogClient } from "../ai/openrouter-client";
 import { OpenRouterTaskGenerator } from "../ai/openrouter-task-generator";
@@ -9,7 +18,11 @@ import { SummaryService } from "../ai/summary-service";
 import { SummaryWorker } from "../ai/summary-worker";
 import { getTokenBudget } from "../ai/token-budget";
 import { WritingOperationRunner } from "../ai/writing-operation-runner";
-import { ChapterReviewService, createOpenRouterChapterReviewClient } from "../chapter-review/chapter-review-service";
+import {
+  ChapterReviewService,
+  createOpenRouterChapterReviewClient,
+  type ChapterReviewClient
+} from "../chapter-review/chapter-review-service";
 import { createChapterContentInvalidator } from "../chapter/chapter-content-invalidator";
 import { ChapterService } from "../chapter/chapter-service";
 import { createDatabase, resolveDatabasePath, type SqliteDatabase } from "../db/database";
@@ -88,6 +101,17 @@ const e2eGeneratedText: Record<TaskType, string> = {
   continue: "远处的钟声忽然响起，他意识到追兵已经逼近。"
 };
 
+const e2eGeneratedTextJa: Record<TaskType, string> = {
+  polish: "彼は静かに手を止め、雨の向こうに沈む港を見つめた。",
+  expand: "彼は静かに手を止めた。軒を打つ雨音の向こうで、港の灯がひとつずつ滲んでいく。",
+  proofread: "彼は静かに手を止めた。",
+  continue: "遠くで汽笛が鳴り、彼は約束の時刻が近いことを悟った。"
+};
+
+function e2eTextFor(taskType: TaskType, sourceText: string): string {
+  return /[\u3040-\u30ff]/u.test(sourceText) ? e2eGeneratedTextJa[taskType] : e2eGeneratedText[taskType];
+}
+
 type ValidatedHandler<TSchema extends z.ZodType, TResult> = (
   input: z.output<TSchema>,
   event: IpcMainInvokeEvent
@@ -100,12 +124,13 @@ const USAGE_ANALYTICS_INTERVAL_MS = 60_000;
 const EXTERNAL_BOOK_SYNC_INTERVAL_MS = 60_000;
 
 function useE2eAiGenerators(): boolean {
-  return process.env.NODE_ENV === "test" && process.env.NOVEL_TOOL_E2E_AI === "1";
+  return process.env.NOVEL_TOOL_E2E_AI === "1" && (process.env.NODE_ENV === "test" || !app.isPackaged);
 }
 
 function createE2eTaskGenerator(): AiTaskGenerator {
   return {
     async generateStream(task, handlers) {
+      const generatedText = e2eTextFor(task.taskType, task.inputText);
       if (task.taskType === "proofread") {
         return {
           generatedText: "",
@@ -117,7 +142,7 @@ function createE2eTaskGenerator(): AiTaskGenerator {
               quote: task.inputText,
               locationHint: "E2E 选区",
               explanation: "E2E 校对建议",
-              suggestion: e2eGeneratedText.proofread,
+              suggestion: generatedText,
               evidence: [
                 {
                   source: "target",
@@ -132,26 +157,128 @@ function createE2eTaskGenerator(): AiTaskGenerator {
         };
       }
 
-      handlers.onChunk?.({ requestId: "e2e_task_stream", content: e2eGeneratedText[task.taskType] });
+      handlers.onChunk?.({ requestId: "e2e_task_stream", content: generatedText });
       return {
-        generatedText: e2eGeneratedText[task.taskType],
+        generatedText,
         changeSummary: `E2E ${task.taskType} candidate`
       };
     }
   };
 }
 
-function createE2eChatGenerator(): AiChatGenerator {
+function createE2eChapterReviewClient(): ChapterReviewClient {
   return {
-    async sendMessageStream(input, handlers) {
-      const content = `E2E AI 回复：${input.message}`;
-      handlers.onChunk?.({ requestId: input.requestId, content });
+    maxChunkTokens: 4_000,
+    async review(input) {
+      const japanese = /[\u3040-\u30ff]/u.test(input.chapterText);
+      const quote = input.chapterText.split(/\n/u).find((line) => line.trim())?.trim().slice(0, 160) || input.chapterTitle;
       return {
-        role: "assistant",
-        content,
-        createdAt: new Date().toISOString()
+        summary: japanese
+          ? "場面の目的と手掛かりは明確です。主人公が決断へ至る動機をもう一段具体化すると、章末の推進力が強まります。"
+          : "场景目标和线索较清楚。如果再补强主人公做出决定的直接动机，章末的推动力会更强。",
+        readabilityScore: 4,
+        aiToneRisk: "low",
+        issues: [
+          {
+            code: "motivation_gap",
+            severity: "medium",
+            quote,
+            locationHint: japanese ? "章の転換点" : "章节转折处",
+            explanation: japanese
+              ? "行動のきっかけは示されていますが、人物が危険を引き受ける理由がまだ抽象的です。"
+              : "行动契机已经出现，但人物愿意承担风险的理由仍然偏抽象。",
+            suggestion: japanese
+              ? "直前の記憶や失いたくないものを一文だけ加え、決断と人物の核心を結び付けてください。"
+              : "可补一句紧邻决定发生前的记忆或牵挂，把行动与人物核心需求连接起来。",
+            evidence: [
+              {
+                source: "target",
+                quote,
+                note: japanese ? "E2E 章レビューの対象文" : "E2E 章节审稿目标文本"
+              }
+            ],
+            canAutoApply: false,
+            needsAuthorJudgment: true
+          }
+        ]
       };
     }
+  };
+}
+
+function createE2eChatGenerator(): AiChatGenerator {
+  const respond = async (
+    input: AiChatAgentGenerationInput,
+    handlers: NovelAgentRuntimeHandlers
+  ): Promise<AiChatMessageResult> => {
+    const japanese = /[\u3040-\u30ff]/u.test(input.message);
+    const readmeCapture = process.env.NOVEL_TOOL_README_CAPTURE === "1";
+    const timestamp = new Date().toISOString();
+    if (readmeCapture) {
+      handlers.onContext?.({
+        requestId: input.requestId,
+        estimatedInputTokens: 1_480,
+        maxInputTokens: 120_000,
+        maxOutputTokens: 8_000,
+        modelContextTokens: 131_072,
+        modelName: "deepseek/deepseek-v3.2",
+        contextMode: "direct",
+        scopeLabel: japanese ? "現在の章" : "当前章节",
+        indexMode: "raw_small_project",
+        indexedChapterCount: 0,
+        totalChapterCount: 3,
+        staleChapterCount: 0,
+        skippedTooShortChapterCount: 0
+      });
+      handlers.onActivity?.({
+        requestId: input.requestId,
+        activity: {
+          id: `${input.requestId}:tool:read-current-chapter`,
+          kind: "tool",
+          status: "complete",
+          title: japanese ? "現在の章を読む" : "读取当前章节",
+          detail: japanese ? "依頼に必要な本文だけを確認" : "只读取当前请求所需的正文",
+          toolName: "read_chapters",
+          input: japanese ? "範囲: 現在の章" : "范围：当前章节",
+          output: japanese ? "第一章「雨の港」を読み込みました" : "已读取第一章《雨夜来信》",
+          createdAt: timestamp,
+          updatedAt: timestamp
+        }
+      });
+    }
+    const content = readmeCapture
+      ? japanese
+        ? [
+            "澪の決断が弱く見える主な箇所は二つあります。",
+            "",
+            "- 手紙を開けない理由がまだ抽象的で、ためらいが人物固有の葛藤に結び付いていません。",
+            "- 約束の刻限は示されていますが、間に合わなかった場合に何を失うのかが見えません。",
+            "",
+            "父を失った記憶か、直人との約束を一文だけ置くと、港へ向かう決断に必然性が生まれます。"
+          ].join("\n")
+        : [
+            "沈澜的决定显得不够坚定，主要有两个原因：",
+            "",
+            "- 她迟迟不拆信的理由仍然偏抽象，犹豫还没有连接到人物独有的矛盾。",
+            "- 文中写了约定时间将近，却没有说明错过之后她会失去什么。",
+            "",
+            "可以补一句与父亲失踪有关的记忆，或她对周屿的承诺，让前往港口的决定更有必然性。"
+          ].join("\n")
+      : japanese
+        ? `E2E AI 返信：${input.message}`
+        : `E2E AI 回复：${input.message}`;
+    handlers.onChunk?.({ requestId: input.requestId, content });
+    return {
+      role: "assistant",
+      content,
+      createdAt: new Date().toISOString()
+    };
+  };
+  return {
+    async sendMessageStream(input, handlers) {
+      return respond(input as AiChatAgentGenerationInput, handlers);
+    },
+    sendAgentMessageStream: respond
   };
 }
 
@@ -215,7 +342,7 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
       setLoginItemSettings: (settings) => app.setLoginItemSettings({ ...settings, args: [...settings.args] })
     }, {}, new SettingsStartupLaunchPreferenceStore(settingsRepo));
     try {
-      startupLaunchService.ensureDefaultEnabled();
+      startupLaunchService.ensureDefaultDisabled();
     } catch (error) {
       logMainError("enable default Windows startup launch failed", error);
     }
@@ -275,7 +402,12 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
     };
     const writingOperationRunner = useE2eAiGenerators()
       ? undefined
-      : WritingOperationRunner.fromSettings(settingsService, resolveChapterRepo, resolveSummaryRepo);
+      : WritingOperationRunner.fromSettings(
+          settingsService,
+          resolveChapterRepo,
+          resolveSummaryRepo,
+          (projectId) => projectRepo.findById(projectId)?.contentLanguage ?? "zh-CN"
+        );
     const createSummaryService = (projectId: string): SummaryService => {
       const existing = summaryServices.get(projectId);
       if (existing) {
@@ -318,21 +450,40 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
       getProjectName(projectId) {
         return projectRepo.findById(projectId)?.name ?? projectService.getRuntimeActiveProject()?.name ?? "当前项目";
       },
-      createClient: () => createOpenRouterChapterReviewClient(settingsService)
+      createClient: async () => useE2eAiGenerators()
+        ? createE2eChapterReviewClient()
+        : createOpenRouterChapterReviewClient(settingsService)
     });
+    const chatGenerator = useE2eAiGenerators() ? createE2eChatGenerator() : new OpenRouterChatGenerator(settingsService);
+    const useLegacyAgentRuntime = useE2eAiGenerators() || process.env.NOVEL_TOOL_AGENT_RUNTIME === "legacy";
+    if (useLegacyAgentRuntime && !chatGenerator.sendAgentMessageStream) {
+      throw new Error("AI Agent Runtime 未初始化。");
+    }
+    const agentRuntime = useLegacyAgentRuntime
+      ? new LegacyNovelAgentRuntime({
+          sendAgentMessageStream: chatGenerator.sendAgentMessageStream!.bind(chatGenerator)
+        })
+      : new PiNovelAgentRuntime({ settingsService });
     const aiTaskService = new AiTaskService(
       (projectId) => new AiTaskRepository(resolveProjectDb(projectId)),
       useE2eAiGenerators()
         ? createE2eTaskGenerator()
-        : new OpenRouterTaskGenerator(settingsService, resolveChapterRepo, resolveSummaryRepo),
-      useE2eAiGenerators() ? createE2eChatGenerator() : new OpenRouterChatGenerator(settingsService),
+        : new OpenRouterTaskGenerator(
+            settingsService,
+            resolveChapterRepo,
+            resolveSummaryRepo,
+            (projectId) => projectRepo.findById(projectId)?.contentLanguage ?? "zh-CN"
+          ),
+      chatGenerator,
       (projectId) => new AiChatRepository(resolveProjectDb(projectId)),
       (projectId) => new ScratchNoteRepository(resolveProjectDb(projectId)),
       resolveChapterRepo,
       undefined,
       async () => getTokenBudget("chat", useE2eAiGenerators() ? null : (await settingsService.getOpenRouterConfigWithModelMetadata()).contextLength),
       writingOperationRunner,
-      (projectId) => new SummaryRepository(resolveProjectDb(projectId))
+      (projectId) => new SummaryRepository(resolveProjectDb(projectId)),
+      agentRuntime,
+      (projectId) => projectRepo.findById(projectId)?.contentLanguage ?? "zh-CN"
     );
     const getSummaryIndexPausedReason = () => {
       if (aiTaskService.hasActiveStreams()) {
@@ -366,7 +517,6 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
             allowActions: false,
             allowTools: false,
             allowAutoChapterContext: false,
-            allowInlineWritingOperation: false,
             includeHistory: false
           });
         }
@@ -431,6 +581,9 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
     if (process.env.NODE_ENV !== "test") {
       let externalBookSyncRunPromise: Promise<unknown> | null = null;
       const runDueExternalBookSync = (trigger: "scheduled" | "startup") => {
+        if (!settingsService.getSettings().experimental.externalBookSyncAutomaticEnabled) {
+          return Promise.resolve(null);
+        }
         if (externalBookSyncRunPromise) {
           return externalBookSyncRunPromise;
         }

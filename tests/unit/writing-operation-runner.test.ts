@@ -9,12 +9,13 @@ import { runMigrations } from "../../src/main/db/migrations";
 import { ChapterRepository } from "../../src/main/db/repositories/chapter-repo";
 import type { OpenRouterChatCompletionInput, OpenRouterStreamHandlers } from "../../src/main/ai/openrouter-client";
 import type { AiTaskRecord } from "../../src/main/shared/types";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { parseAiCandidateMetadata, stringifyAiCandidateMetadata } from "../../src/main/shared/ai-candidate-metadata";
 
 const runnerTempDirs: string[] = [];
 
 afterEach(() => {
+  vi.useRealTimers();
   for (const dir of runnerTempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -108,6 +109,126 @@ describe("AI candidate metadata", () => {
 });
 
 describe("WritingOperationRunner", () => {
+  it("uses Japanese prompts for Japanese inline text inside a Chinese project", async () => {
+    const projectId = "project_inline_ja";
+    const { db, chapterRepo } = createRunnerRepo(projectId);
+    const capturedMessages: string[] = [];
+    const runner = new WritingOperationRunner({
+      resolveChapterRepo: () => chapterRepo,
+      resolveContentLanguage: () => "zh-CN",
+      resolveTaskPreset: () => null,
+      resolveModelConfig: async () => ({
+        apiKey: "sk-or-v1-test",
+        modelName: "test/model",
+        contextLength: null
+      }),
+      createClient: () => ({
+        async createChatCompletion(input: OpenRouterChatCompletionInput) {
+          capturedMessages.push(input.messages.map((message) => message.content).join("\n"));
+          expect(input.responseFormat).toEqual({ type: "json_object" });
+          return { content: '{"issues":[]}', truncated: false };
+        },
+        async streamChatCompletion() {
+          throw new Error("structured proofread should use bounded non-streaming completion");
+        }
+      })
+    });
+
+    await runner.runRequest({
+      projectId,
+      source: "chat_tool",
+      operation: "proofread",
+      target: { kind: "inline_text", text: "彼は扉を開けた。。そして静かに入ったです。" },
+      userInstruction: "日本語で校正してください。"
+    });
+
+    expect(capturedMessages.join("\n")).toContain("日本語小説執筆オペレーションエージェント");
+    expect(capturedMessages.join("\n")).not.toContain("中文小说写作操作 agent");
+    db.close();
+  });
+
+  it("retries a Chinese Japanese-candidate response and only exposes the corrected text", async () => {
+    const projectId = "project_inline_ja_correction";
+    const { db, chapterRepo } = createRunnerRepo(projectId);
+    const requests: OpenRouterChatCompletionInput[] = [];
+    const runner = new WritingOperationRunner({
+      resolveChapterRepo: () => chapterRepo,
+      resolveContentLanguage: () => "zh-CN",
+      resolveTaskPreset: () => null,
+      resolveModelConfig: async () => ({
+        apiKey: "sk-or-v1-test",
+        modelName: "test/model",
+        contextLength: null
+      }),
+      createClient: () => ({
+        async createChatCompletion(input: OpenRouterChatCompletionInput) {
+          requests.push(input);
+          return requests.length === 1
+            ? { content: "他在这扇斑驳的木门前停下脚步，从门缝里传来的声音让他更加紧张。", truncated: false }
+            : { content: "彼は斑の浮いた木の扉の前で足を止めた。扉の向こうから、かすかな物音が聞こえた。", truncated: false };
+        },
+        async streamChatCompletion() {
+          throw new Error("Japanese candidates must be validated before they are exposed");
+        }
+      })
+    });
+    const chunks: string[] = [];
+
+    const result = await runner.runRequest(
+      {
+        projectId,
+        source: "chat_tool",
+        operation: "expand",
+        target: { kind: "inline_text", text: "彼は古い扉の前で足を止めた。" },
+        userInstruction: "情景描写を補ってください。"
+      },
+      {},
+      { onChunk(event) { chunks.push(event.content); } }
+    );
+
+    expect(requests).toHaveLength(2);
+    expect(requests[1].messages.at(-1)?.content).toContain("直前の候補本文は中国語");
+    expect(chunks).toEqual(["彼は斑の浮いた木の扉の前で足を止めた。扉の向こうから、かすかな物音が聞こえた。"]);
+    expect(result.generatedText).toContain("扉の向こうから");
+    db.close();
+  });
+
+  it("stops a structured proofread request after the writing-operation deadline", async () => {
+    vi.useFakeTimers();
+    const projectId = "project_proofread_deadline";
+    const { db, chapterRepo } = createRunnerRepo(projectId);
+    const runner = new WritingOperationRunner({
+      resolveChapterRepo: () => chapterRepo,
+      resolveContentLanguage: () => "zh-CN",
+      resolveTaskPreset: () => null,
+      resolveModelConfig: async () => ({
+        apiKey: "sk-or-v1-test",
+        modelName: "test/model",
+        contextLength: null
+      }),
+      createClient: () => ({
+        async createChatCompletion() {
+          return await new Promise(() => undefined);
+        },
+        async streamChatCompletion() {
+          throw new Error("proofread should not use an unbounded stream");
+        }
+      })
+    });
+
+    const pending = runner.runRequest({
+      projectId,
+      source: "selection_toolbar",
+      operation: "proofread",
+      target: { kind: "inline_text", text: "他打开门。。然后走进去。" },
+      userInstruction: "检查明显问题。"
+    });
+    const rejection = expect(pending).rejects.toThrow("60 秒内完成");
+    await vi.advanceTimersByTimeAsync(60_000);
+    await rejection;
+    db.close();
+  });
+
   it("runs selected-text polish with operation skill and context plan", async () => {
     const projectId = "project_runner";
     const chapterId = "chapter_runner";

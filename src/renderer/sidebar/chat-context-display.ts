@@ -1,9 +1,10 @@
 import { getTokenBudget } from "../../main/ai/token-budget";
 import type { AiStreamContextEvent, SettingsState } from "../../main/shared/types";
+import type { AppLocale } from "../../main/shared/language";
 
-function formatTokenCount(value: number | null): string {
+function formatTokenCount(value: number | null, japanese = false): string {
   if (value === null) {
-    return "未知";
+    return japanese ? "不明" : "未知";
   }
   if (value >= 1000) {
     return `${(value / 1000).toFixed(value >= 10000 ? 0 : 1)}k`;
@@ -45,96 +46,97 @@ export function createIdleChatContextUsage(settings: SettingsState | null): AiSt
   };
 }
 
-function formatModelName(modelName: string): string {
+function formatModelName(modelName: string, japanese: boolean): string {
   const trimmed = modelName.trim();
-  if (!trimmed) {
-    return "模型未配置";
+  if (!trimmed || trimmed === "模型未配置") {
+    return japanese ? "モデル未設定" : "模型未配置";
   }
   const lastSegment = trimmed.split("/").at(-1) ?? trimmed;
   return lastSegment.length > 28 ? `${lastSegment.slice(0, 25)}...` : lastSegment;
 }
 
-function getContextSourceLabel(contextUsage: AiStreamContextEvent): string {
+function getContextSourceLabel(contextUsage: AiStreamContextEvent, japanese: boolean): string {
   if (contextUsage.indexMode === "summary_cache") {
-    return "全文摘要索引";
+    return japanese ? "全文要約インデックス" : "全文摘要索引";
   }
   if (contextUsage.indexMode === "hybrid") {
-    return "摘要索引 + 原文";
+    return japanese ? "要約インデックス + 原文" : "摘要索引 + 原文";
   }
   if (contextUsage.indexMode === "missing") {
-    return "索引缺失";
+    return japanese ? "インデックスなし" : "索引缺失";
   }
   if (contextUsage.indexMode === "stale") {
-    return "摘要索引可能过期";
+    return japanese ? "要約インデックスが古い可能性" : "摘要索引可能过期";
   }
-  return "原文";
+  return japanese ? "原文" : "原文";
 }
 
-function getCompressionLabel(contextUsage: AiStreamContextEvent): string {
+function getCompressionLabel(contextUsage: AiStreamContextEvent, japanese: boolean): string {
   if (contextUsage.indexMode === "summary_cache") {
-    return "墨枢已使用全文摘要索引";
+    return japanese ? "墨枢は全文要約インデックスを使用しています" : "墨枢已使用全文摘要索引";
   }
   if (contextUsage.indexMode === "hybrid") {
-    return "墨枢已混合使用摘要索引和原文";
+    return japanese ? "墨枢は要約インデックスと原文を併用しています" : "墨枢已混合使用摘要索引和原文";
   }
   if (contextUsage.indexMode === "missing") {
-    return "全书摘要索引缺失";
+    return japanese ? "全体の要約インデックスがありません" : "全书摘要索引缺失";
   }
   if (contextUsage.indexMode === "stale") {
-    return "全书摘要索引可能包含过期章节";
+    return japanese ? "全体の要約インデックスに古い章が含まれる可能性があります" : "全书摘要索引可能包含过期章节";
   }
   return contextUsage.contextMode === "summarized"
-    ? "墨枢已压缩背景信息"
+    ? japanese ? "墨枢は背景情報を圧縮しました" : "墨枢已压缩背景信息"
     : contextUsage.contextMode === "mixed"
-      ? "部分原文 + 压缩背景"
-      : "原文背景信息";
+      ? japanese ? "一部の原文 + 圧縮した背景" : "部分原文 + 压缩背景"
+      : japanese ? "原文の背景情報" : "原文背景信息";
 }
 
-function formatCoverageLabel(contextUsage: AiStreamContextEvent): string | null {
+function formatCoverageLabel(contextUsage: AiStreamContextEvent, japanese: boolean): string | null {
   if (contextUsage.totalChapterCount === undefined) {
     return null;
   }
   const indexedChapterCount = contextUsage.indexedChapterCount ?? 0;
-  const parts = [`覆盖 ${indexedChapterCount} / ${contextUsage.totalChapterCount} 章`];
+  const parts = [japanese ? `${indexedChapterCount} / ${contextUsage.totalChapterCount} 章を収録` : `覆盖 ${indexedChapterCount} / ${contextUsage.totalChapterCount} 章`];
   if (contextUsage.staleChapterCount) {
-    parts.push(`${contextUsage.staleChapterCount} 章过期`);
+    parts.push(japanese ? `${contextUsage.staleChapterCount} 章が古い` : `${contextUsage.staleChapterCount} 章过期`);
   }
   if (contextUsage.skippedTooShortChapterCount) {
-    parts.push(`${contextUsage.skippedTooShortChapterCount} 章过短跳过`);
+    parts.push(japanese ? `${contextUsage.skippedTooShortChapterCount} 章は短すぎるため除外` : `${contextUsage.skippedTooShortChapterCount} 章过短跳过`);
   }
-  return parts.join("，");
+  return parts.join(japanese ? "、" : "，");
 }
 
-function getMemoryLabel(contextUsage: AiStreamContextEvent): string | null {
+function getMemoryLabel(contextUsage: AiStreamContextEvent, japanese: boolean): string | null {
   if (contextUsage.memoryCompactedThisRun) {
-    return "本轮已压缩早期对话";
+    return japanese ? "今回、以前の会話を圧縮しました" : "本轮已压缩早期对话";
   }
   if (contextUsage.memoryCompacted) {
-    return "早期对话已压缩为记忆";
+    return japanese ? "以前の会話をメモリへ圧縮済み" : "早期对话已压缩为记忆";
   }
   return null;
 }
 
-export function buildChatContextUsageDisplay(contextUsage: AiStreamContextEvent): ChatContextUsageDisplay {
+export function buildChatContextUsageDisplay(contextUsage: AiStreamContextEvent, locale: AppLocale = "zh-CN"): ChatContextUsageDisplay {
+  const japanese = locale === "ja-JP";
   const visibleTotal = contextUsage.modelContextTokens ?? contextUsage.maxInputTokens;
   const percent = Math.min(100, Math.round((contextUsage.estimatedInputTokens / Math.max(1, visibleTotal)) * 100));
-  const usedLabel = formatTokenCount(contextUsage.estimatedInputTokens);
-  const totalLabel = contextUsage.modelContextTokens === null ? `${formatTokenCount(contextUsage.maxInputTokens)} 输入预算` : formatTokenCount(contextUsage.modelContextTokens);
+  const usedLabel = formatTokenCount(contextUsage.estimatedInputTokens, japanese);
+  const totalLabel = contextUsage.modelContextTokens === null ? `${formatTokenCount(contextUsage.maxInputTokens, japanese)} ${japanese ? "入力予算" : "输入预算"}` : formatTokenCount(contextUsage.modelContextTokens, japanese);
 
   return {
     percent,
     percentText: `${percent}%`,
     usedLabel,
     totalLabel,
-    usedOfTotalLabel: `已用 ${usedLabel} 标记，共 ${totalLabel}`,
-    modelLabel: formatModelName(contextUsage.modelName),
-    windowLabel: formatTokenCount(contextUsage.modelContextTokens),
-    inputBudgetLabel: formatTokenCount(contextUsage.maxInputTokens),
-    outputBudgetLabel: formatTokenCount(contextUsage.maxOutputTokens),
-    compressionLabel: getCompressionLabel(contextUsage),
-    sourceLabel: getContextSourceLabel(contextUsage),
-    memoryLabel: getMemoryLabel(contextUsage),
-    coverageLabel: formatCoverageLabel(contextUsage),
-    scopeLabel: contextUsage.scopeLabel
+    usedOfTotalLabel: japanese ? `${totalLabel} 中 ${usedLabel} トークンを使用` : `已用 ${usedLabel} 标记，共 ${totalLabel}`,
+    modelLabel: formatModelName(contextUsage.modelName, japanese),
+    windowLabel: formatTokenCount(contextUsage.modelContextTokens, japanese),
+    inputBudgetLabel: formatTokenCount(contextUsage.maxInputTokens, japanese),
+    outputBudgetLabel: formatTokenCount(contextUsage.maxOutputTokens, japanese),
+    compressionLabel: getCompressionLabel(contextUsage, japanese),
+    sourceLabel: getContextSourceLabel(contextUsage, japanese),
+    memoryLabel: getMemoryLabel(contextUsage, japanese),
+    coverageLabel: formatCoverageLabel(contextUsage, japanese),
+    scopeLabel: japanese && contextUsage.scopeLabel === "待命" ? "待機" : contextUsage.scopeLabel
   };
 }

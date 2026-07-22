@@ -21,7 +21,7 @@ describe("author entry flow regressions", () => {
     expect(preloadApi).toContain("openProjectFile");
     expect(app).toContain("welcomeNotice");
     expect(welcome).toContain("welcomeNotice");
-    expect(welcome).toContain("选择项目文件，或从下方最近项目继续写作");
+    expect(welcome).toContain('t("chooseProjectHint")');
     expect(welcome).not.toContain("点击继续写作会创建默认项目");
   });
 
@@ -41,7 +41,7 @@ describe("author entry flow regressions", () => {
 
     expect(welcome).toContain("project-menu");
     expect(welcome).toContain("renameProjectDraft");
-    expect(welcome).toContain("重命名项目");
+    expect(welcome).toContain('t("renameProject")');
     expect(welcome).toContain("onRenameProject");
     expect(welcome).toContain("onDeleteProject");
     expect(welcome).not.toContain("<span>•••</span>");
@@ -67,10 +67,10 @@ describe("author entry flow regressions", () => {
     expect(welcome).toContain("onNewProject");
     expect(welcome).not.toContain("newProjectDraft");
     expect(welcome).not.toContain("新建作品\" onClose");
-    expect(newProject).toContain("小说名称");
-    expect(newProject).toContain("每章目标字数");
-    expect(newProject).toContain("项目文件位置");
-    expect(newProject).toContain("确认创建");
+    expect(newProject).toContain('t("novelName")');
+    expect(newProject).toContain('t("targetCharactersPerChapter")');
+    expect(newProject).toContain('t("projectFileLocation")');
+    expect(newProject).toContain('t("confirmCreation")');
     expect(newProject).toContain("onSelectProjectSavePath");
     expect(newProject).toContain("onSuggestProjectPath");
     expect(newProject).not.toContain("封面");
@@ -106,7 +106,7 @@ describe("author entry flow regressions", () => {
     const writingPage = readSource("src/renderer/routes/WritingPage.tsx");
 
     expect(writingPage).toContain("confirmWelcomeOpen");
-    expect(writingPage).toContain("返回开始页？");
+    expect(writingPage).toContain('t("returnToStartQuestion")');
     expect(writingPage).toMatch(/const handleWelcome[\s\S]*setConfirmWelcomeOpen\(true\)/);
     expect(writingPage).toMatch(/const confirmWelcome[\s\S]*flushBeforeNavigation\(onWelcome\)/);
   });
@@ -116,7 +116,7 @@ describe("author entry flow regressions", () => {
 
     expect(writingPage).toContain("navigationError");
     expect(writingPage).toContain("formatIpcErrorMessage");
-    expect(writingPage).toContain("保存失败，已留在当前页面。");
+    expect(writingPage).toContain('t("saveBeforeNavigationFailed")');
     expect(writingPage).toMatch(/setNavigationError\(formatIpcErrorMessage/);
     expect(writingPage).toContain('role="alert"');
     expect(writingPage).not.toContain(".catch(() => undefined)");
@@ -129,8 +129,8 @@ describe("author entry flow regressions", () => {
 
     expect(app).toContain("const returnFromSettings");
     expect(app).toMatch(/<SettingsPage[\s\S]*onWelcome={returnFromSettings}/);
-    expect(settingsPage).toContain('title="返回上一页"');
-    expect(importWizard).toContain('title="返回上一页"');
+    expect(settingsPage).toContain('title={t("back")}');
+    expect(importWizard).toContain('title={t("previous")}');
     expect(settingsPage).not.toContain("confirmWelcome");
     expect(settingsPage).not.toContain("返回开始页？");
   });

@@ -158,7 +158,7 @@ export class StartupLaunchService {
     return this.enabledStatus(enabled);
   }
 
-  ensureDefaultEnabled(): StartupLaunchStatus {
+  ensureDefaultDisabled(): StartupLaunchStatus {
     const unsupportedReason = this.unsupportedReason();
     if (unsupportedReason) {
       return this.getStatus();
@@ -189,10 +189,10 @@ export class StartupLaunchService {
       return this.getStatus();
     }
 
-    this.applyLoginItemSettings(this.loginItemOptions(), true);
-    this.preferenceStore.setDesiredEnabled(true);
+    this.disableAllLoginItems();
+    this.preferenceStore.setDesiredEnabled(false);
     this.preferenceStore.setDefaultEnabledApplied(true);
-    return this.enabledStatus(true);
+    return this.enabledStatus(false);
   }
 
   private enabledStatus(enabled: boolean): StartupLaunchStatus {
