@@ -67,7 +67,7 @@ describe("summary index migrations and repository", () => {
     expect(tables).toEqual(
       expect.arrayContaining(["chapter_ai_summaries", "chapter_ai_summary_chunks", "arc_ai_summaries", "book_ai_summaries", "summary_jobs"])
     );
-    expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").get()).toEqual({ version: 26 });
+    expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").get()).toEqual({ version: 28 });
     expect(db.prepare("PRAGMA table_info(chapter_ai_summaries)").all().map((row) => row.name)).toEqual(
       expect.arrayContaining(["content_hash", "summary_short", "summary_long", "structured_json", "status", "error"])
     );

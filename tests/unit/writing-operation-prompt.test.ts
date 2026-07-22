@@ -50,7 +50,34 @@ describe("writing operation prompt", () => {
     expect(joined).toContain("更有压迫感。");
   });
 
-  it("uses strict JSON schema only for proofread", () => {
+  it("builds Japanese-native writing instructions for Japanese projects", () => {
+    const plan: WritingContextPlan = {
+      ...contextPlan(),
+      targetText: "雨は静かに降り続いていた。",
+      supportingContext: []
+    };
+    const prompt = buildWritingOperationPrompt({
+      operation: getWritingOperationDefinition("polish"),
+      skill: loadWritingSkill("moshu.polish"),
+      contextPlan: plan,
+      userInstruction: "余韻を少し強くする",
+      preset: null,
+      tokenBudget: getTokenBudget("polish"),
+      source: "chat_tool",
+      contentLanguage: "ja-JP"
+    });
+
+    const system = prompt.messages.find((message) => message.role === "system")?.content ?? "";
+    const user = prompt.messages.find((message) => message.role === "user")?.content ?? "";
+    expect(system).toContain("日本語小説執筆オペレーションエージェント");
+    expect(system).toContain("日本語としての自然さ");
+    expect(system).not.toContain("中文小说润色");
+    expect(user).toContain("執筆操作: 推敲");
+    expect(user).toContain("【対象本文】");
+    expect(user).toContain("余韻を少し強くする");
+  });
+
+  it("uses provider-compatible JSON mode plus a locally validated contract for proofread", () => {
     const proofread = buildWritingOperationPrompt({
       operation: getWritingOperationDefinition("proofread"),
       skill: loadWritingSkill("moshu.proofread"),
@@ -70,20 +97,15 @@ describe("writing operation prompt", () => {
       source: "selection_toolbar"
     });
 
-    expect(proofread.responseFormat).toMatchObject({ type: "json_schema" });
-    const responseFormatJson = JSON.stringify(proofread.responseFormat);
-    expect(responseFormatJson).toContain("\"code\"");
-    expect(responseFormatJson).toContain("\"severity\"");
-    expect(responseFormatJson).not.toContain("\"confidence\"");
-    expect(responseFormatJson).not.toContain("\"confidenceRationale\"");
-    expect(responseFormatJson).toContain("\"evidence\"");
-    expect(responseFormatJson).toContain("\"canAutoApply\"");
-    expect(responseFormatJson).toContain("\"needsAuthorJudgment\"");
-    expect(responseFormatJson).toContain("\"additionalProperties\":false");
-    expect(responseFormatJson).not.toContain("minItems");
-    expect(responseFormatJson).not.toContain("无问题");
+    expect(proofread.responseFormat).toEqual({ type: "json_object" });
     expect(polish.responseFormat).toBeUndefined();
     const promptText = proofread.messages.map((message) => message.content).join("\n");
+    expect(promptText).toContain('"code"');
+    expect(promptText).toContain('"severity"');
+    expect(promptText).toContain('"evidence"');
+    expect(promptText).toContain('"canAutoApply"');
+    expect(promptText).toContain('"needsAuthorJudgment"');
+    expect(promptText).not.toContain('"confidence"');
     expect(promptText).toContain("突兀");
     expect(promptText).toContain("误插入");
     expect(promptText).toContain("悬念结尾");
@@ -146,7 +168,7 @@ describe("writing operation prompt", () => {
     });
 
     expect(polish.reasoning).toEqual({ max_tokens: 2000, exclude: true });
-    expect(proofread.reasoning).toEqual({ max_tokens: 4000, exclude: true });
+    expect(proofread.reasoning).toBeUndefined();
 
     const chatPolish = buildWritingOperationPrompt({
       operation: getWritingOperationDefinition("polish"),

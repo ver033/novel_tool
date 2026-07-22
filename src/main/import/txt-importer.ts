@@ -25,6 +25,7 @@ import {
 } from "../project/project-file";
 import { applyImportPreviewOperations, detectTxtChapters } from "./chapter-detector";
 import { readTxtFile } from "./txt-reader";
+import { DEFAULT_CONTENT_LANGUAGE, initialVolumeTitle, type ContentLanguage } from "../shared/language";
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -44,13 +45,13 @@ function createTiptapDocumentFromPlainText(text: string): unknown {
   };
 }
 
-function chapterContentFromPreview(projectId: string, preview: ImportPreviewChapter, sortOrder: number): ChapterContent {
+function chapterContentFromPreview(projectId: string, preview: ImportPreviewChapter, sortOrder: number, language: ContentLanguage): ChapterContent {
   const createdAt = nowIso();
   return {
     id: createId("chapter"),
     projectId,
     title: preview.title,
-    volumeTitle: "第一卷",
+    volumeTitle: initialVolumeTitle(language),
     sortOrder,
     contentJson: createTiptapDocumentFromPlainText(preview.text),
     plainText: preview.text,
@@ -73,12 +74,14 @@ export class TxtImporter {
 
   previewTxt(input: ImportPreviewTxtInput): ImportPreview {
     const filePath = path.resolve(input.filePath);
-    const read = readTxtFile(filePath);
-    const chapters = detectTxtChapters(read.text);
+    const contentLanguage = input.contentLanguage ?? DEFAULT_CONTENT_LANGUAGE;
+    const read = readTxtFile(filePath, { encoding: input.encoding });
+    const chapters = detectTxtChapters(read.text, contentLanguage);
     return this.importJobRepo.createPreview({
       filePath,
       fileName: path.basename(filePath),
       encoding: read.encoding,
+      contentLanguage,
       rawText: read.text,
       totalWordCount: countWritingUnits(read.text),
       chapters
@@ -92,19 +95,22 @@ export class TxtImporter {
     }
     const redetectCount = input.operations.filter((operation) => operation.type === "redetect").length;
     const chapters =
-      redetectCount > 0 ? detectTxtChapters(this.importJobRepo.getRawText(input.importJobId)) : applyImportPreviewOperations(preview.chapters, input.operations);
+      redetectCount > 0
+        ? detectTxtChapters(this.importJobRepo.getRawText(input.importJobId), preview.contentLanguage)
+        : applyImportPreviewOperations(preview.chapters, input.operations, preview.contentLanguage);
     return this.importJobRepo.updatePreview(input.importJobId, chapters);
   }
 
   confirmTxtImport(input: ImportConfirmTxtInput): ImportConfirmResult {
     const preview = this.importJobRepo.getConfirmablePreview(input.importJobId);
     const projectName = input.projectName ?? path.basename(preview.fileName, path.extname(preview.fileName));
+    const contentLanguage = input.contentLanguage ?? preview.contentLanguage;
     const projectFilePath = resolveImportedProjectFilePath(preview.filePath, projectName);
     this.importJobRepo.markWriting(input.importJobId);
 
     const result =
       input.mode === "create_new_project"
-        ? this.confirmNewProjectImport(input.importJobId, projectName, projectFilePath, preview)
+        ? this.confirmNewProjectImport(input.importJobId, projectName, projectFilePath, preview, contentLanguage)
         : this.confirmCurrentProjectImport(input.importJobId, input.projectId, preview);
 
     if (result.project.rootPath) {
@@ -130,7 +136,8 @@ export class TxtImporter {
     importJobId: string,
     projectName: string,
     projectFilePath: string,
-    preview: ImportPreview
+    preview: ImportPreview,
+    contentLanguage: ContentLanguage
   ): ImportConfirmResult {
     const projectDb = openProjectDatabase(projectFilePath);
     try {
@@ -146,6 +153,7 @@ export class TxtImporter {
             id: createId("project"),
             name: projectName,
             rootPath: projectFilePath,
+            contentLanguage,
             createdAt,
             updatedAt: createdAt
           });
@@ -157,7 +165,7 @@ export class TxtImporter {
         const chapters =
           existingChapters.length > 0
             ? existingChapters
-            : preview.chapters.map((chapter, index) => chapterRepo.create(chapterContentFromPreview(project.id, chapter, index)));
+            : preview.chapters.map((chapter, index) => chapterRepo.create(chapterContentFromPreview(project.id, chapter, index, contentLanguage)));
         writeProjectSource(projectDb, { type: "txt", path: preview.filePath }, nowIso());
         const enqueuedAt = nowIso();
         for (const chapter of chapters) {
@@ -202,7 +210,9 @@ export class TxtImporter {
       const summaryService = new SummaryService(new SummaryRepository(projectDb), chapterRepo);
       return chapterRepo.transact(() => {
         const startOrder = chapterRepo.nextSortOrder(project.id);
-        const chapters = preview.chapters.map((chapter, index) => chapterRepo.create(chapterContentFromPreview(project.id, chapter, startOrder + index)));
+        const chapters = preview.chapters.map((chapter, index) =>
+          chapterRepo.create(chapterContentFromPreview(project.id, chapter, startOrder + index, project.contentLanguage))
+        );
         const enqueuedAt = nowIso();
         for (const chapter of chapters) {
           summaryService.maybeEnqueueChapterSummary({

@@ -1,6 +1,7 @@
 import { LinkSimple, Plus, Trash, X } from "@phosphor-icons/react";
 import { useMemo, useState } from "react";
 import type { RelationshipGraphEdge, RelationshipGraphNode } from "../../main/shared/relationship-graph";
+import { useLocalizedCopy } from "../i18n/localized-copy";
 import { buildAuthorRelationshipCreateInput, type AuthorRelationshipCreateInput } from "./author-relationship-form";
 
 type AuthorRelationshipControlsProps = {
@@ -82,10 +83,120 @@ function relationshipCountForNode(nodeId: string, edges: readonly RelationshipGr
   return relationshipIds.size;
 }
 
-function confirmDeleteCharacter(node: RelationshipGraphNode, edges: readonly RelationshipGraphEdge[]): boolean {
+type AuthorRelationshipControlsCopy = {
+  readonly addCharacter: string;
+  readonly addRelationship: string;
+  readonly currentCharacter: (name: string) => string;
+  readonly selectCharacterHint: string;
+  readonly addRelationshipHeading: string;
+  readonly characterHint: string;
+  readonly relationshipHint: string;
+  readonly close: string;
+  readonly characterName: string;
+  readonly characterPlaceholder: string;
+  readonly add: string;
+  readonly characterA: string;
+  readonly characterB: string;
+  readonly mutualRelationship: string;
+  readonly mutualRelationshipEnabledHint: string;
+  readonly mutualRelationshipDisabledHint: string;
+  readonly relationshipName: string;
+  readonly aToB: string;
+  readonly bToA: string;
+  readonly mutualRelationshipPlaceholder: string;
+  readonly forwardRelationshipPlaceholder: string;
+  readonly reverseRelationshipPlaceholder: string;
+  readonly existingCharacters: string;
+  readonly existingRelationships: string;
+  readonly deleteCharacterAria: (name: string) => string;
+  readonly deleteRelationshipAria: (sourceName: string, targetName: string) => string;
+  readonly deleteCharacter: string;
+  readonly deleteRelationship: string;
+  readonly noCharacters: string;
+  readonly noRelationships: string;
+  readonly deleteCharacterCascade: (count: number) => string;
+  readonly deleteCharacterConfirm: (name: string, cascadeHint: string) => string;
+};
+
+const authorRelationshipControlsCopy = {
+  "zh-CN": {
+    addCharacter: "添加人物",
+    addRelationship: "添加关系",
+    currentCharacter: (name: string) => `当前人物：${name}`,
+    selectCharacterHint: "选中人物后，可直接从此人物建立关系",
+    addRelationshipHeading: "添加人物关系",
+    characterHint: "写到新角色时先把名字放进图里。",
+    relationshipHint: "选择两个人，再填写这条关系在线上的名称。",
+    close: "关闭",
+    characterName: "人物名",
+    characterPlaceholder: "例如：白嘉轩",
+    add: "添加",
+    characterA: "人物 A",
+    characterB: "人物 B",
+    mutualRelationship: "相互关系：B 对 A 使用同一名称",
+    mutualRelationshipEnabledHint: "勾选后会自动生成反向同名关系。",
+    mutualRelationshipDisabledHint: "默认只保存 A 对 B；需要反向关系时再填写 B 对 A。",
+    relationshipName: "关系名称",
+    aToB: "A 对 B",
+    bToA: "B 对 A",
+    mutualRelationshipPlaceholder: "夫妻、同学、盟友、师生",
+    forwardRelationshipPlaceholder: "父亲、老师、主家",
+    reverseRelationshipPlaceholder: "儿子、学生、长工",
+    existingCharacters: "已有人物",
+    existingRelationships: "已有关系",
+    deleteCharacterAria: (name: string) => `删除${name}`,
+    deleteRelationshipAria: (sourceName: string, targetName: string) => `删除${sourceName}与${targetName}的关系`,
+    deleteCharacter: "删除人物",
+    deleteRelationship: "删除关系",
+    noCharacters: "暂无人物。",
+    noRelationships: "暂无关系。",
+    deleteCharacterCascade: (count: number) => `，并删除 ${count} 条相关关系`,
+    deleteCharacterConfirm: (name: string, cascadeHint: string) => `删除人物“${name}”${cascadeHint}？`
+  },
+  "ja-JP": {
+    addCharacter: "人物を追加",
+    addRelationship: "関係を追加",
+    currentCharacter: (name: string) => `選択中：${name}`,
+    selectCharacterHint: "人物を選ぶと、その人物から関係を作成できます",
+    addRelationshipHeading: "人物関係を追加",
+    characterHint: "新しい人物の名前を作者設定の関係図へ追加します。",
+    relationshipHint: "二人を選び、関係線に表示する名称を入力します。",
+    close: "閉じる",
+    characterName: "人物名",
+    characterPlaceholder: "例：澪",
+    add: "追加",
+    characterA: "人物 A",
+    characterB: "人物 B",
+    mutualRelationship: "相互関係：B から A にも同じ名称を使う",
+    mutualRelationshipEnabledHint: "逆方向にも同名の関係を自動作成します。",
+    mutualRelationshipDisabledHint: "初期状態では A から B のみ保存します。必要なら B から A も入力してください。",
+    relationshipName: "関係名",
+    aToB: "A から B",
+    bToA: "B から A",
+    mutualRelationshipPlaceholder: "夫婦、同級生、盟友、師弟",
+    forwardRelationshipPlaceholder: "姉、師匠、依頼人",
+    reverseRelationshipPlaceholder: "弟子、協力者、調査員",
+    existingCharacters: "登録済みの人物",
+    existingRelationships: "登録済みの関係",
+    deleteCharacterAria: (name: string) => `${name}を削除`,
+    deleteRelationshipAria: (sourceName: string, targetName: string) => `${sourceName}と${targetName}の関係を削除`,
+    deleteCharacter: "人物を削除",
+    deleteRelationship: "関係を削除",
+    noCharacters: "人物はまだ登録されていません。",
+    noRelationships: "関係はまだ登録されていません。",
+    deleteCharacterCascade: (count: number) => `（関連する ${count} 件の関係も削除されます）`,
+    deleteCharacterConfirm: (name: string, cascadeHint: string) => `人物「${name}」を削除しますか${cascadeHint}？`
+  }
+} satisfies Record<"zh-CN" | "ja-JP", AuthorRelationshipControlsCopy>;
+
+function confirmDeleteCharacter(
+  node: RelationshipGraphNode,
+  edges: readonly RelationshipGraphEdge[],
+  copy: AuthorRelationshipControlsCopy
+): boolean {
   const relationshipCount = relationshipCountForNode(node.id, edges);
-  const cascadeHint = relationshipCount > 0 ? `，并删除 ${relationshipCount} 条相关关系` : "";
-  return window.confirm(`删除人物“${node.name}”${cascadeHint}？`);
+  const cascadeHint = relationshipCount > 0 ? copy.deleteCharacterCascade(relationshipCount) : "";
+  return window.confirm(copy.deleteCharacterConfirm(node.name, cascadeHint));
 }
 
 export function AuthorRelationshipControls({
@@ -98,6 +209,7 @@ export function AuthorRelationshipControls({
   onDeleteCharacter,
   onDeleteRelationship
 }: AuthorRelationshipControlsProps) {
+  const copy = useLocalizedCopy(authorRelationshipControlsCopy);
   const [characterName, setCharacterName] = useState("");
   const [sourceName, setSourceName] = useState("");
   const [targetName, setTargetName] = useState("");
@@ -151,7 +263,7 @@ export function AuthorRelationshipControls({
           type="button"
         >
           <Plus size={15} weight="bold" />
-          添加人物
+          {copy.addCharacter}
         </button>
         <button
           className={`relationship-primary-action secondary ${activePanel === "relationship" ? "active" : ""}`}
@@ -160,19 +272,19 @@ export function AuthorRelationshipControls({
           type="button"
         >
           <LinkSimple size={15} weight="bold" />
-          添加关系
+          {copy.addRelationship}
         </button>
-        <span>{selectedNodeName ? `当前人物：${selectedNodeName}` : "选中人物后，可直接从此人物建立关系"}</span>
+        <span>{selectedNodeName ? copy.currentCharacter(selectedNodeName) : copy.selectCharacterHint}</span>
       </div>
 
       {activePanel ? (
-        <div className="author-relationship-popover" role="dialog" aria-label={activePanel === "character" ? "添加人物" : "添加关系"}>
+        <div className="author-relationship-popover" role="dialog" aria-label={activePanel === "character" ? copy.addCharacter : copy.addRelationship}>
           <div className="author-relationship-popover-head">
             <div>
-              <b>{activePanel === "character" ? "添加人物" : "添加人物关系"}</b>
-              <span>{activePanel === "character" ? "写到新角色时先把名字放进图里。" : "选择两个人，再填写这条关系在线上的名称。"}</span>
+              <b>{activePanel === "character" ? copy.addCharacter : copy.addRelationshipHeading}</b>
+              <span>{activePanel === "character" ? copy.characterHint : copy.relationshipHint}</span>
             </div>
-            <button aria-label="关闭" className="relationship-panel-icon-button" onClick={closePanel} title="关闭" type="button">
+            <button aria-label={copy.close} className="relationship-panel-icon-button" onClick={closePanel} title={copy.close} type="button">
               <X size={15} />
             </button>
           </div>
@@ -194,7 +306,7 @@ export function AuthorRelationshipControls({
               }}
             >
               <label className="relationship-filter-label" htmlFor="author-character-name">
-                人物名
+                {copy.characterName}
               </label>
               <div className="author-relationship-inline">
                 <input
@@ -202,11 +314,11 @@ export function AuthorRelationshipControls({
                   className="relationship-filter-input"
                   id="author-character-name"
                   onChange={(event) => setCharacterName(event.target.value)}
-                  placeholder="例如：白嘉轩"
+                  placeholder={copy.characterPlaceholder}
                   value={characterName}
                 />
                 <button className="relationship-primary-action" disabled={submitting || !characterName.trim()} type="submit">
-                  添加
+                  {copy.add}
                 </button>
               </div>
             </form>
@@ -244,24 +356,24 @@ export function AuthorRelationshipControls({
               </datalist>
               <div className="author-relationship-pair">
                 <label>
-                  <span>人物 A</span>
+                  <span>{copy.characterA}</span>
                   <input
                     autoFocus={!selectedNodeName}
                     className="relationship-filter-input"
                     list="author-character-options"
                     onChange={(event) => setSourceName(event.target.value)}
-                    placeholder="人物 A"
+                    placeholder={copy.characterA}
                     value={sourceName}
                   />
                 </label>
                 <label>
-                  <span>人物 B</span>
+                  <span>{copy.characterB}</span>
                   <input
                     autoFocus={Boolean(selectedNodeName)}
                     className="relationship-filter-input"
                     list="author-character-options"
                     onChange={(event) => setTargetName(event.target.value)}
-                    placeholder="人物 B"
+                    placeholder={copy.characterB}
                     value={targetName}
                   />
                 </label>
@@ -273,27 +385,27 @@ export function AuthorRelationshipControls({
                     onChange={(event) => setSameRelationBothWays(event.target.checked)}
                     type="checkbox"
                   />
-                  <span>相互关系：B 对 A 使用同一名称</span>
+                  <span>{copy.mutualRelationship}</span>
                 </label>
-                <p>{sameRelationBothWays ? "勾选后会自动生成反向同名关系。" : "默认只保存 A 对 B；需要反向关系时再填写 B 对 A。"}</p>
+                <p>{sameRelationBothWays ? copy.mutualRelationshipEnabledHint : copy.mutualRelationshipDisabledHint}</p>
               </div>
               <div className={sameRelationBothWays ? "author-relationship-pair single" : "author-relationship-pair"}>
                 <label>
-                  <span>{sameRelationBothWays ? "关系名称" : "A 对 B"}</span>
+                  <span>{sameRelationBothWays ? copy.relationshipName : copy.aToB}</span>
                   <input
                     className="relationship-filter-input"
                     onChange={(event) => setForwardLabel(event.target.value)}
-                    placeholder={sameRelationBothWays ? "夫妻、同学、盟友、师生" : "父亲、老师、主家"}
+                    placeholder={sameRelationBothWays ? copy.mutualRelationshipPlaceholder : copy.forwardRelationshipPlaceholder}
                     value={forwardLabel}
                   />
                 </label>
                 {!sameRelationBothWays ? (
                   <label>
-                    <span>B 对 A</span>
+                    <span>{copy.bToA}</span>
                     <input
                       className="relationship-filter-input"
                       onChange={(event) => setReverseLabel(event.target.value)}
-                      placeholder="儿子、学生、长工"
+                      placeholder={copy.reverseRelationshipPlaceholder}
                       value={reverseLabel}
                     />
                   </label>
@@ -304,7 +416,7 @@ export function AuthorRelationshipControls({
                 disabled={submitting || !sourceName.trim() || !targetName.trim() || !forwardLabel.trim()}
                 type="submit"
               >
-                添加关系
+                {copy.addRelationship}
               </button>
             </form>
           )}
@@ -313,7 +425,7 @@ export function AuthorRelationshipControls({
 
           <section className="author-relationship-list compact">
             <div className="relationship-section-head">
-              <h3>{activePanel === "character" ? "已有人物" : "已有关系"}</h3>
+              <h3>{activePanel === "character" ? copy.existingCharacters : copy.existingRelationships}</h3>
               <span>{activePanel === "character" ? nodes.length : edges.length}</span>
             </div>
             {activePanel === "character" ? (
@@ -325,16 +437,16 @@ export function AuthorRelationshipControls({
                     </button>
                     <span>{node.relationCount}</span>
                     <button
-                      aria-label={`删除${node.name}`}
+                      aria-label={copy.deleteCharacterAria(node.name)}
                       className="relationship-panel-icon-button subtle-danger"
                       disabled={submitting}
                       onClick={() => {
-                        if (!confirmDeleteCharacter(node, edges)) {
+                        if (!confirmDeleteCharacter(node, edges, copy)) {
                           return;
                         }
                         void runAction(() => onDeleteCharacter(node.id));
                       }}
-                      title="删除人物"
+                      title={copy.deleteCharacter}
                       type="button"
                     >
                       <Trash size={15} />
@@ -342,7 +454,7 @@ export function AuthorRelationshipControls({
                   </div>
                 ))
               ) : (
-                <p className="muted">暂无人物。</p>
+                <p className="muted">{copy.noCharacters}</p>
               )
             ) : relationshipOptions.length ? (
               relationshipOptions.map((edge) => (
@@ -352,11 +464,11 @@ export function AuthorRelationshipControls({
                   </button>
                   <span>{relationshipListLabel(edge, edges)}</span>
                   <button
-                    aria-label={`删除${edge.sourceName}与${edge.targetName}的关系`}
+                    aria-label={copy.deleteRelationshipAria(edge.sourceName, edge.targetName)}
                     className="relationship-panel-icon-button subtle-danger"
                     disabled={submitting}
                     onClick={() => void runAction(() => onDeleteRelationship(edge.authorRelationshipId ?? edge.id))}
-                    title="删除关系"
+                    title={copy.deleteRelationship}
                     type="button"
                   >
                     <Trash size={15} />
@@ -364,7 +476,7 @@ export function AuthorRelationshipControls({
                 </div>
               ))
             ) : (
-              <p className="muted">暂无关系。</p>
+              <p className="muted">{copy.noRelationships}</p>
             )}
           </section>
         </div>

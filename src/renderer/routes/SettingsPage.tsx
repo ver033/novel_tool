@@ -4,6 +4,7 @@ import {
   GearSix,
   Robot,
   Sliders,
+  Translate,
   UploadSimple,
   X
 } from "@phosphor-icons/react";
@@ -31,14 +32,25 @@ import type {
   UsageAnalyticsReportRun,
   UsageAnalyticsStatus
 } from "../../main/shared/types";
+import type { AppLocale } from "../../main/shared/language";
 import { Button } from "../components/Button";
 import { IconButton } from "../components/IconButton";
 import { Input } from "../components/Input";
 import { Textarea } from "../components/Textarea";
 import { RelationshipGraphCachePanel } from "../relationship-graph/RelationshipGraphCachePanel";
 import { getNovelToolApi } from "../state/app-store";
+import { useI18n } from "../i18n";
 
-export type SettingsCategory = "编辑器" | "AI 服务" | "提示词预设" | "章节索引缓存" | "导入导出" | "实验功能" | "备份与数据" | "快捷键";
+export type SettingsCategory =
+  | "language"
+  | "editor"
+  | "ai"
+  | "prompts"
+  | "chapter-cache"
+  | "import-export"
+  | "experimental"
+  | "backup-data"
+  | "shortcuts";
 
 type SettingsPageProps = {
   readonly activeCategory: SettingsCategory;
@@ -53,6 +65,7 @@ type EditableAiProviderSettings = Omit<AiProviderSettingsState, "apiKeyConfigure
 };
 
 type SettingsFormState = {
+  readonly appLocale: AppLocale;
   readonly editor: EditorSettings;
   readonly aiProvider: EditableAiProviderSettings;
   readonly projectPath: string;
@@ -75,13 +88,14 @@ type SettingsContentProps = {
   readonly modelOptions: readonly OpenRouterModelSummary[];
   readonly status: StatusState;
   readonly onAiProviderChange: (patch: Partial<EditableAiProviderSettings>) => void;
+  readonly onAppLocaleChange: (locale: AppLocale) => void;
   readonly onCacheSettingsChange: (patch: Partial<CacheSettings>) => void;
   readonly onTaskPromptPresetsChange: (taskPromptPresets: readonly TaskPromptPreset[]) => void;
   readonly onTestConnection: () => void;
   readonly onSaveSettings: () => void;
 };
 
-const visibleCategories = ["AI 服务", "提示词预设", "章节索引缓存", "导入导出", "实验功能"] as const satisfies readonly SettingsCategory[];
+const visibleCategories = ["language", "ai", "prompts", "chapter-cache", "import-export", "experimental"] as const satisfies readonly SettingsCategory[];
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 
 const taskPromptPresetLabels: Record<TaskPromptPreset["taskType"], string> = {
@@ -99,11 +113,12 @@ const builtInPromptPresetDescriptions: readonly [string, string, string][] = [
 type VisibleSettingsCategory = (typeof visibleCategories)[number];
 
 const categoryIcons: Record<VisibleSettingsCategory, ReactNode> = {
-  "AI 服务": <Robot size={20} />,
-  提示词预设: <Sliders size={20} />,
-  章节索引缓存: <Database size={20} />,
-  导入导出: <UploadSimple size={20} />,
-  实验功能: <GearSix size={20} />
+  language: <Translate size={20} />,
+  ai: <Robot size={20} />,
+  prompts: <Sliders size={20} />,
+  "chapter-cache": <Database size={20} />,
+  "import-export": <UploadSimple size={20} />,
+  experimental: <GearSix size={20} />
 };
 
 function isVisibleCategory(category: SettingsCategory): category is VisibleSettingsCategory {
@@ -111,6 +126,7 @@ function isVisibleCategory(category: SettingsCategory): category is VisibleSetti
 }
 
 const defaultForm: SettingsFormState = {
+  appLocale: "zh-CN",
   editor: {
     fontSize: 20,
     lineHeight: 2.08,
@@ -146,6 +162,7 @@ function formatError(reason: unknown): string {
 
 function formFromSettings(settings: SettingsState): SettingsFormState {
   return {
+    appLocale: settings.appLocale,
     editor: settings.editor,
     aiProvider: {
       providerType: settings.aiProvider?.providerType ?? defaultForm.aiProvider.providerType,
@@ -164,6 +181,7 @@ function formFromSettings(settings: SettingsState): SettingsFormState {
 function buildSaveInput(form: SettingsFormState): SettingsSaveInput {
   const apiKey = form.aiProvider.apiKey.trim();
   return {
+    appLocale: form.appLocale,
     editor: form.editor,
     aiProvider: {
       providerType: form.aiProvider.providerType,
@@ -208,11 +226,11 @@ function filterModelSuggestions(models: readonly OpenRouterModelSummary[], query
     .slice(0, 8);
 }
 
-function formatContextLength(value: number | null): string {
+function formatContextLength(value: number | null, locale: AppLocale = "zh-CN"): string {
   if (!value) {
-    return "上下文未知";
+    return locale === "ja-JP" ? "コンテキスト不明" : "上下文未知";
   }
-  return `${value.toLocaleString("zh-CN")} tokens`;
+  return `${value.toLocaleString(locale)} tokens`;
 }
 
 function formatCacheState(entry: Pick<SummaryChapterCacheEntry, "cacheState"> | Pick<SummaryArcCacheEntry, "cacheState"> | Pick<SummaryBookCacheDetail, "cacheState"> | null): string {
@@ -398,24 +416,26 @@ function findExactModel(models: readonly OpenRouterModelSummary[], modelName: st
 
 export function SettingsPage({ activeCategory, currentProject, onCategoryChange, onWelcome, onClose }: SettingsPageProps) {
   const api = useMemo(getNovelToolApi, []);
+  const { locale, setLocale, t } = useI18n();
   const [form, setForm] = useState<SettingsFormState>(defaultForm);
   const [apiKeyConfigured, setApiKeyConfigured] = useState(false);
   const [modelOptions, setModelOptions] = useState<OpenRouterModelSummary[]>([]);
   const [modelListLoaded, setModelListLoaded] = useState(false);
-  const [status, setStatus] = useState<StatusState>({ kind: "loading", message: "正在读取设置" });
-  const activeVisibleCategory = isVisibleCategory(activeCategory) ? activeCategory : "AI 服务";
+  const [status, setStatus] = useState<StatusState>({ kind: "loading", message: t("loadingSettings") });
+  const activeVisibleCategory = isVisibleCategory(activeCategory) ? activeCategory : "ai";
 
   const isBusy = status.kind === "loading" || status.kind === "saving" || status.kind === "testing";
 
   const applySettings = (settings: SettingsState) => {
     setForm(formFromSettings(settings));
+    setLocale(settings.appLocale);
     setApiKeyConfigured(Boolean(settings.aiProvider?.apiKeyConfigured));
   };
 
   useEffect(() => {
     let cancelled = false;
     async function loadSettings() {
-      setStatus({ kind: "loading", message: "正在读取设置" });
+      setStatus({ kind: "loading", message: t("loadingSettings") });
       try {
         const settings = (await api.settings.get()) as SettingsState;
         if (cancelled) {
@@ -435,16 +455,16 @@ export function SettingsPage({ activeCategory, currentProject, onCategoryChange,
     return () => {
       cancelled = true;
     };
-  }, [api]);
+  }, [api, t]);
 
   const saveSettings = async () => {
     const selectedModel = form.aiProvider.modelName.trim();
     if (!selectedModel) {
-      setStatus({ kind: "error", message: "请选择模型后保存。" });
+      setStatus({ kind: "error", message: t("chooseModel") });
       return;
     }
 
-    setStatus({ kind: "saving", message: "正在保存设置" });
+    setStatus({ kind: "saving", message: t("savingSettings") });
     try {
       const matchedModel = findExactModel(modelOptions, selectedModel);
       const formToSave = matchedModel
@@ -459,22 +479,22 @@ export function SettingsPage({ activeCategory, currentProject, onCategoryChange,
         : form;
       const saved = (await api.settings.save(buildSaveInput(formToSave))) as SettingsState;
       applySettings(saved);
-      setStatus({ kind: "saved", message: "设置已保存" });
+      setStatus({ kind: "saved", message: t("settingsSaved") });
     } catch (reason) {
       setStatus({ kind: "error", message: formatError(reason) });
     }
   };
 
   const testConnection = async () => {
-    setStatus({ kind: "testing", message: "正在测试 AI 连接" });
+    setStatus({ kind: "testing", message: locale === "ja-JP" ? "AI 接続をテストしています" : "正在测试 AI 连接" });
     try {
       await api.settings.testConnection(buildConnectionTestInput(form));
     } catch (reason) {
-      setStatus({ kind: "error", message: `连接测试失败：${formatError(reason)}` });
+      setStatus({ kind: "error", message: `${locale === "ja-JP" ? "接続テストに失敗しました" : "连接测试失败"}：${formatError(reason)}` });
       return;
     }
 
-    setStatus({ kind: "testing", message: "连接测试通过，正在获取模型列表" });
+    setStatus({ kind: "testing", message: locale === "ja-JP" ? "接続テストに成功しました。モデル一覧を取得しています" : "连接测试通过，正在获取模型列表" });
     try {
       const models = (await api.settings.listModels({})) as OpenRouterModelSummary[];
       const matchedModel = findExactModel(models, form.aiProvider.modelName);
@@ -491,11 +511,13 @@ export function SettingsPage({ activeCategory, currentProject, onCategoryChange,
       setStatus({
         kind: "saved",
         message: matchedModel
-          ? `测试连接成功，已获取 ${models.length} 个可用模型。当前模型上下文 ${formatContextLength(matchedModel.contextLength)}，请选择模型后保存。`
-          : `测试连接成功，已获取 ${models.length} 个可用模型。请选择模型后保存。`
+          ? locale === "ja-JP"
+            ? `接続テストに成功し、${models.length} 件のモデルを取得しました。現在のコンテキストは ${formatContextLength(matchedModel.contextLength, locale)} です。モデルを選択して保存してください。`
+            : `测试连接成功，已获取 ${models.length} 个可用模型。当前模型上下文 ${formatContextLength(matchedModel.contextLength, locale)}，请选择模型后保存。`
+          : locale === "ja-JP" ? `接続テストに成功し、${models.length} 件のモデルを取得しました。モデルを選択して保存してください。` : `测试连接成功，已获取 ${models.length} 个可用模型。请选择模型后保存。`
       });
     } catch (reason) {
-      setStatus({ kind: "error", message: `连接可用，但获取模型列表失败：${formatError(reason)}` });
+      setStatus({ kind: "error", message: `${locale === "ja-JP" ? "接続には成功しましたが、モデル一覧を取得できませんでした" : "连接可用，但获取模型列表失败"}：${formatError(reason)}` });
     }
   };
 
@@ -535,25 +557,32 @@ export function SettingsPage({ activeCategory, currentProject, onCategoryChange,
   return (
     <div className="settings-page">
       <header className="settings-top">
-        <button className="brand brand-button" onClick={onWelcome} title="返回上一页" type="button">
+        <button className="brand brand-button" onClick={onWelcome} title={t("back")} type="button">
           <span className="line-icon">
             <GearSix size={24} />
           </span>
-          <span>设置</span>
+          <span>{t("settings")}</span>
         </button>
         <div className="top-actions">
-          <IconButton label="关闭设置" onClick={onClose}>
+          <IconButton label={t("closeSettings")} onClick={onClose}>
             <X size={22} />
           </IconButton>
         </div>
       </header>
 
       <main className="settings-layout">
-        <nav className="settings-nav" aria-label="设置分类">
+        <nav className="settings-nav" aria-label={t("settings")}>
           {visibleCategories.map((category) => (
             <button className={activeVisibleCategory === category ? "active" : ""} key={category} onClick={() => onCategoryChange(category)} type="button">
               <span className="nav-icon">{categoryIcons[category]}</span>
-              {category}
+              {{
+                language: t("language"),
+                ai: t("aiService"),
+                prompts: t("promptPresets"),
+                "chapter-cache": t("chapterCache"),
+                "import-export": t("importExport"),
+                experimental: t("experimental")
+              }[category]}
             </button>
           ))}
         </nav>
@@ -568,20 +597,21 @@ export function SettingsPage({ activeCategory, currentProject, onCategoryChange,
             modelOptions={modelOptions}
             status={status}
             onAiProviderChange={updateAiProvider}
+            onAppLocaleChange={(appLocale) => setForm((current) => ({ ...current, appLocale }))}
             onCacheSettingsChange={updateCacheSettings}
             onTaskPromptPresetsChange={updateTaskPromptPresets}
             onSaveSettings={() => void saveSettings()}
             onTestConnection={testConnection}
           />
-          {activeVisibleCategory !== "章节索引缓存" && activeVisibleCategory !== "导入导出" && activeVisibleCategory !== "实验功能" ? (
+          {activeVisibleCategory !== "chapter-cache" && activeVisibleCategory !== "import-export" && activeVisibleCategory !== "experimental" ? (
             <>
               <div className="notice">
-                <span>你的作品和设置仅保存在本地设备，不会默认同步到云端。只有在你主动使用 AI 功能时，相关内容才会发送到所选 AI 服务。</span>
+                <span>{t("localOnlyNotice")}</span>
               </div>
               {status.message ? <p className={`settings-message ${status.kind}`}>{status.message}</p> : null}
               <div className="wizard-actions">
-                <Button variant="ghost" onClick={onClose}>取消</Button>
-                <Button variant="primary" disabled={isBusy} onClick={() => void saveSettings()}>保存设置</Button>
+                <Button variant="ghost" onClick={onClose}>{t("cancel")}</Button>
+                <Button variant="primary" disabled={isBusy} onClick={() => void saveSettings()}>{t("saveSettings")}</Button>
               </div>
             </>
           ) : null}
@@ -601,11 +631,20 @@ function SettingsContent({
   modelOptions,
   status,
   onAiProviderChange,
+  onAppLocaleChange,
   onCacheSettingsChange,
   onTaskPromptPresetsChange,
   onSaveSettings,
   onTestConnection
 }: SettingsContentProps) {
+  const { locale, t } = useI18n();
+  const japanese = locale === "ja-JP";
+  const promptTaskLabels: Record<TaskPromptPreset["taskType"], string> = japanese
+    ? { polish: "推敲", expand: "加筆", continue: "続きを書く" }
+    : taskPromptPresetLabels;
+  const builtInPresets = japanese
+    ? [["基本推敲", "推敲", "事実を変えず、文章を読みやすく整えます。"], ["詳細加筆", "加筆", "環境、動作、心理の細部を補います。"], ["自然な続き", "続きを書く", "現在の章の語り口を受け継いで進めます。"]] as const
+    : builtInPromptPresetDescriptions;
   const [newPresetName, setNewPresetName] = useState("");
   const [newPresetTaskType, setNewPresetTaskType] = useState<TaskPromptPreset["taskType"]>("polish");
   const [newPresetInstruction, setNewPresetInstruction] = useState("");
@@ -640,26 +679,49 @@ function SettingsContent({
     onTaskPromptPresetsChange(form.taskPromptPresets.filter((preset) => preset.id !== presetId));
   };
 
-  if (category === "AI 服务") {
+  if (category === "language") {
+    return (
+      <div className="settings-grid">
+        <div className="settings-card wide">
+          <h3>{t("languageTitle")}</h3>
+          <p className="muted">{t("languageDescription")}</p>
+          <div className="form-grid">
+            <label htmlFor="app-locale">{t("displayLanguage")}</label>
+            <select
+              id="app-locale"
+              className="input"
+              value={form.appLocale}
+              onChange={(event) => onAppLocaleChange(event.target.value as AppLocale)}
+            >
+              <option value="zh-CN">{t("chinese")}</option>
+              <option value="ja-JP">{t("japanese")}</option>
+            </select>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (category === "ai") {
     const modelSuggestions = filterModelSuggestions(modelOptions, form.aiProvider.modelName);
     const connectionText =
       status.kind === "testing"
-        ? "正在测试"
+        ? (japanese ? "テスト中" : "正在测试")
         : status.kind === "error"
-          ? status.message ?? "连接失败"
-          : status.kind === "saved" && status.message?.startsWith("测试连接成功")
-            ? "连接测试成功，模型列表已加载"
+          ? status.message ?? (japanese ? "接続に失敗しました" : "连接失败")
+          : status.kind === "saved" && status.message?.startsWith(japanese ? "接続テストに成功" : "测试连接成功")
+            ? (japanese ? "接続テストに成功し、モデル一覧を読み込みました" : "连接测试成功，模型列表已加载")
           : apiKeyConfigured
-            ? "API Key 已保存，连接测试会使用真实 provider"
-            : "未配置 API Key";
+            ? (japanese ? "API キーは保存済みです。接続テストでは実際のプロバイダーを使用します" : "API Key 已保存，连接测试会使用真实 provider")
+            : (japanese ? "API キーが未設定です" : "未配置 API Key");
 
     return (
       <div className="settings-grid">
         <div className="settings-card wide">
-          <h3>AI 服务连接</h3>
-          <p className="muted">配置大语言模型服务，用于润色、扩写、校对、续写。</p>
+          <h3>{japanese ? "AI サービス接続" : "AI 服务连接"}</h3>
+          <p className="muted">{japanese ? "推敲、加筆、校正、続きを書くための大規模言語モデルを設定します。" : "配置大语言模型服务，用于润色、扩写、校对、续写。"}</p>
           <div className="form-grid">
-            <label>服务提供商</label>
+            <label>{japanese ? "サービスプロバイダー" : "服务提供商"}</label>
             <select
               className="input"
               value={form.aiProvider.providerType}
@@ -667,20 +729,20 @@ function SettingsContent({
             >
               <option value="openrouter">OpenRouter</option>
             </select>
-            <label>API 地址</label>
+            <label>{japanese ? "API エンドポイント" : "API 地址"}</label>
             <Input value={form.aiProvider.baseUrl} disabled onChange={(event) => onAiProviderChange({ baseUrl: event.target.value })} />
             <label>API Key</label>
             <Input
               type="password"
               value={form.aiProvider.apiKey}
-              placeholder={apiKeyConfigured ? "已保存 API Key，留空则保留" : "输入 API Key"}
+              placeholder={apiKeyConfigured ? (japanese ? "保存済み。空欄なら変更しません" : "已保存 API Key，留空则保留") : (japanese ? "API キーを入力" : "输入 API Key")}
               onChange={(event) => onAiProviderChange({ apiKey: event.target.value })}
             />
-            <label>模型名称</label>
+            <label>{japanese ? "モデル名" : "模型名称"}</label>
             <div className="model-picker">
               <Input
                 value={form.aiProvider.modelName}
-                placeholder="输入模型 ID，如 google/gemini"
+                placeholder={japanese ? "モデル ID を入力（例：google/gemini）" : "输入模型 ID，如 google/gemini"}
                 onChange={(event) => onAiProviderChange({ modelName: event.target.value })}
               />
               {modelListLoaded ? (
@@ -703,24 +765,24 @@ function SettingsContent({
                               <b>{model.name}</b>
                               <small>{model.id}</small>
                             </span>
-                            <small>{formatContextLength(model.contextLength)}</small>
+                            <small>{formatContextLength(model.contextLength, locale)}</small>
                           </button>
                         );
                       })}
                     </div>
                   ) : (
-                    <p className="model-picker-hint">{form.aiProvider.modelName.trim() ? "没有匹配的模型。可以继续手动输入模型 ID。" : "输入关键词筛选模型。"}</p>
+                    <p className="model-picker-hint">{form.aiProvider.modelName.trim() ? (japanese ? "一致するモデルはありません。モデル ID を直接入力できます。" : "没有匹配的模型。可以继续手动输入模型 ID。") : (japanese ? "キーワードでモデルを絞り込みます。" : "输入关键词筛选模型。")}</p>
                   )}
                 </>
               ) : (
-                <p className="model-picker-hint">测试连接成功后会获取可用模型列表。</p>
+                <p className="model-picker-hint">{japanese ? "接続テストに成功すると、利用可能なモデル一覧を取得します。" : "测试连接成功后会获取可用模型列表。"}</p>
               )}
-              <p className="model-picker-hint">当前模型上下文：{formatContextLength(form.aiProvider.contextLength ?? null)}</p>
+              <p className="model-picker-hint">{japanese ? "現在のモデルコンテキスト" : "当前模型上下文"}：{formatContextLength(form.aiProvider.contextLength ?? null, locale)}</p>
             </div>
           </div>
           <div className="connection-row">
-            <Button variant="ghost" disabled={isBusy} onClick={onTestConnection}>测试连接</Button>
-            <Button variant="secondary" disabled={isBusy} onClick={onSaveSettings}>保存 AI 设置</Button>
+            <Button variant="ghost" disabled={isBusy} onClick={onTestConnection}>{japanese ? "接続テスト" : "测试连接"}</Button>
+            <Button variant="secondary" disabled={isBusy} onClick={onSaveSettings}>{japanese ? "AI 設定を保存" : "保存 AI 设置"}</Button>
             <span className={status.kind === "error" ? "settings-message error" : "muted"}>{connectionText}</span>
           </div>
         </div>
@@ -728,13 +790,13 @@ function SettingsContent({
     );
   }
 
-  if (category === "提示词预设") {
+  if (category === "prompts") {
     return (
       <div className="settings-grid">
         <div className="settings-card">
-          <h3>内置任务</h3>
-          <p className="muted">内置任务由系统维护，保证写回方式和输出格式稳定。校对暂不开放自定义预设。</p>
-          {builtInPromptPresetDescriptions.map(([name, taskTypeLabel, desc]) => (
+          <h3>{japanese ? "組み込み操作" : "内置任务"}</h3>
+          <p className="muted">{japanese ? "書き戻し方法と出力形式を安定させるため、組み込み操作はシステムが管理します。校正のカスタムプリセットはまだ利用できません。" : "内置任务由系统维护，保证写回方式和输出格式稳定。校对暂不开放自定义预设。"}</p>
+          {builtInPresets.map(([name, taskTypeLabel, desc]) => (
             <div className="detected-row preset-row" key={name}>
               <span>
                 <b>{name}</b>
@@ -746,45 +808,45 @@ function SettingsContent({
           ))}
         </div>
         <div className="settings-card wide">
-          <h3>我的任务预设</h3>
-          <p className="muted">预设只用于选中文字后的润色、扩写、续写。本次任务仍可在右侧面板追加临时要求。</p>
+          <h3>{japanese ? "マイプリセット" : "我的任务预设"}</h3>
+          <p className="muted">{japanese ? "プリセットは選択範囲の推敲、加筆、続きを書く操作に使います。右側パネルで今回だけの要望も追加できます。" : "预设只用于选中文字后的润色、扩写、续写。本次任务仍可在右侧面板追加临时要求。"}</p>
           {form.taskPromptPresets.length === 0 ? (
-            <div className="empty-inline">还没有自定义预设。可以先添加一个常用润色或扩写指令。</div>
+            <div className="empty-inline">{japanese ? "カスタムプリセットはありません。よく使う推敲や加筆の指示を追加できます。" : "还没有自定义预设。可以先添加一个常用润色或扩写指令。"}</div>
           ) : (
             <div className="prompt-preset-list">
               {form.taskPromptPresets.map((preset) => (
                 <div className="prompt-preset-editor" key={preset.id}>
                   <div className="prompt-preset-head">
-                    <Input aria-label="预设名称" value={preset.name} onChange={(event) => updateTaskPromptPreset(preset.id, { name: event.target.value })} />
+                    <Input aria-label={japanese ? "プリセット名" : "预设名称"} value={preset.name} onChange={(event) => updateTaskPromptPreset(preset.id, { name: event.target.value })} />
                     <select
-                      aria-label={`${preset.name} 的任务大类`}
+                      aria-label={`${preset.name} · ${japanese ? "操作の種類" : "任务大类"}`}
                       className="input"
                       value={preset.taskType}
                       onChange={(event) => updateTaskPromptPreset(preset.id, { taskType: event.target.value as TaskPromptPreset["taskType"] })}
                     >
-                      <option value="polish">润色</option>
-                      <option value="expand">扩写</option>
-                      <option value="continue">续写</option>
+                      <option value="polish">{promptTaskLabels.polish}</option>
+                      <option value="expand">{promptTaskLabels.expand}</option>
+                      <option value="continue">{promptTaskLabels.continue}</option>
                     </select>
                     <button
                       className={`toggle ${preset.showInSelectionMenu ? "on" : ""}`}
                       onClick={() => updateTaskPromptPreset(preset.id, { showInSelectionMenu: !preset.showInSelectionMenu })}
                       type="button"
-                      aria-label={`${preset.name} 是否显示在选区菜单`}
+                      aria-label={`${preset.name} · ${japanese ? "選択メニューに表示" : "是否显示在选区菜单"}`}
                     />
                     <button className="small-button" onClick={() => deleteTaskPromptPreset(preset.id)} type="button">
-                      删除
+                      {t("delete")}
                     </button>
                   </div>
                   <Textarea
-                    aria-label={`${preset.name} 的预设要求`}
+                    aria-label={`${preset.name} · ${japanese ? "プリセットの要望" : "预设要求"}`}
                     value={preset.instruction}
-                    placeholder="写清楚这类任务的固定要求。"
+                    placeholder={japanese ? "この操作で常に適用する要望を入力します。" : "写清楚这类任务的固定要求。"}
                     onChange={(event) => updateTaskPromptPreset(preset.id, { instruction: event.target.value })}
                   />
                   <div className="prompt-preset-meta">
-                    <span>{taskPromptPresetLabels[preset.taskType]}</span>
-                    <span>{preset.showInSelectionMenu ? "显示在选中文字 AI 菜单" : "不显示在选中文字 AI 菜单"}</span>
+                    <span>{promptTaskLabels[preset.taskType]}</span>
+                    <span>{preset.showInSelectionMenu ? (japanese ? "選択範囲の AI メニューに表示" : "显示在选中文字 AI 菜单") : (japanese ? "選択範囲の AI メニューに表示しない" : "不显示在选中文字 AI 菜单")}</span>
                   </div>
                 </div>
               ))}
@@ -792,18 +854,18 @@ function SettingsContent({
           )}
         </div>
         <div className="settings-card wide">
-          <h3>新增预设</h3>
-          <p className="muted">新增后需要点击底部“保存设置”才会写入本地设置。</p>
+          <h3>{japanese ? "プリセットを追加" : "新增预设"}</h3>
+          <p className="muted">{japanese ? "追加後、下部の「設定を保存」を押すとローカル設定へ保存されます。" : "新增后需要点击底部“保存设置”才会写入本地设置。"}</p>
           <div className="prompt-preset-new">
-            <Input aria-label="新预设名称" value={newPresetName} placeholder="预设名称，例如：古风润色" onChange={(event) => setNewPresetName(event.target.value)} />
-            <select aria-label="新预设任务大类" className="input" value={newPresetTaskType} onChange={(event) => setNewPresetTaskType(event.target.value as TaskPromptPreset["taskType"])}>
-              <option value="polish">润色</option>
-              <option value="expand">扩写</option>
-              <option value="continue">续写</option>
+            <Input aria-label={japanese ? "新しいプリセット名" : "新预设名称"} value={newPresetName} placeholder={japanese ? "例：時代小説風の推敲" : "预设名称，例如：古风润色"} onChange={(event) => setNewPresetName(event.target.value)} />
+            <select aria-label={japanese ? "新しいプリセットの操作種類" : "新预设任务大类"} className="input" value={newPresetTaskType} onChange={(event) => setNewPresetTaskType(event.target.value as TaskPromptPreset["taskType"])}>
+              <option value="polish">{promptTaskLabels.polish}</option>
+              <option value="expand">{promptTaskLabels.expand}</option>
+              <option value="continue">{promptTaskLabels.continue}</option>
             </select>
-            <Textarea aria-label="新预设要求" value={newPresetInstruction} placeholder="预设要求，例如：用更古雅但不晦涩的表达润色选中文本，保持事实不变。" onChange={(event) => setNewPresetInstruction(event.target.value)} />
+            <Textarea aria-label={japanese ? "新しいプリセットの要望" : "新预设要求"} value={newPresetInstruction} placeholder={japanese ? "例：事実を変えず、古風だが読みにくくない表現へ推敲する。" : "预设要求，例如：用更古雅但不晦涩的表达润色选中文本，保持事实不变。"} onChange={(event) => setNewPresetInstruction(event.target.value)} />
             <Button disabled={!newPresetName.trim() || !newPresetInstruction.trim()} onClick={addTaskPromptPreset} variant="secondary">
-              添加预设
+              {japanese ? "プリセットを追加" : "添加预设"}
             </Button>
           </div>
         </div>
@@ -811,15 +873,15 @@ function SettingsContent({
     );
   }
 
-  if (category === "章节索引缓存") {
+  if (category === "chapter-cache") {
     return <SummaryCacheSettingsPane cache={form.cache} currentProject={currentProject} onCacheSettingsChange={onCacheSettingsChange} />;
   }
 
-  if (category === "导入导出") {
+  if (category === "import-export") {
     return <ImportExportSettingsPane currentProject={currentProject} />;
   }
 
-  if (category === "实验功能") {
+  if (category === "experimental") {
     return <ExperimentalSettingsPane apiKeyConfigured={apiKeyConfigured} currentProject={currentProject} />;
   }
 
@@ -1086,14 +1148,53 @@ function createExternalBookScanRequestId(): string {
 
 function ExternalBookSyncPane({ currentProject }: ExternalBookSyncPaneProps) {
   const api = useMemo(getNovelToolApi, []);
+  const { locale } = useI18n();
+  const japanese = locale === "ja-JP";
   const [scanBusy, setScanBusy] = useState(false);
   const [clearBusy, setClearBusy] = useState(false);
+  const [automaticEnabled, setAutomaticEnabled] = useState(false);
+  const [automaticBusy, setAutomaticBusy] = useState(true);
   const [activeScanRequestId, setActiveScanRequestIdState] = useState<string | null>(null);
   const activeScanRequestIdRef = useRef<string | null>(null);
 
   function setActiveScanRequestId(requestId: string | null): void {
     activeScanRequestIdRef.current = requestId;
     setActiveScanRequestIdState(requestId);
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    setAutomaticBusy(true);
+    void api.settings.get()
+      .then((settings) => {
+        if (!cancelled) {
+          setAutomaticEnabled((settings as SettingsState).experimental.externalBookSyncAutomaticEnabled);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setAutomaticBusy(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [api]);
+
+  async function toggleAutomaticSync(): Promise<void> {
+    if (automaticBusy) {
+      return;
+    }
+    const next = !automaticEnabled;
+    setAutomaticBusy(true);
+    try {
+      const settings = (await api.settings.save({
+        experimental: { externalBookSyncAutomaticEnabled: next }
+      })) as SettingsState;
+      setAutomaticEnabled(settings.experimental.externalBookSyncAutomaticEnabled);
+    } finally {
+      setAutomaticBusy(false);
+    }
   }
 
   useEffect(() => {
@@ -1182,26 +1283,40 @@ function ExternalBookSyncPane({ currentProject }: ExternalBookSyncPaneProps) {
     <div className="settings-card wide external-book-sync-card">
       <div className="settings-card-head">
         <div>
-          <h3>同步检查</h3>
+          <h3>{japanese ? "外部 .Book の同期確認" : "同步检查"}</h3>
         </div>
+      </div>
+
+      <div className="detected-row">
+        <span>
+          <b>{japanese ? "自動同期" : "自动同步"}</b>
+          <small>{japanese ? "実験機能です。初期状態では無効です。" : "实验功能，默认关闭。"}</small>
+        </span>
+        <button
+          aria-label={japanese ? "外部 .Book の自動同期" : "外部 .Book 自动同步"}
+          className={`toggle ${automaticEnabled ? "on" : ""}`}
+          disabled={automaticBusy}
+          onClick={() => void toggleAutomaticSync()}
+          type="button"
+        />
       </div>
 
       <div className="external-book-sync-actions">
         <Button disabled={!currentProject || scanBusy} onClick={() => void runScan("quick")} type="button" variant="primary">
-          查找 .Book
+          {japanese ? ".Book を検索" : "查找 .Book"}
         </Button>
         <Button disabled={!currentProject || scanBusy} onClick={() => void scanSelectedDirectory()} type="button" variant="secondary">
-          选择检查目录
+          {japanese ? "検索フォルダを選択" : "选择检查目录"}
         </Button>
         <Button disabled={!currentProject || scanBusy} onClick={() => void runScan("global")} type="button" variant="secondary">
-          全局重新扫描
+          {japanese ? "全体を再検索" : "全局重新扫描"}
         </Button>
         <Button disabled={!currentProject || scanBusy || clearBusy} onClick={() => void clearOldHash()} type="button" variant="ghost">
-          清除旧hash
+          {japanese ? "送信履歴を消去" : "清除旧 hash"}
         </Button>
         {scanBusy && activeScanRequestId ? (
           <Button onClick={() => void cancelActiveScan()} type="button" variant="ghost">
-            停止扫描
+            {japanese ? "検索を停止" : "停止扫描"}
           </Button>
         ) : null}
       </div>

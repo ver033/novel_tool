@@ -959,6 +959,24 @@ const migrations: readonly Migration[] = [
       `);
     }
   },
+  {
+    version: 27,
+    name: "project_content_language",
+    up(db) {
+      if (!tableHasColumn(db, "projects", "content_language")) {
+        db.exec("ALTER TABLE projects ADD COLUMN content_language TEXT NOT NULL DEFAULT 'zh-CN';");
+      }
+    }
+  },
+  {
+    version: 28,
+    name: "ai_agent_activity_trace",
+    up(db) {
+      if (!tableHasColumn(db, "ai_chat_messages", "agent_activity_json")) {
+        db.exec("ALTER TABLE ai_chat_messages ADD COLUMN agent_activity_json TEXT;");
+      }
+    }
+  },
 ];
 
 function ensureMigrationRecord(db: SqliteDatabase, migration: Migration): void {

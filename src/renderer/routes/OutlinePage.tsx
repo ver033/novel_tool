@@ -32,6 +32,8 @@ import type {
   ProjectRecord
 } from "../../main/shared/types";
 import { Button } from "../components/Button";
+import { useI18n } from "../i18n";
+import { useLocalizedCopy } from "../i18n/localized-copy";
 import { ProjectModuleRail, type ProjectModule } from "../layout/ProjectModuleRail";
 import { TopBar } from "../layout/TopBar";
 import { getNovelToolApi } from "../state/app-store";
@@ -77,20 +79,191 @@ const viewOptions: Array<{ readonly value: OutlineViewMode; readonly label: stri
   { value: "sheet", label: "表格", icon: <Rows size={17} /> }
 ];
 
-const statusLabels: Record<OutlineEventStatus, string> = {
-  planned: "未写",
-  drafting: "写作中",
-  written: "已写",
-  needs_revision: "待修",
-  done: "完成"
-};
+const outlinePageCopy = {
+  "zh-CN": {
+    title: "大纲",
+    heading: "全书大纲",
+    kicker: "作者规划",
+    search: "搜索场景、角色、地点、伏笔",
+    views: { timeline: "时间线", chapter: "章节落点", plotline: "情节线", sheet: "表格" },
+    status: { planned: "未写", drafting: "写作中", written: "已写", needs_revision: "待修", done: "完成" },
+    daySegment: { day: "白天", night: "晚上", custom: "自定义", unknown: "未定" },
+    openProject: "还没有打开项目",
+    openProjectHint: "打开项目后可以维护全书大纲、故事时间线和情节线。",
+    backHome: "返回首页",
+    import: "导入",
+    addScene: "新增场景",
+    closeNotice: "关闭提示",
+    all: "全部",
+    unassignedChapter: "未安排章节",
+    deletedChapter: "章节已删除",
+    unsetTime: "未定时间",
+    noEvents: "还没有大纲事件",
+    noEventsHint: "先新增一个场景，或从 Excel / CSV 里导入已有大纲。",
+    columns: {
+      rowNumber: "#",
+      chapter: "章节",
+      storyTimeLabel: "故事时间",
+      weekdayLabel: "星期 / 备注",
+      daySegment: "时间段",
+      threadNames: "情节线",
+      summary: "场景摘要",
+      characters: "角色",
+      location: "地点",
+      status: "状态",
+      notes: "作者备注"
+    },
+    unset: "未定",
+    unthreaded: "未分线",
+    empty: "未填",
+    sheetMode: "表格浏览模式",
+    sheetModeHint: "直接修改单元格，离开单元格后自动保存。拖拽表头右侧调整列宽，拖拽行号底部调整行高。",
+    saving: "保存中",
+    noEditableEvents: "还没有可编辑的大纲事件",
+    sheetAria: "大纲表格编辑",
+    resizeColumn: (label: string) => `调整${label}列宽`,
+    resizeColumnTitle: "拖拽调整列宽",
+    resizeRow: (index: number) => `调整第${index}行高度`,
+    resizeRowTitle: "拖拽调整行高",
+    noThreads: "还没有情节线",
+    noThreadsHint: "导入表格里的情节线列，或在场景详情里新增主线、支线、感情线。",
+    addToThread: "+ 场景",
+    sceneDetail: "场景详情",
+    editEvent: "编辑大纲事件",
+    newEvent: "新增大纲事件",
+    new: "新建",
+    eventTitle: "标题",
+    titlePlaceholder: "可选，默认取摘要前 40 字",
+    summary: "场景摘要",
+    summaryPlaceholder: "这一场发生了什么？",
+    linkedChapter: "关联章节（可选）",
+    storyTime: "故事时间",
+    storyTimePlaceholder: "案发当晚 / 11月15日",
+    standardDate: "标准日期",
+    weekdayNote: "星期 / 备注",
+    weekdayPlaceholder: "星期二 / 雨夜",
+    timeOrder: "时间顺序",
+    customSegment: "自定义时间段",
+    customSegmentPlaceholder: "凌晨 / 午后",
+    threadPlaceholder: "新增主线 / 感情线 / 案件线",
+    add: "添加",
+    charactersPlaceholder: "用顿号或逗号分隔",
+    sceneGoal: "场景目标",
+    conflict: "冲突 / 阻碍",
+    outcome: "结果 / 转折",
+    foreshadowing: "伏笔 / 回收",
+    delete: "删除",
+    save: "保存",
+    importOutline: "导入大纲",
+    importExisting: "导入已有大纲",
+    importScenes: "从表格导入场景",
+    close: "关闭",
+    chooseFile: "选择 .xlsx / .csv",
+    previewPaste: "预览粘贴内容",
+    pastePlaceholder: "也可以直接从 Excel 复制表格后粘贴到这里...",
+    selected: "已选择",
+    importable: (count: number) => `${count} 条可导入`,
+    newThreads: (count: number) => `${count} 条新情节线`,
+    skipped: (count: number) => `${count} 行已跳过`,
+    skippedRow: (row: number) => `第 ${row} 行已跳过`,
+    clearImported: "清空导入内容",
+    cancel: "取消",
+    confirmImport: "确认导入"
+  },
+  "ja-JP": {
+    title: "プロット",
+    heading: "作品全体のプロット",
+    kicker: "構成設計",
+    search: "シーン・人物・場所・伏線を検索",
+    views: { timeline: "時系列", chapter: "章ごと", plotline: "プロットライン", sheet: "表" },
+    status: { planned: "未執筆", drafting: "執筆中", written: "執筆済み", needs_revision: "要修正", done: "完了" },
+    daySegment: { day: "昼", night: "夜", custom: "指定", unknown: "未定" },
+    openProject: "プロジェクトが開かれていません",
+    openProjectHint: "プロジェクトを開くと、全体構成・時系列・プロットラインを管理できます。",
+    backHome: "スタート画面へ",
+    import: "取り込む",
+    addScene: "シーンを追加",
+    closeNotice: "通知を閉じる",
+    all: "すべて",
+    unassignedChapter: "章未設定",
+    deletedChapter: "削除された章",
+    unsetTime: "時刻未設定",
+    noEvents: "プロットイベントはまだありません",
+    noEventsHint: "シーンを追加するか、Excel / CSV のプロットを取り込んでください。",
+    columns: {
+      rowNumber: "#",
+      chapter: "章",
+      storyTimeLabel: "物語内の時刻",
+      weekdayLabel: "曜日 / メモ",
+      daySegment: "時間帯",
+      threadNames: "プロットライン",
+      summary: "シーン概要",
+      characters: "登場人物",
+      location: "場所",
+      status: "状態",
+      notes: "作者メモ"
+    },
+    unset: "未定",
+    unthreaded: "ライン未設定",
+    empty: "未入力",
+    sheetMode: "表形式",
+    sheetModeHint: "セルを直接編集すると、フォーカスを外した時に自動保存されます。ヘッダー右端で列幅、行番号の下端で行高を調整できます。",
+    saving: "保存中",
+    noEditableEvents: "編集できるプロットイベントはありません",
+    sheetAria: "プロット表の編集",
+    resizeColumn: (label: string) => `${label}列の幅を調整`,
+    resizeColumnTitle: "ドラッグして列幅を調整",
+    resizeRow: (index: number) => `${index} 行目の高さを調整`,
+    resizeRowTitle: "ドラッグして行高を調整",
+    noThreads: "プロットラインはまだありません",
+    noThreadsHint: "表のプロットライン列を取り込むか、シーン詳細で本筋・支線・恋愛線などを追加してください。",
+    addToThread: "+ シーン",
+    sceneDetail: "シーン詳細",
+    editEvent: "プロットイベントを編集",
+    newEvent: "プロットイベントを追加",
+    new: "新規",
+    eventTitle: "タイトル",
+    titlePlaceholder: "任意。未入力の場合は概要の先頭を使用",
+    summary: "シーン概要",
+    summaryPlaceholder: "このシーンで何が起こりますか？",
+    linkedChapter: "関連する章（任意）",
+    storyTime: "物語内の時刻",
+    storyTimePlaceholder: "事件当日の夜 / 11月15日",
+    standardDate: "日付",
+    weekdayNote: "曜日 / メモ",
+    weekdayPlaceholder: "火曜日 / 雨の夜",
+    timeOrder: "時系列順",
+    customSegment: "指定時間帯",
+    customSegmentPlaceholder: "明け方 / 午後",
+    threadPlaceholder: "本筋 / 恋愛線 / 事件線を追加",
+    add: "追加",
+    charactersPlaceholder: "読点またはカンマで区切る",
+    sceneGoal: "シーンの目的",
+    conflict: "対立 / 障害",
+    outcome: "結果 / 転換",
+    foreshadowing: "伏線 / 回収",
+    delete: "削除",
+    save: "保存",
+    importOutline: "プロットを取り込む",
+    importExisting: "既存プロットの取り込み",
+    importScenes: "表からシーンを取り込む",
+    close: "閉じる",
+    chooseFile: ".xlsx / .csv を選択",
+    previewPaste: "貼り付け内容を確認",
+    pastePlaceholder: "Excel の表をコピーして、ここへ貼り付けることもできます...",
+    selected: "選択済み",
+    importable: (count: number) => `${count} 件を取り込み可能`,
+    newThreads: (count: number) => `新しいプロットライン ${count} 件`,
+    skipped: (count: number) => `${count} 行をスキップ`,
+    skippedRow: (row: number) => `${row} 行目をスキップ`,
+    clearImported: "取り込み内容を消去",
+    cancel: "キャンセル",
+    confirmImport: "取り込みを確定"
+  }
+} as const;
 
-const daySegmentLabels: Record<OutlineDaySegment, string> = {
-  day: "白天",
-  night: "晚上",
-  custom: "自定义",
-  unknown: "未定"
-};
+const statusLabels = outlinePageCopy["zh-CN"].status;
+const daySegmentLabels = outlinePageCopy["zh-CN"].daySegment;
 
 const outlineSheetColumns = [
   { id: "rowNumber", label: "#", defaultWidth: 46, minWidth: 42, maxWidth: 82, resizable: false },
@@ -225,16 +398,20 @@ function mutableImportRows(preview: OutlineBulkImportPreview) {
   }));
 }
 
-function chapterLabel(chapters: readonly ChapterSummary[], chapterId: string | null): string {
+function chapterLabel(chapters: readonly ChapterSummary[], chapterId: string | null, unassigned: string, deleted: string): string {
   if (!chapterId) {
-    return "未安排章节";
+    return unassigned;
   }
-  return chapters.find((chapter) => chapter.id === chapterId)?.title ?? "章节已删除";
+  return chapters.find((chapter) => chapter.id === chapterId)?.title ?? deleted;
 }
 
-function eventTimeLabel(event: OutlineEventRecord): string {
-  const segment = event.daySegment === "custom" ? event.customDaySegment || "自定义" : daySegmentLabels[event.daySegment];
-  return [event.storyTimeLabel || event.storyDate || "未定时间", event.weekdayLabel, segment].filter(Boolean).join(" · ");
+function eventTimeLabel(
+  event: OutlineEventRecord,
+  labels: Readonly<Record<OutlineDaySegment, string>>,
+  unsetTime: string
+): string {
+  const segment = event.daySegment === "custom" ? event.customDaySegment || labels.custom : labels[event.daySegment];
+  return [event.storyTimeLabel || event.storyDate || unsetTime, event.weekdayLabel, segment].filter(Boolean).join(" · ");
 }
 
 function sortEventsByOutlineOrder(items: readonly OutlineEventRecord[]): OutlineEventRecord[] {
@@ -293,7 +470,14 @@ function statusFromSheetValue(value: string): OutlineEventStatus | null {
   if (trimmed in statusLabels) {
     return trimmed as OutlineEventStatus;
   }
-  return (Object.entries(statusLabels).find(([, label]) => label === trimmed)?.[0] as OutlineEventStatus | undefined) ?? null;
+  const allLabels = [outlinePageCopy["zh-CN"].status, outlinePageCopy["ja-JP"].status];
+  for (const labels of allLabels) {
+    const matched = Object.entries(labels).find(([, label]) => label === trimmed)?.[0] as OutlineEventStatus | undefined;
+    if (matched) {
+      return matched;
+    }
+  }
+  return null;
 }
 
 function daySegmentFromSheetValue(value: string): { readonly daySegment: OutlineDaySegment; readonly customDaySegment: string | null } {
@@ -301,14 +485,14 @@ function daySegmentFromSheetValue(value: string): { readonly daySegment: Outline
   if (!trimmed || trimmed === "未定" || trimmed === "unknown") {
     return { daySegment: "unknown", customDaySegment: null };
   }
-  if (trimmed === "白天" || trimmed === "day") {
+  if (trimmed === "白天" || trimmed === "昼" || trimmed === "day") {
     return { daySegment: "day", customDaySegment: null };
   }
-  if (trimmed === "晚上" || trimmed === "夜晚" || trimmed === "night") {
+  if (trimmed === "晚上" || trimmed === "夜晚" || trimmed === "夜" || trimmed === "night") {
     return { daySegment: "night", customDaySegment: null };
   }
-  if (trimmed === "custom" || trimmed === "自定义") {
-    return { daySegment: "custom", customDaySegment: "自定义" };
+  if (trimmed === "custom" || trimmed === "自定义" || trimmed === "指定") {
+    return { daySegment: "custom", customDaySegment: trimmed };
   }
   return { daySegment: "custom", customDaySegment: trimmed.slice(0, 80) };
 }
@@ -393,6 +577,8 @@ export function OutlinePage({
   onWelcome
 }: OutlinePageProps) {
   const api = useMemo(getNovelToolApi, []);
+  const { locale } = useI18n();
+  const copy = useLocalizedCopy(outlinePageCopy);
   const projectId = currentProject?.id ?? null;
   const [overview, setOverview] = useState<OutlineOverview | null>(null);
   const [viewMode, setViewMode] = useState<OutlineViewMode>("timeline");
@@ -419,7 +605,7 @@ export function OutlinePage({
   const events = overview?.events ?? [];
   const selectedEvent = events.find((event) => event.id === selectedEventId) ?? null;
   const filteredEvents = useMemo(() => {
-    const needle = query.trim().toLocaleLowerCase("zh-CN");
+    const needle = query.trim().toLocaleLowerCase(locale);
     return events.filter((event) => {
       if (viewMode === "chapter" && showUnassignedOnly && event.chapterId !== null) {
         return false;
@@ -432,10 +618,10 @@ export function OutlinePage({
       }
       return [event.title, event.summary, event.location, event.povCharacter, event.characters.join(" "), event.notes]
         .join(" ")
-        .toLocaleLowerCase("zh-CN")
+        .toLocaleLowerCase(locale)
         .includes(needle);
     });
-  }, [events, query, selectedChapterId, showUnassignedOnly, viewMode]);
+  }, [events, locale, query, selectedChapterId, showUnassignedOnly, viewMode]);
 
   const reload = useCallback(() => {
     if (!projectId) {
@@ -775,9 +961,9 @@ export function OutlinePage({
       <div className="outline-page">
         <ProjectModuleRail activeModule="outline" onNavigate={navigate} />
         <main className="outline-empty">
-          <h1>还没有打开项目</h1>
-          <p>打开项目后可以维护全书大纲、故事时间线和情节线。</p>
-          <Button onClick={onWelcome}>返回首页</Button>
+          <h1>{copy.openProject}</h1>
+          <p>{copy.openProjectHint}</p>
+          <Button onClick={onWelcome}>{copy.backHome}</Button>
         </main>
       </div>
     );
@@ -787,7 +973,7 @@ export function OutlinePage({
     chapter,
     count: events.filter((event) => event.chapterId === chapter.id).length
   }));
-  const timelineGroups = groupBy(filteredEvents, eventTimeLabel);
+  const timelineGroups = groupBy(filteredEvents, (event) => eventTimeLabel(event, copy.daySegment, copy.unsetTime));
   const sheetEvents = sortEventsByOutlineOrder(filteredEvents);
   const plotlineGroups = threads.map((thread) => ({
     thread,
@@ -797,27 +983,27 @@ export function OutlinePage({
 
   return (
     <div className="outline-page">
-      <ProjectModuleRail activeModule="outline" onNavigate={navigate} />
+      <TopBar
+        mode="writing"
+        title={currentProject.name}
+        subtitle={copy.title}
+        onSettings={onOpenSettings}
+        onWelcome={onWelcome}
+        showSearch
+        searchValue={query}
+        searchPlaceholder={copy.search}
+        onSearchChange={setQuery}
+      />
       <main className="outline-shell">
-        <TopBar
-          mode="writing"
-          title={currentProject.name}
-          subtitle="大纲"
-          onSettings={onOpenSettings}
-          onWelcome={onWelcome}
-          showSearch
-          searchValue={query}
-          searchPlaceholder="搜索场景、角色、地点、伏笔"
-          onSearchChange={setQuery}
-        />
+        <ProjectModuleRail activeModule="outline" onNavigate={navigate} />
         <section className="outline-workspace" aria-busy={loading}>
           <header className="outline-toolbar">
             <div>
-              <span className="outline-kicker">作者规划</span>
-              <h1>全书大纲</h1>
+              <span className="outline-kicker">{copy.kicker}</span>
+              <h1>{copy.heading}</h1>
             </div>
             <div className="outline-toolbar-actions">
-              <div className="outline-view-switch" aria-label="大纲视图">
+              <div className="outline-view-switch" aria-label={copy.title}>
                 {viewOptions.map((option) => (
                   <button
                     className={viewMode === option.value ? "active" : ""}
@@ -826,17 +1012,17 @@ export function OutlinePage({
                     type="button"
                   >
                     {option.icon}
-                    {option.label}
+                    {copy.views[option.value]}
                   </button>
                 ))}
               </div>
               <button className="outline-ghost-button" onClick={() => setImportOpen(true)} type="button">
                 <UploadSimple size={17} />
-                导入
+                {copy.import}
               </button>
               <button className="outline-primary-button" onClick={() => startNewEvent()} type="button">
                 <Plus size={17} />
-                新增场景
+                {copy.addScene}
               </button>
             </div>
           </header>
@@ -844,7 +1030,7 @@ export function OutlinePage({
           {(error || notice) && (
             <div className={`outline-message ${error ? "error" : "success"}`}>
               {error || notice}
-              <button onClick={() => { setError(null); setNotice(null); }} type="button" aria-label="关闭提示">
+              <button onClick={() => { setError(null); setNotice(null); }} type="button" aria-label={copy.closeNotice}>
                 <X size={15} />
               </button>
             </div>
@@ -853,9 +1039,9 @@ export function OutlinePage({
           <div className={viewMode === "sheet" ? "outline-layout outline-layout-sheet" : "outline-layout"}>
             <aside className="outline-chapter-nav">
               <div className="outline-side-head">
-                <span>章节落点</span>
+                <span>{copy.views.chapter}</span>
                 <button onClick={() => { setSelectedChapterId(null); setShowUnassignedOnly(false); setViewMode("timeline"); }} type="button">
-                  全部
+                  {copy.all}
                 </button>
               </div>
               <button
@@ -867,7 +1053,7 @@ export function OutlinePage({
                 }}
                 type="button"
               >
-                <span>未安排章节</span>
+                <span>{copy.unassignedChapter}</span>
                 <b>{events.filter((event) => event.chapterId === null).length}</b>
               </button>
               <div className="outline-chapter-list">
@@ -895,8 +1081,8 @@ export function OutlinePage({
                   {timelineGroups.length === 0 ? (
                     <div className="outline-empty-state">
                       <CalendarBlank size={34} />
-                      <h2>还没有大纲事件</h2>
-                      <p>先新增一个场景，或从 Excel / CSV 里导入已有大纲。</p>
+                      <h2>{copy.noEvents}</h2>
+                      <p>{copy.noEventsHint}</p>
                     </div>
                   ) : (
                     timelineGroups.map((group) => (
@@ -910,10 +1096,10 @@ export function OutlinePage({
                               onClick={() => setSelectedEventId(event.id)}
                               type="button"
                             >
-                              <span>{chapterLabel(chapters, event.chapterId)}</span>
+                              <span>{chapterLabel(chapters, event.chapterId, copy.unassignedChapter, copy.deletedChapter)}</span>
                               <strong>{event.title}</strong>
                               <p>{event.summary}</p>
-                              <small>{statusLabels[event.status]}</small>
+                              <small>{copy.status[event.status]}</small>
                             </button>
                           ))}
                         </div>
@@ -928,27 +1114,27 @@ export function OutlinePage({
                   <table className="outline-event-table">
                     <thead>
                       <tr>
-                        <th>章节落点</th>
-                        <th>故事时间</th>
-                        <th>时间段</th>
-                        <th>情节线</th>
-                        <th>场景摘要</th>
-                        <th>角色</th>
-                        <th>地点</th>
-                        <th>状态</th>
+                        <th>{copy.columns.chapter}</th>
+                        <th>{copy.columns.storyTimeLabel}</th>
+                        <th>{copy.columns.daySegment}</th>
+                        <th>{copy.columns.threadNames}</th>
+                        <th>{copy.columns.summary}</th>
+                        <th>{copy.columns.characters}</th>
+                        <th>{copy.columns.location}</th>
+                        <th>{copy.columns.status}</th>
                       </tr>
                     </thead>
                     <tbody>
                       {filteredEvents.map((event) => (
                         <tr className={selectedEventId === event.id ? "active" : ""} key={event.id} onClick={() => setSelectedEventId(event.id)}>
-                          <td>{chapterLabel(chapters, event.chapterId)}</td>
-                          <td>{event.storyTimeLabel || event.storyDate || "未定"}</td>
-                          <td>{event.daySegment === "custom" ? event.customDaySegment : daySegmentLabels[event.daySegment]}</td>
-                          <td>{event.threadIds.map((id) => threads.find((thread) => thread.id === id)?.name).filter(Boolean).join("、") || "未分线"}</td>
+                          <td>{chapterLabel(chapters, event.chapterId, copy.unassignedChapter, copy.deletedChapter)}</td>
+                          <td>{event.storyTimeLabel || event.storyDate || copy.unset}</td>
+                          <td>{event.daySegment === "custom" ? event.customDaySegment : copy.daySegment[event.daySegment]}</td>
+                          <td>{event.threadIds.map((id) => threads.find((thread) => thread.id === id)?.name).filter(Boolean).join("、") || copy.unthreaded}</td>
                           <td>{event.summary}</td>
-                          <td>{event.characters.join("、") || "未填"}</td>
-                          <td>{event.location || "未填"}</td>
-                          <td>{statusLabels[event.status]}</td>
+                          <td>{event.characters.join("、") || copy.empty}</td>
+                          <td>{event.location || copy.empty}</td>
+                          <td>{copy.status[event.status]}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -959,32 +1145,32 @@ export function OutlinePage({
               {viewMode === "sheet" && (
                 <div className="outline-sheet-wrap">
                   <div className="outline-sheet-note">
-                    <strong>表格浏览模式</strong>
-                    <span>直接修改单元格，离开单元格后自动保存。拖拽表头右侧调整列宽，拖拽行号底部调整行高。</span>
-                    {saving ? <b>保存中</b> : null}
+                    <strong>{copy.sheetMode}</strong>
+                    <span>{copy.sheetModeHint}</span>
+                    {saving ? <b>{copy.saving}</b> : null}
                   </div>
                   {sheetEvents.length === 0 ? (
                     <div className="outline-empty-state">
                       <Rows size={34} />
-                      <h2>还没有可编辑的大纲事件</h2>
-                      <p>先新增一个场景，或从 Excel / CSV 里导入已有大纲。</p>
+                      <h2>{copy.noEditableEvents}</h2>
+                      <p>{copy.noEventsHint}</p>
                     </div>
                   ) : (
-                    <div className="outline-sheet-grid" role="grid" aria-label="大纲表格编辑">
+                    <div className="outline-sheet-grid" role="grid" aria-label={copy.sheetAria}>
                       <div className="outline-sheet-row outline-sheet-header" role="row" style={{ gridTemplateColumns: outlineSheetGridTemplate }}>
                         {outlineSheetColumns.map((column) => (
                           <div
                             className={column.id === "rowNumber" ? "outline-sheet-row-number" : "outline-sheet-header-cell"}
                             key={column.id}
                           >
-                            <span>{column.label}</span>
+                            <span>{copy.columns[column.id]}</span>
                             {column.resizable ? (
                               <span
-                                aria-label={`调整${column.label}列宽`}
+                                aria-label={copy.resizeColumn(copy.columns[column.id])}
                                 className="outline-sheet-column-resizer"
                                 onPointerDown={(pointerEvent) => startSheetColumnResize(pointerEvent, column.id)}
                                 role="separator"
-                                title="拖拽调整列宽"
+                                title={copy.resizeColumnTitle}
                               />
                             ) : null}
                           </div>
@@ -1006,11 +1192,11 @@ export function OutlinePage({
                             <div className="outline-sheet-row-number">
                               <span>{index + 1}</span>
                               <span
-                                aria-label={`调整第${index + 1}行高度`}
+                                aria-label={copy.resizeRow(index + 1)}
                                 className="outline-sheet-row-resizer"
                                 onPointerDown={(pointerEvent) => startSheetRowResize(pointerEvent, outlineEvent.id)}
                                 role="separator"
-                                title="拖拽调整行高"
+                                title={copy.resizeRowTitle}
                               />
                             </div>
                             <select
@@ -1018,7 +1204,7 @@ export function OutlinePage({
                               defaultValue={outlineEvent.chapterId ?? ""}
                               onChange={(inputEvent) => { void saveSheetCell(outlineEvent, "chapterId", inputEvent.currentTarget.value); }}
                             >
-                              <option value="">未安排章节</option>
+                              <option value="">{copy.unassignedChapter}</option>
                               {chapters.map((chapter) => (
                                 <option key={chapter.id} value={chapter.id}>{chapter.title}</option>
                               ))}
@@ -1035,7 +1221,7 @@ export function OutlinePage({
                             />
                             <input
                               className="outline-sheet-cell"
-                              defaultValue={outlineEvent.daySegment === "custom" ? outlineEvent.customDaySegment ?? "" : daySegmentLabels[outlineEvent.daySegment]}
+                              defaultValue={outlineEvent.daySegment === "custom" ? outlineEvent.customDaySegment ?? "" : copy.daySegment[outlineEvent.daySegment]}
                               onBlur={(inputEvent) => { void saveSheetCell(outlineEvent, "daySegment", inputEvent.currentTarget.value); }}
                             />
                             <input
@@ -1063,7 +1249,7 @@ export function OutlinePage({
                               defaultValue={outlineEvent.status}
                               onChange={(inputEvent) => { void saveSheetCell(outlineEvent, "status", inputEvent.currentTarget.value); }}
                             >
-                              {Object.entries(statusLabels).map(([value, label]) => (
+                              {Object.entries(copy.status).map(([value, label]) => (
                                 <option key={value} value={value}>{label}</option>
                               ))}
                             </select>
@@ -1085,8 +1271,8 @@ export function OutlinePage({
                   {plotlineGroups.length === 0 && unthreadedPlotlineEvents.length === 0 ? (
                     <div className="outline-empty-state">
                       <GridFour size={34} />
-                      <h2>还没有情节线</h2>
-                      <p>导入表格里的情节线列，或在场景详情里新增主线、支线、感情线。</p>
+                      <h2>{copy.noThreads}</h2>
+                      <p>{copy.noThreadsHint}</p>
                     </div>
                   ) : (
                     <>
@@ -1100,15 +1286,15 @@ export function OutlinePage({
                           <div className="outline-plotline-lane-events">
                             {threadEvents.length === 0 ? (
                               <button className="outline-plotline-empty-add" onClick={() => startNewEvent(null, thread.id)} type="button">
-                                + 场景
+                                {copy.addToThread}
                               </button>
                             ) : (
                               threadEvents.map((event) => (
                                 <button className={selectedEventId === event.id ? "active" : ""} key={event.id} onClick={() => setSelectedEventId(event.id)} type="button">
-                                  <small>{eventTimeLabel(event)}</small>
+                                  <small>{eventTimeLabel(event, copy.daySegment, copy.unsetTime)}</small>
                                   <strong>{event.title}</strong>
                                   <p>{event.summary}</p>
-                                  <span>{chapterLabel(chapters, event.chapterId)}</span>
+                                  <span>{chapterLabel(chapters, event.chapterId, copy.unassignedChapter, copy.deletedChapter)}</span>
                                 </button>
                               ))
                             )}
@@ -1119,16 +1305,16 @@ export function OutlinePage({
                         <section className="outline-plotline-lane">
                           <header>
                             <span />
-                            <strong>未分线</strong>
+                            <strong>{copy.unthreaded}</strong>
                             <b>{unthreadedPlotlineEvents.length}</b>
                           </header>
                           <div className="outline-plotline-lane-events">
                             {unthreadedPlotlineEvents.map((event) => (
                               <button className={selectedEventId === event.id ? "active" : ""} key={event.id} onClick={() => setSelectedEventId(event.id)} type="button">
-                                <small>{eventTimeLabel(event)}</small>
+                                <small>{eventTimeLabel(event, copy.daySegment, copy.unsetTime)}</small>
                                 <strong>{event.title}</strong>
                                 <p>{event.summary}</p>
-                                <span>{chapterLabel(chapters, event.chapterId)}</span>
+                                <span>{chapterLabel(chapters, event.chapterId, copy.unassignedChapter, copy.deletedChapter)}</span>
                               </button>
                             ))}
                           </div>
@@ -1144,70 +1330,70 @@ export function OutlinePage({
               <form onSubmit={(event) => { void saveDraft(event); }}>
                 <div className="outline-inspector-head">
                   <div>
-                    <span className="outline-kicker">场景详情</span>
-                    <h2>{draft.id ? "编辑大纲事件" : "新增大纲事件"}</h2>
+                    <span className="outline-kicker">{copy.sceneDetail}</span>
+                    <h2>{draft.id ? copy.editEvent : copy.newEvent}</h2>
                   </div>
-                  <button className="outline-icon-button" onClick={() => startNewEvent()} type="button" title="新建">
+                  <button className="outline-icon-button" onClick={() => startNewEvent()} type="button" title={copy.new}>
                     <FilePlus size={18} />
                   </button>
                 </div>
                 <label>
-                  标题
-                  <input value={draft.title} onChange={(event) => updateDraft({ title: event.target.value })} placeholder="可选，默认取摘要前 40 字" />
+                  {copy.eventTitle}
+                  <input value={draft.title} onChange={(event) => updateDraft({ title: event.target.value })} placeholder={copy.titlePlaceholder} />
                 </label>
                 <label>
-                  场景摘要
-                  <textarea value={draft.summary} onChange={(event) => updateDraft({ summary: event.target.value })} placeholder="这一场发生了什么？" />
+                  {copy.summary}
+                  <textarea value={draft.summary} onChange={(event) => updateDraft({ summary: event.target.value })} placeholder={copy.summaryPlaceholder} />
                 </label>
                 <div className="outline-form-grid">
                   <label>
-                    关联章节（可选）
+                    {copy.linkedChapter}
                     <select value={draft.chapterId ?? ""} onChange={(event) => updateDraft({ chapterId: event.target.value || null })}>
-                      <option value="">未安排章节</option>
+                      <option value="">{copy.unassignedChapter}</option>
                       {chapters.map((chapter) => (
                         <option key={chapter.id} value={chapter.id}>{chapter.title}</option>
                       ))}
                     </select>
                   </label>
                   <label>
-                    状态
+                    {copy.columns.status}
                     <select value={draft.status} onChange={(event) => updateDraft({ status: event.target.value as OutlineEventStatus })}>
-                      {Object.entries(statusLabels).map(([value, label]) => (
+                      {Object.entries(copy.status).map(([value, label]) => (
                         <option key={value} value={value}>{label}</option>
                       ))}
                     </select>
                   </label>
                   <label>
-                    故事时间
-                    <input value={draft.storyTimeLabel} onChange={(event) => updateDraft({ storyTimeLabel: event.target.value })} placeholder="案发当晚 / 11月15日" />
+                    {copy.storyTime}
+                    <input value={draft.storyTimeLabel} onChange={(event) => updateDraft({ storyTimeLabel: event.target.value })} placeholder={copy.storyTimePlaceholder} />
                   </label>
                   <label>
-                    标准日期
+                    {copy.standardDate}
                     <input type="date" value={draft.storyDate} onChange={(event) => updateDraft({ storyDate: event.target.value })} />
                   </label>
                   <label>
-                    星期 / 备注
-                    <input value={draft.weekdayLabel} onChange={(event) => updateDraft({ weekdayLabel: event.target.value })} placeholder="星期二 / 雨夜" />
+                    {copy.weekdayNote}
+                    <input value={draft.weekdayLabel} onChange={(event) => updateDraft({ weekdayLabel: event.target.value })} placeholder={copy.weekdayPlaceholder} />
                   </label>
                   <label>
-                    时间顺序
+                    {copy.timeOrder}
                     <input type="number" value={draft.storyTimeOrder} onChange={(event) => updateDraft({ storyTimeOrder: event.target.value })} />
                   </label>
                   <label>
-                    时间段
+                    {copy.columns.daySegment}
                     <select value={draft.daySegment} onChange={(event) => updateDraft({ daySegment: event.target.value as OutlineDaySegment })}>
-                      {Object.entries(daySegmentLabels).map(([value, label]) => (
+                      {Object.entries(copy.daySegment).map(([value, label]) => (
                         <option key={value} value={value}>{label}</option>
                       ))}
                     </select>
                   </label>
                   <label>
-                    自定义时间段
-                    <input value={draft.customDaySegment} onChange={(event) => updateDraft({ customDaySegment: event.target.value })} placeholder="凌晨 / 午后" />
+                    {copy.customSegment}
+                    <input value={draft.customDaySegment} onChange={(event) => updateDraft({ customDaySegment: event.target.value })} placeholder={copy.customSegmentPlaceholder} />
                   </label>
                 </div>
                 <label>
-                  情节线
+                  {copy.columns.threadNames}
                   <div className="outline-thread-picker">
                     {threads.map((thread) => (
                       <button
@@ -1229,16 +1415,16 @@ export function OutlinePage({
                   </div>
                 </label>
                 <div className="outline-thread-create">
-                  <input value={newThreadName} onChange={(event) => setNewThreadName(event.target.value)} placeholder="新增主线 / 感情线 / 案件线" />
-                  <button onClick={() => { void createThread(); }} type="button">添加</button>
+                  <input value={newThreadName} onChange={(event) => setNewThreadName(event.target.value)} placeholder={copy.threadPlaceholder} />
+                  <button onClick={() => { void createThread(); }} type="button">{copy.add}</button>
                 </div>
                 <div className="outline-form-grid">
                   <label>
-                    角色
-                    <input value={draft.charactersText} onChange={(event) => updateDraft({ charactersText: event.target.value })} placeholder="用顿号或逗号分隔" />
+                    {copy.columns.characters}
+                    <input value={draft.charactersText} onChange={(event) => updateDraft({ charactersText: event.target.value })} placeholder={copy.charactersPlaceholder} />
                   </label>
                   <label>
-                    地点
+                    {copy.columns.location}
                     <input value={draft.location} onChange={(event) => updateDraft({ location: event.target.value })} />
                   </label>
                   <label>
@@ -1247,34 +1433,34 @@ export function OutlinePage({
                   </label>
                 </div>
                 <label>
-                  场景目标
+                  {copy.sceneGoal}
                   <textarea value={draft.goal} onChange={(event) => updateDraft({ goal: event.target.value })} />
                 </label>
                 <label>
-                  冲突 / 阻碍
+                  {copy.conflict}
                   <textarea value={draft.conflict} onChange={(event) => updateDraft({ conflict: event.target.value })} />
                 </label>
                 <label>
-                  结果 / 转折
+                  {copy.outcome}
                   <textarea value={draft.outcome} onChange={(event) => updateDraft({ outcome: event.target.value })} />
                 </label>
                 <label>
-                  伏笔 / 回收
+                  {copy.foreshadowing}
                   <textarea value={draft.foreshadowing} onChange={(event) => updateDraft({ foreshadowing: event.target.value })} />
                 </label>
                 <label>
-                  作者备注
+                  {copy.columns.notes}
                   <textarea value={draft.notes} onChange={(event) => updateDraft({ notes: event.target.value })} />
                 </label>
                 <div className="outline-inspector-actions">
                   {draft.id && (
                     <button className="outline-danger-button" onClick={() => { void deleteSelectedEvent(); }} type="button">
-                      删除
+                      {copy.delete}
                     </button>
                   )}
                   <button className="outline-primary-button" disabled={saving} type="submit">
                     <FloppyDisk size={17} />
-                    {saving ? "保存中" : "保存"}
+                    {saving ? copy.saving : copy.save}
                   </button>
                 </div>
               </form>
@@ -1284,35 +1470,35 @@ export function OutlinePage({
       </main>
 
       {importOpen && (
-        <div className="outline-modal-backdrop" role="dialog" aria-modal="true" aria-label="导入大纲">
+        <div className="outline-modal-backdrop" role="dialog" aria-modal="true" aria-label={copy.importOutline}>
           <section className="outline-import-dialog">
             <header>
               <div>
-                <span className="outline-kicker">导入已有大纲</span>
-                <h2>从表格导入场景</h2>
+                <span className="outline-kicker">{copy.importExisting}</span>
+                <h2>{copy.importScenes}</h2>
               </div>
-              <button onClick={() => setImportOpen(false)} type="button" aria-label="关闭">
+              <button onClick={() => setImportOpen(false)} type="button" aria-label={copy.close}>
                 <X size={18} />
               </button>
             </header>
             <div className="outline-import-actions">
               <button onClick={() => { void previewFileImport(); }} type="button">
                 <UploadSimple size={17} />
-                选择 .xlsx / .csv
+                {copy.chooseFile}
               </button>
               <button onClick={() => { void previewPasteImport(); }} type="button">
                 <Rows size={17} />
-                预览粘贴内容
+                {copy.previewPaste}
               </button>
             </div>
             <textarea
               value={importText}
               onChange={(event) => setImportText(event.target.value)}
-              placeholder="也可以直接从 Excel 复制表格后粘贴到这里..."
+              placeholder={copy.pastePlaceholder}
             />
             {importFileName && (
               <p className="outline-import-file">
-                <span>已选择</span>
+                <span>{copy.selected}</span>
                 <strong title={importFileName}>{importFileName}</strong>
               </p>
             )}
@@ -1320,21 +1506,21 @@ export function OutlinePage({
             {importPreview && (
               <div className="outline-import-preview">
                 <div className="outline-import-summary">
-                  <strong>{importPreview.rows.length} 条可导入</strong>
-                  <span>{importPreview.newThreadNames.length} 条新情节线</span>
-                  {importPreview.skippedRows.length > 0 && <span>{importPreview.skippedRows.length} 行已跳过</span>}
+                  <strong>{copy.importable(importPreview.rows.length)}</strong>
+                  <span>{copy.newThreads(importPreview.newThreadNames.length)}</span>
+                  {importPreview.skippedRows.length > 0 && <span>{copy.skipped(importPreview.skippedRows.length)}</span>}
                 </div>
                 <div className="outline-import-preview-list">
                   {importPreview.rows.slice(0, 8).map((row) => (
                     <div key={`${row.rowNumber}:${row.summary}`}>
-                      <b>{row.chapterTitle || "未安排章节"}</b>
+                      <b>{row.chapterTitle || copy.unassignedChapter}</b>
                       <span>{row.summary}</span>
                       {row.warnings.length > 0 && <small>{row.warnings.join("；")}</small>}
                     </div>
                   ))}
                   {importPreview.skippedRows.slice(0, 3).map((row) => (
                     <div key={`skipped:${row.rowNumber}`}>
-                      <b>第 {row.rowNumber} 行已跳过</b>
+                      <b>{copy.skippedRow(row.rowNumber)}</b>
                       <span>{row.reason}</span>
                     </div>
                   ))}
@@ -1343,12 +1529,12 @@ export function OutlinePage({
             )}
             <footer>
               <button className="outline-danger-button" onClick={() => { void clearImportedEvents(); }} type="button">
-                清空导入内容
+                {copy.clearImported}
               </button>
-              <Button onClick={() => { setImportOpen(false); setImportError(null); }} variant="secondary">取消</Button>
+              <Button onClick={() => { setImportOpen(false); setImportError(null); }} variant="secondary">{copy.cancel}</Button>
               <button className="outline-primary-button" disabled={!importPreview || importPreview.rows.length === 0} onClick={() => { void confirmImport(); }} type="button">
                 <Check size={17} />
-                确认导入
+                {copy.confirmImport}
               </button>
             </footer>
           </section>

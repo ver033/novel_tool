@@ -1,5 +1,5 @@
 import { ArrowClockwise, Check, CopySimple, PaperPlaneRight, Plus, Stop, Trash } from "@phosphor-icons/react";
-import { type CSSProperties, type KeyboardEvent, type ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, type CSSProperties, type KeyboardEvent, type ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { AiChatMessageRecord, ChapterSummary, SelectionSnapshot, SummaryIndexStatus } from "../../main/shared/types";
 import { Button } from "../components/Button";
 import { IconButton } from "../components/IconButton";
@@ -7,8 +7,10 @@ import { Modal } from "../components/Modal";
 import type { SettingsCategory } from "../routes/SettingsPage";
 import type { ChatStore } from "../state/chat-store";
 import { ChatMessageContent } from "./ChatMessageContent";
+import { AgentActivityTrail } from "./AgentActivityTrail";
 import { buildChatContextUsageDisplay } from "./chat-context-display";
 import type { AiChatDraftSeed } from "./chat-draft";
+import { useI18n } from "../i18n";
 
 type AiChatTabProps = {
   readonly chapters: readonly ChapterSummary[];
@@ -37,15 +39,24 @@ type SummaryIndexBanner = {
   readonly title: string;
   readonly detail: string;
   readonly variant: "ready" | "building" | "warning" | "paused";
-  readonly actionLabel: "开始建立索引" | "继续建立索引" | "停止后台索引" | "打开缓存设置" | "打开 AI 服务设置" | "重试" | null;
+  readonly action: "start" | "resume" | "stop" | "cache_settings" | "ai_settings" | "retry" | null;
 };
 
-const chatSkillSuggestions: readonly ChatCommandSuggestion[] = [
-  { label: "/润色", detail: "调用润色 skill，只返回候选正文", insertText: "/润色" },
-  { label: "/扩写", detail: "调用扩写 skill，补足动作、心理和承接", insertText: "/扩写" },
-  { label: "/校对", detail: "调用校对 skill，只列出问题和建议", insertText: "/校对" },
-  { label: "/续写", detail: "调用续写 skill，延续当前上下文", insertText: "/续写" }
-];
+function getChatSkillSuggestions(japanese: boolean): readonly ChatCommandSuggestion[] {
+  return japanese
+    ? [
+        { label: "/推敲", detail: "推敲操作を呼び出し、本文候補だけを返します", insertText: "/推敲" },
+        { label: "/加筆", detail: "動作・心理・つながりを補います", insertText: "/加筆" },
+        { label: "/校正", detail: "問題点と提案だけを列挙します", insertText: "/校正" },
+        { label: "/続きを書く", detail: "現在の文脈から続きを生成します", insertText: "/続きを書く" }
+      ]
+    : [
+        { label: "/润色", detail: "调用润色 skill，只返回候选正文", insertText: "/润色" },
+        { label: "/扩写", detail: "调用扩写 skill，补足动作、心理和承接", insertText: "/扩写" },
+        { label: "/校对", detail: "调用校对 skill，只列出问题和建议", insertText: "/校对" },
+        { label: "/续写", detail: "调用续写 skill，延续当前上下文", insertText: "/续写" }
+      ];
+}
 
 const aiSettingsErrorMarkers = [
   "OpenRouter API Key 未配置",
@@ -91,34 +102,34 @@ function isChatInputTooLongError(error: string): boolean {
   return error.includes("AI 对话上下文太长") || error.includes("选区太长") || error.includes("目标文本太长");
 }
 
-function chatErrorTitle(error: string): string {
+function chatErrorTitle(error: string, japanese: boolean): string {
   if (isAiSettingsError(error)) {
-    return "AI 服务未配置";
+    return japanese ? "AI サービスが未設定です" : "AI 服务未配置";
   }
   if (isOpenRouterRateLimitError(error)) {
-    return "OpenRouter 请求被限流";
+    return japanese ? "OpenRouter のレート制限に達しました" : "OpenRouter 请求被限流";
   }
   if (isMissingChapterError(error)) {
-    return "找不到章节";
+    return japanese ? "章が見つかりません" : "找不到章节";
   }
   if (isChatInputTooLongError(error)) {
-    return "对话上下文过长";
+    return japanese ? "会話のコンテキストが長すぎます" : "对话上下文过长";
   }
-  return "AI 对话失败";
+  return japanese ? "AI チャットに失敗しました" : "AI 对话失败";
 }
 
-function chatErrorHint(error: string): string | null {
+function chatErrorHint(error: string, japanese: boolean): string | null {
   if (isAiSettingsError(error)) {
-    return "请先填写 OpenRouter API Key 和模型名称，并测试保存。";
+    return japanese ? "OpenRouter API キーとモデル名を入力し、接続テスト後に保存してください。" : "请先填写 OpenRouter API Key 和模型名称，并测试保存。";
   }
   if (isOpenRouterRateLimitError(error)) {
-    return "当前模型或上游 Provider 正在限流。可以稍后重试，或在 AI 服务设置中换用其他模型。";
+    return japanese ? "現在のモデルまたは上流プロバイダーが制限中です。しばらく待つか、AI サービス設定で別のモデルを選んでください。" : "当前模型或上游 Provider 正在限流。可以稍后重试，或在 AI 服务设置中换用其他模型。";
   }
   if (isMissingChapterError(error)) {
-    return "请检查章节编号是否存在；如果刚导入或重排章节，先确认左侧章节列表。";
+    return japanese ? "章番号を確認してください。インポートまたは並べ替え直後の場合は、左側の章一覧を確認してください。" : "请检查章节编号是否存在；如果刚导入或重排章节，先确认左侧章节列表。";
   }
   if (isChatInputTooLongError(error)) {
-    return "请缩短问题、取消过长选区，或改成分章/分段提问。";
+    return japanese ? "質問を短くする、長い選択範囲を解除する、または章・段落ごとに分けて質問してください。" : "请缩短问题、取消过长选区，或改成分章/分段提问。";
   }
   return null;
 }
@@ -126,23 +137,24 @@ function chatErrorHint(error: string): string | null {
 function buildSummaryIndexBanner(
   status: SummaryIndexStatus | null,
   loading: boolean,
-  error: string | null
+  error: string | null,
+  japanese: boolean
 ): SummaryIndexBanner | null {
   if (error) {
     return {
-      title: "全书索引状态读取失败",
+      title: japanese ? "全文インデックスの状態を取得できませんでした" : "全书索引状态读取失败",
       detail: error,
       variant: "warning",
-      actionLabel: "重试"
+      action: "retry"
     };
   }
   if (!status) {
     return loading
       ? {
-          title: "正在读取全书索引状态",
-          detail: "墨枢正在检查当前项目是否已有可复用的章节摘要。",
+          title: japanese ? "全文インデックスの状態を取得しています" : "正在读取全书索引状态",
+          detail: japanese ? "現在のプロジェクトに再利用可能な章要約があるか確認しています。" : "墨枢正在检查当前项目是否已有可复用的章节摘要。",
           variant: "building",
-          actionLabel: null
+          action: null
         }
       : null;
   }
@@ -167,44 +179,48 @@ function buildSummaryIndexBanner(
   const queuedOrRunning = status.queuedJobCount > 0 || Boolean(status.runningJobLabel);
   if (status.pausedReason === "background_disabled" || !status.backgroundEnabled) {
     return {
-      title: "后台索引已关闭",
-      detail: `全书索引：${indexedCount} / ${status.totalChapterCount} 章${issueSuffix}${failedSuffix}。新章节和过期章节不会自动缓存。`,
+      title: japanese ? "バックグラウンド索引は無効です" : "后台索引已关闭",
+      detail: japanese ? `全文インデックス：${indexedCount} / ${status.totalChapterCount} 章。新しい章と古い章は自動更新されません。` : `全书索引：${indexedCount} / ${status.totalChapterCount} 章${issueSuffix}${failedSuffix}。新章节和过期章节不会自动缓存。`,
       variant: "paused",
-      actionLabel: "继续建立索引"
+      action: "resume"
     };
   }
   if (status.pausedReason === "ai_not_configured") {
     return {
-      title: "AI 服务未配置，索引暂停",
-      detail: `全书索引：${indexedCount} / ${status.totalChapterCount} 章。配置 OpenRouter 后会继续后台建立。`,
+      title: japanese ? "AI サービスが未設定のため、索引を停止しています" : "AI 服务未配置，索引暂停",
+      detail: japanese ? `全文インデックス：${indexedCount} / ${status.totalChapterCount} 章。OpenRouter の設定後にバックグラウンド処理を再開します。` : `全书索引：${indexedCount} / ${status.totalChapterCount} 章。配置 OpenRouter 后会继续后台建立。`,
       variant: "paused",
-      actionLabel: "打开 AI 服务设置"
+      action: "ai_settings"
     };
   }
   if (status.pausedReason === "foreground_ai_active") {
     return {
-      title: "索引已暂停：AI 正在回答",
-      detail: `全书索引：${indexedCount} / ${status.totalChapterCount} 章。后台索引会等前台 AI 结束后继续。`,
+      title: japanese ? "索引を一時停止中：AI が応答しています" : "索引已暂停：AI 正在回答",
+      detail: japanese ? `全文インデックス：${indexedCount} / ${status.totalChapterCount} 章。AI の応答終了後に再開します。` : `全书索引：${indexedCount} / ${status.totalChapterCount} 章。后台索引会等前台 AI 结束后继续。`,
       variant: "paused",
-      actionLabel: null
+      action: null
     };
   }
   if (status.staleChapterCount > 0) {
     return {
-      title: `索引过期：${status.staleChapterCount} 章需要更新`,
-      detail: `全书索引：${indexedCount} / ${status.totalChapterCount} 章${issueSuffix}${failedSuffix}。最近编辑过的章节需要重新摘要。`,
+      title: japanese ? `索引が古くなっています：${status.staleChapterCount} 章を更新してください` : `索引过期：${status.staleChapterCount} 章需要更新`,
+      detail: japanese ? `全文インデックス：${indexedCount} / ${status.totalChapterCount} 章。最近編集した章の要約を更新する必要があります。` : `全书索引：${indexedCount} / ${status.totalChapterCount} 章${issueSuffix}${failedSuffix}。最近编辑过的章节需要重新摘要。`,
       variant: "warning",
-      actionLabel: "打开缓存设置"
+      action: "cache_settings"
     };
   }
   if (queuedOrRunning) {
     return {
-      title: `全书索引：${indexedCount} / ${status.totalChapterCount} 章`,
-      detail: status.runningJobLabel
-        ? `正在摘要：${status.runningJobLabel.replace(/^正在摘要：/, "")}${issueSuffix}${retrySuffix}${failedSuffix}`
-        : `后台摘要任务已排队，会在不影响当前 AI 对话时继续${issueSuffix}${retrySuffix}${failedSuffix}。`,
+      title: japanese ? `全文インデックス：${indexedCount} / ${status.totalChapterCount} 章` : `全书索引：${indexedCount} / ${status.totalChapterCount} 章`,
+      detail: japanese
+        ? status.runningJobLabel
+          ? `要約中：${status.runningJobLabel.replace(/^正在摘要：/, "")}`
+          : "バックグラウンド要約は待機中です。現在の AI チャットを妨げないタイミングで続行します。"
+        : status.runningJobLabel
+          ? `正在摘要：${status.runningJobLabel.replace(/^正在摘要：/, "")}${issueSuffix}${retrySuffix}${failedSuffix}`
+          : `后台摘要任务已排队，会在不影响当前 AI 对话时继续${issueSuffix}${retrySuffix}${failedSuffix}。`,
       variant: "building",
-      actionLabel: "停止后台索引"
+      action: "stop"
     };
   }
   if (status.cancelledJobCount > 0 && status.missingChapterCount > 0) {
@@ -213,25 +229,25 @@ function buildSummaryIndexBanner(
       status.failedJobCount > 0 ? `失败 ${status.failedJobCount} 个任务` : ""
     ].filter(Boolean);
     return {
-      title: "后台索引已停止",
-      detail: `全书索引：${indexedCount} / ${status.totalChapterCount} 章；${stoppedIssueParts.join("；")}${failedSuffix}。`,
+      title: japanese ? "バックグラウンド索引を停止しました" : "后台索引已停止",
+      detail: japanese ? `全文インデックス：${indexedCount} / ${status.totalChapterCount} 章。` : `全书索引：${indexedCount} / ${status.totalChapterCount} 章；${stoppedIssueParts.join("；")}${failedSuffix}。`,
       variant: "paused",
-      actionLabel: "继续建立索引"
+      action: "resume"
     };
   }
   if (status.missingChapterCount > 0) {
     return {
-      title: `全书索引：${indexedCount} / ${status.totalChapterCount} 章`,
-      detail: `当前只有 ${indexedCount} / ${status.totalChapterCount} 章可用于全文摘要索引${issueSuffix}${retrySuffix}${failedSuffix}。`,
+      title: japanese ? `全文インデックス：${indexedCount} / ${status.totalChapterCount} 章` : `全书索引：${indexedCount} / ${status.totalChapterCount} 章`,
+      detail: japanese ? `現在、全文要約インデックスに利用できるのは ${indexedCount} / ${status.totalChapterCount} 章です。` : `当前只有 ${indexedCount} / ${status.totalChapterCount} 章可用于全文摘要索引${issueSuffix}${retrySuffix}${failedSuffix}。`,
       variant: "warning",
-      actionLabel: "开始建立索引"
+      action: "start"
     };
   }
   return {
-    title: `全书索引：${indexedCount} / ${status.totalChapterCount} 章`,
-    detail: "全文总结和跨章节提问会优先使用摘要索引，避免临时读取整本书。",
+    title: japanese ? `全文インデックス：${indexedCount} / ${status.totalChapterCount} 章` : `全书索引：${indexedCount} / ${status.totalChapterCount} 章`,
+    detail: japanese ? "全文要約や章をまたぐ質問では要約インデックスを優先し、作品全体の再読み込みを抑えます。" : "全文总结和跨章节提问会优先使用摘要索引，避免临时读取整本书。",
     variant: "ready",
-    actionLabel: "打开缓存设置"
+    action: "cache_settings"
   };
 }
 
@@ -297,6 +313,45 @@ export function AiChatTab({
   selectionSnapshot,
   onOpenSettings
 }: AiChatTabProps) {
+  const { locale, t } = useI18n();
+  const japanese = locale === "ja-JP";
+  const copy = japanese
+    ? {
+        newChat: "新しいチャット", newChatTitle: "空の AI チャットを作成", deleteChat: "現在のチャットを削除",
+        switchChat: "AI チャットを切り替え", noChat: "チャットはありません", currentChapter: "現在の章",
+        noSelectedChapter: "章が選択されていません", selectedText: "テキストを選択中", noSelectedText: "テキスト未選択",
+        loadingChat: "AI チャットを読み込んでいます...", noMessages: "チャット履歴はありません。", analyzing: "コンテキストを分析しています...",
+        regenerating: "再生成しています...", copyReply: "AI の回答をコピー", regenerateReply: "AI の回答を再生成", thinking: "思考",
+        copyStreaming: "生成中の AI 回答をコピー", aiThinking: "執筆アシスタントが作業しています", retryLast: "直前のメッセージを再試行",
+        openAiSettings: "AI サービス設定を開く", selectContextScope: "コンテキスト範囲を選択", selectWritingOperation: "執筆操作を選択",
+        selectContext: "コンテキストを選択", invokeSkill: "操作を呼び出す", inputAria: "AI チャット入力。Enter で送信、Shift+Enter で改行",
+        inputPlaceholder: "AI に相談したいことを入力...", contextWindow: "背景情報ウィンドウ", preparingContext: "新しいコンテキストを準備中、",
+        used: "使用済み", analyzingShort: "分析中", prepareContext: "コンテキストを準備", updating: "更新中",
+        contextPending: "新しいコンテキストを準備しています。新しい使用量は最終リクエストの開始時に更新されます。",
+        model: "モデル", scope: "範囲", context: "コンテキスト", memory: "会話メモリ", modelWindow: "モデルウィンドウ",
+        inputBudget: "入力予算", output: "出力", stopAi: "AI の回答を停止", deleteDescription: "削除すると、この AI チャットとメッセージ履歴が現在のプロジェクトから取り除かれます。",
+        noCopyReply: "コピーできる AI の回答がありません。", clipboardUnavailable: "システムのクリップボードを利用できません。", copyFailed: "コピーに失敗しました",
+        selectedMention: "@選択範囲", selectedMentionDetail: "現在選択している本文を使用", currentMention: "@現在の章", allMention: "@すべての章",
+        allMentionDetail: "現在のプロジェクトの全章を読み込む", agentModel: "Pi Agent", modelReady: "準備完了", modelRunning: "実行中", modelNotConfigured: "モデル未設定", savedToScratchpad: "下書きメモへ追加しました", toolCompleted: "関連する操作を完了しました"
+      }
+    : {
+        newChat: "新对话", newChatTitle: "新建一个空白 AI 对话", deleteChat: "删除当前对话",
+        switchChat: "切换 AI 对话", noChat: "暂无对话", currentChapter: "当前章节",
+        noSelectedChapter: "未选择章节", selectedText: "已选中文本", noSelectedText: "未选中文本",
+        loadingChat: "正在读取 AI 对话...", noMessages: "暂无对话记录。", analyzing: "正在分析上下文...",
+        regenerating: "正在重新生成...", copyReply: "复制 AI 回复", regenerateReply: "重新生成 AI 回复", thinking: "思考",
+        copyStreaming: "复制正在生成的 AI 回复", aiThinking: "写作助手正在处理", retryLast: "重试上一条",
+        openAiSettings: "打开 AI 服务设置", selectContextScope: "选择上下文范围", selectWritingOperation: "选择写作操作",
+        selectContext: "选择上下文", invokeSkill: "调用 skill", inputAria: "AI 对话输入，Enter 发送，Shift Enter 换行",
+        inputPlaceholder: "告诉 AI 你的想法...", contextWindow: "背景信息窗口", preparingContext: "正在准备新上下文，",
+        used: "已用", analyzingShort: "分析中", prepareContext: "准备上下文", updating: "更新中",
+        contextPending: "正在准备新上下文，新用量会在最终请求开始时刷新。",
+        model: "模型", scope: "范围", context: "上下文", memory: "对话记忆", modelWindow: "模型窗口",
+        inputBudget: "输入预算", output: "输出", stopAi: "停止 AI 回答", deleteDescription: "删除后，这个 AI 对话和其中的消息记录会从当前项目中移除。",
+        noCopyReply: "当前没有可复制的 AI 回复。", clipboardUnavailable: "系统剪贴板不可用。", copyFailed: "复制失败",
+        selectedMention: "@选区", selectedMentionDetail: "使用当前选中的正文", currentMention: "@当前章节", allMention: "@全部章节",
+        allMentionDetail: "读取当前项目所有章节", agentModel: "Pi Agent", modelReady: "已就绪", modelRunning: "执行中", modelNotConfigured: "模型未配置", savedToScratchpad: "已加入草稿纸", toolCompleted: "相关操作已完成"
+      };
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [copiedStreaming, setCopiedStreaming] = useState(false);
   const [copyError, setCopyError] = useState<string | null>(null);
@@ -332,22 +387,22 @@ export function AiChatTab({
     const suggestions: ChatCommandSuggestion[] = [];
     if (selectionSnapshot?.text) {
       suggestions.push({
-        label: "@选区",
-        detail: "使用当前选中的正文",
-        insertText: "@选区"
+        label: copy.selectedMention,
+        detail: copy.selectedMentionDetail,
+        insertText: copy.selectedMention
       });
     }
     if (currentChapterTitle) {
       suggestions.push({
-        label: "@当前章节",
+        label: copy.currentMention,
         detail: currentChapterTitle,
-        insertText: "@当前章节"
+        insertText: copy.currentMention
       });
     }
     suggestions.push({
-      label: "@全部章节",
-      detail: "读取当前项目所有章节",
-      insertText: "@全部章节"
+      label: copy.allMention,
+      detail: copy.allMentionDetail,
+      insertText: copy.allMention
     });
     for (const [index, chapter] of chapters.entries()) {
       suggestions.push({
@@ -357,11 +412,11 @@ export function AiChatTab({
       });
     }
     return suggestions;
-  }, [chapters, currentChapterTitle, selectionSnapshot?.text]);
+  }, [chapters, copy.allMention, copy.allMentionDetail, copy.currentMention, copy.selectedMention, copy.selectedMentionDetail, currentChapterTitle, selectionSnapshot?.text]);
 
   const activeCommand = getActiveCommand(draft, cursorIndex);
   const commandSuggestions = activeCommand
-    ? filterCommandSuggestions(activeCommand.trigger === "@" ? chatMentionSuggestions : chatSkillSuggestions, activeCommand.query)
+    ? filterCommandSuggestions(activeCommand.trigger === "@" ? chatMentionSuggestions : getChatSkillSuggestions(japanese), activeCommand.query)
     : [];
   const showCommandSuggestions = commandSuggestions.length > 0 && !chatStore.busy && !chatStore.loading;
 
@@ -419,11 +474,11 @@ export function AiChatTab({
     setCopyError(null);
     const trimmedText = text.trim();
     if (!trimmedText) {
-      setCopyError("当前没有可复制的 AI 回复。");
+      setCopyError(copy.noCopyReply);
       return;
     }
     if (!navigator.clipboard) {
-      setCopyError("系统剪贴板不可用。");
+      setCopyError(copy.clipboardUnavailable);
       return;
     }
 
@@ -431,7 +486,7 @@ export function AiChatTab({
       await navigator.clipboard.writeText(trimmedText);
       onCopied();
     } catch (reason) {
-      setCopyError(reason instanceof Error ? reason.message : "复制失败");
+      setCopyError(reason instanceof Error ? reason.message : copy.copyFailed);
     }
   }
 
@@ -457,11 +512,16 @@ export function AiChatTab({
   }
 
   const lastUserMessage = getLastUserMessage(chatStore.messages);
-  const errorHint = chatStore.error ? chatErrorHint(chatStore.error) : null;
+  const errorHint = chatStore.error ? chatErrorHint(chatStore.error, japanese) : null;
   const showSettingsAction = Boolean(chatStore.error && (isAiSettingsError(chatStore.error) || isOpenRouterRateLimitError(chatStore.error)));
-  const contextDisplay = chatStore.contextUsage ? buildChatContextUsageDisplay(chatStore.contextUsage) : null;
-  const summaryBanner = buildSummaryIndexBanner(chatStore.summaryIndexStatus, chatStore.summaryIndexLoading, chatStore.summaryIndexError);
+  const contextDisplay = chatStore.contextUsage ? buildChatContextUsageDisplay(chatStore.contextUsage, locale) : null;
+  const summaryBanner = buildSummaryIndexBanner(chatStore.summaryIndexStatus, chatStore.summaryIndexLoading, chatStore.summaryIndexError, japanese);
+  const summaryActionLabels = japanese
+    ? { start: "索引を作成", resume: "索引を再開", stop: "バックグラウンド索引を停止", cache_settings: "キャッシュ設定を開く", ai_settings: "AI サービス設定を開く", retry: "再試行" }
+    : { start: "开始建立索引", resume: "继续建立索引", stop: "停止后台索引", cache_settings: "打开缓存设置", ai_settings: "打开 AI 服务设置", retry: "重试" };
   const showContextStatus = Boolean(contextDisplay || chatStore.contextUsagePending);
+  const rawModelName = chatStore.contextUsage?.modelName.trim();
+  const activeModelName = !rawModelName || rawModelName === "模型未配置" ? copy.modelNotConfigured : rawModelName;
   const contextRingStyle = contextDisplay
     ? ({
         "--context-used": `${contextDisplay.percent * 3.6}deg`
@@ -472,25 +532,25 @@ export function AiChatTab({
     <>
       <section className="chat">
         <div className="chat-title-row">
-          <h2 className="task-title">AI 对话</h2>
+          <h2 className="sr-only">{t("aiChat")}</h2>
           <div className="chat-title-actions">
             <button
               className="small-button blue chat-new-button"
               disabled={chatStore.busy || chatStore.loading || !currentProjectId}
               onClick={() => void chatStore.createSession()}
               type="button"
-              title="新建一个空白 AI 对话"
+              title={copy.newChatTitle}
             >
               <Plus size={15} />
-              新对话
+              {copy.newChat}
             </button>
             <button
               className="icon-lite-button"
               disabled={chatStore.busy || chatStore.loading || !chatStore.session}
               onClick={() => setDeleteConfirmOpen(true)}
               type="button"
-              aria-label="删除当前对话"
-              title="删除当前对话"
+              aria-label={copy.deleteChat}
+              title={copy.deleteChat}
             >
               <Trash size={16} />
             </button>
@@ -498,14 +558,14 @@ export function AiChatTab({
         </div>
         <div className="chat-session-bar">
           <select
-            aria-label="切换 AI 对话"
+            aria-label={copy.switchChat}
             className="chat-session-select"
             disabled={chatStore.busy || chatStore.loading || chatStore.sessions.length === 0}
             onChange={(event) => void chatStore.selectSession(event.target.value)}
-            title="切换 AI 对话"
+            title={copy.switchChat}
             value={chatStore.session?.id ?? ""}
           >
-            {chatStore.sessions.length === 0 ? <option value="">暂无对话</option> : null}
+            {chatStore.sessions.length === 0 ? <option value="">{copy.noChat}</option> : null}
             {chatStore.sessions.map((item) => (
               <option key={item.id} value={item.id}>
                 {item.title}
@@ -514,8 +574,8 @@ export function AiChatTab({
           </select>
         </div>
         <div className="chips">
-          <span className="chip">当前章节：{currentChapterTitle ?? "未选择章节"}</span>
-          <span className="chip">{selectionSnapshot ? "已选中文本" : "未选中文本"}</span>
+          <span className="chip">{copy.currentChapter}：{currentChapterTitle ?? copy.noSelectedChapter}</span>
+          <span className="chip">{selectionSnapshot ? copy.selectedText : copy.noSelectedText}</span>
         </div>
         {summaryBanner ? (
           <div className={`summary-index-banner ${summaryBanner.variant}`} role="status">
@@ -523,24 +583,24 @@ export function AiChatTab({
               <b>{summaryBanner.title}</b>
               <span>{summaryBanner.detail}</span>
             </div>
-            {summaryBanner.actionLabel ? (
+            {summaryBanner.action ? (
               <button
                 className="small-button"
                 disabled={chatStore.summaryIndexLoading || chatStore.busy}
                 onClick={() => {
-                  if (summaryBanner.actionLabel === "打开 AI 服务设置") {
-                    onOpenSettings("AI 服务");
+                  if (summaryBanner.action === "ai_settings") {
+                    onOpenSettings("ai");
                     return;
                   }
-                  if (summaryBanner.actionLabel === "打开缓存设置") {
-                    onOpenSettings("章节索引缓存");
+                  if (summaryBanner.action === "cache_settings") {
+                    onOpenSettings("chapter-cache");
                     return;
                   }
-                  if (summaryBanner.actionLabel === "重试") {
+                  if (summaryBanner.action === "retry") {
                     void chatStore.refreshSummaryIndexStatus();
                     return;
                   }
-                  if (summaryBanner.actionLabel === "停止后台索引") {
+                  if (summaryBanner.action === "stop") {
                     void chatStore.cancelSummaryIndexJob();
                     return;
                   }
@@ -548,7 +608,7 @@ export function AiChatTab({
                 }}
                 type="button"
               >
-                {summaryBanner.actionLabel}
+                {summaryActionLabels[summaryBanner.action]}
               </button>
             ) : null}
             {chatStore.summaryIndexNotice ? <p className="summary-index-notice">{chatStore.summaryIndexNotice}</p> : null}
@@ -557,12 +617,12 @@ export function AiChatTab({
         <div className="messages" aria-live="polite">
           {chatStore.loading ? (
             <div className="message pending" role="status">
-              <div className="message-content">正在读取 AI 对话...</div>
+              <div className="message-content">{copy.loadingChat}</div>
             </div>
           ) : null}
           {!chatStore.loading && chatStore.messages.length === 0 ? (
             <div className="message">
-              <div className="message-content">暂无对话记录。</div>
+              <div className="message-content">{copy.noMessages}</div>
             </div>
           ) : null}
           {chatStore.messages.map((message, index) => {
@@ -571,17 +631,30 @@ export function AiChatTab({
               ? chatStore.streamingText
                 ? chatStore.streamingText
                 : chatStore.contextUsagePending
-                  ? "正在分析上下文..."
-                  : "正在重新生成..."
+                  ? copy.analyzing
+                  : copy.regenerating
               : message.content;
             const showAssistantActions = message.role === "assistant" && message.content.trim() && !isRegeneratingMessage;
+            if (message.role === "tool") {
+              return (
+                <div className="agent-tool-event" key={message.id}>
+                  <Check size={16} weight="bold" />
+                  <span>{message.action?.type === "add_to_scratchpad" ? copy.savedToScratchpad : copy.toolCompleted}</span>
+                  <time>{new Date(message.createdAt).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" })}</time>
+                </div>
+              );
+            }
             return (
-              <div className={`${messageClassName(message)}${isRegeneratingMessage ? " regenerating" : ""}`} key={message.id}>
+              <Fragment key={message.id}>
+                {message.role === "assistant" ? (
+                  <AgentActivityTrail activities={isRegeneratingMessage ? chatStore.agentActivities : message.activities ?? []} />
+                ) : null}
+              <div className={`${messageClassName(message)}${isRegeneratingMessage ? " regenerating" : ""}`}>
                 {showAssistantActions ? (
                   <div className="message-action-stack">
                     <IconButton
                       className={`message-copy-button ${copiedMessageId === message.id ? "copied" : ""}`}
-                      label="复制 AI 回复"
+                      label={copy.copyReply}
                       onClick={() => void copyChatMessage(message)}
                     >
                       {copiedMessageId === message.id ? <Check size={16} weight="bold" /> : <CopySimple size={16} />}
@@ -590,7 +663,7 @@ export function AiChatTab({
                       <IconButton
                         className="message-regenerate-button"
                         disabled={chatStore.busy || chatStore.loading || !chatStore.session}
-                        label="重新生成 AI 回复"
+                        label={copy.regenerateReply}
                         onClick={() => void chatStore.regenerateAssistantMessage(message.id)}
                       >
                         <ArrowClockwise size={16} />
@@ -598,43 +671,36 @@ export function AiChatTab({
                     ) : null}
                   </div>
                 ) : null}
-                {isRegeneratingMessage && chatStore.streamingReasoning ? (
-                  <details className="chat-reasoning" open>
-                    <summary>思考</summary>
-                    <div>{chatStore.streamingReasoning}</div>
-                  </details>
-                ) : null}
                 <ChatMessageContent
                   content={visibleMessageContent}
                   rich={message.role === "assistant" && (!isRegeneratingMessage || Boolean(chatStore.streamingText))}
                 />
-                <div className="message-time">{new Date(message.createdAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}</div>
+                <div className="message-time">{new Date(message.createdAt).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" })}</div>
               </div>
+              </Fragment>
             );
           })}
           {chatStore.busy && !chatStore.regeneratingMessageId ? (
+            <>
+            <AgentActivityTrail activities={chatStore.agentActivities} />
             <div className="message pending" role="status">
               {chatStore.streamingText.trim() ? (
                 <IconButton
                   className={`message-copy-button ${copiedStreaming ? "copied" : ""}`}
-                  label="复制正在生成的 AI 回复"
+                  label={copy.copyStreaming}
                   onClick={() => void copyStreamingReply()}
                 >
                   {copiedStreaming ? <Check size={16} weight="bold" /> : <CopySimple size={16} />}
                 </IconButton>
               ) : null}
-              {chatStore.streamingReasoning ? (
-                <details className="chat-reasoning" open>
-                  <summary>思考</summary>
-                  <div>{chatStore.streamingReasoning}</div>
-                </details>
-              ) : null}
               <ChatMessageContent
-                content={chatStore.streamingText ? chatStore.streamingText : chatStore.contextUsagePending ? "正在分析上下文..." : "AI 正在思考中"}
+                content={chatStore.streamingText ? chatStore.streamingText : chatStore.contextUsagePending ? copy.analyzing : copy.aiThinking}
                 rich={Boolean(chatStore.streamingText)}
               />
             </div>
+            </>
           ) : null}
+          {!chatStore.busy && chatStore.agentActivities.length > 0 ? <AgentActivityTrail activities={chatStore.agentActivities} /> : null}
           {copyError ? (
             <div className="chat-copy-error" role="alert">
               {copyError}
@@ -642,7 +708,7 @@ export function AiChatTab({
           ) : null}
           {chatStore.error ? (
             <div className="chat-error-panel" role="alert">
-              <b>{chatErrorTitle(chatStore.error)}</b>
+              <b>{chatErrorTitle(chatStore.error, japanese)}</b>
               <p>{chatStore.error}</p>
               {errorHint ? <p className="chat-error-hint">{errorHint}</p> : null}
               <div className="chat-error-actions">
@@ -652,11 +718,11 @@ export function AiChatTab({
                   onClick={() => void resendLastUserMessageAfterError()}
                   type="button"
                 >
-                  重试上一条
+                  {copy.retryLast}
                 </button>
                 {showSettingsAction ? (
-                  <button className="small-button" onClick={() => onOpenSettings("AI 服务")} type="button">
-                    打开 AI 服务设置
+                  <button className="small-button" onClick={() => onOpenSettings("ai")} type="button">
+                    {copy.openAiSettings}
                   </button>
                 ) : null}
               </div>
@@ -666,8 +732,8 @@ export function AiChatTab({
         </div>
         <div className="chat-input">
           {showCommandSuggestions ? (
-            <div className="chat-command-menu" role="listbox" aria-label={activeCommand?.trigger === "@" ? "选择上下文范围" : "选择写作操作"}>
-              <div className="chat-command-menu-title">{activeCommand?.trigger === "@" ? "选择上下文" : "调用 skill"}</div>
+            <div className="chat-command-menu" role="listbox" aria-label={activeCommand?.trigger === "@" ? copy.selectContextScope : copy.selectWritingOperation}>
+              <div className="chat-command-menu-title">{activeCommand?.trigger === "@" ? copy.selectContext : copy.invokeSkill}</div>
               {commandSuggestions.map((suggestion) => (
                 <button className="chat-command-item" key={suggestion.label} onMouseDown={(event) => event.preventDefault()} onClick={() => insertCommandSuggestion(suggestion)} type="button">
                   <span>{suggestion.label}</span>
@@ -677,55 +743,66 @@ export function AiChatTab({
             </div>
           ) : null}
           <textarea
-            aria-label="AI 对话输入，Enter 发送，Shift Enter 换行"
+            aria-label={copy.inputAria}
             onChange={handleDraftChange}
             onClick={(event) => setCursorIndex(event.currentTarget.selectionStart ?? draft.length)}
             onKeyDown={handleDraftKeyDown}
             onKeyUp={(event) => setCursorIndex(event.currentTarget.selectionStart ?? draft.length)}
-            placeholder="告诉 AI 你的想法..."
+            placeholder={copy.inputPlaceholder}
             ref={inputRef}
             value={draft}
           />
           <div className="chat-bottom chat-bottom-send">
+            <button
+              className="chat-runtime-bar"
+              onClick={() => onOpenSettings("ai")}
+              title={`${copy.model}：${activeModelName}`}
+              type="button"
+            >
+              <span className={`chat-runtime-dot${chatStore.busy ? " running" : ""}`} aria-hidden="true" />
+              <span className="chat-runtime-agent">{copy.agentModel}</span>
+              <strong>{activeModelName}</strong>
+              <span className="chat-runtime-state">{chatStore.busy ? copy.modelRunning : copy.modelReady}</span>
+            </button>
             <div className="chat-bottom-meta">
               {showContextStatus ? (
                 <div
                   className={`chat-context-status${chatStore.contextUsagePending ? " preparing" : ""}`}
                   aria-label={
                     contextDisplay
-                      ? `背景信息窗口：${chatStore.contextUsagePending ? "正在准备新上下文，" : ""}${contextDisplay.percentText} 已用，${contextDisplay.usedOfTotalLabel}`
-                      : "正在分析上下文"
+                      ? `${copy.contextWindow}：${chatStore.contextUsagePending ? copy.preparingContext : ""}${contextDisplay.percentText} ${copy.used}，${contextDisplay.usedOfTotalLabel}`
+                      : copy.analyzing
                   }
                   tabIndex={0}
                 >
                   <div className="chat-context-status-main">
                     <span className="chat-context-ring" style={contextRingStyle} aria-hidden="true" />
-                    <strong>{contextDisplay?.percentText ?? "分析中"}</strong>
+                    <strong>{contextDisplay?.percentText ?? copy.analyzingShort}</strong>
                     {contextDisplay ? <span>{contextDisplay.usedLabel}</span> : null}
-                    <span className="chat-context-model-label">{contextDisplay?.modelLabel ?? "准备上下文"}</span>
+                    <span className="chat-context-model-label">{contextDisplay?.modelLabel ?? copy.prepareContext}</span>
                     {contextDisplay ? <span className="chat-context-source-label">{contextDisplay.sourceLabel}</span> : null}
                     {contextDisplay?.memoryLabel ? <span className="chat-context-source-label">{contextDisplay.memoryLabel}</span> : null}
-                    {chatStore.contextUsagePending ? <span className="context-updating">更新中</span> : null}
+                    {chatStore.contextUsagePending ? <span className="context-updating">{copy.updating}</span> : null}
                   </div>
                   {contextDisplay ? (
                     <div className="chat-context-popover" role="tooltip">
-                      <div className="chat-context-popover-title">背景信息窗口：</div>
-                      <div className="chat-context-popover-percent">{contextDisplay.percentText} 已用</div>
+                      <div className="chat-context-popover-title">{copy.contextWindow}：</div>
+                      <div className="chat-context-popover-percent">{contextDisplay.percentText} {copy.used}</div>
                       <div className="chat-context-popover-total">{contextDisplay.usedOfTotalLabel}</div>
                       <div className="chat-context-popover-strong">{contextDisplay.compressionLabel}</div>
                       {contextDisplay.memoryLabel ? <div className="chat-context-popover-strong">{contextDisplay.memoryLabel}</div> : null}
                       {chatStore.contextUsagePending ? (
-                        <div className="chat-context-popover-pending">正在准备新上下文，新用量会在最终请求开始时刷新。</div>
+                        <div className="chat-context-popover-pending">{copy.contextPending}</div>
                       ) : null}
                       <div className="chat-context-popover-meta">
-                        <span>模型 {contextDisplay.modelLabel}</span>
-                        <span>范围 {contextDisplay.scopeLabel}</span>
-                        <span>上下文 {contextDisplay.sourceLabel}</span>
-                        {contextDisplay.memoryLabel ? <span>对话记忆 {contextDisplay.memoryLabel}</span> : null}
+                        <span>{copy.model} {contextDisplay.modelLabel}</span>
+                        <span>{copy.scope} {contextDisplay.scopeLabel}</span>
+                        <span>{copy.context} {contextDisplay.sourceLabel}</span>
+                        {contextDisplay.memoryLabel ? <span>{copy.memory} {contextDisplay.memoryLabel}</span> : null}
                         {contextDisplay.coverageLabel ? <span>{contextDisplay.coverageLabel}</span> : null}
-                        <span>模型窗口 {contextDisplay.windowLabel}</span>
-                        <span>输入预算 {contextDisplay.inputBudgetLabel}</span>
-                        <span>输出 {contextDisplay.outputBudgetLabel}</span>
+                        <span>{copy.modelWindow} {contextDisplay.windowLabel}</span>
+                        <span>{copy.inputBudget} {contextDisplay.inputBudgetLabel}</span>
+                        <span>{copy.output} {contextDisplay.outputBudgetLabel}</span>
                       </div>
                     </div>
                   ) : null}
@@ -738,8 +815,8 @@ export function AiChatTab({
                 disabled={chatStore.loading}
                 onClick={() => chatStore.cancelActiveStream()}
                 type="button"
-                aria-label="停止 AI 回答"
-                title="停止 AI 回答"
+                aria-label={copy.stopAi}
+                title={copy.stopAi}
               >
                 <Stop size={20} weight="fill" />
               </button>
@@ -749,7 +826,7 @@ export function AiChatTab({
                 disabled={!draft.trim() || chatStore.loading || !chatStore.session || !currentProjectId}
                 onClick={() => void sendMessage()}
                 type="button"
-                aria-label="发送"
+                aria-label={t("send")}
               >
                 <PaperPlaneRight size={20} weight="regular" />
               </button>
@@ -757,12 +834,12 @@ export function AiChatTab({
           </div>
         </div>
       </section>
-      <Modal open={deleteConfirmOpen} title="删除当前对话" onClose={() => setDeleteConfirmOpen(false)}>
+      <Modal open={deleteConfirmOpen} title={copy.deleteChat} onClose={() => setDeleteConfirmOpen(false)}>
         <div className="confirm-dialog-body">
-          <p>删除后，这个 AI 对话和其中的消息记录会从当前项目中移除。</p>
+          <p>{copy.deleteDescription}</p>
           <div className="modal-actions">
             <Button onClick={() => setDeleteConfirmOpen(false)} type="button" variant="ghost">
-              取消
+              {t("cancel")}
             </Button>
             <Button
               className="danger-button"
@@ -771,7 +848,7 @@ export function AiChatTab({
               type="button"
               variant="primary"
             >
-              删除
+              {t("delete")}
             </Button>
           </div>
         </div>

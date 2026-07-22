@@ -171,7 +171,7 @@ function normalizeSettings(settings: Partial<UsageAnalyticsSettings> | null): Us
     (previous) => scheduleLocalTimes.length === previous.length && previous.every((item, index) => scheduleLocalTimes[index] === item)
   );
   return {
-    automaticReportsEnabled: settings?.automaticReportsEnabled ?? true,
+    automaticReportsEnabled: settings?.automaticReportsEnabled ?? false,
     scheduleLocalTimes: isPreviousDefaultSchedule ? [...DEFAULT_SCHEDULE_LOCAL_TIMES] : scheduleLocalTimes,
     reportRangeDays: Math.min(90, Math.max(1, Math.round(settings?.reportRangeDays ?? DEFAULT_RANGE_DAYS)))
   };

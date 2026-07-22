@@ -215,7 +215,7 @@ describe("StartupLaunchService", () => {
     });
   });
 
-  it("enables Windows startup launch by default for packaged Windows builds when the user has not configured it", () => {
+  it("keeps Windows startup launch disabled by default when the user has not configured it", () => {
     const setLoginItemSettings = vi.fn();
     const preferenceStore = createPreferenceStore(true);
     const service = new StartupLaunchService(
@@ -231,18 +231,18 @@ describe("StartupLaunchService", () => {
       preferenceStore
     );
 
-    const status = service.ensureDefaultEnabled();
+    const status = service.ensureDefaultDisabled();
 
     expect(setLoginItemSettings).toHaveBeenCalledWith({
-      openAtLogin: true,
-      enabled: true,
+      openAtLogin: false,
+      enabled: false,
       name: "Moshu",
       path: "C:\\Users\\me\\AppData\\Local\\moshu\\novel-tool.exe",
       args: HIDDEN_NO_TRAY_STARTUP_ARGS
     });
     expect(preferenceStore.setDefaultEnabledApplied).toHaveBeenCalledWith(true);
-    expect(preferenceStore.setDesiredEnabled).toHaveBeenCalledWith(true);
-    expect(status.enabled).toBe(true);
+    expect(preferenceStore.setDesiredEnabled).toHaveBeenCalledWith(false);
+    expect(status.enabled).toBe(false);
   });
 
   it("migrates the previous hidden startup registration to the no-tray hidden startup registration", () => {
@@ -265,7 +265,7 @@ describe("StartupLaunchService", () => {
       preferenceStore
     );
 
-    service.ensureDefaultEnabled();
+    service.ensureDefaultDisabled();
 
     expect(setLoginItemSettings).toHaveBeenCalledWith({
       openAtLogin: true,
@@ -295,7 +295,7 @@ describe("StartupLaunchService", () => {
       preferenceStore
     );
 
-    const status = service.ensureDefaultEnabled();
+    const status = service.ensureDefaultDisabled();
 
     expect(status.enabled).toBe(false);
     expect(setLoginItemSettings).toHaveBeenCalledWith({
@@ -307,7 +307,7 @@ describe("StartupLaunchService", () => {
     });
   });
 
-  it("enables startup for stale preference records that predate the desired enabled field", () => {
+  it("keeps startup disabled for stale preference records that predate the desired enabled field", () => {
     const setLoginItemSettings = vi.fn();
     const preferenceStore = createPreferenceStore(true);
     preferenceStore.setUserConfigured(true);
@@ -324,13 +324,13 @@ describe("StartupLaunchService", () => {
       preferenceStore
     );
 
-    const status = service.ensureDefaultEnabled();
+    const status = service.ensureDefaultDisabled();
 
-    expect(status.enabled).toBe(true);
-    expect(preferenceStore.setDesiredEnabled).toHaveBeenCalledWith(true);
+    expect(status.enabled).toBe(false);
+    expect(preferenceStore.setDesiredEnabled).toHaveBeenCalledWith(false);
     expect(setLoginItemSettings).toHaveBeenCalledWith({
-      openAtLogin: true,
-      enabled: true,
+      openAtLogin: false,
+      enabled: false,
       name: "Moshu",
       path: "C:\\Users\\me\\AppData\\Local\\moshu\\novel-tool.exe",
       args: HIDDEN_NO_TRAY_STARTUP_ARGS
@@ -355,7 +355,7 @@ describe("StartupLaunchService", () => {
       preferenceStore
     );
 
-    const status = service.ensureDefaultEnabled();
+    const status = service.ensureDefaultDisabled();
 
     expect(status.enabled).toBe(false);
     expect(setLoginItemSettings).toHaveBeenCalledWith({

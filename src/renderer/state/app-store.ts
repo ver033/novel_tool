@@ -8,6 +8,7 @@ import type {
   ProjectRecord,
   RecentProjectEntry
 } from "../../main/shared/types";
+import { initialVolumeTitle } from "../../main/shared/language";
 import { suggestNewChapterTitle } from "./chapter-title";
 import { resolveInitialActiveChapterId, saveLastWritingPosition } from "./writing-position-store";
 
@@ -158,9 +159,11 @@ export function useAppStore() {
     const afterChapter = requestedAfterChapter?.id === lastChapter?.id ? requestedAfterChapter : null;
     const title = suggestNewChapterTitle(sortedChapters, afterChapter ? { afterChapterId: afterChapter.id } : {});
     const inheritedTargetWordCount = (afterChapter ?? sortedChapters[sortedChapters.length - 1])?.targetWordCount ?? null;
+    const volumeTitle = (afterChapter ?? sortedChapters[sortedChapters.length - 1])?.volumeTitle ?? initialVolumeTitle(currentProject.contentLanguage);
     const chapter = (await api.chapter.create({
       projectId: currentProject.id,
       title,
+      volumeTitle,
       sortOrder: afterChapter ? afterChapter.sortOrder + 1 : undefined,
       targetWordCount: inheritedTargetWordCount
     })) as ChapterSummary;

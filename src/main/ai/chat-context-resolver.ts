@@ -64,7 +64,7 @@ function parseChineseOrdinal(value: string): number | null {
 
 export function parseExplicitChapterOrdinal(message: string): number | null {
   const normalized = normalizeFullWidthDigits(message);
-  const match = /(?:第\s*)?([0-9一二两三四五六七八九十百零〇]+)\s*[章节回]/.exec(normalized);
+  const match = /(?:第\s*)?([0-9一二两三四五六七八九十百零〇]+)\s*[章节回話]/.exec(normalized);
   return match ? parseChineseOrdinal(match[1]) : null;
 }
 

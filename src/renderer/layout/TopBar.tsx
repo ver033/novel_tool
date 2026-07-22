@@ -12,6 +12,7 @@ import {
 import { useState } from "react";
 import type { EditorSettings } from "../../main/shared/types";
 import { IconButton } from "../components/IconButton";
+import { useI18n } from "../i18n";
 
 type TopBarProps = {
   readonly title: string;
@@ -38,44 +39,44 @@ type TopBarProps = {
   readonly showSaveStatus?: boolean;
 };
 
-function saveStatusLabel(status: NonNullable<TopBarProps["saveStatus"]>): string {
+function saveStatusLabel(status: NonNullable<TopBarProps["saveStatus"]>, japanese: boolean): string {
   if (status === "dirty") {
-    return "编辑中";
+    return japanese ? "編集中" : "编辑中";
   }
   if (status === "saving") {
-    return "保存中";
+    return japanese ? "保存中" : "保存中";
   }
   if (status === "failed") {
-    return "保存失败";
+    return japanese ? "保存に失敗しました" : "保存失败";
   }
-  return "已自动保存";
+  return japanese ? "自動保存済み" : "已自动保存";
 }
 
 const layoutPresets = [
-  { value: "immersive", label: "沉浸写作", description: "窄页舒展" },
-  { value: "review", label: "审稿校对", description: "宽页紧凑" },
-  { value: "reading", label: "长文阅读", description: "护眼大字" }
+  { value: "immersive", label: "沉浸写作", jaLabel: "没入執筆", description: "窄页舒展", jaDescription: "広がりのある狭幅" },
+  { value: "review", label: "审稿校对", jaLabel: "レビュー", description: "宽页紧凑", jaDescription: "コンパクトな広幅" },
+  { value: "reading", label: "长文阅读", jaLabel: "長文閲覧", description: "护眼大字", jaDescription: "目に優しい大きな文字" }
 ] as const;
 
 const pageWidthOptions = [
-  { value: "narrow", label: "窄栏" },
-  { value: "medium", label: "适中" },
-  { value: "wide", label: "宽栏" },
-  { value: "screen", label: "宽屏" }
+  { value: "narrow", label: "窄栏", jaLabel: "狭い" },
+  { value: "medium", label: "适中", jaLabel: "標準" },
+  { value: "wide", label: "宽栏", jaLabel: "広い" },
+  { value: "screen", label: "宽屏", jaLabel: "全幅" }
 ] as const;
 
 const themeOptions = [
-  { value: "light", label: "浅色" },
-  { value: "eye", label: "护眼" },
-  { value: "night", label: "夜间" }
+  { value: "light", label: "浅色", jaLabel: "ライト" },
+  { value: "eye", label: "护眼", jaLabel: "アイケア" },
+  { value: "night", label: "夜间", jaLabel: "ダーク" }
 ] as const;
 
 const fontFamilyOptions = [
-  { value: "system", label: "默认" },
-  { value: "song", label: "宋体感" },
-  { value: "hei", label: "黑体感" },
-  { value: "fangsong", label: "仿宋感" },
-  { value: "kai", label: "楷体感" }
+  { value: "system", label: "默认", jaLabel: "標準" },
+  { value: "song", label: "宋体感", jaLabel: "明朝体" },
+  { value: "hei", label: "黑体感", jaLabel: "ゴシック体" },
+  { value: "fangsong", label: "仿宋感", jaLabel: "細明朝" },
+  { value: "kai", label: "楷体感", jaLabel: "楷書体" }
 ] as const;
 
 const fontSizeOptions = Array.from({ length: 25 }, (_, index) => {
@@ -92,43 +93,43 @@ const lineHeightOptions = [
 ] as const;
 
 const editorPaddingOptions = [
-  { value: "compact", label: "紧凑" },
-  { value: "standard", label: "标准" },
-  { value: "relaxed", label: "舒展" }
+  { value: "compact", label: "紧凑", jaLabel: "コンパクト" },
+  { value: "standard", label: "标准", jaLabel: "標準" },
+  { value: "relaxed", label: "舒展", jaLabel: "ゆったり" }
 ] as const;
 
 const paragraphSpacingOptions = [
-  { value: "compact", label: "紧凑" },
-  { value: "standard", label: "标准" },
-  { value: "loose", label: "宽松" }
+  { value: "compact", label: "紧凑", jaLabel: "狭い" },
+  { value: "standard", label: "标准", jaLabel: "標準" },
+  { value: "loose", label: "宽松", jaLabel: "広い" }
 ] as const;
 
 const firstLineIndentOptions = [
-  { value: "none", label: "无" },
-  { value: "two", label: "2字" },
-  { value: "four", label: "4字" }
+  { value: "none", label: "无", jaLabel: "なし" },
+  { value: "two", label: "2字", jaLabel: "2字" },
+  { value: "four", label: "4字", jaLabel: "4字" }
 ] as const;
 
 const ruledPaperIntensityOptions = [
-  { value: "off", label: "关闭", ruledPaper: false },
-  { value: "soft", label: "淡", ruledPaper: true },
-  { value: "standard", label: "标准", ruledPaper: true },
-  { value: "strong", label: "清晰", ruledPaper: true }
+  { value: "off", label: "关闭", jaLabel: "オフ", ruledPaper: false },
+  { value: "soft", label: "淡", jaLabel: "薄い", ruledPaper: true },
+  { value: "standard", label: "标准", jaLabel: "標準", ruledPaper: true },
+  { value: "strong", label: "清晰", jaLabel: "濃い", ruledPaper: true }
 ] as const;
 
 const presetSettings: Record<Exclude<EditorSettings["layoutPreset"], "custom">, Partial<EditorSettings>> = {
   immersive: {
     layoutPreset: "immersive",
-    pageWidth: "screen",
-    fontFamily: "system",
-    editorPadding: "compact",
-    fontSize: 20,
-    lineHeight: 2.32,
+    pageWidth: "narrow",
+    fontFamily: "song",
+    editorPadding: "standard",
+    fontSize: 18,
+    lineHeight: 1.82,
     paragraphSpacing: "standard",
     firstLineIndent: "none",
     theme: "light",
-    ruledPaper: true,
-    ruledPaperIntensity: "standard"
+    ruledPaper: false,
+    ruledPaperIntensity: "soft"
   },
   review: {
     layoutPreset: "review",
@@ -186,10 +187,12 @@ export function TopBar({
   showEditorHistoryControls = true,
   showSaveStatus = true
 }: TopBarProps) {
+  const { locale, t } = useI18n();
+  const japanese = locale === "ja-JP";
   const [layoutPanelOpen, setLayoutPanelOpen] = useState(false);
   const canShowLayoutPanel = mode === "writing" && editorSettings && onEditorSettingsChange;
   const layoutPanelMode = focusMode ? "focus" : "normal";
-  const resolvedSearchPlaceholder = searchPlaceholder ?? (mode === "welcome" ? "搜索作品或章节" : "搜索章节或内容");
+  const resolvedSearchPlaceholder = searchPlaceholder ?? (mode === "welcome" ? t("searchWorksOrChapters") : t("searchChaptersOrContent"));
   const updateEditorSetting = (patch: Partial<EditorSettings>) => {
     if (!onEditorSettingsChange) {
       return;
@@ -199,7 +202,7 @@ export function TopBar({
 
   return (
     <header className={`topbar ${focusMode ? "focus-mode" : ""}`}>
-      <button className="brand brand-button" onClick={onWelcome} title="返回开始页" type="button">
+      <button className="brand brand-button" onClick={onWelcome} title={t("backToStart")} type="button">
         <span className={mode === "welcome" ? "logo" : "line-icon"}>
           <BookOpen size={24} weight="regular" />
         </span>
@@ -210,17 +213,17 @@ export function TopBar({
       </button>
       <div className="topbar-center">
         {mode === "writing" && !focusMode && showEditorHistoryControls ? (
-          <div className="undo-redo-group" aria-label="撤销和重做">
-            <IconButton className="undo-redo-button" disabled={!onUndo || !canUndo} label="撤销" onClick={() => onUndo?.()}>
+          <div className="undo-redo-group" aria-label={t("undoAndRedo")}>
+            <IconButton className="undo-redo-button" disabled={!onUndo || !canUndo} label={t("undo")} onClick={() => onUndo?.()}>
               <ArrowCounterClockwise size={22} weight="regular" />
             </IconButton>
-            <IconButton className="undo-redo-button" disabled={!onRedo || !canRedo} label="重做" onClick={() => onRedo?.()}>
+            <IconButton className="undo-redo-button" disabled={!onRedo || !canRedo} label={t("redo")} onClick={() => onRedo?.()}>
               <ArrowClockwise size={22} weight="regular" />
             </IconButton>
           </div>
         ) : null}
         {focusMode ? (
-          <span className="focus-mode-label">专注写作</span>
+          <span className="focus-mode-label">{t("focusWriting")}</span>
         ) : !showSearch ? (
           <span className="focus-mode-label">{searchPlaceholder ?? title}</span>
         ) : (
@@ -238,17 +241,17 @@ export function TopBar({
       </div>
       <div className="top-actions">
         {mode === "writing" && onFocusModeToggle ? (
-          <IconButton label={focusMode ? "退出专注" : "专注模式"} onClick={onFocusModeToggle}>
+          <IconButton label={focusMode ? t("exitFocus") : t("focusMode")} onClick={onFocusModeToggle}>
             {focusMode ? <CornersOut size={24} weight="regular" /> : <CornersIn size={24} weight="regular" />}
           </IconButton>
         ) : null}
         {mode === "writing" && onImport && !focusMode ? (
-          <IconButton label="导入 TXT" onClick={() => onImport()}>
+          <IconButton label={t("importTxt")} onClick={() => onImport()}>
             <UploadSimple size={24} weight="regular" />
           </IconButton>
         ) : null}
         {mode === "writing" && onExport && !focusMode ? (
-          <IconButton label="导出 TXT" onClick={() => onExport()}>
+          <IconButton label={t("exportTxt")} onClick={() => onExport()}>
             <DownloadSimple size={24} weight="regular" />
           </IconButton>
         ) : null}
@@ -256,7 +259,7 @@ export function TopBar({
           <div className="layout-control">
             <button
               aria-expanded={layoutPanelOpen}
-              aria-label="页面与排版"
+              aria-label={t("pageAndTypography")}
               className={`global-style-toggle ${layoutPanelOpen ? "active" : ""}`}
               data-action="toggle-global-style"
               onClick={() => setLayoutPanelOpen((current) => !current)}
@@ -269,15 +272,15 @@ export function TopBar({
                 <div className="global-style-head">
                   <div className="global-style-title">
                     <span className="global-style-title-icon">T</span>
-                    <span>{focusMode ? "专注排版" : "页面与排版"}</span>
+                    <span>{focusMode ? t("focusTypography") : t("pageAndTypography")}</span>
                   </div>
-                  <button className="global-style-close" onClick={() => setLayoutPanelOpen(false)} type="button" aria-label="关闭页面与排版">
+                  <button className="global-style-close" onClick={() => setLayoutPanelOpen(false)} type="button" aria-label={t("closeTypography")}>
                     ×
                   </button>
                 </div>
                 {!focusMode ? (
                   <div className="global-style-group">
-                    <span className="global-style-label">写作预设</span>
+                    <span className="global-style-label">{t("writingPreset")}</span>
                     <div className="preset-grid">
                       {layoutPresets.map((preset) => (
                         <button
@@ -287,8 +290,8 @@ export function TopBar({
                           onClick={() => updateEditorSetting(presetSettings[preset.value])}
                           type="button"
                         >
-                          <strong>{preset.label}</strong>
-                          <span>{preset.description}</span>
+                          <strong>{japanese ? preset.jaLabel : preset.label}</strong>
+                          <span>{japanese ? preset.jaDescription : preset.description}</span>
                         </button>
                       ))}
                     </div>
@@ -297,7 +300,7 @@ export function TopBar({
                 {!focusMode ? (
                   <div className="global-style-row">
                     <div className="global-style-group">
-                      <span className="global-style-label">页面宽度</span>
+                      <span className="global-style-label">{t("pageWidth")}</span>
                       <div className="global-style-options four">
                         {pageWidthOptions.map((option) => (
                           <button
@@ -308,13 +311,13 @@ export function TopBar({
                             onClick={() => updateEditorSetting({ layoutPreset: "custom", pageWidth: option.value })}
                             type="button"
                           >
-                            {option.label}
+                            {japanese ? option.jaLabel : option.label}
                           </button>
                         ))}
                       </div>
                     </div>
                     <div className="global-style-group">
-                      <span className="global-style-label">主题</span>
+                      <span className="global-style-label">{t("theme")}</span>
                       <div className="global-style-options">
                         {themeOptions.map((option) => (
                           <button
@@ -325,7 +328,7 @@ export function TopBar({
                             onClick={() => updateEditorSetting({ layoutPreset: "custom", theme: option.value })}
                             type="button"
                           >
-                            {option.label}
+                            {japanese ? option.jaLabel : option.label}
                           </button>
                         ))}
                       </div>
@@ -333,7 +336,7 @@ export function TopBar({
                   </div>
                 ) : (
                   <div className="global-style-group">
-                    <span className="global-style-label">主题</span>
+                    <span className="global-style-label">{t("theme")}</span>
                     <div className="global-style-options">
                       {themeOptions.map((option) => (
                         <button
@@ -344,14 +347,14 @@ export function TopBar({
                           onClick={() => updateEditorSetting({ layoutPreset: "custom", theme: option.value })}
                           type="button"
                         >
-                          {option.label}
+                          {japanese ? option.jaLabel : option.label}
                         </button>
                       ))}
                     </div>
                   </div>
                 )}
                 <div className="global-style-group">
-                  <span className="global-style-label">正文风格</span>
+                  <span className="global-style-label">{t("bodyStyle")}</span>
                   <div className="global-style-options five">
                     {fontFamilyOptions.map((option) => (
                       <button
@@ -362,14 +365,14 @@ export function TopBar({
                         onClick={() => updateEditorSetting({ layoutPreset: "custom", fontFamily: option.value })}
                         type="button"
                       >
-                        {option.label}
+                        {japanese ? option.jaLabel : option.label}
                       </button>
                     ))}
                   </div>
                 </div>
                 <div className="global-style-row">
                   <div className="global-style-group">
-                    <span className="global-style-label">正文字号</span>
+                    <span className="global-style-label">{t("bodyFontSize")}</span>
                     <select
                       className="global-style-select"
                       data-editor-style="fontSize"
@@ -386,7 +389,7 @@ export function TopBar({
                     </select>
                   </div>
                   <div className="global-style-group">
-                    <span className="global-style-label">行距</span>
+                    <span className="global-style-label">{t("lineHeight")}</span>
                     <div className="global-style-options five">
                       {lineHeightOptions.map((option) => (
                         <button
@@ -404,7 +407,7 @@ export function TopBar({
                   </div>
                 </div>
                 <div className="global-style-group">
-                  <span className="global-style-label">正文边距</span>
+                  <span className="global-style-label">{t("bodyPadding")}</span>
                   <div className="global-style-options">
                     {editorPaddingOptions.map((option) => (
                       <button
@@ -415,7 +418,7 @@ export function TopBar({
                         onClick={() => updateEditorSetting({ layoutPreset: "custom", editorPadding: option.value })}
                         type="button"
                       >
-                        {option.label}
+                        {japanese ? option.jaLabel : option.label}
                       </button>
                     ))}
                   </div>
@@ -423,7 +426,7 @@ export function TopBar({
                 {!focusMode ? (
                   <div className="global-style-row">
                     <div className="global-style-group">
-                      <span className="global-style-label">段间距</span>
+                      <span className="global-style-label">{t("paragraphSpacing")}</span>
                       <div className="global-style-options">
                         {paragraphSpacingOptions.map((option) => (
                           <button
@@ -434,13 +437,13 @@ export function TopBar({
                             onClick={() => updateEditorSetting({ layoutPreset: "custom", paragraphSpacing: option.value })}
                             type="button"
                           >
-                            {option.label}
+                            {japanese ? option.jaLabel : option.label}
                           </button>
                         ))}
                       </div>
                     </div>
                     <div className="global-style-group">
-                      <span className="global-style-label">首行缩进</span>
+                      <span className="global-style-label">{t("firstLineIndent")}</span>
                       <div className="global-style-options">
                         {firstLineIndentOptions.map((option) => (
                           <button
@@ -451,7 +454,7 @@ export function TopBar({
                             onClick={() => updateEditorSetting({ layoutPreset: "custom", firstLineIndent: option.value })}
                             type="button"
                           >
-                            {option.label}
+                            {japanese ? option.jaLabel : option.label}
                           </button>
                         ))}
                       </div>
@@ -459,7 +462,7 @@ export function TopBar({
                   </div>
                 ) : null}
                 <div className="global-style-group">
-                  <span className="global-style-label">稿纸横格</span>
+                  <span className="global-style-label">{t("ruledPaper")}</span>
                   <div className="global-style-options four">
                     {ruledPaperIntensityOptions.map((option) => {
                       const activeIntensity = editorSettings.ruledPaper ? editorSettings.ruledPaperIntensity : "off";
@@ -478,28 +481,28 @@ export function TopBar({
                           }
                           type="button"
                         >
-                          {option.label}
+                          {japanese ? option.jaLabel : option.label}
                         </button>
                       );
                     })}
                   </div>
                 </div>
                 <div className="global-style-note">
-                  {focusMode ? "专注模式下正文区域自动铺满，页面宽度设置退出专注后生效。" : "这些设置只影响当前写作环境的显示，不改写正文内容。"}
+                  {focusMode ? t("focusTypographyNote") : t("typographyNote")}
                 </div>
               </aside>
             ) : null}
           </div>
         ) : null}
         {!focusMode ? (
-          <IconButton label="设置" onClick={onSettings}>
+          <IconButton label={t("settings")} onClick={onSettings}>
             <GearSix size={24} weight="regular" />
           </IconButton>
         ) : null}
         {mode === "writing" && showSaveStatus ? (
           <span className={`status-pill ${saveStatus}`}>
             <span className="dot" />
-            {saveStatusLabel(saveStatus)}
+            {saveStatusLabel(saveStatus, japanese)}
           </span>
         ) : null}
       </div>

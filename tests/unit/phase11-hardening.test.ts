@@ -17,7 +17,7 @@ describe("phase 11 V1 hardening", () => {
 
     expect(packageJson).toContain('"dev": "electron-forge start"');
     expect(packageJson).toContain('"build": "electron-forge package"');
-    expect(importWizard).toContain("TXT");
+    expect(importWizard).toContain("api.import.selectTxtFile");
     expect(currentTask).toContain("polish");
     expect(currentTask).toContain("expand");
     expect(currentTask).toContain("proofread");
@@ -60,16 +60,16 @@ describe("phase 11 V1 hardening", () => {
   it("shows AI chat busy/error states without future placeholder controls", () => {
     const chat = readSource("src/renderer/sidebar/AiChatTab.tsx");
 
-    expect(chat).toContain("AI 正在思考中");
+    expect(chat).toContain("copy.aiThinking");
     expect(chat).not.toContain("AI 正在回复");
-    expect(chat).toContain("正在分析上下文");
+    expect(chat).toContain("copy.analyzing");
     expect(chat).toContain('aria-live="polite"');
     expect(chat).toContain("message pending");
     expect(chat).toContain("chat-bottom-meta");
     expect(chat).toContain("contextDisplay.usedLabel");
     expect(chat).toContain("chatStore.contextUsagePending");
     expect(chat.indexOf("chat-context-status")).toBeGreaterThan(chat.indexOf("chat-bottom-meta"));
-    expect(chat.indexOf("chat-context-status")).toBeLessThan(chat.indexOf('aria-label="发送"'));
+    expect(chat.indexOf("chat-context-status")).toBeLessThan(chat.indexOf('aria-label={t("send")}'));
     expect(chat).not.toContain("添加上下文");
   });
 
@@ -105,10 +105,10 @@ describe("phase 11 V1 hardening", () => {
     expect(chatStore).toContain("onContext(event)");
     expect(chatStore).toContain("setContextUsage(event)");
     expect(chatStore).toContain("setContextUsagePending(false)");
-    expect(chat).toContain("<strong>{contextDisplay?.percentText ?? \"分析中\"}</strong>");
+    expect(chat).toContain("<strong>{contextDisplay?.percentText ?? copy.analyzingShort}</strong>");
     expect(chat).not.toContain('chatStore.contextUsagePending ? "分析中"');
     expect(chat).toContain("context-updating");
-    expect(chat).toContain("新用量会在最终请求开始时刷新");
+    expect(chat).toContain("copy.contextPending");
   });
 
   it("restores the persisted chat context meter from the active session", () => {
@@ -137,7 +137,7 @@ describe("phase 11 V1 hardening", () => {
     const chat = readSource("src/renderer/sidebar/AiChatTab.tsx");
     const chatStore = readSource("src/renderer/state/chat-store.ts");
 
-    expect(chat).toContain('aria-label="停止 AI 回答"');
+    expect(chat).toContain("aria-label={copy.stopAi}");
     expect(chat).toContain("chatStore.cancelActiveStream");
     expect(chatStore).toContain("cancelActiveStream");
     expect(chatStore).toContain("setBusy(false)");
@@ -171,7 +171,7 @@ describe("phase 11 V1 hardening", () => {
     const scratchpad = readSource("src/renderer/sidebar/ScratchpadTab.tsx");
 
     expect(writing).toContain("empty-editor-state");
-    expect(writing).toContain("请选择或新建章节");
+    expect(writing).toContain('t("chooseOrCreateChapter")');
     expect(scratchpad).toContain("const [loading");
     expect(scratchpad).toContain("正在读取草稿纸");
     expect(scratchpad).toContain("scratch-empty");

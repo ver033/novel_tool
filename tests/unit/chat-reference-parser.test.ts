@@ -88,4 +88,23 @@ describe("chat @ reference parser", () => {
       messageWithoutReference: "对比，人物关系有什么变化"
     });
   });
+
+  it("parses Japanese chapter, range, selection, and whole-book references", () => {
+    expect(parseChatScopeReference("第3話を要約してください")).toEqual({
+      scope: { type: "chapter", ordinal: 3 },
+      messageWithoutReference: "を要約してください"
+    });
+    expect(parseChatScopeReference("第2章から第5章までの伏線を確認して")).toEqual({
+      scope: { type: "chapter_range", from: 2, to: 5 },
+      messageWithoutReference: "の伏線を確認して"
+    });
+    expect(parseChatScopeReference("すべての章を要約して")).toEqual({
+      scope: { type: "all_chapters" },
+      messageWithoutReference: "を要約して"
+    });
+    expect(parseChatScopeReference("現在の選択範囲を校正して")).toEqual({
+      scope: { type: "selection" },
+      messageWithoutReference: "を校正して"
+    });
+  });
 });

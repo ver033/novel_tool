@@ -3,6 +3,7 @@ import type {
   AiProviderSettingsState,
   CacheSettings,
   EditorSettings,
+  ExperimentalSettings,
   OpenRouterModelSummary,
   SettingsListModelsInput,
   SettingsSaveInput,
@@ -11,32 +12,39 @@ import type {
   TaskPromptPreset,
   TaskType
 } from "../shared/types";
+import { appLocaleSchema, DEFAULT_APP_LOCALE } from "../shared/language";
 
 const EDITOR_SETTINGS_KEY = "editor";
 const AI_PROVIDER_SETTINGS_KEY = "aiProvider";
 const PROJECT_PATH_SETTINGS_KEY = "projectPath";
 const TASK_PROMPT_PRESETS_SETTINGS_KEY = "taskPromptPresets";
 const CACHE_SETTINGS_KEY = "cache";
+const APP_LOCALE_SETTINGS_KEY = "appLocale";
+const EXPERIMENTAL_SETTINGS_KEY = "experimental";
 export const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 export const OPENROUTER_CONNECTION_TEST_MODEL = "openrouter/auto";
 
 const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
-  fontSize: 20,
-  lineHeight: 2.08,
+  fontSize: 18,
+  lineHeight: 1.82,
   autosaveMs: 1000,
   layoutPreset: "immersive",
-  pageWidth: "screen",
-  fontFamily: "system",
-  editorPadding: "compact",
+  pageWidth: "narrow",
+  fontFamily: "song",
+  editorPadding: "standard",
   paragraphSpacing: "standard",
   firstLineIndent: "none",
   theme: "light",
-  ruledPaper: true,
-  ruledPaperIntensity: "standard"
+  ruledPaper: false,
+  ruledPaperIntensity: "soft"
 };
 
 const DEFAULT_CACHE_SETTINGS: CacheSettings = {
   chapterCacheBuildOrder: "latest_first"
+};
+
+const DEFAULT_EXPERIMENTAL_SETTINGS: ExperimentalSettings = {
+  externalBookSyncAutomaticEnabled: false
 };
 
 export type SecretStore = {
@@ -178,7 +186,9 @@ export class SettingsService {
   getSettings(): SettingsState {
     const savedEditor = this.settingsRepo.getJson<Partial<EditorSettings>>(EDITOR_SETTINGS_KEY);
     const savedCache = this.settingsRepo.getJson<Partial<CacheSettings>>(CACHE_SETTINGS_KEY);
+    const savedExperimental = this.settingsRepo.getJson<Partial<ExperimentalSettings>>(EXPERIMENTAL_SETTINGS_KEY);
     return {
+      appLocale: appLocaleSchema.catch(DEFAULT_APP_LOCALE).parse(this.settingsRepo.getJson<unknown>(APP_LOCALE_SETTINGS_KEY)),
       editor: {
         ...DEFAULT_EDITOR_SETTINGS,
         ...savedEditor
@@ -186,11 +196,19 @@ export class SettingsService {
       aiProvider: sanitizeAiProvider(this.getStoredAiProviderSettings()),
       projectPath: this.settingsRepo.getJson<string>(PROJECT_PATH_SETTINGS_KEY),
       taskPromptPresets: this.listTaskPromptPresets(),
-      cache: normalizeCacheSettings(savedCache)
+      cache: normalizeCacheSettings(savedCache),
+      experimental: {
+        ...DEFAULT_EXPERIMENTAL_SETTINGS,
+        ...savedExperimental
+      }
     };
   }
 
   saveSettings(input: SettingsSaveInput): SettingsState {
+    if (input.appLocale) {
+      this.settingsRepo.setJson(APP_LOCALE_SETTINGS_KEY, input.appLocale);
+    }
+
     if (input.editor) {
       this.settingsRepo.setJson(EDITOR_SETTINGS_KEY, {
         ...this.getSettings().editor,
@@ -226,6 +244,13 @@ export class SettingsService {
         ...this.getSettings().cache,
         ...input.cache
       }));
+    }
+
+    if (input.experimental) {
+      this.settingsRepo.setJson(EXPERIMENTAL_SETTINGS_KEY, {
+        ...this.getSettings().experimental,
+        ...input.experimental
+      } satisfies ExperimentalSettings);
     }
 
     return this.getSettings();

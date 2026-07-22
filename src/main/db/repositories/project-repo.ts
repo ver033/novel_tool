@@ -1,10 +1,12 @@
 import type { SqliteDatabase } from "../database";
 import type { ProjectRecord } from "../../shared/types";
+import { contentLanguageSchema, DEFAULT_CONTENT_LANGUAGE, type ContentLanguage } from "../../shared/language";
 
 type ProjectRow = {
   readonly id: string;
   readonly name: string;
   readonly root_path: string | null;
+  readonly content_language?: string;
   readonly created_at: string;
   readonly updated_at: string;
 };
@@ -14,6 +16,7 @@ function mapProject(row: ProjectRow): ProjectRecord {
     id: row.id,
     name: row.name,
     rootPath: row.root_path,
+    contentLanguage: contentLanguageSchema.catch(DEFAULT_CONTENT_LANGUAGE).parse(row.content_language),
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -27,27 +30,56 @@ function normalizedProjectName(project: ProjectRecord): string {
 export class ProjectRepository {
   constructor(private readonly db: SqliteDatabase) {}
 
-  create(project: ProjectRecord): ProjectRecord {
-    this.db
-      .prepare("INSERT INTO projects (id, name, root_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?)")
-      .run(project.id, project.name, project.rootPath, project.createdAt, project.updatedAt);
-
-    return project;
+  private hasContentLanguageColumn(): boolean {
+    return this.db
+      .prepare("PRAGMA table_info(projects)")
+      .all()
+      .some((row) => row.name === "content_language");
   }
 
-  upsert(project: ProjectRecord): ProjectRecord {
-    this.db
-      .prepare(
-        `INSERT INTO projects (id, name, root_path, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET
-           name = excluded.name,
-           root_path = excluded.root_path,
-           updated_at = excluded.updated_at`
-      )
-      .run(project.id, project.name, project.rootPath, project.createdAt, project.updatedAt);
+  create(project: Omit<ProjectRecord, "contentLanguage"> & { readonly contentLanguage?: ContentLanguage }): ProjectRecord {
+    const contentLanguage = project.contentLanguage ?? DEFAULT_CONTENT_LANGUAGE;
+    if (this.hasContentLanguageColumn()) {
+      this.db
+        .prepare("INSERT INTO projects (id, name, root_path, content_language, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)")
+        .run(project.id, project.name, project.rootPath, contentLanguage, project.createdAt, project.updatedAt);
+    } else {
+      this.db
+        .prepare("INSERT INTO projects (id, name, root_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?)")
+        .run(project.id, project.name, project.rootPath, project.createdAt, project.updatedAt);
+    }
 
-    return this.findById(project.id) ?? project;
+    return this.findById(project.id) ?? { ...project, contentLanguage };
+  }
+
+  upsert(project: Omit<ProjectRecord, "contentLanguage"> & { readonly contentLanguage?: ContentLanguage }): ProjectRecord {
+    const contentLanguage = project.contentLanguage ?? DEFAULT_CONTENT_LANGUAGE;
+    if (this.hasContentLanguageColumn()) {
+      this.db
+        .prepare(
+          `INSERT INTO projects (id, name, root_path, content_language, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             name = excluded.name,
+             root_path = excluded.root_path,
+             content_language = excluded.content_language,
+             updated_at = excluded.updated_at`
+        )
+        .run(project.id, project.name, project.rootPath, contentLanguage, project.createdAt, project.updatedAt);
+    } else {
+      this.db
+        .prepare(
+          `INSERT INTO projects (id, name, root_path, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             name = excluded.name,
+             root_path = excluded.root_path,
+             updated_at = excluded.updated_at`
+        )
+        .run(project.id, project.name, project.rootPath, project.createdAt, project.updatedAt);
+    }
+
+    return this.findById(project.id) ?? { ...project, contentLanguage };
   }
 
   findById(projectId: string): ProjectRecord | null {

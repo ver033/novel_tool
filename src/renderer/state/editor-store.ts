@@ -13,18 +13,18 @@ import { createDraftTextHash, draftRecoveryStore, shouldOfferDraftRecovery, type
 export const AUTOSAVE_DEBOUNCE_MS = 1000;
 
 const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
-  fontSize: 20,
-  lineHeight: 2.08,
+  fontSize: 18,
+  lineHeight: 1.82,
   autosaveMs: AUTOSAVE_DEBOUNCE_MS,
   layoutPreset: "immersive",
-  pageWidth: "screen",
-  fontFamily: "system",
-  editorPadding: "compact",
+  pageWidth: "narrow",
+  fontFamily: "song",
+  editorPadding: "standard",
   paragraphSpacing: "standard",
   firstLineIndent: "none",
   theme: "light",
-  ruledPaper: true,
-  ruledPaperIntensity: "standard"
+  ruledPaper: false,
+  ruledPaperIntensity: "soft"
 };
 
 export type SaveStatus = "saved" | "dirty" | "saving" | "failed";

@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import { AiTaskService, type AiChatGenerator, type AiChatMessageResult } from "../../src/main/ai/ai-task-service";
 import type { ChatPlanner } from "../../src/main/ai/chat-agent-planner";
 import type { ChatAgentPlan } from "../../src/main/ai/chat-agent-types";
-import type { OpenRouterChatCompletionInput, OpenRouterStreamHandlers } from "../../src/main/ai/openrouter-client";
 import { emptyChapterContent } from "../../src/main/chapter/default-content";
 import { createDatabase } from "../../src/main/db/database";
 import { runMigrations } from "../../src/main/db/migrations";
@@ -21,7 +20,6 @@ import { computeChapterContentHash, computeSourceHash, type ChapterAiSummaryPayl
 import type { AiChatMessageRecord, AiStreamContextEvent, ChapterSummary } from "../../src/main/shared/types";
 import { estimateTextTokens } from "../../src/main/ai/token-estimator";
 import { getTokenBudget } from "../../src/main/ai/token-budget";
-import { WritingOperationRunner } from "../../src/main/ai/writing-operation-runner";
 import { arcIndexPayloadV2, bookIndexPayloadV2, chapterIndexPayloadV2 } from "../helpers/summary-index-fixtures";
 
 const tempDirs: string[] = [];
@@ -1032,7 +1030,7 @@ describe("AI chat flow", () => {
     db.close();
   });
 
-  it("forwards streamed reasoning chunks from chat generation handlers", async () => {
+  it("does not expose streamed reasoning chunks from chat generation handlers", async () => {
     const reasoningChunks: string[] = [];
     const chatGenerator: AiChatGenerator = {
       async sendAgentMessageStream(_input, handlers) {
@@ -1067,55 +1065,45 @@ describe("AI chat flow", () => {
       handlers as never
     );
 
-    expect(reasoningChunks).toEqual(["先判断章节范围。"]);
+    expect(reasoningChunks).toEqual([]);
 
     db.close();
   });
 
-  it("forwards reasoning chunks from inline chat writing operations", async () => {
+  it("routes inline writing requests through the agent runtime instead of a fixed shortcut", async () => {
     const streamEvents: string[] = [];
-    const { aiTaskRepo, chapterRepo, chatRepo, db, projectService, scratchRepo, summaryRepo } = createServices();
+    const { aiTaskRepo, chapterRepo, chatRepo, db, projectService, scratchRepo } = createServices();
     const { project } = projectService.createProject({ name: "雨夜" });
     const chatGenerator: AiChatGenerator = {
-      async sendAgentMessageStream() {
-        throw new Error("inline writing operation should not fall through to the agent generator");
+      async sendAgentMessageStream(input, handlers) {
+        expect(input.message).toContain("帮我润色一下");
+        expect(input.tools.some((tool) => tool.name === "run_writing_operation")).toBe(true);
+        const activity = {
+          id: "chat_inline_reasoning:tool:writing",
+          kind: "tool" as const,
+          status: "complete" as const,
+          title: "执行写作操作",
+          toolName: "run_writing_operation",
+          createdAt: "2026-07-21T00:00:00.000Z",
+          updatedAt: "2026-07-21T00:00:00.000Z"
+        };
+        handlers.onActivity?.({ requestId: input.requestId, activity });
+        handlers.onChunk?.({ requestId: input.requestId, content: "萧炎缓缓垂下眼，紧攥的指节在袖中一点点泛白。" });
+        return {
+          role: "assistant",
+          content: "萧炎缓缓垂下眼，紧攥的指节在袖中一点点泛白。",
+          createdAt: "2026-07-21T00:00:00.000Z",
+          activities: [activity]
+        };
       }
     };
-    const runner = new WritingOperationRunner({
-      resolveChapterRepo: (projectId) => chapterRepo(projectId),
-      resolveSummaryRepo: (projectId) => summaryRepo(projectId),
-      resolveTaskPreset: () => null,
-      resolveModelConfig: async () => ({
-        apiKey: "sk-or-v1-test",
-        modelName: "test/model",
-        contextLength: null
-      }),
-      createClient: () => ({
-        async createChatCompletion() {
-          throw new Error("inline chat writing operation should use streamChatCompletion");
-        },
-        async streamChatCompletion(input: OpenRouterChatCompletionInput, handlers?: OpenRouterStreamHandlers) {
-          expect(input.reasoning).not.toMatchObject({ exclude: true });
-          handlers?.onReasoning?.("先判断润色目标和边界。");
-          handlers?.onToken?.("萧炎缓缓垂下眼，紧攥的指节在袖中一点点泛白。");
-          return {
-            content: "萧炎缓缓垂下眼，紧攥的指节在袖中一点点泛白。",
-            truncated: false
-          };
-        }
-      })
-    });
     const aiTaskService = new AiTaskService(
       aiTaskRepo,
       undefined,
       chatGenerator,
       chatRepo,
       scratchRepo,
-      chapterRepo,
-      undefined,
-      () => getTokenBudget("chat"),
-      runner,
-      summaryRepo
+      chapterRepo
     );
     const session = aiTaskService.getChatSession({ projectId: project.id });
 
@@ -1130,16 +1118,19 @@ describe("AI chat flow", () => {
         onChunk(event) {
           streamEvents.push(`chunk:${event.content}`);
         },
-        onReasoning(event) {
-          streamEvents.push(`reasoning:${event.content}`);
+        onActivity(event) {
+          streamEvents.push(`activity:${event.activity.toolName}`);
         }
       }
     );
 
     expect(streamEvents).toEqual([
-      "reasoning:先判断润色目标和边界。",
-      "chunk:【润色稿】\n",
+      "activity:run_writing_operation",
       "chunk:萧炎缓缓垂下眼，紧攥的指节在袖中一点点泛白。"
+    ]);
+    const messages = aiTaskService.listChatMessages({ projectId: project.id, sessionId: session.id });
+    expect(messages.find((message) => message.role === "assistant")?.activities).toEqual([
+      expect.objectContaining({ toolName: "run_writing_operation", status: "complete" })
     ]);
 
     db.close();
@@ -1345,7 +1336,7 @@ describe("AI chat flow", () => {
     let toolResultText = "";
     const chatGenerator: AiChatGenerator = {
       async sendAgentMessageStream(input) {
-        capturedToolNames.push(...input.tools.map((tool) => tool.function.name));
+        capturedToolNames.push(...input.tools.map((tool) => tool.name));
         const toolResult = await input.executeTool({
           id: "call_read_all",
           name: "read_chapters",
@@ -1883,7 +1874,7 @@ describe("AI chat flow", () => {
     const toolNamesByRequest: string[][] = [];
     const chatGenerator: AiChatGenerator = {
       async sendAgentMessageStream(input) {
-        toolNamesByRequest.push(input.tools.map((tool) => tool.function.name));
+        toolNamesByRequest.push(input.tools.map((tool) => tool.name));
         return {
           role: "assistant",
           content: "收到。",

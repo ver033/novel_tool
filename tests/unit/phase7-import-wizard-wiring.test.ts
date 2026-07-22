@@ -34,11 +34,11 @@ describe("phase 7 import wizard wiring", () => {
     expect(page).toContain("api.import.previewTxt");
     expect(page).toContain("api.import.updatePreview");
     expect(page).toContain("api.import.confirmTxtImport");
-    expect(fileStep).toContain("作为新项目导入");
+    expect(fileStep).toContain('t("importAsNewProject")');
     expect(fileStep).not.toContain("导入到当前项目");
     expect(app).toContain('initialMode={importReturnPage === "writing" ? "import_into_current_project" : "create_new_project"}');
-    expect(page).toContain("当前为追加模式");
-    expect(page).toContain("不会新建项目");
+    expect(page).toContain('t("appendMode")');
+    expect(page).toContain('t("appendModeDescription")');
     expect(`${page}\n${previewStep}`).toContain("merge_with_previous");
     expect(`${page}\n${previewStep}`).toContain("split_from_line");
     expect(`${page}\n${previewStep}`).toContain("rename_chapter");
@@ -67,7 +67,7 @@ describe("phase 7 import wizard wiring", () => {
     expect(writingPage).toContain("onImport={handleImport}");
     expect(writingPage).toContain("flushBeforeNavigation(onImport)");
     expect(topBar).toContain("UploadSimple");
-    expect(topBar).toContain("导入 TXT");
+    expect(topBar).toContain('t("importTxt")');
   });
 
   it("requires the Electron preload API instead of a renderer fallback import implementation", () => {

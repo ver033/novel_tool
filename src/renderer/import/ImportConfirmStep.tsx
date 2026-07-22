@@ -1,6 +1,7 @@
 import { CheckCircle } from "@phosphor-icons/react";
 import type { ImportConfirmResult, ImportPreview } from "../../main/shared/types";
 import { ImportSummary } from "./ImportPreviewStep";
+import { useI18n } from "../i18n";
 
 type ImportConfirmStepProps = {
   readonly result: ImportConfirmResult | null;
@@ -8,6 +9,7 @@ type ImportConfirmStepProps = {
 };
 
 export function ImportConfirmStep({ result, preview }: ImportConfirmStepProps) {
+  const { t } = useI18n();
   return (
     <>
       {preview ? <ImportSummary preview={preview} /> : null}
@@ -16,9 +18,9 @@ export function ImportConfirmStep({ result, preview }: ImportConfirmStepProps) {
           <span className="success-mark">
             <CheckCircle size={26} weight="bold" />
           </span>
-          <h2 className="section-title">导入完成</h2>
+          <h2 className="section-title">{t("importComplete")}</h2>
           <p className="muted">
-            {result ? `已导入到《${result.project.name}》，共 ${result.chapters.length} 个章节。` : "确认导入后会在这里显示结果。"}
+            {result ? t("importResult", { name: result.project.name, count: result.chapters.length }) : t("importPendingResult")}
           </p>
         </div>
       </div>

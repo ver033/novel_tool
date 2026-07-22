@@ -1,5 +1,6 @@
 import { proofreadIssueCodes, proofreadResultSchema } from "../shared/proofread";
 import type { TaskPromptPreset } from "../shared/types";
+import type { ContentLanguage } from "../shared/language";
 import type { OpenRouterMessage, OpenRouterResponseFormat } from "./openrouter-client";
 import { buildReasoningConfig } from "./reasoning-budget";
 import type { TokenBudget } from "./token-budget";
@@ -20,81 +21,100 @@ type BuildWritingOperationPromptInput = {
   readonly preset: TaskPromptPreset | null;
   readonly tokenBudget: TokenBudget;
   readonly source: WritingOperationSource;
+  readonly contentLanguage?: ContentLanguage;
 };
 
 const proofreadResponseFormat: OpenRouterResponseFormat = {
-  type: "json_schema",
-  json_schema: {
-    name: "proofread_result",
-    strict: true,
-    schema: {
-      type: "object",
-      properties: {
-        issues: {
-          type: "array",
-          maxItems: 20,
-          items: {
-            type: "object",
-            additionalProperties: false,
-            required: [
-              "code",
-              "severity",
-              "quote",
-              "locationHint",
-              "explanation",
-              "suggestion",
-              "evidence",
-              "canAutoApply",
-              "needsAuthorJudgment"
-            ],
-            properties: {
-              code: { type: "string", enum: proofreadIssueCodes },
-              severity: { type: "string", enum: ["low", "medium", "high", "critical"] },
-              quote: { type: "string", minLength: 1, maxLength: 600 },
-              locationHint: { type: "string", minLength: 1, maxLength: 300 },
-              explanation: { type: "string", minLength: 1, maxLength: 1200 },
-              suggestion: { type: "string", minLength: 1, maxLength: 1200 },
-              suggestedReplacement: { type: "string", maxLength: 1200 },
-              evidence: {
-                type: "array",
-                maxItems: 8,
-                items: {
-                  type: "object",
-                  additionalProperties: false,
-                  required: ["source", "quote", "note"],
-                  properties: {
-                    source: {
-                      type: "string",
-                      enum: ["target", "before_context", "after_context", "memory", "chapter_summary"]
-                    },
-                    quote: { type: "string", minLength: 1, maxLength: 600 },
-                    note: { type: "string", minLength: 1, maxLength: 600 }
-                  }
-                }
-              },
-              canAutoApply: { type: "boolean" },
-              needsAuthorJudgment: { type: "boolean" }
-            }
-          }
-        }
-      },
-      required: ["issues"],
-      additionalProperties: false
-    }
-  }
+  type: "json_object"
 };
 
-function formatSupportingContext(contextPlan: WritingContextPlan): string {
+const proofreadJsonContract = [
+  '{"issues":[{',
+  `"code":"${proofreadIssueCodes.join("|")}",`,
+  '"severity":"low|medium|high|critical",',
+  '"quote":"...","locationHint":"...","explanation":"...","suggestion":"...",',
+  '"suggestedReplacement":"... (optional)",',
+  '"evidence":[{"source":"target|before_context|after_context|memory|chapter_summary","quote":"...","note":"..."}],',
+  '"canAutoApply":true,"needsAuthorJudgment":false',
+  '}]} '
+].join("");
+
+function formatSupportingContext(contextPlan: WritingContextPlan, language: ContentLanguage): string {
   if (contextPlan.supportingContext.length === 0) {
-    return "（无）";
+    return language === "ja-JP" ? "（なし）" : "（无）";
   }
 
   return contextPlan.supportingContext
-    .map((item, index) => [`[${index + 1}] ${item.label}`, `用途：${item.reason}`, item.content].join("\n"))
+    .map((item, index) => [`[${index + 1}] ${item.label}`, `${language === "ja-JP" ? "用途" : "用途"}：${item.reason}`, item.content].join("\n"))
     .join("\n\n");
 }
 
+function japaneseOperationLabel(operation: WritingOperationDefinition["id"]): string {
+  if (operation === "expand") return "加筆";
+  if (operation === "proofread") return "校正";
+  if (operation === "continue") return "続きを執筆";
+  return "推敲";
+}
+
+function japaneseOperationGuidance(operation: WritingOperationDefinition["id"]): string {
+  if (operation === "expand") {
+    return "対象本文の事実と意図を保ち、動作、心理、情景、前後のつながりを補って、対象を置き換えられる完全な加筆版を出力してください。単なる追記だけを出力してはいけません。";
+  }
+  if (operation === "proofread") {
+    return "誤字脱字、不自然な文、重複表現、指示対象、時系列、人物状態、設定、因果の明確な問題だけを指摘してください。趣味の差を問題として水増しせず、不確実な指摘は作者判断が必要としてください。";
+  }
+  if (operation === "continue") {
+    return "最後の文、視点、時制、人物の目的と感情、未解決の動きを自然に受け、対象本文の後ろに挿入する新しい本文だけを出力してください。既存本文を繰り返してはいけません。";
+  }
+  return "筋書き上の事実、人物の意図、視点、時制を変えず、日本語としての自然さ、リズム、語彙、描写の精度を高めてください。過剰な比喩や説明を足してはいけません。";
+}
+
 function buildMessages(input: BuildWritingOperationPromptInput): readonly OpenRouterMessage[] {
+  const contentLanguage = input.contentLanguage ?? "zh-CN";
+  if (contentLanguage === "ja-JP") {
+    const presetLines = input.preset
+      ? [`タスクプリセット: ${input.preset.name}`, `プリセット要件: ${input.preset.instruction}`]
+      : ["タスクプリセット: なし"];
+    const instruction = input.userInstruction.trim() || "なし";
+    return [
+      {
+        role: "system",
+        content: [
+          "あなたは墨枢の日本語小説執筆オペレーションエージェントです。",
+          "固定された執筆操作、対象本文、参考文脈を受け取ります。",
+          "参考文脈は編集対象ではありません。出力へ混ぜたり、本文を直接上書きしたり、下書きメモへ自動保存したりしてはいけません。",
+          "原文の文体、視点、語調、文のリズム、描写密度、会話の癖、情報開示の速度を優先して維持してください。作者が明示した場合だけ文体を変えます。",
+          japaneseOperationGuidance(input.operation.id)
+        ].join("\n\n")
+      },
+      {
+        role: "user",
+        content: [
+          `執筆操作: ${japaneseOperationLabel(input.operation.id)}`,
+          ...presetLines,
+          "優先順位: システムの制約 > 操作の意味と出力形式 > 対象本文の事実と参考文脈の境界 > 今回の要件 > プリセット。",
+          `今回の要件: ${instruction}`,
+          "",
+          "【対象本文】",
+          input.contextPlan.targetText,
+          "",
+          "【参考文脈】",
+          formatSupportingContext(input.contextPlan, contentLanguage),
+          "",
+          "【出力要件】",
+          input.operation.outputKind === "proofread_issues"
+              ? [
+                `次の JSON 契約に一致する校正結果だけを出力してください：${proofreadJsonContract}`,
+                '明確な問題がなければ {"issues":[]} とします。定義されていないキーを追加してはいけません。',
+                "severity は問題が成立した場合の影響度です。確信度など未定義の項目を追加してはいけません。",
+                "論理・整合性の問題は canAutoApply=false とし、根拠が不十分な場合は needsAuthorJudgment=true としてください。本文を自動修正してはいけません。"
+              ].join("\n")
+            : "そのまま使用できる候補本文だけを出力してください。説明や提案一覧は不要です。"
+        ].join("\n")
+      }
+    ] satisfies readonly OpenRouterMessage[];
+  }
+
   const presetLines = input.preset
     ? [`任务预设：${input.preset.name}`, `预设要求：${input.preset.instruction}`]
     : ["任务预设：无"];
@@ -129,12 +149,13 @@ function buildMessages(input: BuildWritingOperationPromptInput): readonly OpenRo
         input.contextPlan.targetText,
         "",
         "【参考上下文】",
-        formatSupportingContext(input.contextPlan),
+        formatSupportingContext(input.contextPlan, contentLanguage),
         "",
         "【输出要求】",
         input.operation.outputKind === "proofread_issues"
           ? [
-              '只输出符合 JSON Schema 的校对结果；没有明确问题时输出 {"issues":[]}。不要输出 no_issue 项。',
+              `只输出符合以下 JSON 契约的校对结果：${proofreadJsonContract}`,
+              '没有明确问题时输出 {"issues":[]}。不要输出 no_issue 项或未定义字段。',
               "severity 表示问题成立后的影响程度；不要输出置信度、置信依据或未标定等字段。",
               "只有证据足够、值得作者处理的问题才列入 issues；风格偏好、网络小说惯用表达、标点节奏或缺少上下文导致不确定时，在 explanation 中说明，并设置 needsAuthorJudgment=true。",
               "如果某句本身语义正确，但作为当前位置的结尾、转场或对白显得突兀，疑似误插入、旧文本残留或场景断裂，必须作为 continuity_risk 或 style_drift 输出；如果可能是悬念结尾、伏笔或刻意回环，设置 needsAuthorJudgment=true、canAutoApply=false。",
@@ -152,21 +173,25 @@ export function buildWritingOperationPrompt(input: BuildWritingOperationPromptIn
     maxCompletionTokens: input.tokenBudget.maxOutputTokens,
     temperature: input.operation.id === "polish" ? 0.45 : input.operation.id === "proofread" ? 0.2 : 0.65,
     responseFormat: input.operation.outputKind === "proofread_issues" ? proofreadResponseFormat : undefined,
-    reasoning: buildReasoningConfig(input.tokenBudget, { exclude: input.source !== "chat_tool", fallbackEffort: "medium" }),
+    reasoning: input.operation.id === "proofread"
+      ? undefined
+      : buildReasoningConfig(input.tokenBudget, { exclude: input.source !== "chat_tool", fallbackEffort: "medium" }),
     tokenBudget: input.tokenBudget
   };
 }
 
 function looksAdviceOnly(content: string): boolean {
   const compact = content.trim().slice(0, 160);
-  return /^(以下是|这里是|我已经|建议|润色建议|修改建议|核心润色|改进点)/.test(compact) || /请告诉我你的偏好/.test(content);
+  return /^(以下是|这里是|我已经|建议|润色建议|修改建议|核心润色|改进点|以下は|こちらは|提案|修正案のポイント|改善点)/.test(compact) || /(请告诉我你的偏好|好みを教えてください)/.test(content);
 }
 
 function stripCandidateDraftLabel(content: string): string {
   return content
     .trim()
     .replace(/^【(?:润色稿|改写稿|扩写稿|续写稿|候选正文)】\s*/u, "")
+    .replace(/^【(?:推敲案|リライト案|加筆案|続きの本文|候補本文)】\s*/u, "")
     .replace(/^(?:润色稿|改写稿|扩写稿|续写稿|候选正文|润色版本|扩写版本|续写版本)[:：]\s*/u, "")
+    .replace(/^(?:推敲案|リライト案|加筆案|続きの本文|候補本文)[:：]\s*/u, "")
     .replace(/^以下是(?:润色后|扩写后|续写后|改写后)?(?:的)?(?:候选)?正文[:：]\s*/u, "")
     .trim();
 }

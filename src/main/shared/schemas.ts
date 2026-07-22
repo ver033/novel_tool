@@ -4,6 +4,9 @@ import {
   relationshipEntityKindSchema,
   relationshipGraphGetInputSchema as relationshipGraphGetInputBaseSchema
 } from "./relationship-graph";
+import { appLocaleSchema, contentLanguageSchema } from "./language";
+
+export { appLocaleSchema, contentLanguageSchema } from "./language";
 
 const nonEmptyString = z.string().trim().min(1);
 const idSchema = nonEmptyString.max(128);
@@ -43,7 +46,8 @@ export const projectCreateInputSchema = z
   .object({
     name: nonEmptyString.max(120),
     rootPath: z.string().trim().min(1).optional(),
-    targetWordCount: z.number().int().min(100).max(500_000).optional()
+    targetWordCount: z.number().int().min(100).max(500_000).optional(),
+    contentLanguage: contentLanguageSchema.optional()
   })
   .strict();
 
@@ -356,16 +360,24 @@ export const startupLaunchUpdateInputSchema = z
   })
   .strict();
 
+export const experimentalSettingsSchema = z
+  .object({
+    externalBookSyncAutomaticEnabled: z.boolean()
+  })
+  .strict();
+
 export const settingsSaveInputSchema = z
   .object({
     editor: editorSettingsSchema.optional(),
+    appLocale: appLocaleSchema.optional(),
     aiProvider: aiProviderSettingsSchema.optional(),
     projectPath: z.string().trim().min(1).optional(),
     taskPromptPresets: z.array(taskPromptPresetSchema).max(100).optional(),
-    cache: cacheSettingsSchema.optional()
+    cache: cacheSettingsSchema.optional(),
+    experimental: experimentalSettingsSchema.partial().optional()
   })
   .strict()
-  .refine((value) => Boolean(value.editor ?? value.aiProvider ?? value.projectPath ?? value.taskPromptPresets ?? value.cache), {
+  .refine((value) => Boolean(value.appLocale ?? value.editor ?? value.aiProvider ?? value.projectPath ?? value.taskPromptPresets ?? value.cache ?? value.experimental), {
     message: "at least one settings section is required"
   });
 
@@ -554,7 +566,9 @@ export const scratchDeleteInputSchema = z
 
 export const importPreviewTxtInputSchema = z
   .object({
-    filePath: nonEmptyString
+    filePath: nonEmptyString,
+    contentLanguage: contentLanguageSchema.optional(),
+    encoding: z.enum(["auto", "utf8", "shift_jis", "euc-jp", "gb18030", "big5"]).optional()
   })
   .strict();
 
@@ -598,7 +612,8 @@ export const importConfirmTxtInputSchema = z
     importJobId: idSchema,
     mode: z.enum(["create_new_project", "import_into_current_project"]),
     projectId: optionalIdSchema,
-    projectName: z.string().trim().min(1).max(120).optional()
+    projectName: z.string().trim().min(1).max(120).optional(),
+    contentLanguage: contentLanguageSchema.optional()
   })
   .strict();
 

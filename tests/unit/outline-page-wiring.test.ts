@@ -20,7 +20,7 @@ describe("author outline page wiring", () => {
     expect(app).toContain('"outline"');
     expect(app).toContain("OutlinePage");
     expect(app).toContain("openOutline");
-    expect(rail).toContain('{ id: "outline", label: "大纲"');
+    expect(rail).toContain('{ id: "outline", label: t("outline")');
     expect(rail).not.toMatch(/id: "outline"[\s\S]{0,120}disabled: true/);
   });
 

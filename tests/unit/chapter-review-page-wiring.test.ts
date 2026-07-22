@@ -15,7 +15,7 @@ describe("AI chapter review page wiring", () => {
 
     expect(existsSync(join(rootDir, "src/renderer/routes/ChapterReviewPage.tsx"))).toBe(true);
     expect(moduleRail).toContain('"chapterReview"');
-    expect(moduleRail).toContain("AI审稿");
+    expect(moduleRail).toContain('label: t("aiReview")');
     expect(moduleRail).toContain("MagnifyingGlass");
     expect(app).toContain('type Page = "welcome" | "writing" | "relationshipGraph" | "outline" | "chapterReview"');
     expect(app).toContain("<ChapterReviewPage");

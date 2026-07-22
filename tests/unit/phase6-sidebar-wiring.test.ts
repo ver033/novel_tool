@@ -22,8 +22,10 @@ describe("phase 6 sidebar data wiring", () => {
     }
 
     const sidebar = readSource("src/renderer/layout/RightUtilitySidebar.tsx");
+    const writing = readSource("src/renderer/routes/WritingPage.tsx");
     expect(sidebar).toContain("../sidebar/AiChatTab");
-    expect(sidebar).toContain("../sidebar/CurrentTaskTab");
+    expect(writing).toContain("../sidebar/CurrentTaskTab");
+    expect(writing).toContain('className="inline-task-dock"');
     expect(sidebar).toContain("../sidebar/ScratchpadTab");
   });
 
@@ -61,7 +63,7 @@ describe("phase 6 sidebar data wiring", () => {
 
     expect(sidebar).toContain("chapters={chapters}");
     expect(scratchpad).toContain("readonly chapters");
-    expect(scratchpad).toContain("getScratchNoteChapterLabel(note, chapters)");
+    expect(scratchpad).toContain("getLocalizedScratchNoteChapterLabel(note, chapters, locale)");
     expect(scratchpad).toContain("note-chapter-tag");
     expect(utils).toContain("getScratchNoteChapterLabel");
   });

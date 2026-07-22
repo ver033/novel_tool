@@ -20,6 +20,9 @@ import type {
   WritingGoalRecord,
   WritingGoalType
 } from "../../main/shared/types";
+import type { AppLocale } from "../../main/shared/language";
+import { useI18n } from "../i18n";
+import { useLocalizedCopy } from "../i18n/localized-copy";
 import { ProjectModuleRail, type ProjectModule } from "../layout/ProjectModuleRail";
 import { TopBar } from "../layout/TopBar";
 import { getNovelToolApi } from "../state/app-store";
@@ -46,36 +49,186 @@ type GoalFormState = {
   readonly restDatesText: string;
 };
 
-const weekdayOptions = [
-  { value: 1, label: "一" },
-  { value: 2, label: "二" },
-  { value: 3, label: "三" },
-  { value: 4, label: "四" },
-  { value: 5, label: "五" },
-  { value: 6, label: "六" },
-  { value: 0, label: "日" }
-] as const;
+const goalPageCopy = {
+  "zh-CN": {
+    weekdays: ["日", "一", "二", "三", "四", "五", "六"],
+    pace: {
+      no_goal: "未设置目标",
+      ahead: "进度领先",
+      on_track: "节奏正常",
+      behind: "需要加速",
+      completed: "目标完成",
+      overdue: "已超期",
+      paused: "目标暂停"
+    },
+    status: {
+      "no-data": "未记录",
+      rest: "休息",
+      missed: "未完成",
+      partial: "部分完成",
+      done: "完成",
+      over: "超额",
+      deadline: "截止",
+      "system-adjusted": "校准"
+    },
+    defaultGoalName: "全书写作目标",
+    title: "写作目标",
+    subtitle: "写作目标和统计",
+    openProject: "先打开一个项目",
+    openProjectHint: "写作目标会根据当前项目的章节字数动态计算。",
+    noGoal: "还没有写作目标",
+    refresh: "刷新",
+    editGoal: "编辑目标",
+    resume: "继续",
+    pause: "暂停",
+    createGoal: "新建目标",
+    remaining: (count: string) => `还差 ${count} 字`,
+    noGoalLead: "用目标把每天该写多少算清楚",
+    currentTotal: (count: string) => `当前全书 ${count} 字`,
+    deadline: (date: string) => `，截止 ${date}`,
+    noGoalHint: "，创建目标后会自动生成每日计划。",
+    neededToday: "今天还需",
+    todayPlan: (count: string) => `今日计划 ${count} 字`,
+    remainingDays: "剩余写作日",
+    perDay: (count: string) => `每天约 ${count} 字`,
+    estimated: "预计完成",
+    estimateHint: "按近 30 天正向写作估算",
+    none: "暂无",
+    calendar: "日历",
+    done: "完成",
+    partial: "部分",
+    gap: "缺口",
+    plan: (count: number | string) => `计划 ${count}`,
+    recentWriting: "近期写作",
+    recentPace: "近 14 天写作节奏",
+    recentOverview: "近 14 天概览",
+    netAdded: "净增",
+    activeDays: (count: number) => `活跃 ${count} 天`,
+    recentStats: "近 14 天写作统计",
+    today: "今",
+    dailyAverage: "日均",
+    best: "最高",
+    noRecentData: "保存章节后，这里会显示连续 14 天的节奏。",
+    dayDetail: "日详情",
+    selectDay: "选择日历中的一天",
+    selectDayHint: "查看当天新增、删减和涉及的章节。",
+    planned: "计划",
+    added: "新增",
+    deleted: "删减",
+    noDayRecord: "这一天还没有写作记录。",
+    saveCount: (count: number) => `${count} 次保存`,
+    createGoalKicker: "创建目标",
+    editGoalKicker: "编辑目标",
+    createGoalHeading: "让系统开始计算每天该写多少",
+    editGoalHeading: "调整未来计划",
+    close: "关闭",
+    goalName: "目标名称",
+    totalWords: "全书总字数",
+    addFromToday: "从今天新增",
+    targetWords: "目标字数",
+    startDate: "开始日期",
+    deadlineDate: "截止日期",
+    writingDays: "写作日",
+    restDays: "休息日",
+    restPlaceholder: "可选，例如 2026-05-20, 2026-05-21",
+    archive: "归档目标",
+    saving: "保存中",
+    saveGoal: "保存目标",
+    invalidTarget: "目标字数至少为 100。",
+    chars: "字",
+    monthFallback: "本月"
+  },
+  "ja-JP": {
+    weekdays: ["日", "月", "火", "水", "木", "金", "土"],
+    pace: {
+      no_goal: "目標未設定",
+      ahead: "予定より先行",
+      on_track: "順調",
+      behind: "ペースアップが必要",
+      completed: "目標達成",
+      overdue: "期限超過",
+      paused: "一時停止中"
+    },
+    status: {
+      "no-data": "記録なし",
+      rest: "休み",
+      missed: "未達成",
+      partial: "一部達成",
+      done: "達成",
+      over: "超過達成",
+      deadline: "締切",
+      "system-adjusted": "調整済み"
+    },
+    defaultGoalName: "作品全体の執筆目標",
+    title: "執筆目標",
+    subtitle: "執筆目標と統計",
+    openProject: "先にプロジェクトを開いてください",
+    openProjectHint: "現在のプロジェクトの文字数を基に執筆目標を計算します。",
+    noGoal: "執筆目標はまだありません",
+    refresh: "更新",
+    editGoal: "目標を編集",
+    resume: "再開",
+    pause: "一時停止",
+    createGoal: "目標を作成",
+    remaining: (count: string) => `残り ${count} 文字`,
+    noGoalLead: "毎日の執筆量を目標から計算します",
+    currentTotal: (count: string) => `現在 ${count} 文字`,
+    deadline: (date: string) => `、締切 ${date}`,
+    noGoalHint: "。目標を作成すると日別の計画が生成されます。",
+    neededToday: "今日の残り",
+    todayPlan: (count: string) => `今日の予定 ${count} 文字`,
+    remainingDays: "残りの執筆日",
+    perDay: (count: string) => `1 日約 ${count} 文字`,
+    estimated: "完了見込み",
+    estimateHint: "直近 30 日の執筆ペースから推定",
+    none: "未定",
+    calendar: "カレンダー",
+    done: "達成",
+    partial: "一部",
+    gap: "未達",
+    plan: (count: number | string) => `予定 ${count}`,
+    recentWriting: "最近の執筆",
+    recentPace: "直近 14 日の執筆ペース",
+    recentOverview: "直近 14 日の概要",
+    netAdded: "純増",
+    activeDays: (count: number) => `執筆 ${count} 日`,
+    recentStats: "直近 14 日の執筆統計",
+    today: "今",
+    dailyAverage: "日平均",
+    best: "最多",
+    noRecentData: "章を保存すると、直近 14 日のペースがここに表示されます。",
+    dayDetail: "日の詳細",
+    selectDay: "カレンダーの日付を選択",
+    selectDayHint: "その日の追加・削除文字数と対象の章を確認できます。",
+    planned: "予定",
+    added: "追加",
+    deleted: "削除",
+    noDayRecord: "この日の執筆記録はありません。",
+    saveCount: (count: number) => `${count} 回保存`,
+    createGoalKicker: "目標を作成",
+    editGoalKicker: "目標を編集",
+    createGoalHeading: "毎日の執筆量を計算します",
+    editGoalHeading: "今後の計画を調整します",
+    close: "閉じる",
+    goalName: "目標名",
+    totalWords: "作品全体の文字数",
+    addFromToday: "今日からの追加分",
+    targetWords: "目標文字数",
+    startDate: "開始日",
+    deadlineDate: "締切日",
+    writingDays: "執筆する曜日",
+    restDays: "休みの日",
+    restPlaceholder: "任意：2026-05-20, 2026-05-21",
+    archive: "目標をアーカイブ",
+    saving: "保存中",
+    saveGoal: "目標を保存",
+    invalidTarget: "目標文字数は 100 文字以上にしてください。",
+    chars: "文字",
+    monthFallback: "今月"
+  }
+} as const;
 
-const paceText: Record<WritingGoalOverview["paceStatus"], string> = {
-  no_goal: "未设置目标",
-  ahead: "进度领先",
-  on_track: "节奏正常",
-  behind: "需要加速",
-  completed: "目标完成",
-  overdue: "已超期",
-  paused: "目标暂停"
-};
-
-const statusText: Record<WritingCalendarDay["status"], string> = {
-  "no-data": "未记录",
-  rest: "休息",
-  missed: "未完成",
-  partial: "部分完成",
-  done: "完成",
-  over: "超额",
-  deadline: "截止",
-  "system-adjusted": "校准"
-};
+type GoalPageCopy = (typeof goalPageCopy)[AppLocale];
 
 function localDateKey(value = new Date()): string {
   const year = value.getFullYear();
@@ -95,31 +248,30 @@ function addDays(value: string, days: number): string {
   return localDateKey(date);
 }
 
-function formatNumber(value: number): string {
-  return new Intl.NumberFormat("zh-CN").format(value);
+function formatNumber(value: number, locale: AppLocale): string {
+  return new Intl.NumberFormat(locale).format(value);
 }
 
-function formatShortDate(value: string): string {
+function formatShortDate(value: string, locale: AppLocale): string {
   const date = parseLocalDate(value);
-  return `${date.getMonth() + 1}月${date.getDate()}日`;
+  return new Intl.DateTimeFormat(locale, { month: "short", day: "numeric" }).format(date);
 }
 
-function formatSignedNumber(value: number): string {
-  return `${value > 0 ? "+" : ""}${formatNumber(value)}`;
+function formatSignedNumber(value: number, locale: AppLocale): string {
+  return `${value > 0 ? "+" : ""}${formatNumber(value, locale)}`;
 }
 
-function weekdayShortLabel(value: string): string {
-  const labels = ["日", "一", "二", "三", "四", "五", "六"];
-  return labels[parseLocalDate(value).getDay()] ?? "";
+function weekdayShortLabel(value: string, copy: GoalPageCopy): string {
+  return copy.weekdays[parseLocalDate(value).getDay()] ?? "";
 }
 
-function monthTitle(days: readonly WritingCalendarDay[]): string {
+function monthTitle(days: readonly WritingCalendarDay[], locale: AppLocale, copy: GoalPageCopy): string {
   const first = days[0]?.localDate;
   if (!first) {
-    return "本月";
+    return copy.monthFallback;
   }
   const date = parseLocalDate(first);
-  return `${date.getFullYear()}年${date.getMonth() + 1}月`;
+  return new Intl.DateTimeFormat(locale, { year: "numeric", month: "long" }).format(date);
 }
 
 function buildCalendarCells(days: readonly WritingCalendarDay[]): Array<WritingCalendarDay | null> {
@@ -147,12 +299,12 @@ function parseRestDates(value: string): string[] {
   return [...new Set(value.split(/[,\s，、]+/).map((item) => item.trim()).filter(Boolean))];
 }
 
-function createDefaultForm(overview: WritingGoalOverview | null): GoalFormState {
+function createDefaultForm(overview: WritingGoalOverview | null, defaultName: string): GoalFormState {
   const today = overview?.today.localDate ?? localDateKey();
   const current = overview?.currentTotalWordCount ?? 0;
   return {
     mode: "create",
-    name: "全书写作目标",
+    name: defaultName,
     goalType: "total_words",
     targetWordCount: String(Math.max(current + 50_000, 100_000)),
     startDate: today,
@@ -175,13 +327,21 @@ function createEditForm(goal: WritingGoalRecord): GoalFormState {
   };
 }
 
-function DayDetailPanel({ detail }: { readonly detail: WritingDayDetail | null }) {
+function DayDetailPanel({
+  copy,
+  detail,
+  locale
+}: {
+  readonly copy: GoalPageCopy;
+  readonly detail: WritingDayDetail | null;
+  readonly locale: AppLocale;
+}) {
   if (!detail) {
     return (
       <aside className="writing-goal-day-detail writing-goal-animate">
-        <span className="writing-goal-panel-kicker">日详情</span>
-        <h2>选择日历中的一天</h2>
-        <p>查看当天新增、删减和涉及的章节。</p>
+        <span className="writing-goal-panel-kicker">{copy.dayDetail}</span>
+        <h2>{copy.selectDay}</h2>
+        <p>{copy.selectDayHint}</p>
       </aside>
     );
   }
@@ -190,27 +350,27 @@ function DayDetailPanel({ detail }: { readonly detail: WritingDayDetail | null }
     <aside className="writing-goal-day-detail writing-goal-animate">
       <div className="writing-goal-detail-head">
         <div>
-          <span className="writing-goal-panel-kicker">日详情</span>
-          <h2>{formatShortDate(detail.localDate)}</h2>
+          <span className="writing-goal-panel-kicker">{copy.dayDetail}</span>
+          <h2>{formatShortDate(detail.localDate, locale)}</h2>
         </div>
-        <strong className={netWords >= 0 ? "positive" : "negative"}>{netWords >= 0 ? "+" : ""}{formatNumber(netWords)}</strong>
+        <strong className={netWords >= 0 ? "positive" : "negative"}>{netWords >= 0 ? "+" : ""}{formatNumber(netWords, locale)}</strong>
       </div>
       <div className="writing-goal-detail-metrics">
-        <span>计划 {formatNumber(detail.plan?.plannedWords ?? 0)}</span>
-        <span>新增 {formatNumber(detail.stat?.addedWords ?? 0)}</span>
-        <span>删减 {formatNumber(detail.stat?.deletedWords ?? 0)}</span>
+        <span>{copy.planned} {formatNumber(detail.plan?.plannedWords ?? 0, locale)}</span>
+        <span>{copy.added} {formatNumber(detail.stat?.addedWords ?? 0, locale)}</span>
+        <span>{copy.deleted} {formatNumber(detail.stat?.deletedWords ?? 0, locale)}</span>
       </div>
       <div className="writing-goal-event-list">
         {detail.chapterSummaries.length === 0 ? (
-          <p className="writing-goal-muted">这一天还没有写作记录。</p>
+          <p className="writing-goal-muted">{copy.noDayRecord}</p>
         ) : (
           detail.chapterSummaries.map((chapter) => (
             <div className="writing-goal-event-row" key={`${chapter.chapterId ?? chapter.chapterTitle}:${chapter.eventCount}`}>
               <div>
                 <strong>{chapter.chapterTitle}</strong>
-                <span>{chapter.eventCount} 次保存</span>
+                <span>{copy.saveCount(chapter.eventCount)}</span>
               </div>
-              <b className={chapter.netWords >= 0 ? "positive" : "negative"}>{chapter.netWords >= 0 ? "+" : ""}{formatNumber(chapter.netWords)}</b>
+              <b className={chapter.netWords >= 0 ? "positive" : "negative"}>{chapter.netWords >= 0 ? "+" : ""}{formatNumber(chapter.netWords, locale)}</b>
             </div>
           ))
         )}
@@ -229,6 +389,8 @@ export function WritingGoalsPage({
   onWelcome
 }: WritingGoalsPageProps) {
   const api = useMemo(getNovelToolApi, []);
+  const { locale } = useI18n();
+  const copy = useLocalizedCopy(goalPageCopy);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const calendarRef = useRef<HTMLDivElement | null>(null);
   const progressRef = useRef<HTMLDivElement | null>(null);
@@ -334,7 +496,7 @@ export function WritingGoalsPage({
   }
 
   function openCreateGoal(): void {
-    setForm(createDefaultForm(overview));
+    setForm(createDefaultForm(overview, copy.defaultGoalName));
   }
 
   function openEditGoal(): void {
@@ -350,7 +512,7 @@ export function WritingGoalsPage({
     }
     const targetWordCount = Number.parseInt(form.targetWordCount, 10);
     if (!Number.isFinite(targetWordCount) || targetWordCount < 100) {
-      setError("目标字数至少为 100。");
+      setError(copy.invalidTarget);
       return;
     }
     setSaving(true);
@@ -411,13 +573,13 @@ export function WritingGoalsPage({
   if (!currentProject) {
     return (
       <div className="writing-goals-page">
-        <TopBar mode="writing" title="写作目标" searchPlaceholder="写作目标和统计" showEditorHistoryControls={false} showSaveStatus={false} showSearch={false} onSettings={onOpenSettings} onWelcome={onWelcome} />
+        <TopBar mode="writing" title={copy.title} searchPlaceholder={copy.subtitle} showEditorHistoryControls={false} showSaveStatus={false} showSearch={false} onSettings={onOpenSettings} onWelcome={onWelcome} />
         <main className="writing-goals-shell">
           <ProjectModuleRail activeModule="goals" onNavigate={handleNavigate} />
           <section className="writing-goals-empty">
             <Target size={38} />
-            <h1>先打开一个项目</h1>
-            <p>写作目标会根据当前项目的章节字数动态计算。</p>
+            <h1>{copy.openProject}</h1>
+            <p>{copy.openProjectHint}</p>
           </section>
         </main>
       </div>
@@ -434,7 +596,7 @@ export function WritingGoalsPage({
         mode="writing"
         title={currentProject.name}
         searchValue=""
-        searchPlaceholder="写作目标和统计"
+        searchPlaceholder={copy.subtitle}
         showEditorHistoryControls={false}
         showSaveStatus={false}
         showSearch={false}
@@ -444,34 +606,34 @@ export function WritingGoalsPage({
       />
       <main className="writing-goals-shell">
         <ProjectModuleRail activeModule="goals" onNavigate={handleNavigate} />
-        <section className="writing-goals-workspace" ref={rootRef} aria-label="写作目标与统计">
+        <section className="writing-goals-workspace" ref={rootRef} aria-label={copy.subtitle}>
           <div className="writing-goals-toolbar writing-goal-animate">
             <div>
-              <span className="writing-goal-panel-kicker">写作目标</span>
-              <h1>{goal?.name ?? "还没有写作目标"}</h1>
+              <span className="writing-goal-panel-kicker">{copy.title}</span>
+              <h1>{goal?.name ?? copy.noGoal}</h1>
             </div>
             <div className="writing-goal-actions">
               <button className="secondary-button" onClick={reload} disabled={loading} type="button">
-                <ArrowClockwise size={18} />刷新
+                <ArrowClockwise size={18} />{copy.refresh}
               </button>
               {goal ? (
                 <>
                   <button className="secondary-button" onClick={openEditGoal} type="button">
-                    <NotePencil size={18} />编辑目标
+                    <NotePencil size={18} />{copy.editGoal}
                   </button>
                   {goal.status === "paused" ? (
                     <button className="primary-button" onClick={() => setGoalStatus("resume")} disabled={saving} type="button">
-                      <Play size={18} />继续
+                      <Play size={18} />{copy.resume}
                     </button>
                   ) : (
                     <button className="secondary-button" onClick={() => setGoalStatus("pause")} disabled={saving} type="button">
-                      <Pause size={18} />暂停
+                      <Pause size={18} />{copy.pause}
                     </button>
                   )}
                 </>
               ) : (
                 <button className="primary-button" onClick={openCreateGoal} type="button">
-                  <Plus size={18} />新建目标
+                  <Plus size={18} />{copy.createGoal}
                 </button>
               )}
             </div>
@@ -486,32 +648,32 @@ export function WritingGoalsPage({
                 <span>{ratio}%</span>
               </div>
               <div className="writing-goal-overview-copy">
-                <span className={`writing-goal-pace ${overview?.paceStatus ?? "no_goal"}`}>{paceText[overview?.paceStatus ?? "no_goal"]}</span>
-                <h2>{goal ? `还差 ${formatNumber(overview?.remainingWords ?? 0)} 字` : "用目标把每天该写多少算清楚"}</h2>
+                <span className={`writing-goal-pace ${overview?.paceStatus ?? "no_goal"}`}>{copy.pace[overview?.paceStatus ?? "no_goal"]}</span>
+                <h2>{goal ? copy.remaining(formatNumber(overview?.remainingWords ?? 0, locale)) : copy.noGoalLead}</h2>
                 <p>
-                  当前全书 {formatNumber(overview?.currentTotalWordCount ?? 0)} 字
-                  {goal ? `，截止 ${goal.deadlineDate}` : "，创建目标后会自动生成每日计划。"}
+                  {copy.currentTotal(formatNumber(overview?.currentTotalWordCount ?? 0, locale))}
+                  {goal ? copy.deadline(goal.deadlineDate) : copy.noGoalHint}
                 </p>
               </div>
             </section>
 
             <section className="writing-goal-stat-card writing-goal-animate">
               <ClockCountdown size={24} />
-              <span>今天还需</span>
-              <strong>{formatNumber(overview?.today.remainingTodayWords ?? 0)}</strong>
-              <small>今日计划 {formatNumber(overview?.today.plannedWords ?? 0)} 字</small>
+              <span>{copy.neededToday}</span>
+              <strong>{formatNumber(overview?.today.remainingTodayWords ?? 0, locale)}</strong>
+              <small>{copy.todayPlan(formatNumber(overview?.today.plannedWords ?? 0, locale))}</small>
             </section>
             <section className="writing-goal-stat-card writing-goal-animate">
               <CalendarBlank size={24} />
-              <span>剩余写作日</span>
-              <strong>{formatNumber(overview?.remainingWritingDays ?? 0)}</strong>
-              <small>每天约 {formatNumber(overview?.requiredPerDay ?? 0)} 字</small>
+              <span>{copy.remainingDays}</span>
+              <strong>{formatNumber(overview?.remainingWritingDays ?? 0, locale)}</strong>
+              <small>{copy.perDay(formatNumber(overview?.requiredPerDay ?? 0, locale))}</small>
             </section>
             <section className="writing-goal-stat-card writing-goal-animate">
               <TrendUp size={24} />
-              <span>预计完成</span>
-              <strong>{overview?.estimatedCompletionDate ? formatShortDate(overview.estimatedCompletionDate) : "暂无"}</strong>
-              <small>按近 30 天正向写作估算</small>
+              <span>{copy.estimated}</span>
+              <strong>{overview?.estimatedCompletionDate ? formatShortDate(overview.estimatedCompletionDate, locale) : copy.none}</strong>
+              <small>{copy.estimateHint}</small>
             </section>
           </div>
 
@@ -519,17 +681,17 @@ export function WritingGoalsPage({
             <section className="writing-calendar-panel writing-goal-animate">
               <div className="writing-calendar-head">
                 <div>
-                  <span className="writing-goal-panel-kicker">日历</span>
-                  <h2>{monthTitle(overview?.calendarDays ?? [])}</h2>
+                  <span className="writing-goal-panel-kicker">{copy.calendar}</span>
+                  <h2>{monthTitle(overview?.calendarDays ?? [], locale, copy)}</h2>
                 </div>
                 <div className="writing-calendar-legend">
-                  <span className="done">完成</span>
-                  <span className="partial">部分</span>
-                  <span className="missed">缺口</span>
+                  <span className="done">{copy.done}</span>
+                  <span className="partial">{copy.partial}</span>
+                  <span className="missed">{copy.gap}</span>
                 </div>
               </div>
               <div className="writing-calendar-weekdays">
-                {weekdayOptions.map((day) => <span key={day.value}>周{day.label}</span>)}
+                {[1, 2, 3, 4, 5, 6, 0].map((day) => <span key={day}>{copy.weekdays[day]}</span>)}
               </div>
               <div className="writing-calendar-grid" ref={calendarRef}>
                 {calendarCells.map((day, index) =>
@@ -542,7 +704,7 @@ export function WritingGoalsPage({
                     >
                       <span className="writing-calendar-date">{parseLocalDate(day.localDate).getDate()}</span>
                       <b>{day.netWords > 0 ? "+" : ""}{day.netWords}</b>
-                      <small>{day.plannedWords > 0 ? `计划 ${day.plannedWords}` : statusText[day.status]}</small>
+                      <small>{day.plannedWords > 0 ? copy.plan(day.plannedWords) : copy.status[day.status]}</small>
                     </button>
                   ) : (
                     <span className="writing-calendar-day blank" key={`blank-${index}`} />
@@ -554,22 +716,22 @@ export function WritingGoalsPage({
             <section className="writing-goal-trend-panel writing-goal-animate">
               <div className="writing-calendar-head">
                 <div>
-                  <span className="writing-goal-panel-kicker">近期写作</span>
-                  <h2>近 14 天写作节奏</h2>
+                  <span className="writing-goal-panel-kicker">{copy.recentWriting}</span>
+                  <h2>{copy.recentPace}</h2>
                 </div>
-                <div className="writing-trend-summary" aria-label="近 14 天概览">
-                  <span>净增 <strong className={recentTotal >= 0 ? "positive" : "negative"}>{formatSignedNumber(recentTotal)}</strong></span>
-                  <span>活跃 {activeRecentDays} 天</span>
+                <div className="writing-trend-summary" aria-label={copy.recentOverview}>
+                  <span>{copy.netAdded} <strong className={recentTotal >= 0 ? "positive" : "negative"}>{formatSignedNumber(recentTotal, locale)}</strong></span>
+                  <span>{copy.activeDays(activeRecentDays)}</span>
                 </div>
               </div>
               <div
                 className={`writing-goal-trend-chart ${hasRecentTrendData ? "" : "empty"}`}
-                aria-label="近 14 天写作统计"
+                aria-label={copy.recentStats}
                 style={{ "--target-top": `${targetTop}px` } as CSSProperties}
               >
                 {trendTarget > 0 ? (
                   <div className="writing-trend-target-line" aria-hidden="true">
-                    <span>今日计划 {formatNumber(trendTarget)}</span>
+                    <span>{copy.todayPlan(formatNumber(trendTarget, locale))}</span>
                   </div>
                 ) : null}
                 <div className="writing-trend-zero-line" aria-hidden="true" />
@@ -590,10 +752,10 @@ export function WritingGoalsPage({
                         "--positive-height": `${positiveHeight}%`,
                         "--negative-height": `${negativeHeight}%`
                       } as CSSProperties}
-                      title={`${day.localDate} ${formatSignedNumber(day.netWords)} 字，新增 ${formatNumber(day.addedWords)}，删减 ${formatNumber(day.deletedWords)}`}
+                      title={`${day.localDate} ${formatSignedNumber(day.netWords, locale)} ${copy.chars}，${copy.added} ${formatNumber(day.addedWords, locale)}，${copy.deleted} ${formatNumber(day.deletedWords, locale)}`}
                       type="button"
                     >
-                      <span className="writing-trend-value">{day.netWords !== 0 ? formatSignedNumber(day.netWords) : ""}</span>
+                      <span className="writing-trend-value">{day.netWords !== 0 ? formatSignedNumber(day.netWords, locale) : ""}</span>
                       <span className="writing-trend-bar-stack" aria-hidden="true">
                         <span className="writing-trend-positive-zone">
                           <span className="writing-trend-positive-bar" />
@@ -604,8 +766,8 @@ export function WritingGoalsPage({
                         </span>
                       </span>
                       <small>
-                        <b>{isToday ? "今" : parseLocalDate(day.localDate).getDate()}</b>
-                        <span>周{weekdayShortLabel(day.localDate)}</span>
+                        <b>{isToday ? copy.today : parseLocalDate(day.localDate).getDate()}</b>
+                        <span>{weekdayShortLabel(day.localDate, copy)}</span>
                       </small>
                     </button>
                     );
@@ -615,17 +777,17 @@ export function WritingGoalsPage({
               <div className="writing-trend-foot">
                 {hasRecentTrendData ? (
                   <>
-                    <span>日均 {formatSignedNumber(Math.round(recentTotal / 14))} 字</span>
-                    <span>最高 {bestRecentDay ? `${formatShortDate(bestRecentDay.localDate)} ${formatSignedNumber(bestRecentDay.netWords)}` : "暂无"}</span>
+                    <span>{copy.dailyAverage} {formatSignedNumber(Math.round(recentTotal / 14), locale)} {copy.chars}</span>
+                    <span>{copy.best} {bestRecentDay ? `${formatShortDate(bestRecentDay.localDate, locale)} ${formatSignedNumber(bestRecentDay.netWords, locale)}` : copy.none}</span>
                   </>
                 ) : (
-                  <span>保存章节后，这里会显示连续 14 天的节奏。</span>
+                  <span>{copy.noRecentData}</span>
                 )}
               </div>
             </section>
           </div>
         </section>
-        <DayDetailPanel detail={dayDetail} />
+        <DayDetailPanel copy={copy} detail={dayDetail} locale={locale} />
       </main>
 
       {form ? (
@@ -633,55 +795,55 @@ export function WritingGoalsPage({
           <form className="writing-goal-form" onSubmit={submitGoal}>
             <div className="writing-goal-form-head">
               <div>
-                <span className="writing-goal-panel-kicker">{form.mode === "create" ? "创建目标" : "编辑目标"}</span>
-                <h2>{form.mode === "create" ? "让系统开始计算每天该写多少" : "调整未来计划"}</h2>
+                <span className="writing-goal-panel-kicker">{form.mode === "create" ? copy.createGoalKicker : copy.editGoalKicker}</span>
+                <h2>{form.mode === "create" ? copy.createGoalHeading : copy.editGoalHeading}</h2>
               </div>
-              <button aria-label="关闭" onClick={() => setForm(null)} type="button">×</button>
+              <button aria-label={copy.close} onClick={() => setForm(null)} type="button">×</button>
             </div>
             <label>
-              <span>目标名称</span>
+              <span>{copy.goalName}</span>
               <input value={form.name} onChange={(event) => updateForm({ name: event.target.value })} />
             </label>
             {form.mode === "create" ? (
               <div className="writing-goal-type-switch">
                 <button className={form.goalType === "total_words" ? "active" : ""} onClick={() => updateForm({ goalType: "total_words" })} type="button">
-                  全书总字数
+                  {copy.totalWords}
                 </button>
                 <button className={form.goalType === "added_words" ? "active" : ""} onClick={() => updateForm({ goalType: "added_words" })} type="button">
-                  从今天新增
+                  {copy.addFromToday}
                 </button>
               </div>
             ) : null}
             <label>
-              <span>目标字数</span>
+              <span>{copy.targetWords}</span>
               <input min={100} step={100} type="number" value={form.targetWordCount} onChange={(event) => updateForm({ targetWordCount: event.target.value })} />
             </label>
             <div className="writing-goal-form-row">
               <label>
-                <span>开始日期</span>
+                <span>{copy.startDate}</span>
                 <input disabled={form.mode === "edit"} type="date" value={form.startDate} onChange={(event) => updateForm({ startDate: event.target.value })} />
               </label>
               <label>
-                <span>截止日期</span>
+                <span>{copy.deadlineDate}</span>
                 <input type="date" value={form.deadlineDate} onChange={(event) => updateForm({ deadlineDate: event.target.value })} />
               </label>
             </div>
-            <div className="writing-goal-weekdays" aria-label="写作日">
-              {weekdayOptions.map((day) => (
+            <div className="writing-goal-weekdays" aria-label={copy.writingDays}>
+              {[1, 2, 3, 4, 5, 6, 0].map((day) => (
                 <button
-                  className={form.activeWeekdays.includes(day.value) ? "active" : ""}
-                  key={day.value}
-                  onClick={() => toggleWeekday(day.value)}
+                  className={form.activeWeekdays.includes(day) ? "active" : ""}
+                  key={day}
+                  onClick={() => toggleWeekday(day)}
                   type="button"
                 >
-                  周{day.label}
+                  {copy.weekdays[day]}
                 </button>
               ))}
             </div>
             <label>
-              <span>休息日</span>
+              <span>{copy.restDays}</span>
               <input
-                placeholder="可选，例如 2026-05-20, 2026-05-21"
+                placeholder={copy.restPlaceholder}
                 value={form.restDatesText}
                 onChange={(event) => updateForm({ restDatesText: event.target.value })}
               />
@@ -689,11 +851,11 @@ export function WritingGoalsPage({
             <div className="writing-goal-form-actions">
               {form.mode === "edit" ? (
                 <button className="danger-button" disabled={saving} onClick={() => setGoalStatus("archive")} type="button">
-                  归档目标
+                  {copy.archive}
                 </button>
               ) : <span />}
               <button className="primary-button" disabled={saving} type="submit">
-                <CheckCircle size={18} />{saving ? "保存中" : "保存目标"}
+                <CheckCircle size={18} />{saving ? copy.saving : copy.saveGoal}
               </button>
             </div>
           </form>

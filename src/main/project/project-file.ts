@@ -4,6 +4,7 @@ import { createDatabase, type SqliteDatabase } from "../db/database";
 import { runMigrations } from "../db/migrations";
 import { ProjectRepository } from "../db/repositories/project-repo";
 import type { ProjectRecord } from "../shared/types";
+import { contentLanguageSchema, DEFAULT_CONTENT_LANGUAGE } from "../shared/language";
 
 export const PROJECT_FILE_EXTENSION = ".noveltool";
 
@@ -26,6 +27,7 @@ type ProjectRow = {
   readonly id: string;
   readonly name: string;
   readonly root_path: string | null;
+  readonly content_language: string;
   readonly created_at: string;
   readonly updated_at: string;
 };
@@ -44,6 +46,7 @@ function mapProject(row: ProjectRow): ProjectRecord {
     id: row.id,
     name: row.name,
     rootPath: row.root_path,
+    contentLanguage: contentLanguageSchema.catch(DEFAULT_CONTENT_LANGUAGE).parse(row.content_language),
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };

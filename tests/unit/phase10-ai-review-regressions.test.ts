@@ -30,8 +30,8 @@ describe("phase 10 AI review regressions", () => {
     const currentTask = readSource("src/renderer/sidebar/CurrentTaskTab.tsx");
 
     expect(currentTask).toContain("useEffect");
-    expect(currentTask).toContain("initialInstructionForTask(taskType, taskPromptPreset)");
-    expect(currentTask).toMatch(/\[taskType, taskPromptPreset\?\.id, selectionSnapshot\?\.selectionHash\]/);
+    expect(currentTask).toContain("initialInstructionForTask(taskType, taskPromptPreset, japanese)");
+    expect(currentTask).toMatch(/\[japanese, taskType, taskPromptPreset\?\.id, selectionSnapshot\?\.selectionHash\]/);
   });
 
   it("does not expose incomplete scratchpad task insertion affordances", () => {

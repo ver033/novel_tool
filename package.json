@@ -1,9 +1,13 @@
 {
   "name": "novel-tool",
   "productName": "墨枢",
-  "version": "1.8.0",
+  "version": "2.0.0",
+  "packageManager": "npm@10.9.2",
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "private": true,
-  "description": "Local-first Chinese long-form novel editing workstation.",
+  "description": "Local-first Chinese and Japanese long-form novel editing workstation.",
   "main": ".vite/build/index.js",
   "scripts": {
     "predev": "npm run rebuild:electron",
@@ -25,6 +29,8 @@
     "rebuild:electron": "electron-rebuild -f -w better-sqlite3"
   },
   "dependencies": {
+    "@earendil-works/pi-agent-core": "0.80.10",
+    "@earendil-works/pi-ai": "0.80.10",
     "@phosphor-icons/react": "2.1.10",
     "@react-sigma/core": "5.0.6",
     "@sigma/edge-curve": "3.1.0",
@@ -37,7 +43,7 @@
     "@tiptap/react": "3.22.4",
     "@tiptap/starter-kit": "3.22.4",
     "animejs": "4.4.1",
-    "axios": "1.15.2",
+    "axios": "1.18.1",
     "better-sqlite3": "12.8.0",
     "chardet": "2.1.1",
     "diff": "8.0.4",
@@ -69,11 +75,12 @@
     "electron": "41.1.1",
     "tailwindcss": "4.2.2",
     "typescript": "6.0.2",
-    "vite": "8.0.10",
+    "vite": "8.1.5",
     "vitest": "4.1.2"
   },
   "overrides": {
     "@electron/rebuild": "4.0.4",
+    "zod-to-json-schema": "3.25.0",
     "uuid": "14.0.0"
   }
 }

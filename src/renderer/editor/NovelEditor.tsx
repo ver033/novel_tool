@@ -12,6 +12,7 @@ import { UniqueID } from "@tiptap/extension-unique-id";
 import { countWritingUnits } from "../../main/shared/text";
 import type { EditorSettings, SelectionSnapshot, TaskPromptPreset, TaskType } from "../../main/shared/types";
 import { SelectionBubbleMenu } from "./SelectionBubbleMenu";
+import { useI18n } from "../i18n";
 import type { TiptapDocument } from "./tiptap/converters";
 import { createParagraphId, ensureParagraphIds } from "./tiptap/paragraph-id";
 import { TextAlignExtension } from "./tiptap/text-align";
@@ -50,7 +51,7 @@ type EditorContentStyle = CSSProperties & {
 
 const fontFamilyBySetting = {
   system: "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif",
-  song: "'Songti SC', 'STSong', 'SimSun', serif",
+  song: "'Hiragino Mincho ProN', 'Yu Mincho', 'Noto Serif JP', 'Noto Serif CJK JP', 'Songti SC', 'STSong', 'SimSun', serif",
   hei: "-apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif",
   fangsong: "'FangSong', 'STFangsong', 'FangSong_GB2312', serif",
   kai: "'Kaiti SC', 'STKaiti', 'KaiTi', serif"
@@ -179,6 +180,7 @@ export const NovelEditor = memo(function NovelEditor({
   onSelectionToScratchpad,
   onTask
 }: NovelEditorProps) {
+  const { locale } = useI18n();
   const appliedContentVersion = useRef<number | null>(contentVersion);
   const onContentChangeRef = useRef(onContentChange);
   useEffect(() => {
@@ -216,7 +218,7 @@ export const NovelEditor = memo(function NovelEditor({
       BackgroundColor,
       TextAlignExtension,
       Placeholder.configure({
-        placeholder: "开始写正文...",
+        placeholder: locale === "ja-JP" ? "本文を書き始める…" : "开始写正文...",
         showOnlyCurrent: false
       }),
       CharacterCount.configure({

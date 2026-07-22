@@ -203,12 +203,36 @@ const runWritingOperationToolParameters = {
       },
       required: ["kind"]
     },
+    kind: {
+      type: "string",
+      enum: ["selection", "inline_text", "chapter", "chapter_range"],
+      description: "推荐的扁平目标字段。当前选区用 selection；对话内文本用 inline_text；整章用 chapter；章节范围用 chapter_range。"
+    },
+    text: {
+      type: "string",
+      description: "kind=inline_text 时的目标文本。"
+    },
+    ordinal: {
+      type: "integer",
+      minimum: 1,
+      description: "kind=chapter 时的章节序号。"
+    },
+    from: {
+      type: "integer",
+      minimum: 1,
+      description: "kind=chapter_range 时的起始章节序号。"
+    },
+    to: {
+      type: "integer",
+      minimum: 1,
+      description: "kind=chapter_range 时的结束章节序号。"
+    },
     instruction: {
       type: "string",
       description: "作者本次额外要求。没有则留空。"
     }
   },
-  required: ["operation", "target"]
+  required: ["operation"]
 } as const;
 
 const checkContinuityToolParameters = {
@@ -289,7 +313,7 @@ export const MOSHU_CHAT_AGENT_TOOLS: readonly OpenRouterToolDefinition[] = [
     function: {
       name: "run_writing_operation",
       description:
-        "执行中文小说写作操作：润色、扩写、校对、续写。自然语言明确提出这四类任务时也可以调用。只生成候选文本或校对问题，不写回正文，不保存草稿纸。不要把总结、分析、提取信息、生成大纲/简介/人物卡/设定卡/时间线、格式转换等非四类请求强行归类到本工具；没有明确目标时不要调用本工具；用户要求保存时必须另行调用 add_to_scratchpad。",
+        "执行中文小说写作操作：润色、扩写、校对、续写。自然语言明确提出这四类任务时也可以调用。目标参数优先使用顶层扁平形式，例如 {\"operation\":\"expand\",\"kind\":\"selection\"}；兼容旧的 target 对象形式。只生成候选文本或校对问题，不写回正文，不保存草稿纸。不要把总结、分析、提取信息、生成大纲/简介/人物卡/设定卡/时间线、格式转换等非四类请求强行归类到本工具；没有明确目标时不要调用本工具；用户要求保存时必须另行调用 add_to_scratchpad。",
       parameters: runWritingOperationToolParameters
     }
   },
@@ -350,20 +374,20 @@ function toPositiveInteger(value: unknown): number | null {
 
 function normalizeScopeByType(type: string, args: Record<string, unknown>): ChatAgentScope | null {
   const normalized = type.trim().toLowerCase().replace(/[\s-]+/g, "_");
-  if (["all", "all_chapters", "all_chapter", "全部章节", "所有章节", "现有章节", "现有所有章节", "全文", "全书"].includes(normalized)) {
+  if (["all", "all_chapters", "all_chapter", "全部章节", "所有章节", "现有章节", "现有所有章节", "全文", "全书", "全章", "すべての章", "全ての章", "全編", "作品全体"].includes(normalized)) {
     return { type: "all_chapters" };
   }
-  if (["current", "current_chapter", "current_chapters", "本章", "当前章节", "当前章"].includes(normalized)) {
+  if (["current", "current_chapter", "current_chapters", "本章", "当前章节", "当前章", "現在の章", "この章", "今の章"].includes(normalized)) {
     return { type: "current_chapter" };
   }
-  if (["selection", "selected_text", "selected", "选区", "选中文本", "当前选区"].includes(normalized)) {
+  if (["selection", "selected_text", "selected", "选区", "选中文本", "当前选区", "選択範囲", "選択テキスト", "現在の選択範囲"].includes(normalized)) {
     return { type: "selection" };
   }
-  if (["chapter", "single_chapter", "单章", "章节"].includes(normalized)) {
+  if (["chapter", "single_chapter", "单章", "章节", "章", "話", "単一章"].includes(normalized)) {
     const ordinal = toPositiveInteger(args.ordinal ?? args.chapter ?? args.chapterOrdinal);
     return ordinal ? { type: "chapter", ordinal } : null;
   }
-  if (["chapter_range", "range", "chapters", "章节范围", "多章"].includes(normalized)) {
+  if (["chapter_range", "range", "chapters", "章节范围", "多章", "章範囲", "複数章"].includes(normalized)) {
     const from = toPositiveInteger(args.from ?? args.start ?? args.startOrdinal);
     const to = toPositiveInteger(args.to ?? args.end ?? args.endOrdinal);
     return from && to ? { type: "chapter_range", from, to } : null;
@@ -382,14 +406,14 @@ function normalizeScopeString(value: string, args: Record<string, unknown>): Cha
     return typed;
   }
 
-  const rangeMatch = trimmed.match(/^第?\s*(\d+)\s*章?\s*(?:-|~|～|—|－|至|到)\s*第?\s*(\d+)\s*章?$/i);
+  const rangeMatch = trimmed.match(/^第?\s*(\d+)\s*[章話]?\s*(?:-|~|～|—|－|至|到|から)\s*第?\s*(\d+)\s*[章話]?(?:まで)?$/i);
   if (rangeMatch) {
     const from = toPositiveInteger(rangeMatch[1]);
     const to = toPositiveInteger(rangeMatch[2]);
     return from && to ? { type: "chapter_range", from, to } : null;
   }
 
-  const chapterMatch = trimmed.match(/^(?:第\s*)?(\d+)\s*章$/i) ?? trimmed.match(/^chapter[\s_-]*(\d+)$/i);
+  const chapterMatch = trimmed.match(/^(?:第\s*)?(\d+)\s*[章話]$/i) ?? trimmed.match(/^chapter[\s_-]*(\d+)$/i);
   if (chapterMatch) {
     const ordinal = toPositiveInteger(chapterMatch[1]);
     return ordinal ? { type: "chapter", ordinal } : null;
@@ -446,6 +470,58 @@ function normalizeReadChaptersArgs(value: unknown): unknown {
 
   const scope = normalizeScopeValue(value, {});
   return scope ? { scope } : value;
+}
+
+function normalizeRunWritingOperationArgs(value: unknown): unknown {
+  if (!isRecord(value)) {
+    return value;
+  }
+
+  const rawTarget = "target" in value ? value.target : value;
+  const targetRecord = isRecord(rawTarget) ? rawTarget : null;
+  const rawKind = typeof rawTarget === "string"
+    ? rawTarget
+    : typeof targetRecord?.kind === "string"
+      ? targetRecord.kind
+      : typeof targetRecord?.type === "string"
+        ? targetRecord.type
+        : typeof targetRecord?.scope === "string"
+          ? targetRecord.scope
+          : null;
+  if (!rawKind) {
+    return value;
+  }
+
+  const kind = rawKind.trim();
+  const targetValues = targetRecord ?? value;
+  const target = kind === "selection"
+    ? { kind }
+    : kind === "inline_text"
+      ? { kind, text: targetValues.text }
+      : kind === "chapter"
+        ? { kind, ordinal: targetValues.ordinal }
+        : kind === "chapter_range"
+          ? { kind, from: targetValues.from, to: targetValues.to }
+          : null;
+  if (!target) {
+    return value;
+  }
+
+  return {
+    operation: value.operation,
+    target,
+    ...(typeof value.instruction === "string" ? { instruction: value.instruction } : {})
+  };
+}
+
+function parseRunWritingOperationArgs(argumentsJson: string): z.output<typeof runWritingOperationArgsSchema> {
+  const parsed = runWritingOperationArgsSchema.safeParse(normalizeRunWritingOperationArgs(parseJsonArguments(argumentsJson)));
+  if (!parsed.success) {
+    throw new Error(
+      'AI 工具 run_writing_operation 参数无效：请使用 {"operation":"expand","kind":"selection"}，或使用兼容形式 {"operation":"expand","target":{"kind":"selection"}}。'
+    );
+  }
+  return parsed.data;
 }
 
 function parseReadChaptersArgs(argumentsJson: string): {
@@ -591,7 +667,7 @@ function stripWrappingCodeFence(text: string): string {
 
 function isLikelyInlineSourceText(text: string): boolean {
   const compact = text.trim();
-  return compact.length >= 12 && /[\u3400-\u9fff]/.test(compact);
+  return compact.length >= 12 && /[\u3400-\u9fff\u3040-\u30ff]/u.test(compact);
 }
 
 function resolveSelectionSource(runtime: ChatAgentToolRuntime, inlineText?: string): SelectionSource | null {
@@ -643,7 +719,7 @@ function shouldUseSummaryIndex(args: { readonly scope: ChatAgentScope; readonly 
 
 function isExplicitRawContextRequest(message: string): boolean {
   const normalized = message.replace(/\s+/g, "");
-  return /(原文|完整正文|逐字|逐句|引用|摘录|节选|直接读取|读取正文|查看正文)/u.test(normalized);
+  return /(原文|完整正文|逐字|逐句|引用|摘录|节选|直接读取|读取正文|查看正文|本文|全文|一字一句|引用箇所|抜粋|本文を読む)/u.test(normalized);
 }
 
 function normalizeReadModeForSafety(
@@ -1034,7 +1110,7 @@ async function executeRunWritingOperation(runtime: ChatAgentToolRuntime, argumen
     throw new Error("写作操作服务未初始化，无法执行润色、扩写、校对或续写。");
   }
 
-  const args = parseArgs(runWritingOperationArgsSchema, argumentsJson, "run_writing_operation");
+  const args = parseRunWritingOperationArgs(argumentsJson);
   const target = resolveWritingOperationTargetFromChatArgs(runtime, args.target);
   const result = await runtime.executeWritingOperation({
     operation: args.operation,

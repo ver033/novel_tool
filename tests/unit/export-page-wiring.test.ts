@@ -44,7 +44,7 @@ describe("TXT export page wiring", () => {
     expect(writingPage).toContain("handleExport");
     expect(writingPage).toContain("flushBeforeNavigation(onExport)");
     expect(topBar).toContain("DownloadSimple");
-    expect(topBar).toContain("导出 TXT");
+    expect(topBar).toContain('t("exportTxt")');
   });
 
   it("documents the V1 export boundary without AI or scratchpad content", () => {

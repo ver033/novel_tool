@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
+  AiAgentActivityRecord,
   AiChatAction,
   AiChatMessageRecord,
   AiChatSessionRecord,
@@ -62,6 +63,7 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
   const [messages, setMessages] = useState<readonly AiChatMessageRecord[]>([]);
   const [streamingText, setStreamingText] = useState("");
   const [streamingReasoning, setStreamingReasoning] = useState("");
+  const [agentActivities, setAgentActivities] = useState<readonly AiAgentActivityRecord[]>([]);
   const [idleContextUsage, setIdleContextUsage] = useState<AiStreamContextEvent | null>(null);
   const [contextUsage, setContextUsage] = useState<AiStreamContextEvent | null>(null);
   const [contextUsagePending, setContextUsagePending] = useState(false);
@@ -87,6 +89,19 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
   const setDraft = useCallback((nextDraft: string) => {
     draftRef.current = nextDraft;
     setDraftState(nextDraft);
+  }, []);
+
+  const upsertAgentActivity = useCallback((activity: AiAgentActivityRecord) => {
+    setAgentActivities((current) => {
+      const index = current.findIndex((item) => item.id === activity.id);
+      if (index < 0) return [...current, activity];
+      return current.map((item, itemIndex) => itemIndex === index ? activity : item);
+    });
+  }, []);
+
+  const settleAgentActivities = useCallback((status: "error" | "stopped") => {
+    const updatedAt = new Date().toISOString();
+    setAgentActivities((current) => current.map((activity) => activity.status === "running" ? { ...activity, status, updatedAt } : activity));
   }, []);
 
   const consumeDraftSeed = useCallback(
@@ -118,9 +133,10 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
     setBusy(false);
     setStreamingText("");
     setStreamingReasoning("");
+    settleAgentActivities("stopped");
     setContextUsagePending(false);
     setRegeneratingMessageId(null);
-  }, [api, setBusy]);
+  }, [api, setBusy, settleAgentActivities]);
 
   const loadMessages = useCallback(
     async (nextSession: AiChatSessionRecord) => {
@@ -220,6 +236,7 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
       setMessages([]);
       setStreamingText("");
       setStreamingReasoning("");
+      setAgentActivities([]);
       setIdleContextUsage(null);
       setContextUsage(null);
       setContextUsagePending(false);
@@ -319,6 +336,7 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
       setMessages([]);
       setStreamingText("");
       setStreamingReasoning("");
+      setAgentActivities([]);
       setContextUsage(idleContextUsage);
       setContextUsagePending(false);
       setRegeneratingMessageId(null);
@@ -344,6 +362,7 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
       setError(null);
       setStreamingText("");
       setStreamingReasoning("");
+      setAgentActivities([]);
       setContextUsage(getSessionContextUsage(selectedSession) ?? idleContextUsage);
       setContextUsagePending(false);
       setRegeneratingMessageId(null);
@@ -368,6 +387,7 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
     setError(null);
     setStreamingText("");
     setStreamingReasoning("");
+    setAgentActivities([]);
     setContextUsagePending(false);
     setRegeneratingMessageId(null);
     try {
@@ -393,6 +413,7 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
     setError(null);
     setStreamingText("");
     setStreamingReasoning("");
+    setAgentActivities([]);
     setContextUsagePending(false);
     setRegeneratingMessageId(null);
     try {
@@ -469,12 +490,14 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
         setMessages((current) => [...current.filter((item) => item.id !== pendingUser.id), ...result.messages]);
         setStreamingText("");
         setStreamingReasoning("");
+        setAgentActivities([]);
       };
 
       setBusy(true);
       setError(null);
       setStreamingText("");
       setStreamingReasoning("");
+      setAgentActivities([]);
       setContextUsagePending(true);
       setMessages((current) => [...current, pendingUser]);
 
@@ -499,6 +522,11 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
             streamReasoningBuffer += event.content;
             scheduleStreamFlush();
           },
+          onActivity(event) {
+            if (isRequestActive()) {
+              upsertAgentActivity(event.activity);
+            }
+          },
           onContext(event) {
             if (!isRequestActive()) {
               return;
@@ -519,6 +547,7 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
             }
             flushStreamBuffers();
             setError(event.error);
+            settleAgentActivities("error");
           }
         });
         const result = (await api.ai.sendChatMessageStream({
@@ -563,6 +592,7 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
         flushStreamBuffers();
         setContextUsagePending(false);
         setError(formatIpcErrorMessage(reason, "AI 对话失败"));
+        settleAgentActivities("error");
         await loadMessages(session).catch(() => {
           setMessages((current) => current.filter((item) => item.id !== pendingUser.id));
         });
@@ -585,7 +615,7 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
         }
       }
     },
-    [api, cancelActiveStream, currentChapterId, currentChapterTitle, flushPendingSave, loadMessages, projectId, refreshSessions, selectionSnapshot, session, setBusy]
+    [api, cancelActiveStream, currentChapterId, currentChapterTitle, flushPendingSave, loadMessages, projectId, refreshSessions, selectionSnapshot, session, setBusy, settleAgentActivities, upsertAgentActivity]
   );
 
   const regenerateAssistantMessage = useCallback(
@@ -645,6 +675,7 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
         setMessages((current) => current.map((message) => (message.id === assistantMessageId ? replacement : message)));
         setStreamingText("");
         setStreamingReasoning("");
+        setAgentActivities([]);
       };
 
       setBusy(true);
@@ -652,6 +683,7 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
       setRegeneratingMessageId(assistantMessageId);
       setStreamingText("");
       setStreamingReasoning("");
+      setAgentActivities([]);
       setContextUsagePending(true);
 
       try {
@@ -675,6 +707,11 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
             streamReasoningBuffer += event.content;
             scheduleStreamFlush();
           },
+          onActivity(event) {
+            if (isRequestActive()) {
+              upsertAgentActivity(event.activity);
+            }
+          },
           onContext(event) {
             if (!isRequestActive()) {
               return;
@@ -695,6 +732,7 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
             }
             flushStreamBuffers();
             setError(event.error);
+            settleAgentActivities("error");
           }
         });
         const result = (await api.ai.regenerateChatMessageStream({
@@ -735,6 +773,7 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
         flushStreamBuffers();
         setContextUsagePending(false);
         setError(formatIpcErrorMessage(reason, "AI 重新生成失败"));
+        settleAgentActivities("error");
         await loadMessages(session).catch(() => undefined);
       } finally {
         const isCurrentRequest = activeRequestId.current === requestId;
@@ -768,11 +807,14 @@ export function useChatStore({ projectId, currentChapterId, currentChapterTitle,
       refreshSessions,
       selectionSnapshot,
       session,
-      setBusy
+      setBusy,
+      settleAgentActivities,
+      upsertAgentActivity
     ]
   );
 
   return {
+    agentActivities,
     busy,
     clearChat,
     contextUsage,

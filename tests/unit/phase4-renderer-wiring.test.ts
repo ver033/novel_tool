@@ -115,8 +115,8 @@ describe("phase 4 renderer Tiptap wiring", () => {
 
     expect(topBar).toContain("ArrowCounterClockwise");
     expect(topBar).toContain("ArrowClockwise");
-    expect(topBar).toContain("label=\"撤销\"");
-    expect(topBar).toContain("label=\"重做\"");
+    expect(topBar).toContain('label={t("undo")}');
+    expect(topBar).toContain('label={t("redo")}');
     expect(topBar).toContain("readonly onUndo?: () => void");
     expect(topBar).toContain("readonly onRedo?: () => void");
     expect(writingPage).toContain("editor?.chain().focus().undo().run()");

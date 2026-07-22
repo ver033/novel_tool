@@ -87,13 +87,18 @@ describe("phase 2 database migrations", () => {
       { version: 23 },
       { version: 24 },
       { version: 25 },
-      { version: 26 }
+      { version: 26 },
+      { version: 27 },
+      { version: 28 }
     ]);
     expect(db.prepare("PRAGMA table_info(import_jobs)").all().find((row) => row.name === "project_id")).toMatchObject({ notnull: 0 });
     expect(db.prepare("PRAGMA table_info(ai_task_candidates)").all().find((row) => row.name === "metadata_json")).toMatchObject({
       notnull: 0
     });
     expect(db.prepare("PRAGMA table_info(ai_chat_messages)").all().find((row) => row.name === "action_json")).toMatchObject({
+      notnull: 0
+    });
+    expect(db.prepare("PRAGMA table_info(ai_chat_messages)").all().find((row) => row.name === "agent_activity_json")).toMatchObject({
       notnull: 0
     });
     expect(db.prepare("PRAGMA table_info(chapters)").all().find((row) => row.name === "daily_word_count_date")).toMatchObject({
@@ -133,7 +138,7 @@ describe("phase 2 database migrations", () => {
     runMigrations(db);
     runMigrations(db);
 
-    expect(db.prepare("SELECT COUNT(*) AS count FROM schema_migrations").get()).toEqual({ count: 23 });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM schema_migrations").get()).toEqual({ count: 25 });
 
     db.close();
   });
@@ -164,7 +169,7 @@ describe("phase 2 database migrations", () => {
     expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'usage_writing_updates'").get()).toEqual({
       name: "usage_writing_updates"
     });
-    expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").get()).toEqual({ version: 26 });
+    expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").get()).toEqual({ version: 28 });
 
     db.close();
   });
@@ -349,7 +354,7 @@ describe("phase 2 database migrations", () => {
     expect(db.prepare("SELECT COUNT(*) AS count FROM arc_ai_summaries").get()).toEqual({ count: 0 });
     expect(db.prepare("SELECT COUNT(*) AS count FROM book_ai_summaries").get()).toEqual({ count: 0 });
     expect(db.prepare("SELECT COUNT(*) AS count FROM summary_jobs").get()).toEqual({ count: 0 });
-    expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").get()).toEqual({ version: 26 });
+    expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").get()).toEqual({ version: 28 });
 
     db.close();
   });
@@ -407,7 +412,7 @@ describe("phase 2 database migrations", () => {
       change_summary: "旧版校对结果已失效，请重新生成。",
       metadata_json: null
     });
-    expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").get()).toEqual({ version: 26 });
+    expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").get()).toEqual({ version: 28 });
 
     db.close();
   });

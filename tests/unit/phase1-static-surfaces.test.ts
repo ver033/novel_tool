@@ -35,11 +35,11 @@ describe("phase 1 static product surfaces", () => {
   it("keeps the welcome page focused on project entry without supported-format cards", () => {
     const welcome = readSource("src/renderer/routes/WelcomePage.tsx");
 
-    expect(welcome).toContain("开始创作");
-    expect(welcome).toContain("继续写作");
-    expect(welcome).toContain("新建作品");
-    expect(welcome).toContain("导入小说");
-    expect(welcome).toContain("最近项目");
+    expect(welcome).toContain('t("startCreating")');
+    expect(welcome).toContain('t("continueWriting")');
+    expect(welcome).toContain('t("newWork")');
+    expect(welcome).toContain('t("importNovel")');
+    expect(welcome).toContain('t("recentProjects")');
     expect(welcome).not.toContain("支持格式");
   });
 
@@ -59,11 +59,11 @@ describe("phase 1 static product surfaces", () => {
     for (const label of ["润色", "扩写", "校对", "续写"]) {
       expect(bubbleMenu).toContain(label);
     }
-    for (const label of ["AI 对话", "当前任务", "草稿纸"]) {
-      expect(sidebar).toContain(label);
+    for (const key of ["aiChat", "currentTask", "scratchpad"]) {
+      expect(sidebar).toContain(`t("${key}")`);
     }
-    for (const metric of ["字数", "今日", "本章目标", "已保存"]) {
-      expect(`${writing}\n${editorStore}`).toContain(metric);
+    for (const key of ["characterCount", "today", "chapterTarget", "autosaved"]) {
+      expect(writing).toContain(`t("${key}")`);
     }
     expect(writing).not.toContain("中文⌄");
     expect(writing).toContain("openTargetWordCountModal");
@@ -78,8 +78,8 @@ describe("phase 1 static product surfaces", () => {
       expect(settings).toContain(category);
     }
     expect(settings).toContain("visibleCategories.map");
-    for (const step of ["选择文件", "识别章节", "预览与调整", "完成导入"]) {
-      expect(importWizard).toContain(step);
+    for (const key of ["fileSelection", "detectChapters", "previewAndAdjust", "completeImport"]) {
+      expect(importWizard).toContain(`t("${key}")`);
     }
   });
 

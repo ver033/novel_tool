@@ -6,7 +6,6 @@ import {
   resolveChatAgentContext,
   type ResolvedChatAgentContext
 } from "./chat-agent-context";
-import type { ChatAgentDirectoryItem, ChatAgentToolExecutorResult } from "./chat-agent-harness";
 import type { ChatPlanner } from "./chat-agent-planner";
 import {
   chatAgentPlanSchema,
@@ -22,7 +21,15 @@ import { selectChatMemoryCompactionTarget } from "./chat-agent-memory";
 import { enrichChatInputWithReferencedChapter } from "./chat-context-resolver";
 import { parseChatScopeReference } from "./chat-reference-parser";
 import { isOpenRouterCanceledError } from "./openrouter-error";
-import type { OpenRouterToolCall, OpenRouterToolDefinition } from "./openrouter-client";
+import type {
+  NovelAgentRunInput,
+  NovelAgentRunOptions,
+  NovelAgentRunResult,
+  NovelAgentRuntime,
+  NovelAgentRuntimeHandlers,
+  NovelAgentToolDefinition
+} from "./agent-runtime/novel-agent-runtime";
+import { LegacyNovelAgentRuntime } from "./agent-runtime/legacy-novel-agent-runtime";
 import type { ContinuityCheckInput } from "./summary-prompts";
 import { estimateTextTokens, truncateTextToTokenBudget } from "./token-estimator";
 import { WritingOperationRunner } from "./writing-operation-runner";
@@ -32,11 +39,12 @@ import { AiTaskRepository } from "../db/repositories/ai-task-repo";
 import type { ChapterRepository } from "../db/repositories/chapter-repo";
 import type { ScratchNoteRepository } from "../db/repositories/scratch-note-repo";
 import type { SummaryRepository } from "../db/repositories/summary-repo";
-import { proofreadIssueLabels, type ProofreadIssue } from "../shared/proofread";
+import type { ProofreadIssue } from "../shared/proofread";
 import type { ContinuityCheckResult } from "../shared/summary-index";
 import { getTokenBudget, type TokenBudget } from "./token-budget";
-import { countWritingUnits } from "../shared/text";
+import { DEFAULT_CONTENT_LANGUAGE, resolveResponseLanguage, type ContentLanguage } from "../shared/language";
 import type {
+  AiAgentActivityRecord,
   AiApplyCandidateInput,
   AiChatAction,
   AiChatMessageRecord,
@@ -69,11 +77,15 @@ export type AiTaskGenerationResult = {
   readonly truncated?: boolean;
 };
 
-export type AiGenerationOptions = {
-  readonly signal?: AbortSignal;
-};
+export type AiGenerationOptions = NovelAgentRunOptions;
 
-function formatChatWritingOperationTitle(operation: TaskType): string {
+function formatChatWritingOperationTitle(operation: TaskType, language: ContentLanguage = DEFAULT_CONTENT_LANGUAGE): string {
+  if (language === "ja-JP") {
+    if (operation === "expand") return "加筆案";
+    if (operation === "continue") return "続きの本文";
+    if (operation === "proofread") return "校正結果";
+    return "推敲案";
+  }
   if (operation === "expand") {
     return "扩写稿";
   }
@@ -86,94 +98,6 @@ function formatChatWritingOperationTitle(operation: TaskType): string {
   return "润色稿";
 }
 
-const proofreadSeverityLabels: Record<ProofreadIssue["severity"], string> = {
-  low: "低",
-  medium: "中",
-  high: "高",
-  critical: "严重"
-};
-
-type InlineWritingOperationRequest = {
-  readonly operation: TaskType;
-  readonly text: string;
-  readonly instruction: string;
-};
-
-function stripCodeFenceForInlineText(message: string): string | null {
-  const match = /```[^\n]*\n([\s\S]*?)\n?```/u.exec(message);
-  return match?.[1]?.trim() || null;
-}
-
-function inferInlineWritingOperationRequest(message: string): InlineWritingOperationRequest | null {
-  if (/(草稿纸|草稿|素材).{0,12}(加入|保存|存到|放到|记录)/u.test(message)) {
-    return null;
-  }
-  if (/(当前章|当前章节|本章|这一章|这章|选区|选中文本|第[0-9０-９一二三四五六七八九十百千]+章|前[0-9０-９一二三四五六七八九十百千]+章)/u.test(message)) {
-    return null;
-  }
-
-  const operation: TaskType | null = /(校对|审校|纠错)/u.test(message)
-    ? "proofread"
-    : /(续写|接着写|继续写)/u.test(message)
-      ? "continue"
-      : /(扩写|展开|丰富(?:一下)?)/u.test(message)
-        ? "expand"
-        : /(润色|润一下|改写)/u.test(message)
-          ? "polish"
-          : null;
-  if (!operation) {
-    return null;
-  }
-
-  const fenced = stripCodeFenceForInlineText(message);
-  const candidate = fenced ?? message;
-  const text = candidate
-    .replace(/^(?:请|帮我|麻烦你)?(?:把|将)?(?:下面|以下|这一段|这段|这段话|内容|文字|段落)?[：:\s\n]*/u, "")
-    .replace(/(?:请|帮我|麻烦你|顺着这个场景|根据这段|沿着这段)?(?:把|将)?(?:这一段|这段|这段话|上面|以上|内容|文字|段落)?(?:润色|润一下色|润一下|改写|扩写|展开|丰富(?:一下)?|续写|接着写|继续写|校对|审校|纠错)(?:一下|一小段|动作和心理|，并稍微扩写动作和心理|并稍微扩写动作和心理|。|！|!|？|\?)?.*$/u, "")
-    .trim();
-  if (!/[\u3400-\u9fff]/u.test(text) || countWritingUnits(text) < 10) {
-    return null;
-  }
-  return {
-    operation,
-    text,
-    instruction: message.replace(text, "").trim()
-  };
-}
-
-function formatProofreadIssuesForChat(issues: readonly ProofreadIssue[] | null | undefined): string {
-  if (!issues || issues.length === 0) {
-    return "【校对结果】\n未发现明确问题。";
-  }
-
-  const lines = issues.map((issue, index) => {
-    const evidenceLines = issue.evidence.map((item) => {
-      const note = item.note.trim();
-      const quote = item.quote.trim();
-      return `- **证据**：${note}${note && quote ? " - " : ""}${quote}`;
-    });
-    return [
-      `### ${index + 1}. ${proofreadIssueLabels[issue.code]}`,
-      `- **严重程度**：${proofreadSeverityLabels[issue.severity]}`,
-      `- **原文**：${issue.quote}`,
-      `- **建议**：${issue.suggestion}`,
-      `- **说明**：${issue.explanation}`,
-      ...evidenceLines,
-      issue.needsAuthorJudgment ? "- **需要作者判断**：是" : null
-    ]
-      .filter(Boolean)
-      .join("\n");
-  });
-  return ["【校对结果】", ...lines].join("\n");
-}
-
-function formatChatWritingOperationResult(operation: TaskType, result: WritingOperationResult): string {
-  if (operation === "proofread") {
-    return formatProofreadIssuesForChat(result.proofreadIssues);
-  }
-  return `【${formatChatWritingOperationTitle(operation)}】\n${result.generatedText.trim()}`;
-}
-
 export type AiTaskGenerator = {
   readonly generateStream?: (task: AiTaskRecord, handlers: AiTaskStreamHandlers, options?: AiGenerationOptions) => Promise<AiTaskGenerationResult>;
   readonly continueStream?: (
@@ -184,18 +108,12 @@ export type AiTaskGenerator = {
   ) => Promise<AiTaskGenerationResult>;
 };
 
-export type AiChatMessageResult = {
-  readonly role: "assistant";
-  readonly content: string;
-  readonly createdAt: string;
-  readonly actions?: readonly AiChatAction[];
-};
+export type AiChatMessageResult = NovelAgentRunResult;
 
 export type AiChatStreamExecutionOptions = {
   readonly allowActions?: boolean;
   readonly allowTools?: boolean;
   readonly allowAutoChapterContext?: boolean;
-  readonly allowInlineWritingOperation?: boolean;
   readonly includeHistory?: boolean;
 };
 
@@ -206,14 +124,7 @@ export type AiChatGenerationInput = AiSendChatMessageStreamInput & {
   readonly compactedMemoryThroughMessageId?: string | null;
 };
 
-export type AiChatAgentGenerationInput = AiSendChatMessageStreamInput & {
-  readonly history: readonly AiChatMessageRecord[];
-  readonly compactedMemorySummary?: string | null;
-  readonly compactedMemoryThroughMessageId?: string | null;
-  readonly chapterDirectory: readonly ChatAgentDirectoryItem[];
-  readonly tools: readonly OpenRouterToolDefinition[];
-  readonly executeTool: (call: OpenRouterToolCall) => Promise<ChatAgentToolExecutorResult>;
-};
+export type AiChatAgentGenerationInput = NovelAgentRunInput;
 
 export type AiChatHistoryMemorySummaryInput = {
   readonly projectId: string;
@@ -230,7 +141,7 @@ export type AiChatGenerator = {
   readonly sendMessageStream?: (input: AiChatGenerationInput, handlers: AiChatStreamHandlers, options?: AiGenerationOptions) => Promise<AiChatMessageResult>;
   readonly sendAgentMessageStream?: (
     input: AiChatAgentGenerationInput,
-    handlers: AiChatStreamHandlers,
+    handlers: NovelAgentRuntimeHandlers,
     options?: AiGenerationOptions
   ) => Promise<AiChatMessageResult>;
   readonly summarizeChapterForContext?: (input: ChatChapterSummaryInput, options?: AiGenerationOptions) => Promise<string>;
@@ -264,6 +175,7 @@ export type AiChatStreamResult = {
 export type AiChatStreamHandlers = {
   readonly onChunk?: (event: { readonly requestId: string; readonly content: string }) => void;
   readonly onReasoning?: (event: { readonly requestId: string; readonly content: string }) => void;
+  readonly onActivity?: (event: { readonly requestId: string; readonly activity: AiAgentActivityRecord }) => void;
   readonly onContext?: (event: {
     readonly requestId: string;
     readonly estimatedInputTokens: number;
@@ -282,6 +194,14 @@ export type AiChatStreamHandlers = {
   readonly onDone?: (event: { readonly requestId: string; readonly payload: AiChatStreamResult }) => void;
   readonly onError?: (event: { readonly requestId: string; readonly error: string }) => void;
 };
+
+function toNovelAgentToolDefinition(tool: (typeof MOSHU_CHAT_AGENT_TOOLS)[number]): NovelAgentToolDefinition {
+  return {
+    name: tool.function.name,
+    description: tool.function.description,
+    parameters: tool.function.parameters
+  };
+}
 
 async function mapWithConcurrency<T, R>(
   items: readonly T[],
@@ -307,6 +227,7 @@ async function mapWithConcurrency<T, R>(
 type AiTaskRepositoryResolver = (projectId?: string) => AiTaskRepository;
 type AiChatRepositoryResolver = (projectId: string) => AiChatRepository;
 type ScratchNoteRepositoryResolver = (projectId: string) => ScratchNoteRepository;
+type ContentLanguageResolver = (projectId: string) => ContentLanguage;
 type ChapterRepositoryResolver = (projectId: string) => ChapterRepository;
 type SummaryRepositoryResolver = (projectId: string) => SummaryRepository;
 type ChatTokenBudgetResolver = () => TokenBudget | Promise<TokenBudget>;
@@ -388,19 +309,19 @@ function advanceSessionContextUsageAfterAnswer(
 
 function inferChatIntent(message: string): ChatAgentPlan["intent"] {
   const normalized = message.replace(/\s+/g, "");
-  if (/校对|错别字|病句/.test(normalized)) {
+  if (/校对|错别字|病句|校正|誤字|脱字|文法/.test(normalized)) {
     return "proofread";
   }
-  if (/改写|重写|润色/.test(normalized)) {
+  if (/改写|重写|润色|推敲|リライト|書き直/.test(normalized)) {
     return "rewrite_suggest";
   }
-  if (/整理|梳理|归纳/.test(normalized)) {
+  if (/整理|梳理|归纳|まとめ直|整理して/.test(normalized)) {
     return "organize";
   }
-  if (/总结|摘要|概括|提炼/.test(normalized)) {
+  if (/总结|摘要|概括|提炼|要約|あらすじ|まとめて/.test(normalized)) {
     return "summarize";
   }
-  if (/分析|节奏|人物|动机|伏笔|矛盾|逻辑/.test(normalized)) {
+  if (/分析|节奏|人物|动机|伏笔|矛盾|逻辑|テンポ|登場人物|動機|伏線|矛盾|論理/.test(normalized)) {
     return "analyze";
   }
   return "answer";
@@ -408,7 +329,10 @@ function inferChatIntent(message: string): ChatAgentPlan["intent"] {
 
 function inferSafeChatActions(message: string): ChatAgentPlan["actions"] {
   const normalized = message.replace(/\s+/g, "");
-  if (/(草稿纸|草稿|素材)/.test(normalized) && /(加入|保存|存到|放到|记录)/.test(normalized)) {
+  if (
+    (/(草稿纸|草稿|素材)/.test(normalized) && /(加入|保存|存到|放到|记录)/.test(normalized)) ||
+    (/(下書きメモ|下書き|メモ|素材)/.test(normalized) && /(追加|保存|入れて|記録|残して)/.test(normalized))
+  ) {
     return [{ type: "add_to_scratchpad" }];
   }
   return [];
@@ -430,7 +354,7 @@ function buildPlanFromAtReference(message: string): ChatAgentPlan | null {
 
 function isScopeFollowUpMessage(message: string): boolean {
   const normalized = message.replace(/\s+/g, "");
-  return /^(同时|顺便|另外|还有|也|并且|然后|再|继续|同样)/.test(normalized) || /(同时|顺便|另外|还有|也要|也请|并且)/.test(normalized);
+  return /^(同时|顺便|另外|还有|也|并且|然后|再|继续|同样|同時に|ついでに|それと|さらに|続けて|同様に|また)/.test(normalized) || /(同时|顺便|另外|还有|也要|也请|并且|同時に|ついでに|それも|こちらも)/.test(normalized);
 }
 
 function buildPlanFromPreviousScope(message: string, history: readonly AiChatMessageRecord[]): ChatAgentPlan | null {
@@ -465,6 +389,7 @@ export class AiTaskService {
   private readonly resolveChapterRepo?: ChapterRepositoryResolver;
   private readonly resolveScratchRepo?: ScratchNoteRepositoryResolver;
   private readonly resolveSummaryRepo?: SummaryRepositoryResolver;
+  private readonly agentRuntime?: NovelAgentRuntime;
   private readonly activeStreams = new Map<string, AbortController>();
 
   constructor(
@@ -477,13 +402,20 @@ export class AiTaskService {
     private readonly chatPlanner?: ChatPlanner,
     private readonly resolveChatTokenBudget: ChatTokenBudgetResolver = () => getTokenBudget("chat"),
     private readonly writingOperationRunner?: WritingOperationRunner,
-    summaryRepo?: SummaryRepository | SummaryRepositoryResolver
+    summaryRepo?: SummaryRepository | SummaryRepositoryResolver,
+    agentRuntime?: NovelAgentRuntime,
+    private readonly resolveContentLanguage: ContentLanguageResolver = () => DEFAULT_CONTENT_LANGUAGE
   ) {
     this.resolveAiTaskRepo = typeof aiTaskRepo === "function" ? aiTaskRepo : () => aiTaskRepo;
     this.resolveAiChatRepo = aiChatRepo ? (typeof aiChatRepo === "function" ? aiChatRepo : () => aiChatRepo) : undefined;
     this.resolveChapterRepo = chapterRepo ? (typeof chapterRepo === "function" ? chapterRepo : () => chapterRepo) : undefined;
     this.resolveScratchRepo = scratchRepo ? (typeof scratchRepo === "function" ? scratchRepo : () => scratchRepo) : undefined;
     this.resolveSummaryRepo = summaryRepo ? (typeof summaryRepo === "function" ? summaryRepo : () => summaryRepo) : undefined;
+    this.agentRuntime =
+      agentRuntime ??
+      (chatGenerator?.sendAgentMessageStream
+        ? new LegacyNovelAgentRuntime({ sendAgentMessageStream: chatGenerator.sendAgentMessageStream.bind(chatGenerator) })
+        : undefined);
   }
 
   private getAiChatRepo(projectId: string): AiChatRepository {
@@ -652,7 +584,7 @@ export class AiTaskService {
     streamHandlers?: AiChatStreamHandlers,
     options: AiChatStreamExecutionOptions = {}
   ): Promise<AiChatAgentGenerationInput | null> {
-    if (!this.chatGenerator?.sendAgentMessageStream || !this.resolveChapterRepo) {
+    if (!this.agentRuntime || !this.resolveChapterRepo) {
       return null;
     }
 
@@ -663,7 +595,7 @@ export class AiTaskService {
     const allowedActions = options.allowActions === false ? [] : inferSafeChatActions(input.message).map((action) => action.type);
     const scratchRepo = this.resolveScratchRepo?.(input.projectId);
     const summaryRepo = this.resolveSummaryRepo?.(input.projectId);
-    const checkContinuity = this.chatGenerator.checkContinuity?.bind(this.chatGenerator);
+    const checkContinuity = this.chatGenerator?.checkContinuity?.bind(this.chatGenerator);
     const runtimeBase = {
       projectId: input.projectId,
       currentChapterId: currentChapter?.id ?? input.chapterId,
@@ -682,6 +614,7 @@ export class AiTaskService {
           operation: request.operation,
           target: request.target,
           instruction: request.instruction,
+          presentationLanguage: resolveResponseLanguage(input.message, this.resolveContentLanguage(input.projectId)),
           signal,
           streamHandlers
         });
@@ -702,6 +635,8 @@ export class AiTaskService {
 
     return {
       ...input,
+      contentLanguage: this.resolveContentLanguage(input.projectId),
+      responseLanguage: resolveResponseLanguage(input.message, this.resolveContentLanguage(input.projectId)),
       currentChapterTitle: currentChapter?.title ?? input.currentChapterTitle,
       history,
       compactedMemorySummary: memory.compactedMemorySummary,
@@ -721,7 +656,7 @@ export class AiTaskService {
                 return allowedActions.includes("add_to_scratchpad");
               }
               return true;
-            }),
+            }).map(toNovelAgentToolDefinition),
       executeTool: (call) =>
         executeChatAgentToolWithAction({
           name: call.name,
@@ -736,6 +671,7 @@ export class AiTaskService {
     readonly operation: TaskType;
     readonly target: WritingOperationTarget;
     readonly instruction: string;
+    readonly presentationLanguage: ContentLanguage;
     readonly signal?: AbortSignal;
     readonly streamHandlers?: AiChatStreamHandlers;
   }): Promise<WritingOperationResult & { readonly streamedPresentation?: boolean }> {
@@ -752,7 +688,7 @@ export class AiTaskService {
       streamedTitle = true;
       input.streamHandlers?.onChunk?.({
         requestId: "",
-        content: `【${formatChatWritingOperationTitle(input.operation)}】\n`
+        content: `【${formatChatWritingOperationTitle(input.operation, input.presentationLanguage)}】\n`
       });
     };
     const result = await this.writingOperationRunner.runRequest(
@@ -1210,6 +1146,7 @@ export class AiTaskService {
     readonly content: string;
     readonly assistantAction: AiChatAction | null;
     readonly action: AiChatAction | null;
+    readonly activities: readonly AiAgentActivityRecord[];
   }> {
     let memoryContextState: Pick<AiStreamContextEvent, "memoryCompacted" | "memoryCompactedThisRun"> = {
       memoryCompacted: false,
@@ -1219,8 +1156,8 @@ export class AiTaskService {
       onChunk: (event: { readonly content: string }) => {
         handlers.onChunk?.({ requestId: input.requestId, content: event.content });
       },
-      onReasoning: (event: { readonly content: string }) => {
-        handlers.onReasoning?.({ requestId: input.requestId, content: event.content });
+      onActivity: (event: { readonly activity: AiAgentActivityRecord }) => {
+        handlers.onActivity?.({ requestId: input.requestId, activity: event.activity });
       },
       onContext: (event: Parameters<NonNullable<AiChatStreamHandlers["onContext"]>>[0]) => {
         const previousUsage = chatRepo.getSession({
@@ -1236,26 +1173,6 @@ export class AiTaskService {
         handlers.onContext?.(contextUsage);
       }
     } satisfies AiChatStreamHandlers;
-    const inlineWritingOperation = options.allowInlineWritingOperation === false ? null : inferInlineWritingOperationRequest(input.message);
-    if (inlineWritingOperation) {
-      const generated = await this.runChatWritingOperation({
-        projectId: input.projectId,
-        operation: inlineWritingOperation.operation,
-        target: {
-          kind: "inline_text",
-          text: inlineWritingOperation.text
-        },
-        instruction: inlineWritingOperation.instruction,
-        signal: abortController.signal,
-        streamHandlers
-      });
-      return {
-        content: formatChatWritingOperationResult(inlineWritingOperation.operation, generated),
-        assistantAction: null,
-        action: null
-      };
-    }
-
     const memory = await this.compactChatMemoryIfNeeded(input, chatRepo, history, abortController.signal);
     memoryContextState = {
       memoryCompacted: Boolean(memory.compactedMemorySummary),
@@ -1288,7 +1205,7 @@ export class AiTaskService {
           agentContext: legacyAgenticGeneration.generationInput.agentContext
         }
       : toolCallAgentBaseInput;
-    const generated = await this.chatGenerator?.sendAgentMessageStream?.(toolCallAgentInput, streamHandlers, { signal: abortController.signal });
+    const generated = await this.agentRuntime?.run(toolCallAgentInput, streamHandlers, { signal: abortController.signal });
     if (!generated) {
       throw new Error("OpenRouter 对话工具调用服务未初始化。");
     }
@@ -1318,7 +1235,8 @@ export class AiTaskService {
       assistantAction: {
         type: "none"
       },
-      action
+      action,
+      activities: generated.activities ?? []
     };
   }
 
@@ -1357,7 +1275,7 @@ export class AiTaskService {
       throw new Error(error);
     };
 
-    if (!this.chatGenerator?.sendAgentMessageStream) {
+    if (!this.agentRuntime) {
       return fail("OpenRouter 对话工具调用服务未初始化。");
     }
 
@@ -1371,7 +1289,8 @@ export class AiTaskService {
         sessionId: input.sessionId,
         role: "assistant",
         content: generated.content,
-        action: generated.assistantAction
+        action: generated.assistantAction,
+        activities: generated.activities
       });
       const toolMessage = generated.action
         ? chatRepo.createMessage({
@@ -1453,7 +1372,8 @@ export class AiTaskService {
         sessionId: input.sessionId,
         messageId: input.assistantMessageId,
         content: generated.content,
-        action: generated.assistantAction
+        action: generated.assistantAction,
+        activities: generated.activities
       });
       const result = {
         messages: [assistantMessage],

@@ -4,6 +4,7 @@ import type { ChapterRepository } from "../db/repositories/chapter-repo";
 import type { SummaryRepository } from "../db/repositories/summary-repo";
 import { SettingsService } from "../settings/settings-service";
 import { WritingOperationRunner } from "./writing-operation-runner";
+import type { ContentLanguage } from "../shared/language";
 
 export class OpenRouterTaskGenerator implements AiTaskGenerator {
   private readonly runner: WritingOperationRunner;
@@ -11,9 +12,10 @@ export class OpenRouterTaskGenerator implements AiTaskGenerator {
   constructor(
     settingsService: SettingsService,
     resolveChapterRepo: (projectId: string) => ChapterRepository,
-    resolveSummaryRepo?: (projectId: string) => SummaryRepository
+    resolveSummaryRepo?: (projectId: string) => SummaryRepository,
+    resolveContentLanguage?: (projectId: string) => ContentLanguage
   ) {
-    this.runner = WritingOperationRunner.fromSettings(settingsService, resolveChapterRepo, resolveSummaryRepo);
+    this.runner = WritingOperationRunner.fromSettings(settingsService, resolveChapterRepo, resolveSummaryRepo, resolveContentLanguage);
   }
 
   async generateStream(task: AiTaskRecord, handlers: AiTaskStreamHandlers, options: AiGenerationOptions = {}): Promise<AiTaskGenerationResult> {

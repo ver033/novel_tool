@@ -245,7 +245,24 @@ export type AiChatMessageRecord = {
   readonly role: AiChatMessageRole;
   readonly content: string;
   readonly action: AiChatAction | null;
+  readonly activities?: readonly AiAgentActivityRecord[];
   readonly createdAt: string;
+};
+
+export type AiAgentActivityRecord = {
+  readonly id: string;
+  /** `decision` / `response` are retained only for older persisted sessions. */
+  readonly kind: "decision" | "tool" | "task" | "response";
+  readonly status: "pending" | "running" | "complete" | "blocked" | "error" | "stopped";
+  readonly title: string;
+  readonly detail?: string;
+  readonly toolName?: string;
+  readonly taskId?: string;
+  readonly activeForm?: string;
+  readonly input?: string;
+  readonly output?: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
 };
 
 export type AiStreamChunkEvent = {
@@ -256,6 +273,11 @@ export type AiStreamChunkEvent = {
 export type AiStreamReasoningEvent = {
   readonly requestId: string;
   readonly content: string;
+};
+
+export type AiStreamAgentActivityEvent = {
+  readonly requestId: string;
+  readonly activity: AiAgentActivityRecord;
 };
 
 export type AiContextIndexMode = "raw" | "raw_small_project" | "summary_cache" | "hybrid" | "missing" | "stale";
@@ -302,6 +324,7 @@ export type ImportPreview = {
   readonly filePath: string;
   readonly fileName: string;
   readonly encoding: string;
+  readonly contentLanguage: import("./language").ContentLanguage;
   readonly totalWordCount: number;
   readonly chapters: readonly ImportPreviewChapter[];
   readonly createdAt: string;
@@ -522,6 +545,7 @@ export type ProjectRecord = {
   readonly id: string;
   readonly name: string;
   readonly rootPath: string | null;
+  readonly contentLanguage: import("./language").ContentLanguage;
   readonly createdAt: string;
   readonly updatedAt: string;
 };
@@ -688,15 +712,20 @@ export type ChapterCacheBuildOrder = z.output<typeof chapterCacheBuildOrderSchem
 export type CacheSettings = {
   readonly chapterCacheBuildOrder: ChapterCacheBuildOrder;
 };
+export type ExperimentalSettings = {
+  readonly externalBookSyncAutomaticEnabled: boolean;
+};
 export type AiProviderSettingsState = Omit<z.output<typeof aiProviderSettingsSchema>, "apiKey"> & {
   readonly apiKeyConfigured: boolean;
 };
 export type SettingsState = {
+  readonly appLocale: import("./language").AppLocale;
   readonly editor: EditorSettings;
   readonly aiProvider: AiProviderSettingsState | null;
   readonly projectPath: string | null;
   readonly taskPromptPresets: readonly TaskPromptPreset[];
   readonly cache: CacheSettings;
+  readonly experimental: ExperimentalSettings;
 };
 
 export type TaskPromptPreset = z.output<typeof taskPromptPresetSchema>;
@@ -790,6 +819,7 @@ export type ScratchCreateInput = z.input<typeof scratchCreateInputSchema>;
 export type ScratchUpdateInput = z.input<typeof scratchUpdateInputSchema>;
 export type ScratchDeleteInput = z.input<typeof scratchDeleteInputSchema>;
 export type ImportPreviewTxtInput = z.input<typeof importPreviewTxtInputSchema>;
+export type TxtImportEncoding = NonNullable<ImportPreviewTxtInput["encoding"]>;
 export type ImportUpdatePreviewInput = z.input<typeof importUpdatePreviewInputSchema>;
 export type ImportConfirmTxtInput = z.input<typeof importConfirmTxtInputSchema>;
 export type ExternalBookSyncStatusInput = z.input<typeof externalBookSyncStatusInputSchema>;
@@ -1047,6 +1077,7 @@ export const ipcChannels = {
     cancelStream: "novelTool:ai:cancelStream",
     streamChunk: "novelTool:ai:streamChunk",
     streamReasoning: "novelTool:ai:streamReasoning",
+    streamAgentActivity: "novelTool:ai:streamAgentActivity",
     streamContext: "novelTool:ai:streamContext",
     streamDone: "novelTool:ai:streamDone",
     streamError: "novelTool:ai:streamError",

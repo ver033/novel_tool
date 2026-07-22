@@ -70,9 +70,9 @@ describe("Proofread V2 UI", () => {
     expect(currentTask).toContain("Check");
     expect(currentTask).toContain("copyGeneratedCandidate");
     expect(currentTask).toContain("copyAllProofreadIssues");
-    expect(currentTask).toContain('label="复制候选正文"');
-    expect(currentTask).toContain('label="复制全部校对结果"');
-    expect(currentTask).toContain('label="复制这条校对建议"');
+    expect(currentTask).toContain("label={ui.copyCandidate}");
+    expect(currentTask).toContain("label={ui.copyAllProofread}");
+    expect(currentTask).toContain("label={ui.copyIssue}");
     expect(currentTask).not.toContain(">复制建议</button>");
   });
 });

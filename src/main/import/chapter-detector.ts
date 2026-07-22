@@ -2,6 +2,7 @@ import type { z } from "zod";
 import { countWritingUnits } from "../shared/text";
 import type { ImportPreviewChapter } from "../shared/types";
 import type { importUpdatePreviewInputSchema } from "../shared/schemas";
+import { DEFAULT_CONTENT_LANGUAGE, type ContentLanguage } from "../shared/language";
 
 export type ImportPreviewOperation = z.input<typeof importUpdatePreviewInputSchema>["operations"][number];
 
@@ -11,14 +12,15 @@ type Line = {
 };
 
 const chapterNumberPattern = String.raw`[零〇一二三四五六七八九十百千万\d]+(?:[\s　]+[零〇一二三四五六七八九十百千万\d]+)*`;
-const chapterHeadingMarkerPattern = String.raw`第[\s　]*${chapterNumberPattern}[\s　]*[章节回卷部集]`;
+const chapterHeadingMarkerPattern = String.raw`第[\s　]*${chapterNumberPattern}[\s　]*[章节回卷部集話幕編巻]`;
 const volumeHeadingMarkerPattern = String.raw`卷[\s　]*${chapterNumberPattern}`;
-const numberedVolumeHeadingMarkerPattern = String.raw`第[\s　]*${chapterNumberPattern}[\s　]*卷`;
+const numberedVolumeHeadingMarkerPattern = String.raw`第[\s　]*${chapterNumberPattern}[\s　]*[卷巻]`;
+const namedJapaneseHeadingPattern = String.raw`(?:プロローグ|エピローグ|終章|後書き|あとがき)`;
 const headingPattern = new RegExp(
-  String.raw`^(?:${chapterHeadingMarkerPattern}[\s　、:：.-]*.*|${volumeHeadingMarkerPattern}[\s　、:：.-]*.*|${numberedVolumeHeadingMarkerPattern}[\s　、:：.-]*.*|序章|楔子|番外(?:[\s　、:：.-].*)?|后记)$`
+  String.raw`^(?:${chapterHeadingMarkerPattern}[\s　、:：.・-]*.*|${volumeHeadingMarkerPattern}[\s　、:：.・-]*.*|${numberedVolumeHeadingMarkerPattern}[\s　、:：.・-]*.*|序章|楔子|番外(?:[\s　、:：.・-].*)?|后记|${namedJapaneseHeadingPattern}(?:[\s　、:：.・-].*)?)$`
 );
 const headingMarkerPattern = new RegExp(
-  String.raw`^(${chapterHeadingMarkerPattern}|${volumeHeadingMarkerPattern}|${numberedVolumeHeadingMarkerPattern}|序章|楔子|番外|后记)`
+  String.raw`^(${chapterHeadingMarkerPattern}|${volumeHeadingMarkerPattern}|${numberedVolumeHeadingMarkerPattern}|序章|楔子|番外|后记|${namedJapaneseHeadingPattern})`
 );
 const wordCountOnlyHeadingPattern = new RegExp(
   String.raw`^(?:${chapterHeadingMarkerPattern}|${volumeHeadingMarkerPattern})[\s　、:：.-]*[0-9零〇一二三四五六七八九十百千万,.，]+\s*字(?:\s*[Pp]\d+.*)?$`
@@ -83,10 +85,10 @@ function isWordCountOnlyHeading(line: string): boolean {
   return wordCountOnlyHeadingPattern.test(line.trim());
 }
 
-export function detectTxtChapters(content: string): ImportPreviewChapter[] {
+export function detectTxtChapters(content: string, language: ContentLanguage = DEFAULT_CONTENT_LANGUAGE): ImportPreviewChapter[] {
   const normalized = normalizeTxtContent(content);
   if (!normalized) {
-    return [createChapter("正文", [{ text: "", number: 1 }], 0)];
+    return [createChapter(language === "ja-JP" ? "本文" : "正文", [{ text: "", number: 1 }], 0)];
   }
 
   const lines = normalized.split("\n").map((text, index) => ({ text, number: index + 1 }));
@@ -120,7 +122,7 @@ export function detectTxtChapters(content: string): ImportPreviewChapter[] {
   }
 
   if (!foundHeading) {
-    return [createChapter("正文", lines, 0)];
+    return [createChapter(language === "ja-JP" ? "本文" : "正文", lines, 0)];
   }
 
   if (currentLines.length > 0 || chapters.length === 0) {
@@ -179,7 +181,8 @@ function splitFromLine(chapters: readonly ImportPreviewChapter[], chapterIndex: 
 
 export function applyImportPreviewOperations(
   chapters: readonly ImportPreviewChapter[],
-  operations: readonly ImportPreviewOperation[]
+  operations: readonly ImportPreviewOperation[],
+  language: ContentLanguage = DEFAULT_CONTENT_LANGUAGE
 ): ImportPreviewChapter[] {
   let next = [...chapters];
 
@@ -197,7 +200,7 @@ export function applyImportPreviewOperations(
       continue;
     }
     if (operation.type === "redetect") {
-      next = [createChapter("正文", [{ text: next.map((chapter) => chapter.text).join("\n\n"), number: 1 }], 0)];
+      next = [createChapter(language === "ja-JP" ? "本文" : "正文", [{ text: next.map((chapter) => chapter.text).join("\n\n"), number: 1 }], 0)];
     }
   }
 

@@ -17,6 +17,7 @@ import { WritingPage } from "./routes/WritingPage";
 import type { AiChatDraftSeed } from "./sidebar/chat-draft";
 import { getNovelToolApi, useAppStore } from "./state/app-store";
 import type { ImportConfirmResult, ProjectCreateInput, SelectionSnapshot, TaskPromptPreset, UsageAnalyticsRecordEventInput } from "../main/shared/types";
+import { useI18n } from "./i18n";
 
 type Page = "welcome" | "writing" | "relationshipGraph" | "outline" | "chapterReview" | "writingGoals" | "settings" | "import" | "export" | "newProject";
 type ImportReturnPage = "welcome" | "writing";
@@ -37,6 +38,7 @@ const pageUsageFeatures: Record<Page, UsageAnalyticsRecordEventInput["feature"]>
 };
 
 export function App() {
+  const { locale } = useI18n();
   const [page, setPage] = useState<Page>("welcome");
   const [importReturnPage, setImportReturnPage] = useState<ImportReturnPage>("welcome");
   const [exportReturnPage, setExportReturnPage] = useState<ExportReturnPage>("writing");
@@ -47,7 +49,7 @@ export function App() {
   const [taskPromptPreset, setTaskPromptPreset] = useState<TaskPromptPreset | null>(null);
   const [selectionSnapshot, setSelectionSnapshot] = useState<SelectionSnapshot | null>(null);
   const [aiChatDraftSeed, setAiChatDraftSeed] = useState<AiChatDraftSeed | null>(null);
-  const [settingsCategory, setSettingsCategory] = useState<SettingsCategory>("AI 服务");
+  const [settingsCategory, setSettingsCategory] = useState<SettingsCategory>("ai");
   const [importStep, setImportStep] = useState(1);
   const [welcomeNotice, setWelcomeNotice] = useState<string | null>(null);
   const [scratchpadRefreshToken, setScratchpadRefreshToken] = useState(0);
@@ -215,12 +217,12 @@ export function App() {
           openWriting();
           return;
         }
-        setWelcomeNotice("已取消打开项目文件。也可以从下方最近项目继续写作。");
+        setWelcomeNotice(locale === "ja-JP" ? "プロジェクトファイルを開く操作をキャンセルしました。最近のプロジェクトからも執筆を再開できます。" : "已取消打开项目文件。也可以从下方最近项目继续写作。");
       })
       .catch((reason: unknown) => {
         setWelcomeNotice(reason instanceof Error ? reason.message : String(reason));
       });
-  }, [appStore, openWriting]);
+  }, [appStore, locale, openWriting]);
   const openNewProject = useCallback(() => {
     setWelcomeNotice(null);
     setPage("newProject");
@@ -436,6 +438,7 @@ export function App() {
       <AppShell>
         <ImportWizardPage
           currentProjectId={appStore.currentProject?.id ?? null}
+          currentProjectLanguage={appStore.currentProject?.contentLanguage ?? null}
           initialMode={importReturnPage === "writing" ? "import_into_current_project" : "create_new_project"}
           step={importStep}
           onBack={previousImportStep}

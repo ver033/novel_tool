@@ -49,7 +49,7 @@ describe("AI chat summary index UI source", () => {
     expect(chatTab).toContain("继续建立索引");
     expect(chatTab).toContain("停止后台索引");
     expect(chatTab).toContain("打开缓存设置");
-    expect(chatTab).toContain('onOpenSettings("章节索引缓存")');
+    expect(chatTab).toContain('onOpenSettings("chapter-cache")');
     expect(chatTab).not.toContain("void chatStore.rebuildSummaryIndex({ force: true })");
     expect(chatTab).toContain("后台索引已停止");
     expect(chatTab).toContain("后台索引已关闭");
@@ -79,6 +79,6 @@ describe("AI chat summary index UI source", () => {
     expect(contextDisplay).toContain("索引缺失");
     expect(chatTab).toContain("contextDisplay.sourceLabel");
     expect(chatTab).toContain("contextDisplay.coverageLabel");
-    expect(chatTab).toContain("上下文 {contextDisplay.sourceLabel}");
+    expect(chatTab).toContain("{copy.context} {contextDisplay.sourceLabel}");
   });
 });

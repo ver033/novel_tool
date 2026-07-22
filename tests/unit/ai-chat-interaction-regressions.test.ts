@@ -29,7 +29,7 @@ describe("AI chat author interaction regressions", () => {
 
     expect(chat).toContain("chat-command-menu");
     expect(chat).toContain("chatMentionSuggestions");
-    expect(chat).toContain("chatSkillSuggestions");
+    expect(chat).toContain("getChatSkillSuggestions");
     expect(chat).toContain("@选区");
     expect(chat).toContain("@全部章节");
     expect(chat).toContain("/润色");
@@ -107,7 +107,35 @@ describe("AI chat author interaction regressions", () => {
     expect(chat).toContain("scrollIntoView");
     expect(chat).toContain("chatStore.streamingText");
     expect(chat).toContain("chatStore.streamingReasoning");
+    expect(chat).toContain("AgentActivityTrail");
+    expect(chat).not.toContain('<details className="chat-reasoning"');
     expect(chat).toContain("chat-scroll-anchor");
+  });
+
+  it("renders real Pi activity events and keeps the model visible in the composer", () => {
+    const chat = readSource("src/renderer/sidebar/AiChatTab.tsx");
+    const trail = readSource("src/renderer/sidebar/AgentActivityTrail.tsx");
+    const runtime = readSource("src/main/ai/agent-runtime/pi-novel-agent-runtime.ts");
+    const service = readSource("src/main/ai/ai-task-service.ts");
+
+    expect(chat).toContain("chatStore.agentActivities");
+    expect(chat).toContain("chat-runtime-bar");
+    expect(chat).toContain("activeModelName");
+    expect(chat.indexOf("<textarea")).toBeLessThan(chat.indexOf('className="chat-runtime-bar"'));
+    expect(readSource("src/renderer/styles/globals.css")).toContain("grid-template-columns: minmax(112px, 1fr) minmax(0, auto) 38px");
+    expect(trail).toContain('item.kind === "tool"');
+    expect(trail).toContain('item.kind === "task"');
+    expect(trail).toContain("agent-process-toggle");
+    expect(trail).toContain("agent-task-progress");
+    expect(trail).not.toContain("确认请求");
+    expect(trail).not.toContain("工作记录 · 4 项");
+    expect(runtime).toContain('event.type === "tool_execution_start"');
+    expect(runtime).toContain('event.type === "tool_execution_end"');
+    expect(runtime).toContain("toTaskAgentTools");
+    expect(runtime).not.toContain("activityTracker.startTurn");
+    expect(runtime).not.toContain("activityTracker.startResponse");
+    expect(runtime).not.toContain("tool_choice");
+    expect(service).not.toContain("inferInlineWritingOperationRequest");
   });
 
   it("shows icon-only copy controls for AI chat replies and streamed output", () => {
@@ -118,8 +146,8 @@ describe("AI chat author interaction regressions", () => {
     expect(chat).toContain("Check");
     expect(chat).toContain("copyChatMessage");
     expect(chat).toContain("copyStreamingReply");
-    expect(chat).toContain('label="复制 AI 回复"');
-    expect(chat).toContain('label="复制正在生成的 AI 回复"');
+    expect(chat).toContain("label={copy.copyReply}");
+    expect(chat).toContain("label={copy.copyStreaming}");
     expect(css).toContain(".message-copy-button");
     expect(css).toContain(".chat-copy-error");
   });

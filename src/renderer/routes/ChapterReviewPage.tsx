@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowClockwise, CheckSquare, MagnifyingGlass, Square, Trash } from "@phosphor-icons/react";
 import type { ChapterReviewProgressEvent, ChapterReviewRunRecord, ChapterSummary, ProjectRecord } from "../../main/shared/types";
-import { proofreadIssueLabels, type ProofreadIssue, type ProofreadIssueCode } from "../../main/shared/proofread";
+import { proofreadIssueLabels, proofreadIssueLabelsJa, type ProofreadIssue, type ProofreadIssueCode } from "../../main/shared/proofread";
+import type { AppLocale } from "../../main/shared/language";
+import { useI18n } from "../i18n";
+import { useLocalizedCopy } from "../i18n/localized-copy";
 import { ProjectModuleRail, type ProjectModule } from "../layout/ProjectModuleRail";
 import { TopBar } from "../layout/TopBar";
 import { getNovelToolApi } from "../state/app-store";
@@ -19,36 +22,126 @@ type ChapterReviewPageProps = {
   readonly onWelcome: () => void;
 };
 
-const severityLabel: Record<ProofreadIssue["severity"], string> = {
-  low: "低",
-  medium: "中",
-  high: "高",
-  critical: "严重"
-};
-
-const riskLabel: Record<ChapterReviewRunRecord["chapters"][number]["aiToneRisk"], string> = {
-  none: "无",
-  low: "低",
-  medium: "中",
-  high: "高"
-};
+const reviewPageCopy = {
+  "zh-CN": {
+    title: "AI 审稿",
+    heading: "章节审稿",
+    openProject: "先打开一个项目",
+    openProjectHint: "打开项目后可以选择章节进行 AI 审稿。",
+    refresh: "刷新",
+    selectAll: "全选",
+    clear: "清空",
+    stop: "停止审稿",
+    running: "审稿中",
+    start: "开始审稿",
+    selectedChapters: "已选章节",
+    latestResult: "最近结果",
+    loading: "加载中",
+    none: "无",
+    noRecord: "暂无记录",
+    status: "审稿状态",
+    ready: "待开始",
+    notSelected: "未选择",
+    canStart: "可以开始审稿",
+    chooseFromLeft: "从左侧选择章节",
+    chapters: "章节",
+    results: "审稿结果",
+    issues: "问题",
+    aiToneRisk: "AI 味风险",
+    time: "时间",
+    categories: {
+      all: "全部",
+      text: "文字表达",
+      logic: "逻辑连续",
+      character: "人物对白",
+      style: "文风 AI 味"
+    },
+    severity: { low: "低", medium: "中", high: "高", critical: "严重" },
+    risk: { none: "无", low: "低", medium: "中", high: "高" },
+    openText: "查看正文",
+    readability: "可读性",
+    aiTone: "AI 味",
+    noCategoryIssue: "当前分类没有问题。",
+    noIssue: "未发现明确问题。",
+    noResult: "暂无审稿结果",
+    history: "记录",
+    deleteRecord: "删除记录",
+    incomplete: "未完成",
+    completed: "完成",
+    failed: "失败",
+    stopped: "已停止",
+    starting: "正在启动审稿",
+    stopping: "正在停止审稿",
+    chooseChapterError: "请选择要审稿的章节。",
+    elapsed: "已用",
+    remaining: "预计剩余",
+    segments: "段",
+    chars: "字",
+    chapterUnit: "章",
+    issueUnit: "问题"
+  },
+  "ja-JP": {
+    title: "AI レビュー",
+    heading: "章レビュー",
+    openProject: "先にプロジェクトを開いてください",
+    openProjectHint: "プロジェクトを開くと、章を選んで AI レビューを実行できます。",
+    refresh: "更新",
+    selectAll: "すべて選択",
+    clear: "選択解除",
+    stop: "レビューを停止",
+    running: "レビュー中",
+    start: "レビューを開始",
+    selectedChapters: "選択した章",
+    latestResult: "最新の結果",
+    loading: "読み込み中",
+    none: "なし",
+    noRecord: "記録なし",
+    status: "レビュー状態",
+    ready: "開始待ち",
+    notSelected: "未選択",
+    canStart: "レビューを開始できます",
+    chooseFromLeft: "左側から章を選択してください",
+    chapters: "章",
+    results: "レビュー結果",
+    issues: "指摘",
+    aiToneRisk: "AI 表現リスク",
+    time: "日時",
+    categories: {
+      all: "すべて",
+      text: "文章表現",
+      logic: "論理と連続性",
+      character: "人物と台詞",
+      style: "文体と AI 表現"
+    },
+    severity: { low: "低", medium: "中", high: "高", critical: "重大" },
+    risk: { none: "なし", low: "低", medium: "中", high: "高" },
+    openText: "本文を開く",
+    readability: "読みやすさ",
+    aiTone: "AI 表現",
+    noCategoryIssue: "この分類には指摘がありません。",
+    noIssue: "明確な問題は見つかりませんでした。",
+    noResult: "レビュー結果はまだありません",
+    history: "履歴",
+    deleteRecord: "履歴を削除",
+    incomplete: "未完了",
+    completed: "完了",
+    failed: "失敗",
+    stopped: "停止済み",
+    starting: "レビューを開始しています",
+    stopping: "レビューを停止しています",
+    chooseChapterError: "レビューする章を選択してください。",
+    elapsed: "経過",
+    remaining: "残り時間",
+    segments: "区間",
+    chars: "文字",
+    chapterUnit: "章",
+    issueUnit: "件"
+  }
+} as const;
 
 type IssueCategoryId = "all" | "text" | "logic" | "character" | "style";
 
-const issueCategoryOptions: readonly { readonly id: IssueCategoryId; readonly label: string }[] = [
-  { id: "all", label: "全部" },
-  { id: "text", label: "文字表达" },
-  { id: "logic", label: "逻辑连续" },
-  { id: "character", label: "人物对白" },
-  { id: "style", label: "文风AI味" }
-];
-
-const issueCategoryLabel: Record<Exclude<IssueCategoryId, "all">, string> = {
-  text: "文字表达",
-  logic: "逻辑连续",
-  character: "人物对白",
-  style: "文风AI味"
-};
+const issueCategoryOptions: readonly IssueCategoryId[] = ["all", "text", "logic", "character", "style"];
 
 const issueCategoryRank: Record<Exclude<IssueCategoryId, "all">, number> = {
   text: 1,
@@ -98,7 +191,6 @@ function groupIssuesForDisplay(issues: readonly ProofreadIssue[], selectedCatego
   }
   return [...groups.entries()].map(([category, groupIssues]) => ({
     category,
-    label: issueCategoryLabel[category],
     issues: groupIssues
   }));
 }
@@ -107,11 +199,11 @@ function createChapterReviewRequestId(): string {
   return `chapter_review_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function formatDateTime(value: string | null): string {
+function formatDateTime(value: string | null, locale: AppLocale, incomplete: string): string {
   if (!value) {
-    return "未完成";
+    return incomplete;
   }
-  return new Intl.DateTimeFormat("zh-CN", {
+  return new Intl.DateTimeFormat(locale, {
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
@@ -119,17 +211,17 @@ function formatDateTime(value: string | null): string {
   }).format(new Date(value));
 }
 
-function statusText(run: ChapterReviewRunRecord): string {
+function statusText(run: ChapterReviewRunRecord, copy: (typeof reviewPageCopy)[AppLocale]): string {
   if (run.status === "running") {
-    return "审稿中";
+    return copy.running;
   }
   if (run.status === "failed") {
     if (run.error === "AI审稿已停止。") {
-      return "已停止";
+      return copy.stopped;
     }
-    return "失败";
+    return copy.failed;
   }
-  return "完成";
+  return copy.completed;
 }
 
 function isCanceledReviewMessage(reason: unknown): boolean {
@@ -149,6 +241,8 @@ export function ChapterReviewPage({
   onWelcome
 }: ChapterReviewPageProps) {
   const api = useMemo(getNovelToolApi, []);
+  const { locale } = useI18n();
+  const copy = useLocalizedCopy(reviewPageCopy);
   const projectId = currentProject?.id ?? null;
   const sortedChapters = useMemo(() => [...chapters].sort((a, b) => a.sortOrder - b.sortOrder), [chapters]);
   const [selectedChapterIds, setSelectedChapterIds] = useState<readonly string[]>([]);
@@ -187,7 +281,17 @@ export function ChapterReviewPage({
     return rank[chapter.aiToneRisk] > rank[current] ? chapter.aiToneRisk : current;
   }, "none") ?? "none";
   const progressValue = running ? progress?.progressPercent ?? 1 : progress?.phase === "completed" ? 100 : progress?.progressPercent ?? 0;
-  const progressText = progress?.message ?? (running ? "正在启动审稿" : "");
+  const progressText = progress?.message
+    ? locale === "ja-JP"
+      ? progress.phase === "completed"
+        ? copy.completed
+        : progress.phase === "failed"
+          ? copy.failed
+          : copy.running
+      : progress.message
+    : running
+      ? copy.starting
+      : "";
   const reviewElapsedMs = reviewStartedAt ? Math.max(0, reviewClockNow - reviewStartedAt) : 0;
   const activeRunChapterCount = activeRun ? activeRun.chapters.length || activeRun.chapterIds.length : 0;
   const estimatedRemainingMs = progress
@@ -198,11 +302,18 @@ export function ChapterReviewPage({
       parallelCapacity: chapterReviewParallelCapacity
     })
     : null;
-  const remainingTimeText = formatReviewRemainingText({
-    estimatedRemainingMs,
-    completedChunks: progress?.completedChunks ?? 0,
-    totalChunks: progress?.totalChunks ?? 0
-  });
+  const remainingTimeText =
+    locale === "ja-JP"
+      ? estimatedRemainingMs !== null
+        ? formatReviewDuration(estimatedRemainingMs)
+        : progress && progress.completedChunks > 0 && progress.completedChunks < progress.totalChunks
+          ? `残り ${Math.max(1, progress.totalChunks - progress.completedChunks)} 件の応答を待機中`
+          : "計算中"
+      : formatReviewRemainingText({
+          estimatedRemainingMs,
+          completedChunks: progress?.completedChunks ?? 0,
+          totalChunks: progress?.totalChunks ?? 0
+        });
 
   const reloadRuns = useCallback(async () => {
     if (!projectId) {
@@ -271,7 +382,7 @@ export function ChapterReviewPage({
       return;
     }
     if (selectedChapterIds.length === 0) {
-      setError("请选择要审稿的章节。");
+      setError(copy.chooseChapterError);
       return;
     }
     setRunning(true);
@@ -291,7 +402,7 @@ export function ChapterReviewPage({
       totalChunks: selectedChapterIds.length,
       completedChunks: 0,
       progressPercent: 1,
-      message: "正在启动审稿"
+      message: copy.starting
     });
     const unsubscribe = api.chapterReview.subscribeProgress(requestId, setProgress);
     try {
@@ -321,7 +432,7 @@ export function ChapterReviewPage({
       return;
     }
     setError(null);
-    setProgress((current) => current ? { ...current, message: "正在停止审稿" } : current);
+    setProgress((current) => current ? { ...current, message: copy.stopping } : current);
     try {
       await api.chapterReview.cancelReview({ requestId: activeReviewRequestId });
     } catch (reason) {
@@ -346,13 +457,13 @@ export function ChapterReviewPage({
   if (!currentProject) {
     return (
       <div className="chapter-review-page">
-        <TopBar mode="writing" title="AI审稿" searchPlaceholder="AI审稿" showEditorHistoryControls={false} showSaveStatus={false} showSearch={false} onSettings={onOpenSettings} onWelcome={onWelcome} />
+        <TopBar mode="writing" title={copy.title} searchPlaceholder={copy.title} showEditorHistoryControls={false} showSaveStatus={false} showSearch={false} onSettings={onOpenSettings} onWelcome={onWelcome} />
         <main className="chapter-review-shell">
           <ProjectModuleRail activeModule="chapterReview" onNavigate={handleNavigate} />
           <section className="chapter-review-empty">
             <MagnifyingGlass size={38} />
-            <h1>先打开一个项目</h1>
-            <p>打开项目后可以选择章节进行 AI 审稿。</p>
+            <h1>{copy.openProject}</h1>
+            <p>{copy.openProjectHint}</p>
           </section>
         </main>
       </div>
@@ -364,8 +475,8 @@ export function ChapterReviewPage({
       <TopBar
         mode="writing"
         title={currentProject.name}
-        subtitle="AI审稿"
-        searchPlaceholder="AI审稿"
+        subtitle={copy.title}
+        searchPlaceholder={copy.title}
         showEditorHistoryControls={false}
         showSaveStatus={false}
         showSearch={false}
@@ -374,29 +485,29 @@ export function ChapterReviewPage({
       />
       <main className="chapter-review-shell">
         <ProjectModuleRail activeModule="chapterReview" onNavigate={handleNavigate} />
-        <section className="chapter-review-workspace" aria-label="AI审稿">
+        <section className="chapter-review-workspace" aria-label={copy.title}>
           <header className="chapter-review-toolbar">
             <div>
-              <span className="chapter-review-kicker">AI审稿</span>
-              <h1>章节审稿</h1>
+              <span className="chapter-review-kicker">{copy.title}</span>
+              <h1>{copy.heading}</h1>
             </div>
             <div className="chapter-review-actions">
               <button className="secondary-button" onClick={reloadRuns} disabled={loading || running} type="button">
-                <ArrowClockwise size={18} />刷新
+                <ArrowClockwise size={18} />{copy.refresh}
               </button>
               <button className="secondary-button" onClick={() => setSelectedChapterIds(sortedChapters.map((chapter) => chapter.id))} disabled={running || sortedChapters.length === 0} type="button">
-                <CheckSquare size={18} />全选
+                <CheckSquare size={18} />{copy.selectAll}
               </button>
               <button className="secondary-button" onClick={() => setSelectedChapterIds([])} disabled={running || selectedCount === 0} type="button">
-                <Square size={18} />清空
+                <Square size={18} />{copy.clear}
               </button>
               {running && activeReviewRequestId ? (
                 <button className="secondary-button" onClick={() => void cancelActiveReview()} type="button">
-                  <Square size={18} />停止审稿
+                  <Square size={18} />{copy.stop}
                 </button>
               ) : null}
               <button className="primary-button" onClick={() => void startReview()} disabled={running || selectedCount === 0} type="button">
-                <MagnifyingGlass size={18} />{running ? "审稿中" : "开始审稿"}
+                <MagnifyingGlass size={18} />{running ? copy.running : copy.start}
               </button>
             </div>
           </header>
@@ -404,14 +515,14 @@ export function ChapterReviewPage({
           {error ? <div className="chapter-review-error">{error}</div> : null}
           <div className="chapter-review-focus-panel">
             <div className="chapter-review-selection-meta">
-              <span>已选章节</span>
+              <span>{copy.selectedChapters}</span>
               <strong>{selectedCount}</strong>
-              <small>{selectedWordCount.toLocaleString("zh-CN")} 字</small>
+              <small>{selectedWordCount.toLocaleString(locale)} {copy.chars}</small>
             </div>
             <div className="chapter-review-selection-meta">
-              <span>最近结果</span>
-              <strong>{activeRun ? statusText(activeRun) : loading ? "加载中" : "无"}</strong>
-              <small>{activeRun ? `${activeRunChapterCount} 章 / ${totalIssueCount} 问题` : "暂无记录"}</small>
+              <span>{copy.latestResult}</span>
+              <strong>{activeRun ? statusText(activeRun, copy) : loading ? copy.loading : copy.none}</strong>
+              <small>{activeRun ? `${activeRunChapterCount} ${copy.chapterUnit} / ${totalIssueCount} ${copy.issueUnit}` : copy.noRecord}</small>
             </div>
             {running || progress ? (
               <div className={`chapter-review-progress ${progress?.phase ?? "preparing"}`} aria-live="polite">
@@ -425,27 +536,27 @@ export function ChapterReviewPage({
                 <div className="chapter-review-progress-stats">
                   <span>
                     {progress
-                      ? `${progress.completedChapters}/${progress.totalChapters} 章，${progress.completedChunks}/${progress.totalChunks} 段`
-                      : `${selectedCount} 章`}
+                      ? `${progress.completedChapters}/${progress.totalChapters} ${copy.chapterUnit}，${progress.completedChunks}/${progress.totalChunks} ${copy.segments}`
+                      : `${selectedCount} ${copy.chapterUnit}`}
                   </span>
-                  <span>已用 {formatReviewDuration(reviewElapsedMs)}</span>
-                  <span>预计剩余：{remainingTimeText}</span>
+                  <span>{copy.elapsed} {formatReviewDuration(reviewElapsedMs)}</span>
+                  <span>{copy.remaining}：{remainingTimeText}</span>
                 </div>
               </div>
             ) : (
               <div className="chapter-review-idle-panel">
-                <span>审稿状态</span>
-                <strong>{selectedCount > 0 ? "待开始" : "未选择"}</strong>
-                <small>{selectedCount > 0 ? "可以开始审稿" : "从左侧选择章节"}</small>
+                <span>{copy.status}</span>
+                <strong>{selectedCount > 0 ? copy.ready : copy.notSelected}</strong>
+                <small>{selectedCount > 0 ? copy.canStart : copy.chooseFromLeft}</small>
               </div>
             )}
           </div>
 
           <div className="chapter-review-layout">
-            <aside className="chapter-review-sidebar" aria-label="章节选择">
+            <aside className="chapter-review-sidebar" aria-label={copy.selectedChapters}>
               <div className="chapter-review-panel-head">
-                <h2>章节</h2>
-                <span>{selectedCount}/{sortedChapters.length} · {selectedWordCount.toLocaleString("zh-CN")} 字</span>
+                <h2>{copy.chapters}</h2>
+                <span>{selectedCount}/{sortedChapters.length} · {selectedWordCount.toLocaleString(locale)} {copy.chars}</span>
               </div>
               <div className="chapter-review-chapter-list">
                 {sortedChapters.map((chapter) => (
@@ -453,44 +564,44 @@ export function ChapterReviewPage({
                     <input type="checkbox" checked={selectedSet.has(chapter.id)} onChange={() => toggleChapter(chapter.id)} />
                     <span>
                       <strong>{chapter.title}</strong>
-                      <small>{chapter.wordCount.toLocaleString("zh-CN")} 字</small>
+                      <small>{chapter.wordCount.toLocaleString(locale)} {copy.chars}</small>
                     </span>
                   </label>
                 ))}
               </div>
             </aside>
 
-            <section className="chapter-review-results" aria-label="审稿结果">
+            <section className="chapter-review-results" aria-label={copy.results}>
               <div className="chapter-review-run-summary">
                 <div>
-                  <span>状态</span>
-                  <strong>{activeRun ? statusText(activeRun) : loading ? "加载中" : "无记录"}</strong>
+                  <span>{copy.status}</span>
+                  <strong>{activeRun ? statusText(activeRun, copy) : loading ? copy.loading : copy.noRecord}</strong>
                 </div>
                 <div>
-                  <span>问题</span>
+                  <span>{copy.issues}</span>
                   <strong>{totalIssueCount}</strong>
                 </div>
                 <div>
-                  <span>AI味风险</span>
-                  <strong>{riskLabel[maxAiToneRisk]}</strong>
+                  <span>{copy.aiToneRisk}</span>
+                  <strong>{copy.risk[maxAiToneRisk]}</strong>
                 </div>
                 <div>
-                  <span>时间</span>
-                  <strong>{formatDateTime(activeRun?.completedAt ?? activeRun?.requestedAt ?? null)}</strong>
+                  <span>{copy.time}</span>
+                  <strong>{formatDateTime(activeRun?.completedAt ?? activeRun?.requestedAt ?? null, locale, copy.incomplete)}</strong>
                 </div>
               </div>
               {activeRun ? (
-                <div className="chapter-review-category-tabs" aria-label="问题分类">
+                <div className="chapter-review-category-tabs" aria-label={copy.categories.all}>
                   {issueCategoryOptions.map((option) => (
                     <button
-                      className={issueCategory === option.id ? "active" : ""}
-                      disabled={issueCategoryCounts[option.id] === 0 && option.id !== "all"}
-                      key={option.id}
-                      onClick={() => setIssueCategory(option.id)}
+                      className={issueCategory === option ? "active" : ""}
+                      disabled={issueCategoryCounts[option] === 0 && option !== "all"}
+                      key={option}
+                      onClick={() => setIssueCategory(option)}
                       type="button"
                     >
-                      <span>{option.label}</span>
-                      <strong>{issueCategoryCounts[option.id]}</strong>
+                      <span>{copy.categories[option]}</span>
+                      <strong>{issueCategoryCounts[option]}</strong>
                     </button>
                   ))}
                 </div>
@@ -508,27 +619,27 @@ export function ChapterReviewPage({
                             <p>{chapter.summary}</p>
                           </div>
                           <button className="secondary-button compact" onClick={() => onOpenChapter(chapter.chapterId)} type="button">
-                            查看正文
+                            {copy.openText}
                           </button>
                         </header>
                         <div className="chapter-review-metrics">
-                          <span>可读性 {chapter.readabilityScore}/5</span>
-                          <span>AI味 {riskLabel[chapter.aiToneRisk]}</span>
-                          <span>{chapter.issueCount} 个问题</span>
+                          <span>{copy.readability} {chapter.readabilityScore}/5</span>
+                          <span>{copy.aiTone} {copy.risk[chapter.aiToneRisk]}</span>
+                          <span>{chapter.issueCount} {copy.issueUnit}</span>
                         </div>
                         {issueGroups.length > 0 ? (
                           <div className="chapter-review-issue-list">
                             {issueGroups.map((group) => (
                               <section className="chapter-review-issue-group" key={`${chapter.id}-${group.category}`}>
                                 <div className="chapter-review-issue-group-head">
-                                  <h3>{group.label}</h3>
+                                  <h3>{copy.categories[group.category]}</h3>
                                   <span>{group.issues.length}</span>
                                 </div>
                                 {group.issues.map((issue, index) => (
                                   <section className={`chapter-review-issue severity-${issue.severity}`} key={`${chapter.id}-${issue.code}-${index}`}>
                                     <div className="chapter-review-issue-head">
-                                      <span>{proofreadIssueLabels[issue.code]}</span>
-                                      <strong>{severityLabel[issue.severity]}</strong>
+                                      <span>{locale === "ja-JP" ? proofreadIssueLabelsJa[issue.code] : proofreadIssueLabels[issue.code]}</span>
+                                      <strong>{copy.severity[issue.severity]}</strong>
                                     </div>
                                     <blockquote>{issue.quote}</blockquote>
                                     <p>{issue.explanation}</p>
@@ -540,7 +651,7 @@ export function ChapterReviewPage({
                             ))}
                           </div>
                         ) : (
-                          <p className="chapter-review-no-issues">{chapter.issues.length > 0 ? "当前分类没有问题。" : "未发现明确问题。"}</p>
+                          <p className="chapter-review-no-issues">{chapter.issues.length > 0 ? copy.noCategoryIssue : copy.noIssue}</p>
                         )}
                       </article>
                     );
@@ -549,28 +660,28 @@ export function ChapterReviewPage({
               ) : (
                 <div className="chapter-review-placeholder">
                   <MagnifyingGlass size={36} />
-                  <h2>暂无审稿结果</h2>
+                  <h2>{copy.noResult}</h2>
                 </div>
               )}
             </section>
 
-            <aside className="chapter-review-history" aria-label="历史记录">
+            <aside className="chapter-review-history" aria-label={copy.history}>
               <div className="chapter-review-panel-head">
-                <h2>记录</h2>
+                <h2>{copy.history}</h2>
                 <span>{runs.length}</span>
               </div>
               <div className="chapter-review-history-list">
                 {runs.map((run) => (
                   <button className={`chapter-review-history-item ${activeRun?.id === run.id ? "active" : ""}`} key={run.id} onClick={() => setActiveRunId(run.id)} type="button">
-                    <span>{statusText(run)}</span>
-                    <strong>{run.chapters.length || run.chapterIds.length} 章 / {run.issueCount} 问题</strong>
-                    <small>{formatDateTime(run.completedAt ?? run.requestedAt)}</small>
+                    <span>{statusText(run, copy)}</span>
+                    <strong>{run.chapters.length || run.chapterIds.length} {copy.chapterUnit} / {run.issueCount} {copy.issueUnit}</strong>
+                    <small>{formatDateTime(run.completedAt ?? run.requestedAt, locale, copy.incomplete)}</small>
                   </button>
                 ))}
               </div>
               {activeRun ? (
                 <button className="secondary-button chapter-review-delete" onClick={() => void deleteRun(activeRun.id)} type="button">
-                  <Trash size={18} />删除记录
+                  <Trash size={18} />{copy.deleteRecord}
                 </button>
               ) : null}
             </aside>

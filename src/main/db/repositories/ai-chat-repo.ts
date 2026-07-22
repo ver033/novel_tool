@@ -1,5 +1,6 @@
 import { createId } from "../../shared/ids";
 import type {
+  AiAgentActivityRecord,
   AiChatAction,
   AiChatMessageRecord,
   AiChatMessageRole,
@@ -29,6 +30,7 @@ type AiChatMessageRow = {
   readonly role: AiChatMessageRole;
   readonly content: string;
   readonly action_json: string | null;
+  readonly agent_activity_json: string | null;
   readonly created_at: string;
 };
 
@@ -38,6 +40,7 @@ type CreateMessageInput = {
   readonly role: AiChatMessageRole;
   readonly content: string;
   readonly action: AiChatAction | null;
+  readonly activities?: readonly AiAgentActivityRecord[];
 };
 
 type CreateSessionInput = {
@@ -62,6 +65,7 @@ type MessageInput = ClearSessionInput & {
 type UpdateAssistantMessageInput = MessageInput & {
   readonly content: string;
   readonly action: AiChatAction | null;
+  readonly activities?: readonly AiAgentActivityRecord[];
 };
 
 type RenameSessionInput = {
@@ -103,6 +107,20 @@ function stringifyAction(value: AiChatAction | null): string | null {
   return value ? JSON.stringify(value) : null;
 }
 
+function parseActivities(value: string | null): readonly AiAgentActivityRecord[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed) ? parsed as AiAgentActivityRecord[] : [];
+  } catch {
+    return [];
+  }
+}
+
+function stringifyActivities(value: readonly AiAgentActivityRecord[] | undefined): string | null {
+  return value?.length ? JSON.stringify(value) : null;
+}
+
 function parseContextUsage(value: string | null): AiStreamContextEvent | null {
   return value ? (JSON.parse(value) as AiStreamContextEvent) : null;
 }
@@ -133,6 +151,7 @@ function mapMessage(row: AiChatMessageRow): AiChatMessageRecord {
     role: row.role,
     content: row.content,
     action: parseAction(row.action_json),
+    activities: parseActivities(row.agent_activity_json),
     createdAt: row.created_at
   };
 }
@@ -284,12 +303,13 @@ export class AiChatRepository {
       role: input.role,
       content: input.content,
       action: input.action,
+      activities: input.activities ?? [],
       createdAt
     } satisfies AiChatMessageRecord;
 
     this.db
-      .prepare("INSERT INTO ai_chat_messages (id, session_id, project_id, role, content, action_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-      .run(message.id, message.sessionId, message.projectId, message.role, message.content, stringifyAction(message.action), message.createdAt);
+      .prepare("INSERT INTO ai_chat_messages (id, session_id, project_id, role, content, action_json, agent_activity_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(message.id, message.sessionId, message.projectId, message.role, message.content, stringifyAction(message.action), stringifyActivities(message.activities), message.createdAt);
     this.db.prepare("UPDATE ai_chat_sessions SET updated_at = ? WHERE id = ? AND project_id = ?").run(createdAt, message.sessionId, message.projectId);
 
     return message;
@@ -300,10 +320,10 @@ export class AiChatRepository {
     const result = this.db
       .prepare(
         `UPDATE ai_chat_messages
-         SET content = ?, action_json = ?
+         SET content = ?, action_json = ?, agent_activity_json = ?
          WHERE project_id = ? AND session_id = ? AND id = ? AND role = 'assistant'`
       )
-      .run(input.content, stringifyAction(input.action), input.projectId, input.sessionId, input.messageId);
+      .run(input.content, stringifyAction(input.action), stringifyActivities(input.activities), input.projectId, input.sessionId, input.messageId);
     if (result.changes !== 1) {
       throw new Error("AI 回复不存在，无法重新生成。");
     }

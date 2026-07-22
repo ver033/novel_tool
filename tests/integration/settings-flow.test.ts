@@ -50,15 +50,19 @@ describe("settings flow", () => {
     const { db, settingsService } = createSettingsService();
 
     expect(settingsService.getSettings()).toMatchObject({
+      appLocale: "zh-CN",
       editor: {
-        fontSize: 20,
-        lineHeight: 2.08,
+        fontSize: 18,
+        lineHeight: 1.82,
         autosaveMs: 1000
       },
       aiProvider: null,
       projectPath: null,
       cache: {
         chapterCacheBuildOrder: "latest_first"
+      },
+      experimental: {
+        externalBookSyncAutomaticEnabled: false
       }
     });
 
@@ -115,6 +119,32 @@ describe("settings flow", () => {
       contextLength: null
     });
     expect(JSON.stringify(preservedKey)).not.toContain("secret_key");
+
+    db.close();
+  });
+
+  it("persists the application locale independently from editor and project settings", () => {
+    const { db, settingsService } = createSettingsService();
+
+    expect(settingsService.saveSettings({ appLocale: "ja-JP" }).appLocale).toBe("ja-JP");
+    expect(new SettingsService(new SettingsRepository(db), { secretStore: memorySecretStore }).getSettings().appLocale).toBe("ja-JP");
+
+    db.close();
+  });
+
+  it("keeps experimental automation disabled until the user explicitly enables it", () => {
+    const { db, settingsService } = createSettingsService();
+
+    expect(settingsService.getSettings().experimental.externalBookSyncAutomaticEnabled).toBe(false);
+    expect(
+      settingsService.saveSettings({
+        experimental: { externalBookSyncAutomaticEnabled: true }
+      }).experimental.externalBookSyncAutomaticEnabled
+    ).toBe(true);
+    expect(
+      new SettingsService(new SettingsRepository(db), { secretStore: memorySecretStore }).getSettings().experimental
+        .externalBookSyncAutomaticEnabled
+    ).toBe(true);
 
     db.close();
   });

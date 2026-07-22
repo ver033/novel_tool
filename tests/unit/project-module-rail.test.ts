@@ -14,10 +14,10 @@ describe("project module rail", () => {
 
     expect(rail).toContain('"writing"');
     expect(rail).toContain('"relationshipGraph"');
-    expect(rail).toContain('"正文"');
-    expect(rail).toContain('"人物关系图"');
-    expect(rail).toContain('"大纲"');
-    expect(rail).toContain('"资料"');
+    expect(rail).toContain('label: t("manuscript")');
+    expect(rail).toContain('label: t("relationshipGraph")');
+    expect(rail).toContain('label: t("outline")');
+    expect(rail).toContain('label: t("materials")');
     expect(rail).toContain("disabled: true");
     expect(rail).toContain("onNavigate");
   });

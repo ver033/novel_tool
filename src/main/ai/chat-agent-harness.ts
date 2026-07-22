@@ -16,6 +16,9 @@ import type { TokenBudget } from "./token-budget";
 import { proofreadIssueLabels, type ProofreadIssue } from "../shared/proofread";
 import { countWritingUnits } from "../shared/text";
 import type { AiChatAction, AiChatMessageRecord, AiContextIndexMode } from "../shared/types";
+import type { NovelAgentDirectoryItem, NovelAgentToolResult } from "./agent-runtime/novel-agent-runtime";
+
+export type { NovelAgentDirectoryItem as ChatAgentDirectoryItem, NovelAgentToolResult as ChatAgentToolExecutorResult } from "./agent-runtime/novel-agent-runtime";
 
 const CHAT_AGENT_MAX_ITERATIONS = 8;
 const CHAT_AGENT_TRUNCATED_FINAL_NOTICE = "\n\n（回答已被模型截断，以上是已生成的部分。建议缩小范围，或按章节继续校对。）";
@@ -27,14 +30,6 @@ const proofreadSeverityLabels: Record<ProofreadIssue["severity"], string> = {
   medium: "中",
   high: "高",
   critical: "严重"
-};
-
-export type ChatAgentDirectoryItem = {
-  readonly ordinal: number;
-  readonly id: string;
-  readonly title: string;
-  readonly wordCount: number;
-  readonly current: boolean;
 };
 
 export type ChatAgentModelInput = {
@@ -51,11 +46,6 @@ export type ChatAgentModel = {
   readonly stream: (input: ChatAgentModelInput, handlers?: OpenRouterStreamHandlers) => Promise<OpenRouterChatCompletionResult>;
 };
 
-export type ChatAgentToolExecutorResult = {
-  readonly content: string;
-  readonly action: AiChatAction | null;
-};
-
 export type ChatAgentLoopInput = {
   readonly requestId: string;
   readonly projectId: string;
@@ -67,7 +57,7 @@ export type ChatAgentLoopInput = {
   readonly currentChapterId?: string;
   readonly currentChapterTitle?: string;
   readonly selectionText?: string;
-  readonly chapterDirectory: readonly ChatAgentDirectoryItem[];
+  readonly chapterDirectory: readonly NovelAgentDirectoryItem[];
   readonly tools: readonly OpenRouterToolDefinition[];
   readonly model: ChatAgentModel;
   readonly tokenBudget: TokenBudget;
@@ -75,7 +65,7 @@ export type ChatAgentLoopInput = {
   readonly modelContextTokens: number | null;
   readonly modelName: string;
   readonly signal?: AbortSignal;
-  readonly executeTool: (call: OpenRouterToolCall) => Promise<ChatAgentToolExecutorResult>;
+  readonly executeTool: (call: OpenRouterToolCall) => Promise<NovelAgentToolResult>;
 };
 
 export type ChatAgentLoopHandlers = {
@@ -181,7 +171,7 @@ function buildSystemPrompt(): string {
   ].join("\n");
 }
 
-function formatChapterDirectory(chapters: readonly ChatAgentDirectoryItem[]): string {
+function formatChapterDirectory(chapters: readonly NovelAgentDirectoryItem[]): string {
   if (chapters.length === 0) {
     return "（当前项目没有章节）";
   }
