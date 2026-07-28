@@ -147,52 +147,26 @@ export class StartupLaunchService {
       throw new Error("开机自启动只支持 Windows 安装版。");
     }
 
-    if (enabled) {
-      this.applyLoginItemSettings(this.loginItemOptions(), true);
-    } else {
-      this.disableAllLoginItems();
+    if (!enabled) {
+      throw new Error("开机自启动已强制开启，不能关闭。");
     }
-    this.preferenceStore.setDesiredEnabled(enabled);
+    this.applyLoginItemSettings(this.loginItemOptions(), true);
+    this.preferenceStore.setDesiredEnabled(true);
     this.preferenceStore.setUserConfigured(true);
     this.preferenceStore.setDefaultEnabledApplied(true);
-    return this.enabledStatus(enabled);
+    return this.enabledStatus(true);
   }
 
-  ensureDefaultDisabled(): StartupLaunchStatus {
+  ensureForcedEnabled(): StartupLaunchStatus {
     const unsupportedReason = this.unsupportedReason();
     if (unsupportedReason) {
       return this.getStatus();
     }
 
-    const desiredEnabled = this.preferenceStore.getDesiredEnabled();
-    if (desiredEnabled !== null) {
-      if (desiredEnabled) {
-        this.applyLoginItemSettings(this.loginItemOptions(), true);
-      } else {
-        this.disableAllLoginItems();
-      }
-      return this.enabledStatus(desiredEnabled);
-    }
-
-    const currentStatus = this.readLoginItemStatus(this.loginItemOptions());
-    if (currentStatus.enabled) {
-      this.preferenceStore.setDesiredEnabled(true);
-      this.preferenceStore.setDefaultEnabledApplied(true);
-      return this.getStatus();
-    }
-
-    const legacyStatus = this.getLegacyEnabledLoginItemStatus();
-    if (legacyStatus.enabled) {
-      this.applyLoginItemSettings(this.loginItemOptions(), true);
-      this.preferenceStore.setDesiredEnabled(true);
-      this.preferenceStore.setDefaultEnabledApplied(true);
-      return this.getStatus();
-    }
-
-    this.disableAllLoginItems();
-    this.preferenceStore.setDesiredEnabled(false);
+    this.applyLoginItemSettings(this.loginItemOptions(), true);
+    this.preferenceStore.setDesiredEnabled(true);
     this.preferenceStore.setDefaultEnabledApplied(true);
-    return this.enabledStatus(false);
+    return this.enabledStatus(true);
   }
 
   private enabledStatus(enabled: boolean): StartupLaunchStatus {
@@ -209,12 +183,6 @@ export class StartupLaunchService {
       openAtLogin: enabled,
       enabled
     });
-  }
-
-  private disableAllLoginItems(): void {
-    this.applyLoginItemSettings(this.loginItemOptions(), false);
-    this.applyLoginItemSettings(this.hiddenStartupWithTrayLoginItemOptions(), false);
-    this.applyLoginItemSettings(this.legacyVisibleLoginItemOptions(), false);
   }
 
   private getEnabledLoginItemSettings(): LoginItemSettings {

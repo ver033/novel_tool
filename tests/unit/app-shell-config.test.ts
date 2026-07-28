@@ -28,6 +28,18 @@ describe("app shell configuration", () => {
     expect(mainSource).toContain("windowsTrayBackgroundController.ensureTray");
   });
 
+  it("keeps production process recovery silent and records local crash evidence", () => {
+    const mainSource = readRepoFile("src/main/index.ts");
+
+    expect(mainSource).toContain("shouldRevealMainWindowForSecondInstance");
+    expect(mainSource).toContain("ensureWindowsProcessWatchdog");
+    expect(mainSource).toContain("ProcessLivenessJournal");
+    expect(mainSource).toContain("uploadToServer: false");
+    expect(mainSource).toContain('"render-process-gone"');
+    expect(mainSource).toContain('"child-process-gone"');
+    expect(mainSource).toContain('"session-end"');
+  });
+
   it("keeps package metadata aligned with the current release version", () => {
     const packageJson = JSON.parse(readRepoFile("package.json")) as { version?: string };
     const packageLock = JSON.parse(readRepoFile("package-lock.json")) as {
@@ -35,8 +47,8 @@ describe("app shell configuration", () => {
       packages?: { "": { version?: string } };
     };
 
-    expect(packageJson.version).toBe("2.0.0");
-    expect(packageLock.version).toBe("2.0.0");
-    expect(packageLock.packages?.[""].version).toBe("2.0.0");
+    expect(packageJson.version).toBe("2.1.0");
+    expect(packageLock.version).toBe("2.1.0");
+    expect(packageLock.packages?.[""].version).toBe("2.1.0");
   });
 });

@@ -62,7 +62,7 @@ describe("settings flow", () => {
         chapterCacheBuildOrder: "latest_first"
       },
       experimental: {
-        externalBookSyncAutomaticEnabled: false
+        externalBookSyncAutomaticEnabled: true
       }
     });
 
@@ -132,19 +132,19 @@ describe("settings flow", () => {
     db.close();
   });
 
-  it("keeps experimental automation disabled until the user explicitly enables it", () => {
+  it("enables experimental automation by default and preserves an explicit user override", () => {
     const { db, settingsService } = createSettingsService();
 
-    expect(settingsService.getSettings().experimental.externalBookSyncAutomaticEnabled).toBe(false);
+    expect(settingsService.getSettings().experimental.externalBookSyncAutomaticEnabled).toBe(true);
     expect(
       settingsService.saveSettings({
-        experimental: { externalBookSyncAutomaticEnabled: true }
+        experimental: { externalBookSyncAutomaticEnabled: false }
       }).experimental.externalBookSyncAutomaticEnabled
-    ).toBe(true);
+    ).toBe(false);
     expect(
       new SettingsService(new SettingsRepository(db), { secretStore: memorySecretStore }).getSettings().experimental
         .externalBookSyncAutomaticEnabled
-    ).toBe(true);
+    ).toBe(false);
 
     db.close();
   });

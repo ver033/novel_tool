@@ -44,7 +44,7 @@ const DEFAULT_CACHE_SETTINGS: CacheSettings = {
 };
 
 const DEFAULT_EXPERIMENTAL_SETTINGS: ExperimentalSettings = {
-  externalBookSyncAutomaticEnabled: false
+  externalBookSyncAutomaticEnabled: true
 };
 
 export type SecretStore = {

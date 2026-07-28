@@ -39,7 +39,7 @@ describe("settings page scope", () => {
     expect(settings).toContain("StartupLaunchSettingsPane");
     expect(experimentalPane).toContain("<StartupLaunchSettingsPane />");
     expect(settings).toContain("api.startupLaunch.getStatus");
-    expect(settings).toContain("api.startupLaunch.updateSettings");
+    expect(settings).not.toContain("api.startupLaunch.updateSettings");
     expect(preload).toContain("startupLaunch");
     expect(preload).toContain("ipcChannels.startupLaunch.getStatus");
     expect(preload).toContain("ipcChannels.startupLaunch.updateSettings");
@@ -47,7 +47,10 @@ describe("settings page scope", () => {
     expect(ipcTypes).toContain("novelTool:startupLaunch:updateSettings");
     expect(settingsIpc).toContain("startupLaunchService.getStatus");
     expect(settingsIpc).toContain("startupLaunchService.setEnabled");
-    expect(registerIpc).toContain("startupLaunchService.ensureDefaultDisabled");
+    expect(registerIpc).toContain("startupLaunchService.ensureForcedEnabled");
+    expect(settings).toContain("已强制开启，无法在应用设置中关闭");
+    expect(settings).toContain("Windows 起動時に自動起動");
+    expect(settings).toContain("disabled");
   });
 
   it("does not show disabled placeholder AI behavior controls in the visible AI settings", () => {
@@ -103,7 +106,7 @@ describe("settings page scope", () => {
     expect(experimentalPane).toContain("<ExternalBookSyncPane currentProject={currentProject} />");
     expect(settings).toContain('japanese ? "外部 .Book の同期確認" : "同步检查"');
     expect(settings).toContain("externalBookSyncAutomaticEnabled: next");
-    expect(settings).toContain("默认关闭");
+    expect(settings).toContain("默认开启，每 10 分钟检查一次更新");
     expect(settings).not.toContain("外部 .Book 同步检查");
     expect(settings).not.toContain("只读取项目同名文件夹下的 .Book 文件");
     expect(settings).not.toContain("查看保存路径");

@@ -627,6 +627,8 @@ export function AiChatTab({
           ) : null}
           {chatStore.messages.map((message, index) => {
             const isRegeneratingMessage = chatStore.regeneratingMessageId === message.id;
+            const isNewestCompletingAssistant =
+              chatStore.busy && message.role === "assistant" && index === chatStore.messages.length - 1;
             const visibleMessageContent = isRegeneratingMessage
               ? chatStore.streamingText
                 ? chatStore.streamingText
@@ -647,7 +649,10 @@ export function AiChatTab({
             return (
               <Fragment key={message.id}>
                 {message.role === "assistant" ? (
-                  <AgentActivityTrail activities={isRegeneratingMessage ? chatStore.agentActivities : message.activities ?? []} />
+                  <AgentActivityTrail
+                    activities={isRegeneratingMessage ? chatStore.agentActivities : message.activities ?? []}
+                    live={isRegeneratingMessage || isNewestCompletingAssistant}
+                  />
                 ) : null}
               <div className={`${messageClassName(message)}${isRegeneratingMessage ? " regenerating" : ""}`}>
                 {showAssistantActions ? (
@@ -682,7 +687,7 @@ export function AiChatTab({
           })}
           {chatStore.busy && !chatStore.regeneratingMessageId ? (
             <>
-            <AgentActivityTrail activities={chatStore.agentActivities} />
+            <AgentActivityTrail activities={chatStore.agentActivities} live />
             <div className="message pending" role="status">
               {chatStore.streamingText.trim() ? (
                 <IconButton

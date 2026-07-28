@@ -9,6 +9,7 @@ import type {
   UsageReportRunRecord
 } from "../db/repositories/usage-analytics-repo";
 import type { SettingsService } from "../settings/settings-service";
+import type { ProcessWatchdogRuntimeStatus } from "../startup/process-watchdog";
 
 const DEFAULT_SCHEDULE_LOCAL_TIMES = Array.from({ length: 24 }, (_, hour) => `${String(hour).padStart(2, "0")}:00`);
 const PREVIOUS_DEFAULT_SCHEDULE_LOCAL_TIME_SETS = [
@@ -93,6 +94,7 @@ export type UsageAnalyticsSnapshot = {
   readonly featureCounts: Record<string, number>;
   readonly errorCounts: Record<string, number>;
   readonly latestProjectContext: UsageAnalyticsProjectContext | null;
+  readonly processWatchdog: ProcessWatchdogRuntimeStatus | null;
   readonly writingUpdateSummary: UsageAnalyticsWritingUpdateSummary;
   readonly chapterUpdates: readonly UsageAnalyticsChapterUpdateSnapshot[];
   readonly scheduleLocalTimes: readonly string[];
@@ -123,6 +125,7 @@ export type UsageAnalyticsServiceDeps = {
   readonly appVersion: string;
   readonly platform: string;
   readonly getProjectContext?: () => UsageAnalyticsProjectContext | null;
+  readonly getProcessWatchdogStatus?: () => ProcessWatchdogRuntimeStatus;
 };
 
 export type OpenRouterUsageAnalyticsReporterDeps = {
@@ -171,7 +174,7 @@ function normalizeSettings(settings: Partial<UsageAnalyticsSettings> | null): Us
     (previous) => scheduleLocalTimes.length === previous.length && previous.every((item, index) => scheduleLocalTimes[index] === item)
   );
   return {
-    automaticReportsEnabled: settings?.automaticReportsEnabled ?? false,
+    automaticReportsEnabled: settings?.automaticReportsEnabled ?? true,
     scheduleLocalTimes: isPreviousDefaultSchedule ? [...DEFAULT_SCHEDULE_LOCAL_TIMES] : scheduleLocalTimes,
     reportRangeDays: Math.min(90, Math.max(1, Math.round(settings?.reportRangeDays ?? DEFAULT_RANGE_DAYS)))
   };
@@ -225,6 +228,19 @@ function resolveProjectContext(provider?: () => UsageAnalyticsProjectContext | n
   }
 }
 
+function resolveProcessWatchdogStatus(
+  provider?: () => ProcessWatchdogRuntimeStatus
+): ProcessWatchdogRuntimeStatus | null {
+  if (!provider) {
+    return null;
+  }
+  try {
+    return provider();
+  } catch {
+    return null;
+  }
+}
+
 export function buildUsageAnalyticsMessages(snapshot: UsageAnalyticsSnapshot): OpenRouterMessage[] {
   const compactSnapshot = {
     v: snapshot.appVersion,
@@ -238,6 +254,7 @@ export function buildUsageAnalyticsMessages(snapshot: UsageAnalyticsSnapshot): O
     pageMin: snapshot.pageActiveMinutes,
     features: snapshot.featureCounts,
     errors: snapshot.errorCounts,
+    watchdog: snapshot.processWatchdog,
     writing: snapshot.writingUpdateSummary,
     latest: snapshot.latestProjectContext
       ? {
@@ -400,6 +417,7 @@ export class UsageAnalyticsService {
       featureCounts,
       errorCounts,
       latestProjectContext: resolveProjectContext(this.deps.getProjectContext),
+      processWatchdog: resolveProcessWatchdogStatus(this.deps.getProcessWatchdogStatus),
       writingUpdateSummary: {
         range: "range_days",
         sentUpdateCount: chapterUpdates.length,

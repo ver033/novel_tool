@@ -890,8 +890,9 @@ function SettingsContent({
 
 function StartupLaunchSettingsPane() {
   const api = useMemo(getNovelToolApi, []);
+  const { locale } = useI18n();
+  const japanese = locale === "ja-JP";
   const [status, setStatus] = useState<StartupLaunchStatus | null>(null);
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function loadStatus(): Promise<void> {
@@ -907,32 +908,27 @@ function StartupLaunchSettingsPane() {
     void loadStatus();
   }, [api]);
 
-  async function updateStartupLaunch(enabled: boolean): Promise<void> {
-    setBusy(true);
-    setError(null);
-    try {
-      setStatus(await api.startupLaunch.updateSettings({ enabled }));
-    } catch (reason) {
-      setError(formatError(reason));
-      await loadStatus();
-    } finally {
-      setBusy(false);
-    }
-  }
-
   const enabled = Boolean(status?.enabled);
 
   return (
     <div className="settings-card wide">
       <div className="detected-row">
         <span>
-          <b>开机自启动</b>
+          <b>{japanese ? "Windows 起動時に自動起動" : "开机自启动"}</b>
+          <small>
+            {status?.supported
+              ? japanese
+                ? "常時有効です。アプリの設定から無効にはできません。"
+                : "已强制开启，无法在应用设置中关闭。"
+              : japanese
+                ? "Windows のインストール版でのみ利用できます。"
+                : "仅 Windows 安装版支持。"}
+          </small>
         </span>
         <button
-          aria-label="开机自启动"
+          aria-label={japanese ? "Windows 起動時に自動起動（常時有効）" : "开机自启动（强制开启）"}
           className={`toggle ${enabled ? "on" : ""}`}
-          disabled={!status || busy || !status.supported}
-          onClick={() => void updateStartupLaunch(!enabled)}
+          disabled
           type="button"
         />
       </div>
@@ -1152,7 +1148,7 @@ function ExternalBookSyncPane({ currentProject }: ExternalBookSyncPaneProps) {
   const japanese = locale === "ja-JP";
   const [scanBusy, setScanBusy] = useState(false);
   const [clearBusy, setClearBusy] = useState(false);
-  const [automaticEnabled, setAutomaticEnabled] = useState(false);
+  const [automaticEnabled, setAutomaticEnabled] = useState(true);
   const [automaticBusy, setAutomaticBusy] = useState(true);
   const [activeScanRequestId, setActiveScanRequestIdState] = useState<string | null>(null);
   const activeScanRequestIdRef = useRef<string | null>(null);
@@ -1290,7 +1286,11 @@ function ExternalBookSyncPane({ currentProject }: ExternalBookSyncPaneProps) {
       <div className="detected-row">
         <span>
           <b>{japanese ? "自動同期" : "自动同步"}</b>
-          <small>{japanese ? "実験機能です。初期状態では無効です。" : "实验功能，默认关闭。"}</small>
+          <small>
+            {japanese
+              ? "実験機能です。初期状態で有効になり、10分ごとに更新を確認します。"
+              : "实验功能，默认开启，每 10 分钟检查一次更新。"}
+          </small>
         </span>
         <button
           aria-label={japanese ? "外部 .Book の自動同期" : "外部 .Book 自动同步"}

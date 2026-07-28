@@ -89,7 +89,8 @@ describe("summary index preload and IPC wiring", () => {
     expect(registerIpc).toContain("registerExternalBookSyncIpc(externalBookSyncService)");
     expect(registerIpc).toContain("new ExternalBookSyncService");
     expect(registerIpc).toContain('runDueExternalBookSync("startup")');
-    expect(registerIpc).toContain("EXTERNAL_BOOK_SYNC_INTERVAL_MS");
+    expect(registerIpc).toContain("const EXTERNAL_BOOK_SYNC_CHECK_INTERVAL_MS = 10 * 60_000");
+    expect(registerIpc).toContain("EXTERNAL_BOOK_SYNC_CHECK_INTERVAL_MS");
     expect(registerIpc).toContain('runDueExternalBookSync("scheduled")');
     expect(registerIpc).not.toContain('app.on("before-quit"');
     expect(registerIpc).not.toContain('runDueExternalBookSync("shutdown")');

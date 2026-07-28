@@ -224,9 +224,9 @@ describe("editor writing experience optimizations", () => {
     expect(writingPage).not.toContain("if (!focusMode) {\n      return;");
     expect(writingPage).toContain("FloatingWorkspaceLayer");
     expect(writingPage).toContain("EditorContextMenu");
-    expect(floatingLayer).toContain("activeEditorChapterId={activeChapterId}");
-    expect(utilityPanel).toContain("readonly activeEditorChapterId");
-    expect(utilityPanel).toContain("activeEditorChapterId={activeEditorChapterId}");
+    expect(floatingLayer).toContain("taskStore={taskStore}");
+    expect(utilityPanel).toContain("readonly taskStore: TaskStore");
+    expect(utilityPanel).toContain("taskStore={taskStore}");
     expect(utilityPanel).toContain("AiChatTab");
     expect(utilityPanel).toContain("CurrentTaskTab");
     expect(utilityPanel).toContain("ScratchpadEditorPanel");
@@ -367,6 +367,21 @@ describe("editor writing experience optimizations", () => {
     expect(savedOpen).toHaveLength(3);
     expect(savedRaised).toHaveLength(3);
     expect(savedRaised.filter((panel) => panel.scratchNoteId === "scratch_saved_1")).toHaveLength(1);
+  });
+
+  it("reuses one floating task surface for the shared current task controller", () => {
+    const viewport = { height: 720, width: 1180 };
+    const firstOpen = openOrRaiseFloatingPanel([], "task", "chapter_1", viewport);
+    const secondOpen = openOrRaiseFloatingPanel(firstOpen, "task", "chapter_2", viewport);
+
+    expect(firstOpen).toHaveLength(1);
+    expect(secondOpen).toHaveLength(1);
+    expect(secondOpen[0]).toMatchObject({
+      id: "task:current",
+      kind: "task",
+      chapterId: "chapter_2",
+      minimized: false
+    });
   });
 
   it("keeps auxiliary editor actions outside ruled text areas when floating panels are resized", () => {

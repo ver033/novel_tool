@@ -13,7 +13,7 @@ describe("phase 10 AI review regressions", () => {
     const taskStore = readSource("src/renderer/state/task-store.ts");
 
     expect(taskStore).toContain("api.ai.updateTask");
-    expect(taskStore).toMatch(/taskId: task\.id,[\s\S]*patch: \{[\s\S]*instruction/);
+    expect(taskStore).toMatch(/taskId: sourceTask\.id,[\s\S]*patch: \{[\s\S]*instruction/);
     expect(taskStore.indexOf("api.ai.updateTask")).toBeGreaterThan(-1);
     expect(taskStore.indexOf("api.ai.updateTask")).toBeLessThan(taskStore.indexOf("api.ai.generatePreview"));
   });
@@ -27,11 +27,11 @@ describe("phase 10 AI review regressions", () => {
   });
 
   it("resets the default task instruction when task type or selection changes", () => {
-    const currentTask = readSource("src/renderer/sidebar/CurrentTaskTab.tsx");
+    const writingPage = readSource("src/renderer/routes/WritingPage.tsx");
 
-    expect(currentTask).toContain("useEffect");
-    expect(currentTask).toContain("initialInstructionForTask(taskType, taskPromptPreset, japanese)");
-    expect(currentTask).toMatch(/\[japanese, taskType, taskPromptPreset\?\.id, selectionSnapshot\?\.selectionHash\]/);
+    expect(writingPage).toContain("useEffect");
+    expect(writingPage).toContain('initialInstructionForTask(taskType, taskPromptPreset, locale === "ja-JP")');
+    expect(writingPage).toMatch(/\[locale, selectionSnapshot\?\.selectionHash, taskPromptPreset\?\.id, taskRunId, taskType\]/);
   });
 
   it("does not expose incomplete scratchpad task insertion affordances", () => {

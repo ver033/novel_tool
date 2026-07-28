@@ -12,6 +12,7 @@ import { applyAiCandidateToEditor } from "../editor/ai-apply";
 import type { SavedChapterVersion } from "./editor-store";
 import { getNovelToolApi } from "./app-store";
 import { formatIpcErrorMessage } from "./ipc-error";
+import type { TaskExecutionPhase } from "./task-execution";
 
 type PreviewResult = {
   readonly task: AiTaskRecord;
@@ -26,6 +27,9 @@ type UseTaskStoreOptions = {
   readonly presetId: string | null;
   readonly selectionSnapshot: SelectionSnapshot | null;
   readonly instruction: string;
+  readonly taskRunId: number | null;
+  readonly autoStartId: number | null;
+  readonly onAutoStartConsumed: (taskRunId: number) => void;
   readonly editor: Editor | null;
   readonly flushPendingSave: () => Promise<SavedChapterVersion | null>;
   readonly onContentSaved: (content: ChapterContent) => void;
@@ -44,6 +48,9 @@ export function useTaskStore({
   presetId,
   selectionSnapshot,
   instruction,
+  taskRunId,
+  autoStartId,
+  onAutoStartConsumed,
   editor,
   flushPendingSave,
   onContentSaved
@@ -54,7 +61,9 @@ export function useTaskStore({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [streamingText, setStreamingText] = useState("");
+  const [taskExecutionPhase, setTaskExecutionPhase] = useState<TaskExecutionPhase>("idle");
   const configuredKey = useRef<string | null>(null);
+  const activeTaskIdRef = useRef<string | null>(null);
   const activeRequestId = useRef<string | null>(null);
   const canceledRequestIds = useRef<Set<string>>(new Set());
 
@@ -67,78 +76,59 @@ export function useTaskStore({
     if (options.detach) {
       activeRequestId.current = null;
     }
+    setTaskExecutionPhase("canceling");
     void api.ai.cancelStream({ requestId });
     setBusy(false);
-    setStreamingText("");
+    setTaskExecutionPhase("canceled");
   }, [api]);
 
   useEffect(() => {
+    activeTaskIdRef.current = null;
     cancelActiveStream({ detach: true });
     setTask(null);
     setCandidate(null);
     setError(null);
     setStreamingText("");
+    setTaskExecutionPhase("idle");
     configuredKey.current = null;
-  }, [cancelActiveStream, projectId, chapterId, taskType, presetId, selectionSnapshot?.selectionHash]);
+  }, [cancelActiveStream, projectId, chapterId, taskType, presetId, selectionSnapshot?.selectionHash, taskRunId]);
 
   useEffect(() => () => cancelActiveStream({ detach: true }), [cancelActiveStream]);
 
-  useEffect(() => {
-    if (!projectId || !selectionSnapshot) {
-      return;
-    }
-
-    const nextKey = `${projectId}:${chapterId ?? "none"}:${taskType}:${presetId ?? "none"}:${selectionSnapshot.selectionHash}`;
-    if (configuredKey.current === nextKey) {
-      return;
-    }
-    configuredKey.current = nextKey;
-
-    setBusy(true);
-    setError(null);
-    void api.ai
-      .createTask({
-        projectId,
-        chapterId: chapterId ?? undefined,
-        taskType,
-        inputText: selectionSnapshot.text,
-        instruction,
-        ...(presetId ? { presetId } : {}),
-        selection: {
-          ...selectionSnapshot,
-          paragraphIds: [...selectionSnapshot.paragraphIds]
-        }
-      })
-      .then((createdTask) => {
-        setTask(createdTask as AiTaskRecord);
-      })
-      .catch((reason: unknown) => {
-        configuredKey.current = null;
-        setError(formatIpcErrorMessage(reason, "创建 AI 任务失败"));
-      })
-      .finally(() => {
-        setBusy(false);
-      });
-  }, [api, chapterId, instruction, presetId, projectId, selectionSnapshot, taskType]);
-
-  const generatePreview = useCallback(async () => {
-    if (!task) {
-      return;
-    }
-
+  const generatePreviewForTask = useCallback(async (sourceTask: AiTaskRecord) => {
+    const isCurrentTask = (): boolean => activeTaskIdRef.current === sourceTask.id;
     setBusy(true);
     setError(null);
     setStreamingText("");
+    setTaskExecutionPhase("preparing");
     let unsubscribe: (() => void) | null = null;
     let requestId: string | null = null;
+    let resultApplied = false;
+    const applyResult = (result: PreviewResult): void => {
+      if (resultApplied || !isCurrentTask()) {
+        return;
+      }
+      resultApplied = true;
+      setTask(result.task);
+      setCandidate(result.candidate);
+      setStreamingText("");
+    };
     try {
+      await flushPendingSave();
+      if (!isCurrentTask()) {
+        return;
+      }
+      setTaskExecutionPhase("requesting");
       const updatedTask = (await api.ai.updateTask({
-        taskId: task.id,
+        taskId: sourceTask.id,
         patch: {
           instruction,
           ...(presetId ? { presetId } : {})
         }
       })) as AiTaskRecord;
+      if (!isCurrentTask()) {
+        return;
+      }
       setTask(updatedTask);
       requestId = `task_stream_${Date.now()}_${Math.random().toString(16).slice(2)}`;
       const currentRequestId = requestId;
@@ -146,43 +136,43 @@ export function useTaskStore({
       activeRequestId.current = currentRequestId;
       unsubscribe = api.ai.subscribeAiStream(currentRequestId, {
         onChunk(event) {
-          if (activeRequestId.current !== currentRequestId || canceledRequestIds.current.has(currentRequestId)) {
+          if (!isCurrentTask() || activeRequestId.current !== currentRequestId || canceledRequestIds.current.has(currentRequestId)) {
             return;
           }
+          setTaskExecutionPhase("streaming");
           setStreamingText((current) => `${current}${event.content}`);
         },
         onDone(event) {
-          if (activeRequestId.current !== currentRequestId || canceledRequestIds.current.has(currentRequestId)) {
+          if (!isCurrentTask() || activeRequestId.current !== currentRequestId || canceledRequestIds.current.has(currentRequestId)) {
             return;
           }
-          const result = event.payload as PreviewResult;
-          setTask(result.task);
-          setCandidate(result.candidate);
-          setStreamingText("");
+          setTaskExecutionPhase("finalizing");
+          applyResult(event.payload as PreviewResult);
         },
         onError(event) {
-          if (activeRequestId.current !== currentRequestId || canceledRequestIds.current.has(currentRequestId)) {
+          if (!isCurrentTask() || activeRequestId.current !== currentRequestId || canceledRequestIds.current.has(currentRequestId)) {
             return;
           }
           setError(event.error);
+          setTaskExecutionPhase("error");
         }
       });
       const result = (await api.ai.generatePreviewStream({ requestId: currentRequestId, taskId: updatedTask.id })) as PreviewResult;
-      if (canceledRequestIds.current.has(currentRequestId)) {
-        setStreamingText("");
+      if (canceledRequestIds.current.has(currentRequestId) || !isCurrentTask()) {
+        if (isCurrentTask()) setTaskExecutionPhase("canceled");
         return;
       }
-      setTask(result.task);
-      setCandidate(result.candidate);
-      setStreamingText("");
+      applyResult(result);
+      setTaskExecutionPhase("complete");
     } catch (reason) {
       if (requestId && (isCanceledIpcError(reason) || canceledRequestIds.current.has(requestId))) {
-        if (activeRequestId.current === requestId) {
-          setStreamingText("");
-        }
+        if (isCurrentTask()) setTaskExecutionPhase("canceled");
         return;
       }
-      setError(formatIpcErrorMessage(reason, "生成预览失败"));
+      if (isCurrentTask()) {
+        setError(formatIpcErrorMessage(reason, "生成预览失败"));
+        setTaskExecutionPhase("error");
+      }
     } finally {
       if (requestId && activeRequestId.current === requestId) {
         activeRequestId.current = null;
@@ -191,18 +181,94 @@ export function useTaskStore({
       if (requestId) {
         canceledRequestIds.current.delete(requestId);
       }
-      setBusy(false);
+      if (isCurrentTask()) {
+        setBusy(false);
+      }
     }
-  }, [api, cancelActiveStream, instruction, presetId, task]);
+  }, [api, cancelActiveStream, flushPendingSave, instruction, presetId]);
+
+  const generatePreview = useCallback(async () => {
+    if (task) {
+      await generatePreviewForTask(task);
+    }
+  }, [generatePreviewForTask, task]);
+
+  useEffect(() => {
+    if (!projectId || !selectionSnapshot) {
+      return;
+    }
+
+    const nextKey = `${projectId}:${chapterId ?? "none"}:${taskType}:${presetId ?? "none"}:${selectionSnapshot.selectionHash}:${taskRunId ?? "manual"}`;
+    if (configuredKey.current === nextKey) {
+      return;
+    }
+    configuredKey.current = nextKey;
+
+    setBusy(true);
+    setError(null);
+    setTaskExecutionPhase("creating");
+    void (async () => {
+      try {
+        const createdTask = (await api.ai.createTask({
+          projectId,
+          chapterId: chapterId ?? undefined,
+          taskType,
+          inputText: selectionSnapshot.text,
+          instruction,
+          ...(presetId ? { presetId } : {}),
+          selection: {
+            ...selectionSnapshot,
+            paragraphIds: [...selectionSnapshot.paragraphIds]
+          }
+        })) as AiTaskRecord;
+        if (configuredKey.current !== nextKey) {
+          return;
+        }
+        activeTaskIdRef.current = createdTask.id;
+        setTask(createdTask);
+        if (taskRunId !== null && autoStartId === taskRunId) {
+          onAutoStartConsumed(taskRunId);
+          await generatePreviewForTask(createdTask);
+        } else {
+          setTaskExecutionPhase("ready");
+        }
+      } catch (reason) {
+        if (configuredKey.current === nextKey) {
+          configuredKey.current = null;
+          setError(formatIpcErrorMessage(reason, "创建 AI 任务失败"));
+          setTaskExecutionPhase("error");
+        }
+      } finally {
+        if (configuredKey.current === nextKey) {
+          setBusy(false);
+        }
+      }
+    })();
+  }, [
+    api,
+    autoStartId,
+    chapterId,
+    generatePreviewForTask,
+    instruction,
+    onAutoStartConsumed,
+    presetId,
+    projectId,
+    selectionSnapshot,
+    taskRunId,
+    taskType
+  ]);
 
   const continuePreview = useCallback(async () => {
     if (!task) {
       return;
     }
 
+    const sourceTaskId = task.id;
+    const isCurrentTask = (): boolean => activeTaskIdRef.current === sourceTaskId;
     setBusy(true);
     setError(null);
     setStreamingText((current) => current || task.outputText || "");
+    setTaskExecutionPhase("requesting");
     let unsubscribe: (() => void) | null = null;
     let requestId: string | null = null;
     try {
@@ -212,43 +278,48 @@ export function useTaskStore({
       activeRequestId.current = currentRequestId;
       unsubscribe = api.ai.subscribeAiStream(currentRequestId, {
         onChunk(event) {
-          if (activeRequestId.current !== currentRequestId || canceledRequestIds.current.has(currentRequestId)) {
+          if (!isCurrentTask() || activeRequestId.current !== currentRequestId || canceledRequestIds.current.has(currentRequestId)) {
             return;
           }
+          setTaskExecutionPhase("streaming");
           setStreamingText((current) => `${current}${event.content}`);
         },
         onDone(event) {
-          if (activeRequestId.current !== currentRequestId || canceledRequestIds.current.has(currentRequestId)) {
+          if (!isCurrentTask() || activeRequestId.current !== currentRequestId || canceledRequestIds.current.has(currentRequestId)) {
             return;
           }
           const result = event.payload as PreviewResult;
+          setTaskExecutionPhase("finalizing");
           setTask(result.task);
           setCandidate(result.candidate);
           setStreamingText("");
         },
         onError(event) {
-          if (activeRequestId.current !== currentRequestId || canceledRequestIds.current.has(currentRequestId)) {
+          if (!isCurrentTask() || activeRequestId.current !== currentRequestId || canceledRequestIds.current.has(currentRequestId)) {
             return;
           }
           setError(event.error);
+          setTaskExecutionPhase("error");
         }
       });
       const result = (await api.ai.continuePreviewStream({ requestId: currentRequestId, taskId: task.id })) as PreviewResult;
-      if (canceledRequestIds.current.has(currentRequestId)) {
-        setStreamingText("");
+      if (canceledRequestIds.current.has(currentRequestId) || !isCurrentTask()) {
+        if (isCurrentTask()) setTaskExecutionPhase("canceled");
         return;
       }
       setTask(result.task);
       setCandidate(result.candidate);
       setStreamingText("");
+      setTaskExecutionPhase("complete");
     } catch (reason) {
       if (requestId && (isCanceledIpcError(reason) || canceledRequestIds.current.has(requestId))) {
-        if (activeRequestId.current === requestId) {
-          setStreamingText("");
-        }
+        if (isCurrentTask()) setTaskExecutionPhase("canceled");
         return;
       }
-      setError(formatIpcErrorMessage(reason, "继续生成失败"));
+      if (isCurrentTask()) {
+        setError(formatIpcErrorMessage(reason, "继续生成失败"));
+        setTaskExecutionPhase("error");
+      }
     } finally {
       if (requestId && activeRequestId.current === requestId) {
         activeRequestId.current = null;
@@ -257,7 +328,9 @@ export function useTaskStore({
       if (requestId) {
         canceledRequestIds.current.delete(requestId);
       }
-      setBusy(false);
+      if (isCurrentTask()) {
+        setBusy(false);
+      }
     }
   }, [api, cancelActiveStream, task]);
 
@@ -383,6 +456,9 @@ export function useTaskStore({
     saveCandidateToScratchpad,
     saveTextToScratchpad,
     streamingText,
-    task
+    task,
+    taskExecutionPhase
   };
 }
+
+export type TaskStore = ReturnType<typeof useTaskStore>;

@@ -57,6 +57,7 @@ import { SettingsService } from "../settings/settings-service";
 import { ipcChannels } from "../shared/types";
 import type { TaskType } from "../shared/types";
 import { SettingsStartupLaunchPreferenceStore, StartupLaunchService } from "../startup/startup-launch-service";
+import type { ProcessWatchdogRuntimeStatus } from "../startup/process-watchdog";
 import { OpenRouterUsageAnalyticsReporter, UsageAnalyticsService, type UsageAnalyticsProjectContext } from "../usage/usage-analytics-service";
 import { WritingGoalService } from "../writing-goals/writing-goal-service";
 import {
@@ -92,6 +93,7 @@ import { registerWritingGoalIpc } from "./writing-goal-ipc";
 type RegisterIpcOptions = {
   readonly database?: SqliteDatabase;
   readonly userDataPath?: string;
+  readonly getProcessWatchdogStatus?: () => ProcessWatchdogRuntimeStatus;
 };
 
 const e2eGeneratedText: Record<TaskType, string> = {
@@ -121,7 +123,7 @@ type DirectHandler<TResult> = (event: IpcMainInvokeEvent, payload: unknown) => P
 let registered = false;
 const SUMMARY_WORKER_INTERVAL_MS = 3_000;
 const USAGE_ANALYTICS_INTERVAL_MS = 60_000;
-const EXTERNAL_BOOK_SYNC_INTERVAL_MS = 60_000;
+const EXTERNAL_BOOK_SYNC_CHECK_INTERVAL_MS = 10 * 60_000;
 
 function useE2eAiGenerators(): boolean {
   return process.env.NOVEL_TOOL_E2E_AI === "1" && (process.env.NODE_ENV === "test" || !app.isPackaged);
@@ -342,7 +344,7 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
       setLoginItemSettings: (settings) => app.setLoginItemSettings({ ...settings, args: [...settings.args] })
     }, {}, new SettingsStartupLaunchPreferenceStore(settingsRepo));
     try {
-      startupLaunchService.ensureDefaultDisabled();
+      startupLaunchService.ensureForcedEnabled();
     } catch (error) {
       logMainError("enable default Windows startup launch failed", error);
     }
@@ -394,7 +396,10 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
       reporter: new OpenRouterUsageAnalyticsReporter({ settingsService }),
       appVersion: app.getVersion(),
       platform: process.platform,
-      getProjectContext: getUsageAnalyticsProjectContext
+      getProjectContext: getUsageAnalyticsProjectContext,
+      ...(options.getProcessWatchdogStatus
+        ? { getProcessWatchdogStatus: options.getProcessWatchdogStatus }
+        : {})
     });
     const resolveOutlineService = (projectId: string): OutlineService => {
       const projectDb = resolveProjectDb(projectId);
@@ -606,7 +611,10 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
         return externalBookSyncRunPromise;
       };
       void runDueExternalBookSync("startup");
-      const externalBookSyncInterval = setInterval(() => void runDueExternalBookSync("scheduled"), EXTERNAL_BOOK_SYNC_INTERVAL_MS);
+      const externalBookSyncInterval = setInterval(
+        () => void runDueExternalBookSync("scheduled"),
+        EXTERNAL_BOOK_SYNC_CHECK_INTERVAL_MS
+      );
       externalBookSyncInterval.unref?.();
 
       let usageAnalyticsReportRunning = false;

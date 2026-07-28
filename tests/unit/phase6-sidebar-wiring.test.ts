@@ -24,8 +24,8 @@ describe("phase 6 sidebar data wiring", () => {
     const sidebar = readSource("src/renderer/layout/RightUtilitySidebar.tsx");
     const writing = readSource("src/renderer/routes/WritingPage.tsx");
     expect(sidebar).toContain("../sidebar/AiChatTab");
-    expect(writing).toContain("../sidebar/CurrentTaskTab");
-    expect(writing).toContain('className="inline-task-dock"');
+    expect(sidebar).toContain("../sidebar/CurrentTaskTab");
+    expect(writing).toContain("useTaskStore");
     expect(sidebar).toContain("../sidebar/ScratchpadTab");
   });
 
@@ -48,7 +48,7 @@ describe("phase 6 sidebar data wiring", () => {
     expect(writing).toContain("useChatStore");
     expect(chat).toContain("chatStore");
     expect(chatStore).toContain(".sendChatMessageStream");
-    expect(currentTask).toContain("useTaskStore");
+    expect(currentTask).toContain("taskStore: TaskStore");
     expect(currentTask).toContain("selectionSnapshot");
     expect(scratchpad).toContain("api.scratch.list");
     expect(scratchpad).toContain("api.scratch.create");

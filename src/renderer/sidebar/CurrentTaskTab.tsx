@@ -1,28 +1,25 @@
-import { useEffect, useMemo, useState } from "react";
-import type { Editor } from "@tiptap/react";
-import { Check, CopySimple } from "@phosphor-icons/react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { BookOpenText, Check, CheckCircle, Circle, CopySimple, SpinnerGap, StopCircle, WarningCircle } from "@phosphor-icons/react";
 import { proofreadIssueLabels, proofreadIssueLabelsJa, type ProofreadIssue } from "../../main/shared/proofread";
-import type { ChapterContent, SelectionSnapshot, TaskPromptPreset, TaskType } from "../../main/shared/types";
+import type { SelectionSnapshot, TaskPromptPreset, TaskType } from "../../main/shared/types";
 import { Button } from "../components/Button";
 import { IconButton } from "../components/IconButton";
 import { Textarea } from "../components/Textarea";
 import type { SettingsCategory } from "../routes/SettingsPage";
 import { candidateStatusLabels, taskLabels, taskStatusLabels } from "../state/sidebar-store";
-import { useTaskStore } from "../state/task-store";
-import type { SavedChapterVersion } from "../state/editor-store";
+import { buildTaskExecutionSteps, type TaskExecutionPhase, type TaskExecutionStepStatus } from "../state/task-execution";
+import type { TaskStore } from "../state/task-store";
 import { useI18n } from "../i18n";
 
 type CurrentTaskTabProps = {
-  readonly activeEditorChapterId: string | null;
-  readonly chapterId: string | null;
   readonly currentChapterTitle: string | null;
-  readonly projectId: string | null;
+  readonly instruction: string;
   readonly selectionSnapshot: SelectionSnapshot | null;
   readonly taskPromptPreset: TaskPromptPreset | null;
+  readonly taskStore: TaskStore;
+  readonly taskRunId: number | null;
   readonly taskType: TaskType;
-  readonly editor: Editor | null;
-  readonly flushPendingSave: () => Promise<SavedChapterVersion | null>;
-  readonly onContentSaved: (content: ChapterContent) => void;
+  readonly onInstructionChange: (instruction: string) => void;
   readonly onOpenSettings: (category?: SettingsCategory) => void;
 };
 
@@ -40,7 +37,7 @@ const defaultInstructionJa: Record<TaskType, string> = {
   continue: "現在の最後の一文から自然に続け、選択範囲の下へ挿入する新しい本文だけを生成してください。"
 };
 
-function initialInstructionForTask(taskType: TaskType, taskPromptPreset: TaskPromptPreset | null, japanese = false): string {
+export function initialInstructionForTask(taskType: TaskType, taskPromptPreset: TaskPromptPreset | null, japanese = false): string {
   return taskPromptPreset ? "" : (japanese ? defaultInstructionJa : defaultInstruction)[taskType];
 }
 
@@ -154,17 +151,99 @@ function formatAllProofreadIssues(issues: readonly ProofreadIssue[], japanese = 
   return issues.map((issue, index) => `${index + 1}. ${formatProofreadIssueDraft(issue, japanese)}`).join("\n\n");
 }
 
+function TaskStepIcon({ status }: { readonly status: TaskExecutionStepStatus }) {
+  if (status === "complete") return <CheckCircle size={17} weight="fill" />;
+  if (status === "active") return <SpinnerGap className="agent-process-spinner" size={17} weight="bold" />;
+  if (status === "error") return <WarningCircle size={17} weight="fill" />;
+  if (status === "stopped") return <StopCircle size={17} weight="fill" />;
+  return <Circle size={15} />;
+}
+
+function TaskExecutionProgress({
+  hasSelection,
+  japanese,
+  phase,
+  taskType
+}: {
+  readonly hasSelection: boolean;
+  readonly japanese: boolean;
+  readonly phase: TaskExecutionPhase;
+  readonly taskType: TaskType;
+}) {
+  const steps = buildTaskExecutionSteps(phase, hasSelection);
+  const taskName = japanese
+    ? { polish: "推敲", expand: "加筆", proofread: "校正", continue: "続きを書く" }[taskType]
+    : taskLabels[taskType];
+  const labels = japanese
+    ? {
+        selection: hasSelection ? "選択範囲を受け取りました" : "本文の選択を待っています",
+        setup: "タスクと参照範囲を準備",
+        generation: `${taskName}の結果を生成`,
+        result: "結果を確認して次の操作を選択",
+        idle: "開始準備中",
+        creating: "タスクを作成しています",
+        preparing: "本文を保存し、参照範囲を準備しています",
+        ready: "タスクの準備ができました",
+        requesting: "モデルへ送信し、応答を待っています",
+        streaming: "モデルから内容を受信しています",
+        finalizing: "結果を整理しています",
+        complete: "結果を確認できます",
+        canceling: "生成を停止しています",
+        canceled: "生成を停止しました",
+        error: "処理中にエラーが発生しました"
+      }
+    : {
+        selection: hasSelection ? "已接收选区" : "等待选择正文",
+        setup: "准备任务与参考范围",
+        generation: `生成${taskName}结果`,
+        result: "检查结果并选择下一步",
+        idle: "正在准备启动",
+        creating: "正在创建任务",
+        preparing: "正在保存正文并准备参考范围",
+        ready: "任务已准备完成",
+        requesting: "已发送给模型，正在等待响应",
+        streaming: "正在接收模型生成内容",
+        finalizing: "正在整理生成结果",
+        complete: "结果已就绪，可以继续处理",
+        canceling: "正在停止生成",
+        canceled: "生成已停止",
+        error: "任务执行失败"
+      };
+  const completedCount = steps.filter((step) => step.status === "complete").length;
+
+  return (
+    <section className={`task-execution-progress phase-${phase}`} aria-label={japanese ? "タスクの実行状況" : "任务执行状态"}>
+      <header className="task-execution-progress-head">
+        <span className={`task-execution-pulse ${phase}`} aria-hidden="true" />
+        <div>
+          <strong>{labels[phase]}</strong>
+          <small>{japanese ? `${completedCount} / ${steps.length} ステップ` : `${completedCount} / ${steps.length} 阶段`}</small>
+        </div>
+      </header>
+      <div className="task-execution-progress-track" aria-hidden="true">
+        <span style={{ transform: `scaleX(${completedCount / steps.length})` }} />
+      </div>
+      <ol className="task-execution-step-list" aria-live="polite">
+        {steps.map((step) => (
+          <li className={step.status} key={step.id}>
+            <span aria-hidden="true"><TaskStepIcon status={step.status} /></span>
+            <span>{labels[step.id]}</span>
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
 export function CurrentTaskTab({
-  activeEditorChapterId,
-  chapterId,
   currentChapterTitle,
-  projectId,
+  instruction,
   selectionSnapshot,
   taskPromptPreset,
+  taskStore,
+  taskRunId,
   taskType,
-  editor,
-  flushPendingSave,
-  onContentSaved,
+  onInstructionChange,
   onOpenSettings
 }: CurrentTaskTabProps) {
   const { t, locale } = useI18n();
@@ -211,33 +290,30 @@ export function CurrentTaskTab({
   const localizedCandidateStatusLabels: typeof candidateStatusLabels = japanese
     ? { preview: "プレビュー", applied: "置換済み", inserted: "挿入済み", rejected: "破棄済み", copied: "コピー済み", inserted_to_scratchpad: "下書きメモへ追加済み" }
     : candidateStatusLabels;
-  const [instruction, setInstruction] = useState(initialInstructionForTask(taskType, taskPromptPreset, japanese));
   const [copiedIssueIndex, setCopiedIssueIndex] = useState<number | null>(null);
   const [copiedCandidate, setCopiedCandidate] = useState(false);
   const [copiedAllProofread, setCopiedAllProofread] = useState(false);
   const [copyError, setCopyError] = useState<string | null>(null);
+  const taskRootRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
-    setInstruction(initialInstructionForTask(taskType, taskPromptPreset, japanese));
     setCopiedIssueIndex(null);
     setCopiedCandidate(false);
     setCopiedAllProofread(false);
     setCopyError(null);
   }, [japanese, taskType, taskPromptPreset?.id, selectionSnapshot?.selectionHash]);
+  useEffect(() => {
+    if (taskRunId === null) {
+      return undefined;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      const scrollContainer = taskRootRef.current?.closest<HTMLElement>(".sidebar-content, .floating-panel-body");
+      scrollContainer?.scrollTo({ top: 0 });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [taskRunId]);
 
   const selectedText = selectionSnapshot?.text ?? ui.selectTextFirst;
   const label = localizedTaskLabels[taskType];
-  const taskStore = useTaskStore({
-    projectId,
-    chapterId,
-    taskType,
-    presetId: taskPromptPreset?.id ?? null,
-    selectionSnapshot,
-    instruction,
-    activeEditorChapterId,
-    editor,
-    flushPendingSave,
-    onContentSaved
-  });
   const primaryLabel = taskType === "expand" ? ui.replaceOriginal : taskType === "continue" ? ui.insertBelow : ui.applyReplacement;
   const hasCandidateText = Boolean(taskStore.candidate?.generatedText.trim());
   const candidateCopyText = taskStore.streamingText || taskStore.candidate?.generatedText || taskStore.task?.outputText || "";
@@ -266,6 +342,44 @@ export function CurrentTaskTab({
       <b>{ui.copyFailed}</b>
       <p>{copyError}</p>
     </div>
+  ) : null;
+  const executionProgress = (
+    <TaskExecutionProgress
+      hasSelection={Boolean(selectionSnapshot)}
+      japanese={japanese}
+      phase={taskStore.taskExecutionPhase}
+      taskType={taskType}
+    />
+  );
+  const contextPlan = taskStore.candidate?.writingContextPlan ?? null;
+  const contextModeLabel = contextPlan
+    ? japanese
+      ? { direct: "直接文脈", summarized: "要約文脈", mixed: "混合文脈" }[contextPlan.mode]
+      : { direct: "直接上下文", summarized: "摘要上下文", mixed: "混合上下文" }[contextPlan.mode]
+    : null;
+  const contextSummary = contextPlan ? (
+    <details className="task-context-plan">
+      <summary>
+        <BookOpenText size={16} />
+        <span>
+          {japanese
+            ? `参照範囲 ${contextPlan.supportingContext.length} 件 · ${contextModeLabel}`
+            : `已使用 ${contextPlan.supportingContext.length} 项参考 · ${contextModeLabel}`}
+        </span>
+        <small>≈ {contextPlan.estimatedInputTokens.toLocaleString(japanese ? "ja-JP" : "zh-CN")} tokens</small>
+      </summary>
+      <p>{contextPlan.reason}</p>
+      {contextPlan.supportingContext.length > 0 ? (
+        <ul>
+          {contextPlan.supportingContext.map((item, index) => (
+            <li key={`${item.kind}-${index}`}>
+              <strong>{item.label}</strong>
+              <span>{item.reason}</span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </details>
   ) : null;
 
   function markCopied(type: "candidate" | "proofread-all" | "proofread-issue", issueIndex?: number): void {
@@ -325,7 +439,7 @@ export function CurrentTaskTab({
   if (taskType === "proofread") {
     const proofreadIssues = taskStore.candidate?.proofreadIssues ?? [];
     return (
-      <div className="task-card">
+      <div className="task-card" ref={taskRootRef}>
         <h2 className="task-title">
           {ui.currentTask} <span className="mini-tag">{localizedTaskLabels.proofread}</span>
         </h2>
@@ -334,10 +448,12 @@ export function CurrentTaskTab({
           <div>{ui.currentChapter}：{currentChapterTitle ?? ui.noSelectedChapter}</div>
           {taskStore.candidate ? <div>{ui.result}：{localizedCandidateStatusLabels[taskStore.candidate.status]}</div> : null}
         </div>
+        {executionProgress}
+        {contextSummary}
         {errorPanel}
         {copyErrorPanel}
         <label className="field-label">{ui.request}</label>
-        <Textarea value={instruction} onChange={(event) => setInstruction(event.target.value)} />
+        <Textarea value={instruction} onChange={(event) => onInstructionChange(event.target.value)} />
         <label className="field-label">{ui.originalExcerpt}</label>
         <div className="preview-box">{selectedText}</div>
         <div className="field-label-row">
@@ -460,7 +576,7 @@ export function CurrentTaskTab({
   }
 
   return (
-    <div className="task-card">
+    <div className="task-card" ref={taskRootRef}>
       <h2 className="task-title">
         {ui.currentTask} <span className="mini-tag">{label}</span>
         {taskPromptPreset ? <span className="mini-tag">{taskPromptPreset.name}</span> : null}
@@ -470,6 +586,8 @@ export function CurrentTaskTab({
         <div>{ui.currentChapter}：{currentChapterTitle ?? ui.noSelectedChapter}</div>
         <div>{ui.target}：{ui.currentSelection}</div>
       </div>
+      {executionProgress}
+      {contextSummary}
       {errorPanel}
       {taskPromptPreset ? (
         <>
@@ -481,7 +599,7 @@ export function CurrentTaskTab({
       <Textarea
         value={instruction}
         placeholder={taskPromptPreset ? ui.optionalRequest : undefined}
-        onChange={(event) => setInstruction(event.target.value)}
+        onChange={(event) => onInstructionChange(event.target.value)}
       />
       <label className="field-label">{ui.originalExcerpt}</label>
       <div className="preview-box">{selectedText}</div>

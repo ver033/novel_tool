@@ -35,4 +35,24 @@ describe("Windows Squirrel startup events", () => {
     expect(runUpdateCommand).not.toHaveBeenCalled();
     expect(quit).not.toHaveBeenCalled();
   });
+
+  it("removes the external watchdog task during uninstall", () => {
+    const quit = vi.fn();
+    const runUpdateCommand = vi.fn();
+    const removeProcessWatchdog = vi.fn();
+
+    const handled = handleWindowsSquirrelStartupEvent({
+      argv: ["novel-tool.exe", "--squirrel-uninstall"],
+      platform: "win32",
+      exeName: "novel-tool.exe",
+      quit,
+      runUpdateCommand,
+      removeProcessWatchdog
+    });
+
+    expect(handled).toBe(true);
+    expect(runUpdateCommand).toHaveBeenCalledWith(["--removeShortcut", "novel-tool.exe"]);
+    expect(removeProcessWatchdog).toHaveBeenCalledTimes(1);
+    expect(quit).toHaveBeenCalledTimes(1);
+  });
 });

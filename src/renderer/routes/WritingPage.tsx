@@ -15,12 +15,13 @@ import type { FloatingPanelGeometry, FloatingPanelKind, FloatingPanelState, Outl
 import { LeftChapterTree, type ChapterAuxiliaryInfo } from "../layout/LeftChapterTree";
 import { ProjectModuleRail, type ProjectModule } from "../layout/ProjectModuleRail";
 import { RightUtilitySidebar, type SidebarTab, type TaskType } from "../layout/RightUtilitySidebar";
-import { CurrentTaskTab } from "../sidebar/CurrentTaskTab";
+import { initialInstructionForTask } from "../sidebar/CurrentTaskTab";
 import type { AiChatDraftSeed } from "../sidebar/chat-draft";
 import { TopBar } from "../layout/TopBar";
 import { getNovelToolApi } from "../state/app-store";
 import { useChatStore } from "../state/chat-store";
 import { useEditorStore } from "../state/editor-store";
+import { useTaskStore } from "../state/task-store";
 import { formatIpcErrorMessage } from "../state/ipc-error";
 import type { SettingsCategory } from "./SettingsPage";
 import type { ChapterContent, ChapterSummary, ProjectRecord, ScratchNoteRecord, SelectionSnapshot, TaskPromptPreset } from "../../main/shared/types";
@@ -234,6 +235,8 @@ type WritingPageProps = {
   readonly scratchpadRefreshToken: number;
   readonly selectionSnapshot: SelectionSnapshot | null;
   readonly taskPromptPreset: TaskPromptPreset | null;
+  readonly taskAutoStartId: number | null;
+  readonly taskRunId: number | null;
   readonly taskType: TaskType;
   readonly onCreateChapter: (options?: { readonly afterChapterId?: string }) => void;
   readonly onAuxiliaryChanged: () => void;
@@ -267,6 +270,7 @@ type WritingPageProps = {
   readonly onExport: () => void;
   readonly onImport: () => void;
   readonly onTask: (task: TaskType, snapshot?: SelectionSnapshot | null, preset?: TaskPromptPreset | null) => void;
+  readonly onTaskAutoStartConsumed: (taskRunId: number) => void;
   readonly onWelcome: () => void;
   readonly onSettings: (category?: SettingsCategory) => void;
 };
@@ -284,6 +288,8 @@ export function WritingPage({
   scratchpadRefreshToken,
   selectionSnapshot,
   taskPromptPreset,
+  taskAutoStartId,
+  taskRunId,
   taskType,
   onCreateChapter,
   onAuxiliaryChanged,
@@ -317,6 +323,7 @@ export function WritingPage({
   onExport,
   onImport,
   onTask,
+  onTaskAutoStartConsumed,
   onWelcome,
   onSettings
 }: WritingPageProps) {
@@ -324,6 +331,9 @@ export function WritingPage({
   const api = useMemo(getNovelToolApi, []);
   const editorStore = useEditorStore(activeChapter, onChapterSaved);
   const [editor, setEditor] = useState<Editor | null>(null);
+  const [taskInstruction, setTaskInstruction] = useState(
+    initialInstructionForTask(taskType, taskPromptPreset, locale === "ja-JP")
+  );
   const [taskPromptPresets, setTaskPromptPresets] = useState<TaskPromptPreset[]>([]);
   const [taskPromptPresetError, setTaskPromptPresetError] = useState<string | null>(null);
   const [renameChapterDraft, setRenameChapterDraft] = useState<{ id: string; title: string } | null>(null);
@@ -349,6 +359,24 @@ export function WritingPage({
   const activeChapterScratchNoteIds = activeChapterAuxiliaryInfo?.scratchNoteIds ?? [];
   const activeChapterHasScratchNotes = (activeChapterAuxiliaryInfo?.scratchCount ?? 0) > 0;
   const canOpenAllAssist = Boolean(activeChapterAuxiliaryInfo?.hasOutline || activeChapterHasScratchNotes);
+  useEffect(() => {
+    setTaskInstruction(initialInstructionForTask(taskType, taskPromptPreset, locale === "ja-JP"));
+  }, [locale, selectionSnapshot?.selectionHash, taskPromptPreset?.id, taskRunId, taskType]);
+  const taskStore = useTaskStore({
+    activeEditorChapterId: activeChapter?.id ?? null,
+    projectId: currentProject?.id ?? null,
+    chapterId: selectionSnapshot?.chapterId ?? activeChapter?.id ?? null,
+    taskType,
+    presetId: taskPromptPreset?.id ?? null,
+    selectionSnapshot,
+    instruction: taskInstruction,
+    taskRunId,
+    autoStartId: taskAutoStartId,
+    onAutoStartConsumed: onTaskAutoStartConsumed,
+    editor,
+    flushPendingSave: editorStore.flushPendingSave,
+    onContentSaved: editorStore.markContentSaved
+  });
   const chatPanelVisible = (!focusMode && sidebarOpen && sidebarTab === "chat") || floatingPanels.some((panel) => panel.kind === "chat");
   const chatStore = useChatStore({
     projectId: chatPanelVisible ? currentProject?.id ?? null : null,
@@ -1024,23 +1052,6 @@ export function WritingPage({
                         }}
                         onTask={onTask}
                       />
-                      {!focusMode && sidebarOpen && sidebarTab === "task" ? (
-                        <section className="inline-task-dock" aria-label={t("currentTask")}>
-                          <CurrentTaskTab
-                            activeEditorChapterId={activeChapter?.id ?? null}
-                            chapterId={activeChapter?.id ?? null}
-                            currentChapterTitle={activeChapter?.title ?? null}
-                            projectId={currentProject?.id ?? null}
-                            selectionSnapshot={selectionSnapshot}
-                            taskPromptPreset={taskPromptPreset}
-                            taskType={taskType}
-                            editor={editor}
-                            flushPendingSave={editorStore.flushPendingSave}
-                            onContentSaved={editorStore.markContentSaved}
-                            onOpenSettings={handleSettings}
-                          />
-                        </section>
-                      ) : null}
                     </>
                   ) : (
                     <div className="empty-editor-state">
@@ -1062,11 +1073,8 @@ export function WritingPage({
                 chapters={chapters}
                 currentProjectId={currentProject?.id ?? null}
                 chatStore={chatStore}
-                editor={editor}
-                flushPendingSave={editorStore.flushPendingSave}
                 onClosePanel={onCloseFloatingPanel}
                 onAuxiliaryChanged={onAuxiliaryChanged}
-                onContentSaved={editorStore.markContentSaved}
                 onMinimizePanel={onMinimizeFloatingPanel}
                 onMovePanel={onMoveFloatingPanel}
                 onOpenOutline={handleOpenOutlinePage}
@@ -1077,8 +1085,12 @@ export function WritingPage({
                 onScratchNoteSaved={onFloatingScratchNoteSaved}
                 panels={floatingPanels}
                 selectionSnapshot={selectionSnapshot}
+                taskInstruction={taskInstruction}
                 taskPromptPreset={taskPromptPreset}
+                taskRunId={taskRunId}
+                taskStore={taskStore}
                 taskType={taskType}
+                onTaskInstructionChange={setTaskInstruction}
               />
 
               {editorContextMenu ? (
@@ -1165,8 +1177,12 @@ export function WritingPage({
                   chatStore={chatStore}
                   scratchpadRefreshToken={scratchpadRefreshToken}
                   selectionSnapshot={selectionSnapshot}
+                  taskInstruction={taskInstruction}
                   taskPromptPreset={taskPromptPreset}
+                  taskRunId={taskRunId}
+                  taskStore={taskStore}
                   taskType={taskType}
+                  onTaskInstructionChange={setTaskInstruction}
                   onAuxiliaryChanged={onAuxiliaryChanged}
                   onTabChange={onSidebarTabChange}
                   onClose={onCloseSidebar}

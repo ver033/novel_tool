@@ -44,6 +44,9 @@ export function createFloatingPanelId(
   if (kind === "outline" && outlineTab === "book") {
     return "outline:book";
   }
+  if (kind === "task") {
+    return "task:current";
+  }
   return `${kind}:${kind === "chat" ? "global" : chapterId ?? "current"}`;
 }
 
@@ -100,17 +103,18 @@ export function openOrRaiseFloatingPanel(
   const panelScratchDraftId = kind === "scratch" && !panelScratchNoteId ? createFloatingScratchDraftId() : null;
   const panelOutlineTab = kind === "outline" ? outlineTab : null;
   const id = createFloatingPanelId(kind, panelChapterId, panelScratchNoteId, panelScratchDraftId, outlineTab);
-  const maxZIndex = panels.reduce((max, panel) => Math.max(max, panel.zIndex), 100);
-  const existing = panels.find((panel) => panel.id === id);
+  const basePanels = kind === "task" ? panels.filter((panel) => panel.kind !== "task" || panel.id === id) : panels;
+  const maxZIndex = basePanels.reduce((max, panel) => Math.max(max, panel.zIndex), 100);
+  const existing = basePanels.find((panel) => panel.id === id);
   if (existing) {
-    return panels.map((panel) =>
+    return basePanels.map((panel) =>
       panel.id === id ? { ...panel, chapterId: panelChapterId, minimized: false, outlineTab: panelOutlineTab, zIndex: maxZIndex + 1 } : panel
     );
   }
 
-  const geometry = getDefaultFloatingPanelGeometry(kind, viewport, panels.length * 26, outlineTab);
+  const geometry = getDefaultFloatingPanelGeometry(kind, viewport, basePanels.length * 26, outlineTab);
   return [
-    ...panels,
+    ...basePanels,
     {
       ...geometry,
       id,

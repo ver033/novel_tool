@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createDatabase, type SqliteDatabase } from "../../src/main/db/database";
 import { runMigrations } from "../../src/main/db/migrations";
 import { UsageAnalyticsRepository } from "../../src/main/db/repositories/usage-analytics-repo";
+import type { ProcessWatchdogRuntimeStatus } from "../../src/main/startup/process-watchdog";
 import {
   buildUsageAnalyticsMessages,
   UsageAnalyticsService,
@@ -26,7 +27,11 @@ afterEach(() => {
   }
 });
 
-function createHarness(reporter?: UsageAnalyticsReporter, getProjectContext?: () => UsageAnalyticsProjectContext | null) {
+function createHarness(
+  reporter?: UsageAnalyticsReporter,
+  getProjectContext?: () => UsageAnalyticsProjectContext | null,
+  getProcessWatchdogStatus?: () => ProcessWatchdogRuntimeStatus
+) {
   const dir = mkdtempSync(join(tmpdir(), "usage-analytics-"));
   tempDirs.push(dir);
   const db = createDatabase(join(dir, "usage.sqlite3"));
@@ -44,18 +49,24 @@ function createHarness(reporter?: UsageAnalyticsReporter, getProjectContext?: ()
       },
     appVersion: "1.5.5",
     platform: "darwin",
-    ...(getProjectContext ? { getProjectContext } : {})
+    ...(getProjectContext ? { getProjectContext } : {}),
+    ...(getProcessWatchdogStatus ? { getProcessWatchdogStatus } : {})
   });
   return { service, snapshots };
 }
 
 describe("UsageAnalyticsService", () => {
-  it("keeps automatic product analysis disabled until the user enables it", async () => {
+  it("enables automatic product analysis by default and respects an explicit disable", async () => {
     const { service, snapshots } = createHarness();
 
-    expect(service.getStatus(new Date(2026, 4, 19, 9, 0)).automaticReportsEnabled).toBe(false);
-    await expect(service.runDueAutomaticReport(new Date(2026, 4, 19, 9, 0))).resolves.toBeNull();
-    expect(snapshots).toHaveLength(0);
+    expect(service.getStatus(new Date(2026, 4, 19, 9, 0)).automaticReportsEnabled).toBe(true);
+    await expect(service.runDueAutomaticReport(new Date(2026, 4, 19, 9, 0))).resolves.toMatchObject({
+      status: "completed",
+      trigger: "automatic"
+    });
+    service.updateSettings({ automaticReportsEnabled: false });
+    await expect(service.runDueAutomaticReport(new Date(2026, 4, 19, 10, 0))).resolves.toBeNull();
+    expect(snapshots).toHaveLength(1);
   });
 
   it("builds an anonymized usage snapshot from local events", () => {
@@ -131,6 +142,28 @@ describe("UsageAnalyticsService", () => {
     expect(userContent).toContain("第十二章 夜雨");
     expect(userContent).not.toContain("雨声里，林远停下脚步。");
     expect(userContent.length).toBeLessThan(fullSnapshotJson.length / 2);
+  });
+
+  it("includes the watchdog runtime status in each hourly product analysis payload", async () => {
+    const watchdogStatus: ProcessWatchdogRuntimeStatus = {
+      supported: true,
+      registrationState: "installed",
+      intervalMinutes: 5,
+      lastRegistrationAttemptAt: "2026-05-19T08:50:00.000Z",
+      lastRegistrationSuccessAt: "2026-05-19T08:50:01.000Z",
+      lastProbeAt: "2026-05-19T08:55:00.000Z",
+      lastRecoveryLaunchAt: null
+    };
+    const { service, snapshots } = createHarness(undefined, undefined, () => watchdogStatus);
+
+    await service.runDueAutomaticReport(new Date(2026, 4, 19, 9, 0));
+
+    expect(snapshots[0]?.processWatchdog).toEqual(watchdogStatus);
+    const userMessage = buildUsageAnalyticsMessages(snapshots[0]!).at(1)?.content ?? "";
+    expect(userMessage).toContain('"watchdog"');
+    expect(userMessage).toContain('"registrationState":"installed"');
+    expect(userMessage).not.toContain("schtasks");
+    expect(userMessage).not.toContain("C:\\\\Users");
   });
 
   it("includes lightweight chapter update events without duplicating saved body text", () => {

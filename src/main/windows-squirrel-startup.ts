@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
+import { removeProcessWatchdogTaskDetached } from "./startup/process-watchdog";
 
 type WindowsSquirrelStartupOptions = {
   readonly argv?: readonly string[];
@@ -7,6 +8,7 @@ type WindowsSquirrelStartupOptions = {
   readonly exeName?: string;
   readonly quit: () => void;
   readonly runUpdateCommand?: (args: readonly string[]) => void;
+  readonly removeProcessWatchdog?: () => void;
 };
 
 function runSquirrelUpdateCommand(args: readonly string[]): void {
@@ -37,6 +39,7 @@ export function handleWindowsSquirrelStartupEvent(options: WindowsSquirrelStartu
 
   if (squirrelEvent === "--squirrel-uninstall") {
     runUpdateCommand(["--removeShortcut", exeName]);
+    (options.removeProcessWatchdog ?? removeProcessWatchdogTaskDetached)();
     options.quit();
     return true;
   }

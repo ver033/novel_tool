@@ -9,7 +9,6 @@ type TaskCase = {
   readonly input: string;
   readonly expectedText: string;
   readonly applyButton: RegExp;
-  readonly generateButton?: RegExp | string;
   readonly previewText?: RegExp | string;
   readonly absentTextAfterApply?: string;
   readonly skipApply?: boolean;
@@ -39,7 +38,6 @@ const taskCases: readonly TaskCase[] = [
     input: "他勒住马缰。。",
     expectedText: "他勒住马缰。",
     applyButton: /^应用$/,
-    generateButton: /开始校对/,
     previewText: "E2E 校对建议",
     skipApply: true
   },
@@ -104,9 +102,9 @@ async function runTask(page: Page, taskCase: TaskCase): Promise<void> {
   await page.getByRole("button", { name: /Ask AI/ }).click();
   await page.getByRole("button", { name: taskCase.label }).click();
   await expect(page.getByRole("heading", { name: /当前任务/ })).toBeVisible();
-
-  await page.getByRole("button", { name: taskCase.generateButton ?? "生成预览" }).click();
+  await expect(page.locator(".task-execution-progress")).toBeVisible();
   await expect(page.getByText(taskCase.previewText ?? taskCase.expectedText)).toBeVisible();
+  await expect(page.locator(".task-execution-progress")).toHaveClass(/phase-complete/);
   if (taskCase.skipApply) {
     await expect(page.locator(".tiptap-manuscript")).toContainText(taskCase.input);
     return;

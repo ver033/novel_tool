@@ -14,6 +14,7 @@ import { useI18n } from "../i18n";
 
 type AgentActivityTrailProps = {
   readonly activities: readonly AiAgentActivityRecord[];
+  readonly live?: boolean;
 };
 
 type ActivityStatus = AiAgentActivityRecord["status"];
@@ -27,38 +28,25 @@ function StateIcon({ status }: { readonly status: ActivityStatus }) {
 }
 
 function overallStatus(activities: readonly AiAgentActivityRecord[]): "running" | "error" | "stopped" | "complete" {
-  if (activities.some((item) => item.status === "running" || item.status === "pending" || item.status === "blocked")) return "running";
-  if (activities.some((item) => item.status === "error")) return "error";
+  if (activities.some((item) => item.status === "error" || item.status === "blocked")) return "error";
   if (activities.some((item) => item.status === "stopped")) return "stopped";
+  if (activities.some((item) => item.status === "running" || item.status === "pending")) return "running";
   return "complete";
 }
 
-export function AgentActivityTrail({ activities }: AgentActivityTrailProps) {
+export function AgentActivityTrail({ activities, live = false }: AgentActivityTrailProps) {
   const { t } = useI18n();
   const tools = useMemo(() => activities.filter((item) => item.kind === "tool"), [activities]);
   const tasks = useMemo(() => activities.filter((item) => item.kind === "task"), [activities]);
-  const running = tools.some((item) => item.status === "running");
   const needsAttention = tools.some((item) => item.status === "error" || item.status === "blocked" || item.status === "stopped");
-  const [expanded, setExpanded] = useState(running);
+  const [expanded, setExpanded] = useState(live || needsAttention);
   const userToggled = useRef(false);
-  const wasRunning = useRef(running);
 
   useEffect(() => {
-    if (needsAttention) {
+    if (live || needsAttention) {
       if (!userToggled.current) setExpanded(true);
-      wasRunning.current = false;
-      return;
     }
-    if (running) {
-      if (!userToggled.current) setExpanded(true);
-      wasRunning.current = true;
-      return;
-    }
-    if (!wasRunning.current || userToggled.current) return;
-    wasRunning.current = false;
-    const timer = window.setTimeout(() => setExpanded(false), 900);
-    return () => window.clearTimeout(timer);
-  }, [needsAttention, running]);
+  }, [live, needsAttention]);
 
   if (tools.length === 0 && tasks.length === 0) return null;
 
