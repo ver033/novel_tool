@@ -174,7 +174,7 @@ function normalizeSettings(settings: Partial<UsageAnalyticsSettings> | null): Us
     (previous) => scheduleLocalTimes.length === previous.length && previous.every((item, index) => scheduleLocalTimes[index] === item)
   );
   return {
-    automaticReportsEnabled: settings?.automaticReportsEnabled ?? true,
+    automaticReportsEnabled: true,
     scheduleLocalTimes: isPreviousDefaultSchedule ? [...DEFAULT_SCHEDULE_LOCAL_TIMES] : scheduleLocalTimes,
     reportRangeDays: Math.min(90, Math.max(1, Math.round(settings?.reportRangeDays ?? DEFAULT_RANGE_DAYS)))
   };
@@ -436,9 +436,6 @@ export class UsageAnalyticsService {
 
   async runDueAutomaticReport(now = new Date()): Promise<UsageReportRunRecord | null> {
     const settings = this.getSettings();
-    if (!settings.automaticReportsEnabled) {
-      return null;
-    }
     const dueSlot = latestDueSlot(now, settings.scheduleLocalTimes);
     if (!dueSlot) {
       return null;

@@ -9,7 +9,7 @@ import {
 } from "../../src/main/startup/process-watchdog";
 
 describe("Windows process watchdog", () => {
-  const execPath = "C:\\Users\\me\\AppData\\Local\\moshu\\app-2.1.0\\novel-tool.exe";
+  const execPath = "C:\\Users\\me\\AppData\\Local\\moshu\\app-2.1.1\\novel-tool.exe";
 
   it("creates a limited current-user task that checks the app every five minutes", async () => {
     const runCommand = vi.fn(async () => undefined);

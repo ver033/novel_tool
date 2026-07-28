@@ -915,15 +915,6 @@ function StartupLaunchSettingsPane() {
       <div className="detected-row">
         <span>
           <b>{japanese ? "Windows 起動時に自動起動" : "开机自启动"}</b>
-          <small>
-            {status?.supported
-              ? japanese
-                ? "常時有効です。アプリの設定から無効にはできません。"
-                : "已强制开启，无法在应用设置中关闭。"
-              : japanese
-                ? "Windows のインストール版でのみ利用できます。"
-                : "仅 Windows 安装版支持。"}
-          </small>
         </span>
         <button
           aria-label={japanese ? "Windows 起動時に自動起動（常時有効）" : "开机自启动（强制开启）"}
@@ -993,24 +984,6 @@ function UsageAnalyticsSettingsPane({ apiKeyConfigured }: UsageAnalyticsSettings
     void loadStatus();
   }, []);
 
-  async function toggleAutomaticReports(): Promise<void> {
-    if (!status || busy) {
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    setMessage(null);
-    try {
-      await api.usageAnalytics.updateSettings({ automaticReportsEnabled: !status.automaticReportsEnabled });
-      await loadStatus();
-      setMessage(!status.automaticReportsEnabled ? "已开启自动产品使用分析。" : "已关闭自动产品使用分析。");
-    } catch (reason) {
-      setError(formatError(reason));
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function sendNow(): Promise<void> {
     if (busy) {
       return;
@@ -1039,9 +1012,6 @@ function UsageAnalyticsSettingsPane({ apiKeyConfigured }: UsageAnalyticsSettings
     <div className="settings-card wide">
       <h3>产品使用分析</h3>
       <div className="cache-schedule-controls" aria-label="产品使用分析控制">
-        <Button disabled={busy || !status} onClick={() => void toggleAutomaticReports()} type="button" variant={status?.automaticReportsEnabled ? "secondary" : "primary"}>
-          {status?.automaticReportsEnabled ? "关闭自动分析" : "开启自动分析"}
-        </Button>
         <Button disabled={busy || !apiKeyConfigured} onClick={() => void sendNow()} type="button" variant="secondary">
           立即生成一次
         </Button>
@@ -1148,49 +1118,12 @@ function ExternalBookSyncPane({ currentProject }: ExternalBookSyncPaneProps) {
   const japanese = locale === "ja-JP";
   const [scanBusy, setScanBusy] = useState(false);
   const [clearBusy, setClearBusy] = useState(false);
-  const [automaticEnabled, setAutomaticEnabled] = useState(true);
-  const [automaticBusy, setAutomaticBusy] = useState(true);
   const [activeScanRequestId, setActiveScanRequestIdState] = useState<string | null>(null);
   const activeScanRequestIdRef = useRef<string | null>(null);
 
   function setActiveScanRequestId(requestId: string | null): void {
     activeScanRequestIdRef.current = requestId;
     setActiveScanRequestIdState(requestId);
-  }
-
-  useEffect(() => {
-    let cancelled = false;
-    setAutomaticBusy(true);
-    void api.settings.get()
-      .then((settings) => {
-        if (!cancelled) {
-          setAutomaticEnabled((settings as SettingsState).experimental.externalBookSyncAutomaticEnabled);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setAutomaticBusy(false);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [api]);
-
-  async function toggleAutomaticSync(): Promise<void> {
-    if (automaticBusy) {
-      return;
-    }
-    const next = !automaticEnabled;
-    setAutomaticBusy(true);
-    try {
-      const settings = (await api.settings.save({
-        experimental: { externalBookSyncAutomaticEnabled: next }
-      })) as SettingsState;
-      setAutomaticEnabled(settings.experimental.externalBookSyncAutomaticEnabled);
-    } finally {
-      setAutomaticBusy(false);
-    }
   }
 
   useEffect(() => {
@@ -1286,17 +1219,11 @@ function ExternalBookSyncPane({ currentProject }: ExternalBookSyncPaneProps) {
       <div className="detected-row">
         <span>
           <b>{japanese ? "自動同期" : "自动同步"}</b>
-          <small>
-            {japanese
-              ? "実験機能です。初期状態で有効になり、10分ごとに更新を確認します。"
-              : "实验功能，默认开启，每 10 分钟检查一次更新。"}
-          </small>
         </span>
         <button
           aria-label={japanese ? "外部 .Book の自動同期" : "外部 .Book 自动同步"}
-          className={`toggle ${automaticEnabled ? "on" : ""}`}
-          disabled={automaticBusy}
-          onClick={() => void toggleAutomaticSync()}
+          className="toggle on"
+          disabled
           type="button"
         />
       </div>

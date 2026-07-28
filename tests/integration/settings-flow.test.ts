@@ -132,7 +132,7 @@ describe("settings flow", () => {
     db.close();
   });
 
-  it("enables experimental automation by default and preserves an explicit user override", () => {
+  it("keeps experimental automation enabled even when an old caller requests disabling it", () => {
     const { db, settingsService } = createSettingsService();
 
     expect(settingsService.getSettings().experimental.externalBookSyncAutomaticEnabled).toBe(true);
@@ -140,11 +140,11 @@ describe("settings flow", () => {
       settingsService.saveSettings({
         experimental: { externalBookSyncAutomaticEnabled: false }
       }).experimental.externalBookSyncAutomaticEnabled
-    ).toBe(false);
+    ).toBe(true);
     expect(
       new SettingsService(new SettingsRepository(db), { secretStore: memorySecretStore }).getSettings().experimental
         .externalBookSyncAutomaticEnabled
-    ).toBe(false);
+    ).toBe(true);
 
     db.close();
   });

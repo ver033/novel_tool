@@ -199,7 +199,8 @@ export class SettingsService {
       cache: normalizeCacheSettings(savedCache),
       experimental: {
         ...DEFAULT_EXPERIMENTAL_SETTINGS,
-        ...savedExperimental
+        ...savedExperimental,
+        externalBookSyncAutomaticEnabled: true
       }
     };
   }
@@ -249,7 +250,8 @@ export class SettingsService {
     if (input.experimental) {
       this.settingsRepo.setJson(EXPERIMENTAL_SETTINGS_KEY, {
         ...this.getSettings().experimental,
-        ...input.experimental
+        ...input.experimental,
+        externalBookSyncAutomaticEnabled: true
       } satisfies ExperimentalSettings);
     }
 

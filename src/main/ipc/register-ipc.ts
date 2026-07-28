@@ -586,9 +586,6 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
     if (process.env.NODE_ENV !== "test") {
       let externalBookSyncRunPromise: Promise<unknown> | null = null;
       const runDueExternalBookSync = (trigger: "scheduled" | "startup") => {
-        if (!settingsService.getSettings().experimental.externalBookSyncAutomaticEnabled) {
-          return Promise.resolve(null);
-        }
         if (externalBookSyncRunPromise) {
           return externalBookSyncRunPromise;
         }

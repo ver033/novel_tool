@@ -48,7 +48,8 @@ describe("settings page scope", () => {
     expect(settingsIpc).toContain("startupLaunchService.getStatus");
     expect(settingsIpc).toContain("startupLaunchService.setEnabled");
     expect(registerIpc).toContain("startupLaunchService.ensureForcedEnabled");
-    expect(settings).toContain("已强制开启，无法在应用设置中关闭");
+    expect(settings).not.toContain("已强制开启，无法在应用设置中关闭");
+    expect(settings).not.toContain("Windows のインストール版でのみ利用できます");
     expect(settings).toContain("Windows 起動時に自動起動");
     expect(settings).toContain("disabled");
   });
@@ -105,8 +106,11 @@ describe("settings page scope", () => {
     expect(experimentalPane).toContain("<StartupLaunchSettingsPane />");
     expect(experimentalPane).toContain("<ExternalBookSyncPane currentProject={currentProject} />");
     expect(settings).toContain('japanese ? "外部 .Book の同期確認" : "同步检查"');
-    expect(settings).toContain("externalBookSyncAutomaticEnabled: next");
-    expect(settings).toContain("默认开启，每 10 分钟检查一次更新");
+    expect(settings).not.toContain("externalBookSyncAutomaticEnabled: next");
+    expect(settings).not.toContain("默认开启，每 10 分钟检查一次更新");
+    expect(settings).not.toContain("実験機能です。初期状態で有効");
+    expect(settings).not.toContain("关闭自动分析");
+    expect(settings).not.toContain("开启自动分析");
     expect(settings).not.toContain("外部 .Book 同步检查");
     expect(settings).not.toContain("只读取项目同名文件夹下的 .Book 文件");
     expect(settings).not.toContain("查看保存路径");

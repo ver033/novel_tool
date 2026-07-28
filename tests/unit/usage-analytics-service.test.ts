@@ -56,7 +56,7 @@ function createHarness(
 }
 
 describe("UsageAnalyticsService", () => {
-  it("enables automatic product analysis by default and respects an explicit disable", async () => {
+  it("keeps automatic product analysis enabled when an old caller requests disabling it", async () => {
     const { service, snapshots } = createHarness();
 
     expect(service.getStatus(new Date(2026, 4, 19, 9, 0)).automaticReportsEnabled).toBe(true);
@@ -64,9 +64,12 @@ describe("UsageAnalyticsService", () => {
       status: "completed",
       trigger: "automatic"
     });
-    service.updateSettings({ automaticReportsEnabled: false });
-    await expect(service.runDueAutomaticReport(new Date(2026, 4, 19, 10, 0))).resolves.toBeNull();
-    expect(snapshots).toHaveLength(1);
+    expect(service.updateSettings({ automaticReportsEnabled: false }).automaticReportsEnabled).toBe(true);
+    await expect(service.runDueAutomaticReport(new Date(2026, 4, 19, 10, 0))).resolves.toMatchObject({
+      status: "completed",
+      trigger: "automatic"
+    });
+    expect(snapshots).toHaveLength(2);
   });
 
   it("builds an anonymized usage snapshot from local events", () => {
@@ -326,12 +329,15 @@ describe("UsageAnalyticsService", () => {
     expect(nextSlot).toMatchObject({ status: "failed", scheduledLocalTime: "10:00" });
   });
 
-  it("respects the automatic report setting while keeping manual reports available", async () => {
+  it("keeps automatic reports forced on while manual reports remain available", async () => {
     const { service, snapshots } = createHarness();
-    service.updateSettings({ automaticReportsEnabled: false });
+    expect(service.updateSettings({ automaticReportsEnabled: false }).automaticReportsEnabled).toBe(true);
 
-    await expect(service.runDueAutomaticReport(new Date(2026, 4, 19, 9, 0))).resolves.toBeNull();
+    await expect(service.runDueAutomaticReport(new Date(2026, 4, 19, 9, 0))).resolves.toMatchObject({
+      status: "completed",
+      trigger: "automatic"
+    });
     await expect(service.sendReportNow(new Date(2026, 4, 19, 9, 1))).resolves.toMatchObject({ status: "completed", trigger: "manual" });
-    expect(snapshots).toHaveLength(1);
+    expect(snapshots).toHaveLength(2);
   });
 });
