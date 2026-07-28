@@ -44,6 +44,7 @@ import { ShareableProjectExporter } from "../export/shareable-project-exporter";
 import { ExternalBookSyncAutomationStore } from "../external-book-sync/book-automation-store";
 import { ExternalBookSentChapterStore } from "../external-book-sync/book-send-history-store";
 import { ExternalBookSourceStore } from "../external-book-sync/book-source-store";
+import { EXTERNAL_BOOK_SYNC_CHECK_INTERVAL_MS } from "../external-book-sync/external-book-sync-config";
 import { ExternalBookSyncService } from "../external-book-sync/external-book-sync-service";
 import { TxtExporter } from "../export/txt-exporter";
 import { TxtImporter } from "../import/txt-importer";
@@ -123,7 +124,6 @@ type DirectHandler<TResult> = (event: IpcMainInvokeEvent, payload: unknown) => P
 let registered = false;
 const SUMMARY_WORKER_INTERVAL_MS = 3_000;
 const USAGE_ANALYTICS_INTERVAL_MS = 60_000;
-const EXTERNAL_BOOK_SYNC_CHECK_INTERVAL_MS = 10 * 60_000;
 
 function useE2eAiGenerators(): boolean {
   return process.env.NOVEL_TOOL_E2E_AI === "1" && (process.env.NODE_ENV === "test" || !app.isPackaged);

@@ -252,7 +252,7 @@ describe("ExternalBookSyncService", () => {
 
     expect(run).toMatchObject({
       trigger: "startup",
-      scheduledLocalTime: "07:00",
+      scheduledLocalTime: "07:10",
       status: "completed",
       candidateCount: 2,
       sentChapterCount: 2,
@@ -292,7 +292,7 @@ describe("ExternalBookSyncService", () => {
 
     expect(firstRun).toMatchObject({
       trigger: "startup",
-      scheduledLocalTime: "07:00",
+      scheduledLocalTime: "07:10",
       status: "completed",
       candidateCount: 2,
       sentChapterCount: 2,
@@ -353,7 +353,7 @@ describe("ExternalBookSyncService", () => {
 
     expect(run).toMatchObject({
       trigger: "startup",
-      scheduledLocalTime: "07:00",
+      scheduledLocalTime: "07:10",
       status: "completed",
       candidateCount: 4,
       sentChapterCount: 4,
@@ -713,7 +713,7 @@ describe("ExternalBookSyncService", () => {
 
     expect(run).toMatchObject({
       trigger: "startup",
-      scheduledLocalTime: "07:00",
+      scheduledLocalTime: "07:10",
       status: "completed",
       candidateCount: 2,
       sentChapterCount: 2
@@ -743,8 +743,8 @@ describe("ExternalBookSyncService", () => {
     const realBookFolderPath = realpathSync(projectBookDir);
     const secondRun = await service.runStartupCatchUpSync(project.id, new Date(2026, 4, 19, 7, 20));
 
-    expect(firstRun).toMatchObject({ trigger: "startup", scheduledLocalTime: "07:00", status: "skipped", candidateCount: 0 });
-    expect(secondRun).toMatchObject({ trigger: "startup", scheduledLocalTime: "07:00", status: "completed", candidateCount: 2, sentChapterCount: 2 });
+    expect(firstRun).toMatchObject({ trigger: "startup", scheduledLocalTime: "07:10", status: "skipped", candidateCount: 0 });
+    expect(secondRun).toMatchObject({ trigger: "startup", scheduledLocalTime: "07:20", status: "completed", candidateCount: 2, sentChapterCount: 2 });
     expect(sourceStore.listSources(project.id)).toMatchObject([
       {
         bookFolderPath: realBookFolderPath
@@ -881,6 +881,57 @@ describe("ExternalBookSyncService", () => {
     expect(sentMessages.filter((message) => message.includes("缺失章节：第二章"))).toHaveLength(2);
     expect(sentMessages.join("\n")).toContain("旧的新增正文。");
     expect(sentMessages.join("\n")).toContain("修改后的新增正文。");
+  });
+
+  it("detects a changed .Book chapter on the first ten-minute check after startup", async () => {
+    const { dir, project, service, sentMessages } = createFixture();
+    const projectBookDir = join(dir, "举足无措");
+    mkdirSync(projectBookDir, { recursive: true });
+    const bookFilePath = join(projectBookDir, "chapter-token.Book");
+    writeFileSync(bookFilePath, "第二章\n启动时的正文。", "utf8");
+
+    const startup = await service.runStartupCatchUpSync(project.id, new Date(2026, 4, 19, 7, 2));
+    sentMessages.length = 0;
+    writeFileSync(bookFilePath, "第二章\n十分钟后修改的正文。", "utf8");
+    const scheduled = await service.runDueAutomaticSync({
+      projectId: project.id,
+      trigger: "scheduled",
+      now: new Date(2026, 4, 19, 7, 12)
+    });
+
+    expect(startup).toMatchObject({ status: "completed", scheduledLocalTime: "07:00", sentChapterCount: 1 });
+    expect(scheduled).toMatchObject({ status: "completed", scheduledLocalTime: "07:10", sentChapterCount: 1 });
+    expect(sentMessages.join("\n")).toContain("十分钟后修改的正文。");
+  });
+
+  it("detects a changed .Book chapter across the midnight sync boundary", async () => {
+    const { dir, project, service, sentMessages } = createFixture();
+    const projectBookDir = join(dir, "举足无措");
+    mkdirSync(projectBookDir, { recursive: true });
+    const bookFilePath = join(projectBookDir, "chapter-midnight.Book");
+    writeFileSync(bookFilePath, "第二章\n午夜前的正文。", "utf8");
+
+    const beforeMidnight = await service.runStartupCatchUpSync(project.id, new Date(2026, 4, 19, 23, 58));
+    sentMessages.length = 0;
+    writeFileSync(bookFilePath, "第二章\n午夜后的正文。", "utf8");
+    const afterMidnight = await service.runDueAutomaticSync({
+      projectId: project.id,
+      trigger: "scheduled",
+      now: new Date(2026, 4, 20, 0, 8)
+    });
+
+    expect(beforeMidnight).toMatchObject({
+      status: "completed",
+      scheduledLocalTime: "23:50",
+      scheduledSlotKey: "2026-05-19T23:50"
+    });
+    expect(afterMidnight).toMatchObject({
+      status: "completed",
+      scheduledLocalTime: "00:00",
+      scheduledSlotKey: "2026-05-20T00:00",
+      sentChapterCount: 1
+    });
+    expect(sentMessages.join("\n")).toContain("午夜后的正文。");
   });
 
   it("does not resend when ignored .Book metadata changes but chapter content stays the same", async () => {
@@ -1347,9 +1398,9 @@ describe("ExternalBookSyncService", () => {
     const startup = await service.runStartupCatchUpSync(project.id, new Date(2026, 4, 19, 11, 30));
     const duplicateStartup = await service.runStartupCatchUpSync(project.id, new Date(2026, 4, 19, 11, 45));
 
-    expect(morning).toMatchObject({ trigger: "startup", scheduledLocalTime: "06:30", scheduledSlotKey: "2026-05-19T06:30", sentChapterCount: 2 });
+    expect(morning).toMatchObject({ trigger: "startup", scheduledLocalTime: "06:50", scheduledSlotKey: "2026-05-19T06:50", sentChapterCount: 2 });
     expect(startup).toMatchObject({ trigger: "startup", scheduledLocalTime: "11:30", status: "skipped", candidateCount: 2, sentChapterCount: 0 });
-    expect(duplicateStartup).toMatchObject({ trigger: "startup", scheduledLocalTime: "11:30", status: "skipped", candidateCount: 2, sentChapterCount: 0 });
+    expect(duplicateStartup).toMatchObject({ trigger: "startup", scheduledLocalTime: "11:40", status: "skipped", candidateCount: 2, sentChapterCount: 0 });
     expect(sentMessages.filter((message) => message.includes("缺失章节：第二章"))).toHaveLength(1);
   });
 });

@@ -9,9 +9,9 @@ import {
 } from "../../src/main/startup/process-watchdog";
 
 describe("Windows process watchdog", () => {
-  const execPath = "C:\\Users\\me\\AppData\\Local\\moshu\\app-2.1.1\\novel-tool.exe";
+  const execPath = "C:\\Users\\me\\AppData\\Local\\moshu\\app-2.1.2\\novel-tool.exe";
 
-  it("creates a limited current-user task that checks the app every five minutes", async () => {
+  it("creates a limited current-user task that checks the app every hour", async () => {
     const runCommand = vi.fn(async () => undefined);
     const service = new WindowsProcessWatchdogService({
       platform: "win32",
@@ -36,7 +36,7 @@ describe("Windows process watchdog", () => {
         "/SC",
         "MINUTE",
         "/MO",
-        "5",
+        "60",
         "/TR",
         '"C:\\Users\\me\\AppData\\Local\\moshu\\novel-tool.exe" --hidden-startup --hidden-startup-no-tray --process-watchdog',
         "/IT",
@@ -94,7 +94,7 @@ describe("Windows process watchdog", () => {
     expect(monitor.getStatus()).toEqual({
       supported: true,
       registrationState: "installed",
-      intervalMinutes: 5,
+      intervalMinutes: 60,
       lastRegistrationAttemptAt: "2026-05-19T08:50:00.000Z",
       lastRegistrationSuccessAt: "2026-05-19T08:50:01.000Z",
       lastProbeAt: "2026-05-19T08:55:00.000Z",

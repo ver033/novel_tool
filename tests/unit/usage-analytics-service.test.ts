@@ -151,7 +151,7 @@ describe("UsageAnalyticsService", () => {
     const watchdogStatus: ProcessWatchdogRuntimeStatus = {
       supported: true,
       registrationState: "installed",
-      intervalMinutes: 5,
+      intervalMinutes: 60,
       lastRegistrationAttemptAt: "2026-05-19T08:50:00.000Z",
       lastRegistrationSuccessAt: "2026-05-19T08:50:01.000Z",
       lastProbeAt: "2026-05-19T08:55:00.000Z",
@@ -259,6 +259,17 @@ describe("UsageAnalyticsService", () => {
     expect(status.nextScheduledAt).toBe(new Date(2026, 4, 19, 10, 0).toISOString());
     expect(status.lastSuccessAt).toBe(first?.completedAt);
     expect(status.latestReportText).toBe("产品使用分析报告");
+  });
+
+  it("runs the first hourly report after midnight without colliding with the previous day", async () => {
+    const { service, snapshots } = createHarness();
+
+    const beforeMidnight = await service.runDueAutomaticReport(new Date(2026, 4, 19, 23, 0));
+    const afterMidnight = await service.runDueAutomaticReport(new Date(2026, 4, 20, 0, 0));
+
+    expect(beforeMidnight).toMatchObject({ status: "completed", scheduledSlotKey: "2026-05-19T23:00" });
+    expect(afterMidnight).toMatchObject({ status: "completed", scheduledSlotKey: "2026-05-20T00:00" });
+    expect(snapshots).toHaveLength(2);
   });
 
   it("sends one catch-up report when the app opens after a missed schedule slot", async () => {

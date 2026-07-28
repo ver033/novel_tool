@@ -26,14 +26,17 @@ import { ExternalBookSentChapterStore } from "./book-send-history-store";
 import { CURRENT_EXTERNAL_BOOK_SOURCE_SELECTION_VERSION, ExternalBookSourceStore, type ExternalBookSyncSource } from "./book-source-store";
 import { isBookFilePath, isProjectBookFolderPath } from "./book-project-folder";
 import { parseChapterOrdinal } from "./book-chapter-ordinal";
+import { EXTERNAL_BOOK_SYNC_CHECK_INTERVAL_MINUTES } from "./external-book-sync-config";
 import { scanBookFiles, type BookFileScanProgress, type BookFileScanResult } from "./filesystem-book-scanner";
 import { searchWindowsIndexForBookFiles } from "./windows-index-search";
 
 const DEFAULT_SCAN_BUDGET_MS = 180_000;
 const WINDOWS_INDEX_TIMEOUT_MS = 15_000;
 const MAX_BOOK_BYTES = 20 * 1024 * 1024;
-const AUTOMATIC_SYNC_SCHEDULE_LOCAL_TIMES = Array.from({ length: 48 }, (_, index) => {
-  const minutes = index * 30;
+const AUTOMATIC_SYNC_SCHEDULE_LOCAL_TIMES = Array.from({
+  length: (24 * 60) / EXTERNAL_BOOK_SYNC_CHECK_INTERVAL_MINUTES
+}, (_, index) => {
+  const minutes = index * EXTERNAL_BOOK_SYNC_CHECK_INTERVAL_MINUTES;
   return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
 });
 const RETRYABLE_AUTOMATIC_SYNC_DELAY_MS = 5 * 60 * 1000;

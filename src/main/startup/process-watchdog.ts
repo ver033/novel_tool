@@ -8,7 +8,7 @@ import {
 
 export const PROCESS_WATCHDOG_LAUNCH_ARG = "--process-watchdog";
 export const PROCESS_WATCHDOG_TASK_NAME = "Moshu Process Watchdog";
-export const PROCESS_WATCHDOG_INTERVAL_MINUTES = 5;
+export const PROCESS_WATCHDOG_INTERVAL_MINUTES = 60;
 
 type ProcessWatchdogUnsupportedReason = "not_windows" | "not_packaged";
 
