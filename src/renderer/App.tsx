@@ -2,7 +2,7 @@ import "./styles/globals.css";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppShell } from "./layout/AppShell";
 import type { FloatingPanelGeometry, FloatingPanelKind, FloatingPanelState, OutlineFloatingTab } from "./layout/floating-panel-state";
-import { clampFloatingPanelGeometry, createFloatingPanelId, getDefaultFloatingPanelGeometry, openOrRaiseFloatingPanel } from "./layout/floating-panel-state";
+import { clampFloatingPanelGeometry, getDefaultFloatingPanelGeometry, openOrRaiseFloatingPanel } from "./layout/floating-panel-state";
 import type { SidebarTab, TaskType } from "./layout/RightUtilitySidebar";
 import { ExportPage } from "./routes/ExportPage";
 import { ImportWizardPage } from "./routes/ImportWizardPage";
@@ -346,7 +346,6 @@ export function App() {
         panel.id === panelId && panel.kind === "scratch"
           ? {
               ...panel,
-              id: createFloatingPanelId("scratch", panel.chapterId, noteId),
               scratchDraftId: null,
               scratchNoteId: noteId
             }

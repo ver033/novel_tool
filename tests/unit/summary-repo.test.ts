@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createDatabase, type SqliteDatabase } from "../../src/main/db/database";
 import { runMigrations } from "../../src/main/db/migrations";
 import { SummaryRepository } from "../../src/main/db/repositories/summary-repo";
+import { DEFAULT_BACKGROUND_INDEX_ENABLED } from "../../src/main/shared/summary-index-settings";
 import {
   computeChapterContentHash,
   computeSourceHash,
@@ -437,13 +438,14 @@ describe("summary index migrations and repository", () => {
     seedProjectAndChapter(db);
     const repo = new SummaryRepository(db);
 
-    expect(repo.getBackgroundIndexEnabled("project_1")).toBe(true);
-
-    repo.setBackgroundIndexEnabled("project_1", false, "2026-05-01T00:02:00.000Z");
+    expect(DEFAULT_BACKGROUND_INDEX_ENABLED).toBe(false);
     expect(repo.getBackgroundIndexEnabled("project_1")).toBe(false);
 
-    repo.setBackgroundIndexEnabled("project_1", true, "2026-05-01T00:03:00.000Z");
+    repo.setBackgroundIndexEnabled("project_1", true, "2026-05-01T00:02:00.000Z");
     expect(repo.getBackgroundIndexEnabled("project_1")).toBe(true);
+
+    repo.setBackgroundIndexEnabled("project_1", false, "2026-05-01T00:03:00.000Z");
+    expect(repo.getBackgroundIndexEnabled("project_1")).toBe(false);
     db.close();
   });
 });

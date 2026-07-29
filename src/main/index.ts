@@ -1,7 +1,8 @@
-import { app, BrowserWindow, crashReporter, Menu, nativeImage, Tray } from "electron";
+import { app, BrowserWindow, crashReporter, Menu, nativeImage, net, session, Tray } from "electron";
 import path from "node:path";
 import { registerIpcHandlers } from "./ipc/register-ipc";
 import { initializeMainLogger, installMainProcessErrorHandlers, logMainError, writeMainLog } from "./logger";
+import { createSystemProxyNetwork } from "./network/system-proxy-network";
 import { ProcessLivenessJournal } from "./process-liveness-journal";
 import {
   ProcessWatchdogRuntimeMonitor,
@@ -247,11 +248,34 @@ if (!handleWindowsSquirrelStartupEvent({ quit: () => app.quit() })) {
       showMainWindowWithTray();
     });
 
-    app.whenReady().then(() => {
+    app.whenReady().then(async () => {
       initializeMainLogger(app.getPath("userData"));
       installMainProcessErrorHandlers();
       initializeProcessLiveness(app.getPath("userData"));
       ensureWindowsProcessWatchdog();
+      const electronFetch: typeof globalThis.fetch = (input, init) => {
+        const normalizedInput = input instanceof URL ? input.toString() : input;
+        return net.fetch(
+          normalizedInput as string | Request,
+          {
+            ...init,
+            bypassCustomProtocolHandlers: true
+          }
+        ) as Promise<Response>;
+      };
+      const systemProxyNetwork = createSystemProxyNetwork({
+        fetchImpl: electronFetch,
+        session: session.defaultSession,
+        setGlobalFetch(fetchImpl) {
+          globalThis.fetch = fetchImpl;
+        },
+        log: writeMainLog
+      });
+      try {
+        await systemProxyNetwork.install();
+      } catch (error) {
+        logMainError("install Electron system proxy network failed", error);
+      }
       app.on("child-process-gone", (_event, details) => {
         writeMainLog("error", "Electron child process gone", {
           details

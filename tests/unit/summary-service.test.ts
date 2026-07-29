@@ -29,7 +29,10 @@ function createDb(): SqliteDatabase {
   return db;
 }
 
-function seedProject(db: SqliteDatabase): { readonly chapterRepo: ChapterRepository; readonly summaryRepo: SummaryRepository } {
+function seedProject(
+  db: SqliteDatabase,
+  options: { readonly enableBackgroundIndex?: boolean } = {}
+): { readonly chapterRepo: ChapterRepository; readonly summaryRepo: SummaryRepository } {
   new ProjectRepository(db).create({
     id: "project_1",
     name: "归途",
@@ -37,9 +40,13 @@ function seedProject(db: SqliteDatabase): { readonly chapterRepo: ChapterReposit
     createdAt,
     updatedAt: createdAt
   });
+  const summaryRepo = new SummaryRepository(db);
+  if (options.enableBackgroundIndex !== false) {
+    summaryRepo.setBackgroundIndexEnabled("project_1", true, createdAt);
+  }
   return {
     chapterRepo: new ChapterRepository(db),
-    summaryRepo: new SummaryRepository(db)
+    summaryRepo
   };
 }
 
@@ -1408,6 +1415,28 @@ describe("summary index status and rebuild controls", () => {
       backgroundEnabled: false,
       pausedReason: "background_disabled"
     });
+    db.close();
+  });
+
+  it("keeps chapter indexing disabled until the project explicitly opts in", () => {
+    const db = createDb();
+    const { chapterRepo, summaryRepo } = seedProject(db, { enableBackgroundIndex: false });
+    createChapter(chapterRepo, "chapter_1", "春".repeat(620));
+    const service = new SummaryService(summaryRepo, chapterRepo);
+
+    expect(service.getIndexStatus("project_1", "2026-05-01T00:10:00.000Z")).toMatchObject({
+      backgroundEnabled: false,
+      pausedReason: "background_disabled"
+    });
+    expect(
+      service.maybeEnqueueChapterSummary({
+        projectId: "project_1",
+        chapterId: "chapter_1",
+        trigger: "auto_idle",
+        now: "2026-05-01T00:10:00.000Z"
+      })
+    ).toBeNull();
+    expect(summaryRepo.listSummaryJobs("project_1")).toEqual([]);
     db.close();
   });
 

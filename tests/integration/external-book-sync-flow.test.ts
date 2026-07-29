@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import os, { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, parse } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { emptyChapterContent } from "../../src/main/chapter/default-content";
 import { createDatabase, type SqliteDatabase } from "../../src/main/db/database";
@@ -165,6 +165,21 @@ function writeFirstAndSecondBookFiles(projectBookDir: string): {
 }
 
 describe("ExternalBookSyncService", () => {
+  it("keeps a first-time quick scan away from the filesystem root", async () => {
+    const { dir, project, service } = createFixture();
+    vi.spyOn(os, "homedir").mockReturnValue(dir);
+
+    const result = await service.scanProject({
+      projectId: project.id,
+      mode: "quick",
+      timeBudgetMs: 1_000
+    });
+
+    expect(result.searchedRoots).toContain(dir);
+    expect(result.searchedRoots).not.toContain(parse(project.rootPath!).root);
+    expect(result.scan?.timedOut).toBe(false);
+  });
+
   it("finds missing chapters without mutating chapters or summary jobs", async () => {
     const { dir, project, chapterRepo, summaryRepo, sourceStore, service } = createFixture();
     const projectBookDir = join(dir, "举足无措");

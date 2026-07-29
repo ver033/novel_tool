@@ -13,6 +13,7 @@ import {
   type SummaryStatus
 } from "../../shared/summary-index";
 import type { ChapterCacheBuildOrder } from "../../shared/types";
+import { DEFAULT_BACKGROUND_INDEX_ENABLED } from "../../shared/summary-index-settings";
 import type { SqliteDatabase } from "../database";
 
 export type ClaimSummaryJobOptions = {
@@ -318,7 +319,7 @@ export class SummaryRepository {
       | { readonly value_json: string }
       | undefined;
     if (!row) {
-      return true;
+      return DEFAULT_BACKGROUND_INDEX_ENABLED;
     }
     try {
       const value = JSON.parse(row.value_json) as unknown;
@@ -329,9 +330,9 @@ export class SummaryRepository {
         return Boolean((value as { readonly enabled: boolean }).enabled);
       }
     } catch {
-      return true;
+      return DEFAULT_BACKGROUND_INDEX_ENABLED;
     }
-    return true;
+    return DEFAULT_BACKGROUND_INDEX_ENABLED;
   }
 
   setBackgroundIndexEnabled(projectId: string, enabled: boolean, now: string): void {

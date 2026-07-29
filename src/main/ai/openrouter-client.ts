@@ -130,6 +130,10 @@ export type OpenRouterStreamHandlers = {
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 const OPENROUTER_CHAT_COMPLETIONS_PATH = "chat/completions";
 const OPENROUTER_MODELS_PATH = "models?output_modalities=text&supported_parameters=tools";
+const sharedNetworkFetch: typeof globalThis.fetch = (input, init) => globalThis.fetch(input, init);
+const OPENROUTER_AXIOS_ENV = {
+  fetch: sharedNetworkFetch
+};
 const OPENROUTER_REQUEST_TIMEOUT_MS = 60_000;
 const OPENROUTER_STREAM_TIMEOUT_MS = 300_000;
 
@@ -489,6 +493,8 @@ function parseCompletionResponse(response: unknown, allowEmptyContent: boolean):
 
 async function defaultHttpPost(request: OpenRouterHttpRequest): Promise<unknown> {
   const response = await axios.post(request.url, request.body, {
+    adapter: "fetch",
+    env: OPENROUTER_AXIOS_ENV,
     headers: request.headers,
     timeout: OPENROUTER_REQUEST_TIMEOUT_MS,
     signal: request.signal
@@ -499,6 +505,8 @@ async function defaultHttpPost(request: OpenRouterHttpRequest): Promise<unknown>
 async function defaultHttpStreamPost(request: OpenRouterHttpRequest): Promise<OpenRouterHttpStream> {
   try {
     const response = await axios.post(request.url, request.body, {
+      adapter: "fetch",
+      env: OPENROUTER_AXIOS_ENV,
       headers: request.headers,
       timeout: OPENROUTER_STREAM_TIMEOUT_MS,
       responseType: "stream",
@@ -576,6 +584,8 @@ class ToolCallAccumulator {
 
 async function defaultHttpGet(request: OpenRouterHttpGetRequest): Promise<unknown> {
   const response = await axios.get(request.url, {
+    adapter: "fetch",
+    env: OPENROUTER_AXIOS_ENV,
     timeout: OPENROUTER_REQUEST_TIMEOUT_MS
   });
   return response.data;

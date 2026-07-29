@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChapterContent, ChapterSummary, EditorSettings, SettingsState } from "../../main/shared/types";
+import { DEFAULT_EDITOR_SETTINGS } from "../../main/shared/editor-settings";
 import { countWritingUnits } from "../../main/shared/text";
 import { getNovelToolApi } from "./app-store";
 import {
@@ -10,22 +11,7 @@ import {
 } from "../editor/tiptap/converters";
 import { createDraftTextHash, draftRecoveryStore, shouldOfferDraftRecovery, type EditorDraftRecord } from "./draft-recovery-store";
 
-export const AUTOSAVE_DEBOUNCE_MS = 1000;
-
-const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
-  fontSize: 18,
-  lineHeight: 1.82,
-  autosaveMs: AUTOSAVE_DEBOUNCE_MS,
-  layoutPreset: "immersive",
-  pageWidth: "narrow",
-  fontFamily: "song",
-  editorPadding: "standard",
-  paragraphSpacing: "standard",
-  firstLineIndent: "none",
-  theme: "light",
-  ruledPaper: false,
-  ruledPaperIntensity: "soft"
-};
+export const AUTOSAVE_DEBOUNCE_MS = DEFAULT_EDITOR_SETTINGS.autosaveMs;
 
 export type SaveStatus = "saved" | "dirty" | "saving" | "failed";
 
@@ -129,6 +115,10 @@ export function useEditorStore(activeChapter: ChapterSummary | null, onChapterSa
   const [dailyWordCountDate, setDailyWordCountDate] = useState<string | null>(null);
   const [savedWordCount, setSavedWordCount] = useState(0);
   const [pendingDraftRecovery, setPendingDraftRecovery] = useState<EditorDraftRecord | null>(null);
+  const editorSettingsRef = useRef<EditorSettings>(DEFAULT_EDITOR_SETTINGS);
+  const confirmedEditorSettingsRef = useRef<EditorSettings>(DEFAULT_EDITOR_SETTINGS);
+  const editorSettingsRevision = useRef(0);
+  const editorSettingsSaveQueue = useRef<Promise<void>>(Promise.resolve());
   const saveInFlight = useRef<Promise<SavedChapterVersion | null> | null>(null);
   const editRevision = useRef(0);
   const savedRevision = useRef(0);
@@ -172,13 +162,14 @@ export function useEditorStore(activeChapter: ChapterSummary | null, onChapterSa
     async function loadEditorSettings() {
       try {
         const settings = (await api.settings.get()) as SettingsState;
-        if (!cancelled) {
+        if (!cancelled && editorSettingsRevision.current === 0) {
+          confirmedEditorSettingsRef.current = settings.editor;
+          editorSettingsRef.current = settings.editor;
           setEditorSettings(settings.editor);
         }
       } catch (reason) {
         if (!cancelled) {
-          setErrorMessage(formatError(reason));
-          setSaveStatus("failed");
+          console.warn("Failed to load editor display settings; using defaults", reason);
         }
       }
     }
@@ -359,13 +350,36 @@ export function useEditorStore(activeChapter: ChapterSummary | null, onChapterSa
 
   const updateEditorSettings = useCallback(
     async (patch: Partial<EditorSettings>) => {
-      try {
+      const previous = editorSettingsRef.current;
+      const optimistic = {
+        ...previous,
+        ...patch
+      };
+      const revision = editorSettingsRevision.current + 1;
+      editorSettingsRevision.current = revision;
+      editorSettingsRef.current = optimistic;
+      setEditorSettings(optimistic);
+      setErrorMessage(null);
+
+      const saveRequest = editorSettingsSaveQueue.current.then(async () => {
         const settings = (await api.settings.save({ editor: patch })) as SettingsState;
-        setEditorSettings(settings.editor);
-        setErrorMessage(null);
+        confirmedEditorSettingsRef.current = settings.editor;
+        if (editorSettingsRevision.current === revision) {
+          editorSettingsRef.current = settings.editor;
+          setEditorSettings(settings.editor);
+          setErrorMessage(null);
+        }
+      });
+      editorSettingsSaveQueue.current = saveRequest.catch(() => undefined);
+
+      try {
+        await saveRequest;
       } catch (reason) {
+        if (editorSettingsRevision.current === revision) {
+          editorSettingsRef.current = confirmedEditorSettingsRef.current;
+          setEditorSettings(confirmedEditorSettingsRef.current);
+        }
         setErrorMessage(formatError(reason));
-        setSaveStatus("failed");
         throw reason;
       }
     },

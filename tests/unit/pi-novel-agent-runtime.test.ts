@@ -44,6 +44,38 @@ function createRuntime(responses: Parameters<ReturnType<typeof createFauxCore>["
 }
 
 describe("PiNovelAgentRuntime", () => {
+  it("uses the fetch installed by the main process for its production OpenAI-compatible stream", async () => {
+    const originalFetch = globalThis.fetch;
+    const installedFetch = vi.fn(async () => new Response([
+      'data: {"id":"chatcmpl_test","object":"chat.completion.chunk","created":0,"model":"test/model","choices":[{"index":0,"delta":{"role":"assistant","content":"共享网络已生效。"},"finish_reason":null}]}',
+      "",
+      'data: {"id":"chatcmpl_test","object":"chat.completion.chunk","created":0,"model":"test/model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}',
+      "",
+      "data: [DONE]",
+      "",
+      ""
+    ].join("\n"), {
+      status: 200,
+      headers: { "Content-Type": "text/event-stream" }
+    }));
+    globalThis.fetch = installedFetch as typeof globalThis.fetch;
+
+    try {
+      const runtime = new PiNovelAgentRuntime({
+        settingsService: {
+          getOpenRouterConfigWithModelMetadata: vi.fn(async () => runtimeConfig)
+        }
+      });
+
+      await expect(runtime.run(createInput(), {})).resolves.toMatchObject({
+        content: "共享网络已生效。"
+      });
+      expect(installedFetch).toHaveBeenCalledTimes(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("runs a direct answer through Pi and forwards the final text", async () => {
     const { runtime, settingsService } = createRuntime([fauxAssistantMessage("可以从人物动机开始梳理。")]);
     const onChunk = vi.fn();

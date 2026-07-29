@@ -1942,10 +1942,10 @@ select:focus-visible {
   display: grid;
   gap: 15px;
   padding: 16px;
-  border: 1px solid rgba(220, 226, 236, 0.96);
+  border: 1px solid var(--line);
   border-radius: 12px;
-  background: #fff;
-  box-shadow: 0 24px 58px rgba(15, 23, 42, 0.15);
+  background: var(--panel);
+  box-shadow: 0 24px 58px rgba(63, 55, 47, 0.16);
   overflow: auto;
 }
 
@@ -1983,7 +1983,7 @@ select:focus-visible {
   display: flex;
   align-items: center;
   gap: 9px;
-  color: #1f2937;
+  color: var(--text);
   font-size: 14px;
   font-weight: 760;
 }
@@ -2002,13 +2002,13 @@ select:focus-visible {
   border: 0;
   border-radius: 8px;
   background: transparent;
-  color: #94a3b8;
+  color: var(--muted);
   font-size: 18px;
 }
 
 .global-style-close:hover {
-  background: #f1f5f9;
-  color: #1f2937;
+  background: var(--panel-soft);
+  color: var(--text);
 }
 
 .global-style-group {
@@ -2017,7 +2017,7 @@ select:focus-visible {
 }
 
 .global-style-label {
-  color: #64748b;
+  color: var(--muted);
   font-size: 12px;
   font-weight: 760;
 }
@@ -2042,24 +2042,30 @@ select:focus-visible {
 
 .global-style-option {
   height: 34px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--line);
   border-radius: 10px;
-  background: #fff;
-  color: #475569;
+  background: var(--panel);
+  color: #57514b;
   font-size: 13px;
   font-weight: 680;
   padding: 0 8px;
 }
 
 .global-style-option:hover {
-  border-color: #cbd5e1;
-  background: #f8fafc;
+  border-color: var(--line-strong);
+  background: var(--panel-soft);
 }
 
 .global-style-option.active {
-  border-color: rgba(30, 136, 229, 0.38);
-  background: #eef6ff;
+  border-color: var(--blue-line);
+  background: var(--blue-soft);
   color: var(--blue);
+}
+
+.global-style-option:active,
+.preset-button:active,
+.global-style-toggle:active {
+  transform: scale(0.98);
 }
 
 .global-style-options.seven .global-style-option {
@@ -2070,10 +2076,10 @@ select:focus-visible {
   width: 100%;
   height: 34px;
   min-width: 0;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--line);
   border-radius: 10px;
-  background: #fff;
-  color: #334155;
+  background: var(--panel);
+  color: #45413d;
   padding: 0 10px;
   font-size: 13px;
   font-weight: 680;
@@ -2081,8 +2087,10 @@ select:focus-visible {
 
 .global-style-select:hover,
 .global-style-select:focus {
-  border-color: #93c5fd;
-  background: #f8fbff;
+  border-color: var(--blue-line);
+  background: var(--panel-soft);
+  outline: 2px solid color-mix(in srgb, var(--blue) 16%, transparent);
+  outline-offset: 1px;
 }
 
 .global-style-row {
@@ -2093,9 +2101,65 @@ select:focus-visible {
 
 .global-style-note {
   padding-top: 2px;
-  color: #94a3b8;
+  color: var(--faint);
   font-size: 12px;
   line-height: 1.5;
+}
+
+.global-style-save-status {
+  min-height: 20px;
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  color: #8a94a3;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.global-style-save-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 6px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: #c4cbd4;
+}
+
+.global-style-save-status.saving {
+  color: #64748b;
+}
+
+.global-style-save-status.saving .global-style-save-dot {
+  background: #7d91a8;
+  animation: editor-setting-pulse 900ms ease-in-out infinite alternate;
+}
+
+.global-style-save-status.saved {
+  color: #587163;
+}
+
+.global-style-save-status.saved .global-style-save-dot {
+  background: #6f8d79;
+}
+
+.global-style-save-status.failed {
+  color: #a34236;
+}
+
+.global-style-save-status.failed .global-style-save-dot {
+  background: #b44d40;
+}
+
+@keyframes editor-setting-pulse {
+  from {
+    opacity: 0.45;
+    transform: scale(0.86);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 .preset-grid {
@@ -2110,10 +2174,10 @@ select:focus-visible {
   gap: 4px;
   align-content: center;
   padding: 8px 10px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--line);
   border-radius: 12px;
-  background: #fff;
-  color: #334155;
+  background: var(--panel);
+  color: #45413d;
   text-align: left;
 }
 
@@ -2122,15 +2186,15 @@ select:focus-visible {
 }
 
 .preset-button span {
-  color: #94a3b8;
+  color: var(--faint);
   font-size: 11px;
   line-height: 1.35;
 }
 
 .preset-button:hover,
 .preset-button.active {
-  border-color: rgba(30, 136, 229, 0.42);
-  background: #eef6ff;
+  border-color: var(--blue-line);
+  background: var(--blue-soft);
   color: var(--blue);
 }
 
@@ -10308,13 +10372,34 @@ button.export-choice:disabled {
   background: #ded8d0;
 }
 
+.writing-page .workspace.theme-light {
+  --editor-canvas-background: #fffefa;
+  --editor-manuscript-color: #45413d;
+  --editor-heading-color: #292724;
+  --editor-caret-color: #c96849;
+}
+
+.writing-page .workspace.theme-eye {
+  --editor-canvas-background: #fbfbef;
+  --editor-manuscript-color: #273225;
+  --editor-heading-color: #263524;
+  --editor-caret-color: #6f8c60;
+}
+
+.writing-page .workspace.theme-night {
+  --editor-canvas-background: #121826;
+  --editor-manuscript-color: #e5e7eb;
+  --editor-heading-color: #f3f4f6;
+  --editor-caret-color: #93c5fd;
+}
+
 .writing-page .editor-wrap {
-  background: #fffefa;
+  background: var(--editor-canvas-background, #fffefa);
 }
 
 .writing-page .editor-scroll {
-  padding: 34px max(var(--editor-shell-padding-x, 14px), 28px) 66px;
-  background: #fffefa;
+  padding: 34px var(--editor-shell-padding-x, 28px) 66px;
+  background: var(--editor-canvas-background, #fffefa);
 }
 
 .writing-page .editor-inner {
@@ -10323,7 +10408,7 @@ button.export-choice:disabled {
 
 .writing-page .chapter-heading {
   margin-bottom: 24px;
-  color: #292724;
+  color: var(--editor-heading-color, #292724);
   font-family: "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", "Songti SC", serif;
   font-size: 30px;
   line-height: 1.35;
@@ -10336,17 +10421,13 @@ button.export-choice:disabled {
 }
 
 .writing-page .tiptap-manuscript {
-  color: #45413d;
-  caret-color: #c96849;
+  color: var(--editor-manuscript-color, #45413d);
+  caret-color: var(--editor-caret-color, #c96849);
   text-rendering: optimizeLegibility;
 }
 
 .writing-page .tiptap-manuscript p {
   letter-spacing: 0.015em;
-}
-
-.writing-page .novel-editor-content.ruled-paper .tiptap-manuscript {
-  background-image: none;
 }
 
 .writing-page .search-jump-highlight {
@@ -11407,7 +11488,8 @@ button.export-choice:disabled {
 
 @media (prefers-reduced-motion: reduce) {
   .task-execution-pulse,
-  .agent-process-spinner {
+  .agent-process-spinner,
+  .global-style-save-status.saving .global-style-save-dot {
     animation: none !important;
   }
 }
@@ -11487,7 +11569,7 @@ button.export-choice:disabled {
   }
 
   .writing-page .editor-scroll {
-    padding-inline: 20px;
+    padding-inline: clamp(12px, var(--editor-shell-padding-x, 20px), 24px);
   }
 
   .writing-page .chapter-heading {

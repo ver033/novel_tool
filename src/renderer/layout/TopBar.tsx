@@ -9,7 +9,7 @@ import {
   MagnifyingGlass,
   UploadSimple
 } from "@phosphor-icons/react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { EditorSettings } from "../../main/shared/types";
 import { IconButton } from "../components/IconButton";
 import { useI18n } from "../i18n";
@@ -190,14 +190,57 @@ export function TopBar({
   const { locale, t } = useI18n();
   const japanese = locale === "ja-JP";
   const [layoutPanelOpen, setLayoutPanelOpen] = useState(false);
+  const [layoutSaveError, setLayoutSaveError] = useState<string | null>(null);
+  const [layoutSaveStatus, setLayoutSaveStatus] = useState<"idle" | "saving" | "saved" | "failed">("idle");
+  const layoutControlRef = useRef<HTMLDivElement>(null);
+  const layoutSaveRevision = useRef(0);
   const canShowLayoutPanel = mode === "writing" && editorSettings && onEditorSettingsChange;
   const layoutPanelMode = focusMode ? "focus" : "normal";
   const resolvedSearchPlaceholder = searchPlaceholder ?? (mode === "welcome" ? t("searchWorksOrChapters") : t("searchChaptersOrContent"));
+
+  useEffect(() => {
+    if (!layoutPanelOpen) {
+      return;
+    }
+
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setLayoutPanelOpen(false);
+      }
+    };
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (event.target instanceof Node && !layoutControlRef.current?.contains(event.target)) {
+        setLayoutPanelOpen(false);
+      }
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    return () => {
+      document.removeEventListener("keydown", closeOnEscape);
+      document.removeEventListener("pointerdown", closeOnOutsidePointer);
+    };
+  }, [layoutPanelOpen]);
+
   const updateEditorSetting = (patch: Partial<EditorSettings>) => {
     if (!onEditorSettingsChange) {
       return;
     }
-    void onEditorSettingsChange(patch);
+    const revision = layoutSaveRevision.current + 1;
+    layoutSaveRevision.current = revision;
+    setLayoutSaveError(null);
+    setLayoutSaveStatus("saving");
+    void Promise.resolve(onEditorSettingsChange(patch))
+      .then(() => {
+        if (layoutSaveRevision.current === revision) {
+          setLayoutSaveStatus("saved");
+        }
+      })
+      .catch((reason: unknown) => {
+        if (layoutSaveRevision.current === revision) {
+          setLayoutSaveError(reason instanceof Error ? reason.message : String(reason));
+          setLayoutSaveStatus("failed");
+        }
+      });
   };
 
   return (
@@ -256,8 +299,9 @@ export function TopBar({
           </IconButton>
         ) : null}
         {canShowLayoutPanel ? (
-          <div className="layout-control">
+          <div className="layout-control" ref={layoutControlRef}>
             <button
+              aria-controls="editor-display-settings-panel"
               aria-expanded={layoutPanelOpen}
               aria-label={t("pageAndTypography")}
               className={`global-style-toggle ${layoutPanelOpen ? "active" : ""}`}
@@ -268,7 +312,10 @@ export function TopBar({
               Aa
             </button>
             {layoutPanelOpen ? (
-              <aside className={`global-style-panel ${layoutPanelMode === "focus" ? "focus-mode-style-panel" : ""}`}>
+              <aside
+                className={`global-style-panel ${layoutPanelMode === "focus" ? "focus-mode-style-panel" : ""}`}
+                id="editor-display-settings-panel"
+              >
                 <div className="global-style-head">
                   <div className="global-style-title">
                     <span className="global-style-title-icon">T</span>
@@ -489,6 +536,22 @@ export function TopBar({
                 </div>
                 <div className="global-style-note">
                   {focusMode ? t("focusTypographyNote") : t("typographyNote")}
+                </div>
+                <div
+                  aria-live="polite"
+                  className={`global-style-save-status ${layoutSaveStatus}`}
+                  role={layoutSaveStatus === "failed" ? "alert" : "status"}
+                >
+                  <span className="global-style-save-dot" />
+                  <span>
+                    {layoutSaveStatus === "saving"
+                      ? t("displaySettingsSaving")
+                      : layoutSaveStatus === "failed"
+                        ? `${t("displaySettingsSaveFailed")}${layoutSaveError ? `：${layoutSaveError}` : ""}`
+                        : layoutSaveStatus === "saved"
+                          ? t("displaySettingsSaved")
+                          : t("displaySettingsAutoSave")}
+                  </span>
                 </div>
               </aside>
             ) : null}

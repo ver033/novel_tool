@@ -4,6 +4,7 @@ import { Button } from "../components/Button";
 import { getNovelToolApi } from "../state/app-store";
 import { filterScratchNotes, getLocalizedScratchNoteChapterLabel, getLocalizedScratchNoteSourceLabel, getScratchNoteSourceLabel, getScratchpadFilterLabel, scratchpadFilters, sortScratchNotes } from "./scratchpad-utils";
 import { useI18n } from "../i18n";
+import { clearScratchpadDraft, readScratchpadDraft, writeScratchpadDraft, type ScratchpadDraftScope } from "./scratchpad-draft-store";
 
 type ScratchpadTabProps = {
   readonly chapterId: string | null;
@@ -18,7 +19,13 @@ export function ScratchpadTab({ chapterId, chapters, onNotesChanged, projectId, 
   const japanese = locale === "ja-JP";
   const api = useMemo(getNovelToolApi, []);
   const [activeFilter, setActiveFilter] = useState<(typeof scratchpadFilters)[number]>("全部");
-  const [draft, setDraft] = useState("");
+  const draftScope = useMemo<ScratchpadDraftScope>(() => ({
+    chapterId,
+    kind: "quick-note",
+    projectId
+  }), [chapterId, projectId]);
+  const draftScopeKey = `${projectId ?? "none"}:${chapterId ?? "global"}`;
+  const [draft, setDraft] = useState(() => readScratchpadDraft(draftScope));
   const [notes, setNotes] = useState<ScratchNoteRecord[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -27,6 +34,10 @@ export function ScratchpadTab({ chapterId, chapters, onNotesChanged, projectId, 
   useEffect(() => {
     latestProjectId.current = projectId;
   }, [projectId]);
+
+  useEffect(() => {
+    setDraft(readScratchpadDraft(draftScope));
+  }, [draftScope, draftScopeKey]);
 
   const loadNotes = useCallback(async () => {
     if (!projectId) {
@@ -74,6 +85,7 @@ export function ScratchpadTab({ chapterId, chapters, onNotesChanged, projectId, 
       }
       setNotes((current) => sortScratchNotes([created, ...current]));
       setDraft("");
+      clearScratchpadDraft(draftScope);
       setError(null);
       onNotesChanged?.();
     } catch (reason) {
@@ -139,7 +151,15 @@ export function ScratchpadTab({ chapterId, chapters, onNotesChanged, projectId, 
         <span className="count-pill">{visibleNotes.length} {japanese ? "件" : "条"}</span>
       </div>
       <div className="scratch-compose">
-        <textarea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder={japanese ? "アイデア、場面、細部をすばやく記録..." : "快速记录灵感、场景或细节..."} />
+        <textarea
+          value={draft}
+          onChange={(event) => {
+            const nextDraft = event.target.value;
+            setDraft(nextDraft);
+            writeScratchpadDraft(draftScope, nextDraft);
+          }}
+          placeholder={japanese ? "アイデア、場面、細部をすばやく記録..." : "快速记录灵感、场景或细节..."}
+        />
         <div className="scratch-compose-bottom">
           <span className="muted">{error ?? (japanese ? "既定ではアイデアメモとして保存します" : "默认保存为灵感便签")}</span>
           <Button disabled={!projectId || !draft.trim()} onClick={() => void createNote()} variant="secondary">

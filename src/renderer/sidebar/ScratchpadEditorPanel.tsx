@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ScratchNoteRecord } from "../../main/shared/types";
 import { Button } from "../components/Button";
 import { getNovelToolApi } from "../state/app-store";
 import { useI18n } from "../i18n";
+import { clearScratchpadDraft, readScratchpadDraft, writeScratchpadDraft, type ScratchpadDraftScope } from "./scratchpad-draft-store";
 
 type ScratchpadEditorPanelProps = {
   readonly chapterId: string | null;
@@ -30,17 +31,30 @@ export function ScratchpadEditorPanel({
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState("");
   const [savedNoteId, setSavedNoteId] = useState<string | null>(null);
+  const savedNoteIdRef = useRef<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const scopeKey = `${projectId ?? "none"}:${chapterId ?? "global"}:${scratchNoteId ?? "new"}`;
+  const draftScope = useMemo<ScratchpadDraftScope>(() => ({
+    chapterId,
+    kind: "floating-note",
+    noteId: scratchNoteId,
+    projectId
+  }), [chapterId, projectId, scratchNoteId]);
   const statusText = error ?? (notice || (japanese ? "保存すると右サイドバーの下書きメモ一覧に表示されます。" : "这张草稿纸保存后会在右侧栏汇总中出现。"));
 
   useEffect(() => {
+    if (scratchNoteId && savedNoteIdRef.current === scratchNoteId) {
+      return undefined;
+    }
+
     let cancelled = false;
-    setContent("");
+    const recoveredDraft = readScratchpadDraft(draftScope);
+    setContent(recoveredDraft);
     setError(null);
     setNotice("");
     setSavedNoteId(scratchNoteId);
+    savedNoteIdRef.current = scratchNoteId;
 
     if (!projectId || !scratchNoteId) {
       setLoading(false);
@@ -61,8 +75,10 @@ export function ScratchpadEditorPanel({
           setError(japanese ? "この下書きメモは見つかりませんでした。" : "没有找到这条草稿。");
           return;
         }
-        setContent(note.content);
-        setNotice(japanese ? "既存の下書きメモを開きました。" : "已打开已有草稿。");
+        setContent(recoveredDraft || note.content);
+        setNotice(recoveredDraft
+          ? (japanese ? "未保存の下書きを復元しました。" : "已恢复未保存的草稿。")
+          : (japanese ? "既存の下書きメモを開きました。" : "已打开已有草稿。"));
       })
       .catch((reason: unknown) => {
         if (!cancelled) {
@@ -78,7 +94,7 @@ export function ScratchpadEditorPanel({
     return () => {
       cancelled = true;
     };
-  }, [api, chapterId, japanese, projectId, scopeKey, scratchNoteId]);
+  }, [api, chapterId, draftScope, japanese, projectId, scopeKey, scratchNoteId]);
 
   async function saveScratchpadPage(): Promise<void> {
     if (!projectId) {
@@ -104,6 +120,7 @@ export function ScratchpadEditorPanel({
           }
         })) as ScratchNoteRecord;
         setContent(updated.content);
+        clearScratchpadDraft(draftScope);
         setNotice(japanese ? "下書きメモを更新しました。" : "草稿已更新。");
       } else {
         const created = (await api.scratch.create({
@@ -113,7 +130,9 @@ export function ScratchpadEditorPanel({
           pinned: false
         })) as ScratchNoteRecord;
         setContent(created.content);
+        clearScratchpadDraft(draftScope);
         setSavedNoteId(created.id);
+        savedNoteIdRef.current = created.id;
         onScratchNoteSaved?.(panelId, created.id);
         setNotice(japanese ? "下書きメモを右サイドバーの一覧へ保存しました。" : "草稿已保存到右栏汇总。");
       }
@@ -137,7 +156,9 @@ export function ScratchpadEditorPanel({
         className="scratchpad-page-editor ruled-aux-editor"
         disabled={!projectId || loading}
         onChange={(event) => {
-          setContent(event.target.value);
+          const nextContent = event.target.value;
+          setContent(nextContent);
+          writeScratchpadDraft(draftScope, nextContent);
           setError(null);
           setNotice("");
         }}

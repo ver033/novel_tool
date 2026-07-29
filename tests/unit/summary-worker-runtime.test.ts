@@ -19,9 +19,15 @@ describe("summary worker runtime settings", () => {
 
   it("does not restart automatic background indexing while the project switch is disabled", () => {
     const source = readSource("src/main/ipc/register-ipc.ts");
+    const repository = readSource("src/main/db/repositories/summary-repo.ts");
+    const sharedDefaults = readSource("src/main/shared/summary-index-settings.ts");
+    const settingsPage = readSource("src/renderer/routes/SettingsPage.tsx");
 
     expect(source).toContain("summaryRepo.getBackgroundIndexEnabled(currentProject.id)");
     expect(source).toContain("return createSummaryService(input.projectId).setBackgroundIndexEnabled");
     expect(source).toContain("setBackgroundIndexEnabled(input.projectId, false");
+    expect(sharedDefaults).toContain("DEFAULT_BACKGROUND_INDEX_ENABLED = false");
+    expect(repository).toContain("return DEFAULT_BACKGROUND_INDEX_ENABLED");
+    expect(settingsPage).toContain("indexStatus?.backgroundEnabled ?? DEFAULT_BACKGROUND_INDEX_ENABLED");
   });
 });

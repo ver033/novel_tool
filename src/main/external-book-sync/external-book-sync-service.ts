@@ -854,7 +854,7 @@ export class ExternalBookSyncService {
             ? defaultRoots(project.rootPath)
             : savedRoots.length > 0
               ? savedRoots
-              : defaultRoots(project.rootPath));
+              : automaticDiscoveryRoots(project.rootPath));
       const shouldScanFileSystem =
         input.mode === "global" ||
         input.mode === "directory" ||

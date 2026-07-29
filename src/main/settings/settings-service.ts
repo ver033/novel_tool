@@ -13,6 +13,7 @@ import type {
   TaskType
 } from "../shared/types";
 import { appLocaleSchema, DEFAULT_APP_LOCALE } from "../shared/language";
+import { DEFAULT_EDITOR_SETTINGS } from "../shared/editor-settings";
 
 const EDITOR_SETTINGS_KEY = "editor";
 const AI_PROVIDER_SETTINGS_KEY = "aiProvider";
@@ -23,21 +24,6 @@ const APP_LOCALE_SETTINGS_KEY = "appLocale";
 const EXPERIMENTAL_SETTINGS_KEY = "experimental";
 export const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 export const OPENROUTER_CONNECTION_TEST_MODEL = "openrouter/auto";
-
-const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
-  fontSize: 18,
-  lineHeight: 1.82,
-  autosaveMs: 1000,
-  layoutPreset: "immersive",
-  pageWidth: "narrow",
-  fontFamily: "song",
-  editorPadding: "standard",
-  paragraphSpacing: "standard",
-  firstLineIndent: "none",
-  theme: "light",
-  ruledPaper: false,
-  ruledPaperIntensity: "soft"
-};
 
 const DEFAULT_CACHE_SETTINGS: CacheSettings = {
   chapterCacheBuildOrder: "latest_first"

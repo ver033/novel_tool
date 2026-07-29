@@ -105,10 +105,19 @@ export function openOrRaiseFloatingPanel(
   const id = createFloatingPanelId(kind, panelChapterId, panelScratchNoteId, panelScratchDraftId, outlineTab);
   const basePanels = kind === "task" ? panels.filter((panel) => panel.kind !== "task" || panel.id === id) : panels;
   const maxZIndex = basePanels.reduce((max, panel) => Math.max(max, panel.zIndex), 100);
-  const existing = basePanels.find((panel) => panel.id === id);
+  const existing = basePanels.find((panel) =>
+    panel.id === id ||
+    (kind === "scratch" &&
+      Boolean(panelScratchNoteId) &&
+      panel.kind === "scratch" &&
+      panel.chapterId === panelChapterId &&
+      panel.scratchNoteId === panelScratchNoteId)
+  );
   if (existing) {
     return basePanels.map((panel) =>
-      panel.id === id ? { ...panel, chapterId: panelChapterId, minimized: false, outlineTab: panelOutlineTab, zIndex: maxZIndex + 1 } : panel
+      panel.id === existing.id
+        ? { ...panel, chapterId: panelChapterId, minimized: false, outlineTab: panelOutlineTab, zIndex: maxZIndex + 1 }
+        : panel
     );
   }
 

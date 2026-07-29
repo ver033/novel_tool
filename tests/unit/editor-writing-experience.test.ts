@@ -186,13 +186,13 @@ describe("editor writing experience optimizations", () => {
     expect(css).toContain(".chapter-aux-chip");
   });
 
-  it("lets the editor canvas expand when either side panel is hidden", () => {
+  it("lets the editor canvas expand while preserving the author's selected page width", () => {
     const writingPage = readSource("src/renderer/routes/WritingPage.tsx");
     const css = readSource("src/renderer/styles/globals.css");
 
     expect(writingPage).toContain("editorUsesFullWidth");
     expect(writingPage).toContain("chapterListHidden || !sidebarOpen");
-    expect(writingPage).toContain('maxWidth: editorUsesFullWidth ? "none"');
+    expect(writingPage).toContain('maxWidth: focusMode ? "none"');
     expect(writingPage).toContain("full-width-editor");
     expect(css).toContain(".workspace.full-width-editor .editor-scroll");
     expect(css).toContain(".workspace.full-width-editor .editor-inner");
@@ -367,6 +367,24 @@ describe("editor writing experience optimizations", () => {
     expect(savedOpen).toHaveLength(3);
     expect(savedRaised).toHaveLength(3);
     expect(savedRaised.filter((panel) => panel.scratchNoteId === "scratch_saved_1")).toHaveLength(1);
+  });
+
+  it("keeps a floating scratch panel mounted after its first save and raises it by the saved note id", () => {
+    const viewport = { height: 720, width: 1180 };
+    const [draftPanel] = openOrRaiseFloatingPanel([], "scratch", "chapter_1", viewport, null);
+    const convertedPanel = {
+      ...draftPanel!,
+      scratchDraftId: null,
+      scratchNoteId: "scratch_saved_1"
+    };
+    const raised = openOrRaiseFloatingPanel([convertedPanel], "scratch", "chapter_1", viewport, "scratch_saved_1");
+
+    expect(raised).toHaveLength(1);
+    expect(raised[0]).toMatchObject({
+      id: draftPanel!.id,
+      minimized: false,
+      scratchNoteId: "scratch_saved_1"
+    });
   });
 
   it("reuses one floating task surface for the shared current task controller", () => {

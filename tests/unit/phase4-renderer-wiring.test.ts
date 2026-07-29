@@ -31,7 +31,7 @@ describe("phase 4 renderer Tiptap wiring", () => {
 
     expect(writingPage).toContain("<NovelEditor");
     expect(writingPage).not.toContain("<article className=\"manuscript\"");
-    expect(editorStore).toContain("AUTOSAVE_DEBOUNCE_MS = 1000");
+    expect(editorStore).toContain("AUTOSAVE_DEBOUNCE_MS = DEFAULT_EDITOR_SETTINGS.autosaveMs");
     expect(editorStore).toContain("getContent");
     expect(editorStore).toContain("saveContent");
     expect(editorStore).toContain("api.settings.get");

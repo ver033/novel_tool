@@ -43,9 +43,9 @@ const pageWidthBySetting = {
 } as const;
 
 const editorPaddingBySetting = {
-  compact: "6px",
-  standard: "14px",
-  relaxed: "40px"
+  compact: "16px",
+  standard: "28px",
+  relaxed: "48px"
 } as const;
 
 const themeClassBySetting = {
@@ -403,7 +403,7 @@ export function WritingPage({
   }, [editorStore.wordCount, locale, t, targetWordCount]);
   const editorUsesFullWidth = focusMode || chapterListHidden || !sidebarOpen;
   const editorInnerStyle: EditorInnerStyle = {
-    maxWidth: editorUsesFullWidth ? "none" : pageWidthBySetting[editorStore.editorSettings.pageWidth] ?? pageWidthBySetting.medium
+    maxWidth: focusMode ? "none" : pageWidthBySetting[editorStore.editorSettings.pageWidth] ?? pageWidthBySetting.medium
   };
   const editorScrollStyle: EditorScrollStyle = {
     "--editor-shell-padding-x": editorPaddingBySetting[editorStore.editorSettings.editorPadding] ?? editorPaddingBySetting.compact

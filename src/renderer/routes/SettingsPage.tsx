@@ -33,6 +33,8 @@ import type {
   UsageAnalyticsStatus
 } from "../../main/shared/types";
 import type { AppLocale } from "../../main/shared/language";
+import { DEFAULT_EDITOR_SETTINGS } from "../../main/shared/editor-settings";
+import { DEFAULT_BACKGROUND_INDEX_ENABLED } from "../../main/shared/summary-index-settings";
 import { Button } from "../components/Button";
 import { IconButton } from "../components/IconButton";
 import { Input } from "../components/Input";
@@ -127,20 +129,7 @@ function isVisibleCategory(category: SettingsCategory): category is VisibleSetti
 
 const defaultForm: SettingsFormState = {
   appLocale: "zh-CN",
-  editor: {
-    fontSize: 20,
-    lineHeight: 2.08,
-    autosaveMs: 1000,
-    layoutPreset: "immersive",
-    pageWidth: "screen",
-    fontFamily: "system",
-    editorPadding: "compact",
-    paragraphSpacing: "standard",
-    firstLineIndent: "none",
-    theme: "light",
-    ruledPaper: true,
-    ruledPaperIntensity: "standard"
-  },
+  editor: DEFAULT_EDITOR_SETTINGS,
   aiProvider: {
     providerType: "openrouter",
     baseUrl: OPENROUTER_BASE_URL,
@@ -1552,7 +1541,7 @@ function SummaryCacheSettingsPane({ cache, currentProject, onCacheSettingsChange
   const selectedArcEntry = arcEntries.find((entry) => entry.arcKey === selectedArcKey) ?? arcEntries[0] ?? null;
   const running = Boolean(indexStatus?.runningJobLabel);
   const hasQueuedOrRunning = Boolean(indexStatus && (indexStatus.queuedJobCount > 0 || indexStatus.runningJobLabel));
-  const backgroundEnabled = indexStatus?.backgroundEnabled ?? true;
+  const backgroundEnabled = indexStatus?.backgroundEnabled ?? DEFAULT_BACKGROUND_INDEX_ENABLED;
   const fullCachePreview = detail
     ? JSON.stringify(
         {
