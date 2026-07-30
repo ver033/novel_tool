@@ -557,13 +557,13 @@ export function buildChatCompletionMessages(input: AiChatGenerationInput, chatBu
 export class OpenRouterChatGenerator implements AiChatGenerator {
   constructor(private readonly settingsService: SettingsService) {}
 
-  private async createClient(): Promise<{
+  private async createClient(options: { readonly requireTools?: boolean } = { requireTools: true }): Promise<{
     readonly client: OpenRouterClient;
     readonly modelName: string;
     readonly contextLength: number | null;
     readonly chatBudget: TokenBudget;
   }> {
-    const config = await this.settingsService.getOpenRouterConfigWithModelMetadata(undefined, { requireTools: true });
+    const config = await this.settingsService.getOpenRouterConfigWithModelMetadata(undefined, options);
     return {
       modelName: config.modelName,
       contextLength: config.contextLength,
@@ -585,7 +585,7 @@ export class OpenRouterChatGenerator implements AiChatGenerator {
   }
 
   async sendMessageStream(input: AiChatGenerationInput, handlers: AiChatStreamHandlers, options: AiGenerationOptions = {}): Promise<AiChatMessageResult> {
-    const { chatBudget, client, contextLength, modelName } = await this.createClient();
+    const { chatBudget, client, contextLength, modelName } = await this.createClient({ requireTools: false });
     const reasoning = buildReasoningConfig(chatBudget, { exclude: false, fallbackEffort: "medium" });
     const messages = buildChatCompletionMessages(input, chatBudget);
     handlers.onContext?.({

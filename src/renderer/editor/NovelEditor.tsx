@@ -22,6 +22,7 @@ export type NovelEditorProps = {
   readonly contentJson: TiptapDocument;
   readonly contentVersion: number;
   readonly editorSettings: EditorSettings;
+  readonly lockedSelectionSnapshot?: SelectionSnapshot | null;
   readonly searchTarget?: EditorSearchTarget | null;
   readonly taskPromptPresets: readonly TaskPromptPreset[];
   readonly onContentChange: (contentJson: TiptapDocument) => void;
@@ -70,6 +71,7 @@ const firstLineIndentBySetting = {
 } as const;
 
 const searchJumpHighlightPluginKey = new PluginKey<DecorationSet>("moshuSearchJumpHighlight");
+const aiTaskLockedSelectionPluginKey = new PluginKey<DecorationSet>("moshuAiTaskLockedSelection");
 
 const SearchJumpHighlightExtension = Extension.create({
   name: "moshuSearchJumpHighlight",
@@ -96,6 +98,43 @@ const SearchJumpHighlightExtension = Extension.create({
               return DecorationSet.create(transaction.doc, [
                 Decoration.inline(highlightRange.from, highlightRange.to, {
                   class: "search-jump-highlight"
+                })
+              ]);
+            }
+            return previousDecorations.map(transaction.mapping, transaction.doc);
+          }
+        }
+      })
+    ];
+  }
+});
+
+const AiTaskLockedSelectionExtension = Extension.create({
+  name: "moshuAiTaskLockedSelection",
+
+  addProseMirrorPlugins() {
+    return [
+      new Plugin<DecorationSet>({
+        key: aiTaskLockedSelectionPluginKey,
+        props: {
+          decorations(state) {
+            return aiTaskLockedSelectionPluginKey.getState(state);
+          }
+        },
+        state: {
+          init() {
+            return DecorationSet.empty;
+          },
+          apply(transaction, previousDecorations) {
+            const lockedRange = transaction.getMeta(aiTaskLockedSelectionPluginKey) as { readonly from: number; readonly to: number } | null | undefined;
+            if (lockedRange === null) {
+              return DecorationSet.empty;
+            }
+            if (lockedRange && lockedRange.to > lockedRange.from && lockedRange.to <= transaction.doc.content.size) {
+              return DecorationSet.create(transaction.doc, [
+                Decoration.inline(lockedRange.from, lockedRange.to, {
+                  class: "ai-task-locked-selection",
+                  "data-ai-task-selection": "locked"
                 })
               ]);
             }
@@ -171,6 +210,7 @@ export const NovelEditor = memo(function NovelEditor({
   contentJson,
   contentVersion,
   editorSettings,
+  lockedSelectionSnapshot,
   searchTarget,
   taskPromptPresets,
   onContentChange,
@@ -226,6 +266,7 @@ export const NovelEditor = memo(function NovelEditor({
         wordCounter: countWritingUnits
       }),
       SearchJumpHighlightExtension,
+      AiTaskLockedSelectionExtension,
       UniqueID.configure({
         attributeName: "paragraphId",
         types: ["paragraph", "heading"],
@@ -258,6 +299,25 @@ export const NovelEditor = memo(function NovelEditor({
   }, [editor, onEditorReady]);
 
   useEffect(() => {
+    if (!editor) {
+      return;
+    }
+
+    const lockedRange =
+      lockedSelectionSnapshot
+      && lockedSelectionSnapshot.chapterId === chapterId
+      && lockedSelectionSnapshot.to > lockedSelectionSnapshot.from
+      && lockedSelectionSnapshot.to <= editor.state.doc.content.size
+        ? { from: lockedSelectionSnapshot.from, to: lockedSelectionSnapshot.to }
+        : null;
+    editor.view.dispatch(
+      editor.state.tr
+        .setMeta(aiTaskLockedSelectionPluginKey, lockedRange)
+        .setMeta("addToHistory", false)
+    );
+  }, [chapterId, editor, lockedSelectionSnapshot?.from, lockedSelectionSnapshot?.selectionHash, lockedSelectionSnapshot?.to]);
+
+  useEffect(() => {
     if (!editor || !searchTarget || searchTarget.chapterId !== chapterId) {
       return;
     }
@@ -283,7 +343,7 @@ export const NovelEditor = memo(function NovelEditor({
 
   return (
     <>
-      {editor ? (
+      {editor && !lockedSelectionSnapshot ? (
         <SelectionBubbleMenu
           chapterId={chapterId}
           editor={editor}

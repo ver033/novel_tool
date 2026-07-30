@@ -27,14 +27,20 @@ export type PlanWritingOperationContextInput = {
   readonly chapterRepo: ChapterRepository;
   readonly summaryRepo?: SummaryRepository;
   readonly tokenBudget: TokenBudget;
+  readonly reservedInputTokens?: number;
 };
 
 const TARGET_TEXT_RESERVE_TOKENS = 600;
+const SUPPORTING_CONTEXT_ITEM_OVERHEAD_TOKENS = 48;
 
-function assertTargetFits(targetText: string, tokenBudget: TokenBudget): void {
-  const estimated = estimateTextTokens(targetText) + TARGET_TEXT_RESERVE_TOKENS;
+function resolveInputReserve(input: PlanWritingOperationContextInput): number {
+  return Math.max(TARGET_TEXT_RESERVE_TOKENS, input.reservedInputTokens ?? 0);
+}
+
+function assertTargetFits(targetText: string, tokenBudget: TokenBudget, reservedInputTokens: number): void {
+  const estimated = estimateTextTokens(targetText) + reservedInputTokens;
   if (estimated > tokenBudget.maxInputTokens) {
-    throw new Error("目标文本太长，无法一次可靠处理。请缩短选区，或改为分段/分章处理。");
+    throw new Error("本次要求与目标文本合计过长，无法一次可靠处理。请缩短选区、精简本次要求，或改为分段处理。");
   }
 }
 
@@ -239,9 +245,10 @@ function resolveTargetText(projectId: string, target: WritingOperationTarget, ch
 function trimSupportingContext(
   items: readonly WritingSupportingContextItem[],
   targetText: string,
-  tokenBudget: TokenBudget
+  tokenBudget: TokenBudget,
+  reservedInputTokens: number
 ): { readonly items: readonly WritingSupportingContextItem[]; readonly truncated: boolean } {
-  const targetTokens = estimateTextTokens(targetText) + TARGET_TEXT_RESERVE_TOKENS;
+  const targetTokens = estimateTextTokens(targetText) + reservedInputTokens;
   let remaining = Math.max(0, tokenBudget.maxInputTokens - targetTokens);
   let truncated = false;
   const result: WritingSupportingContextItem[] = [];
@@ -252,14 +259,18 @@ function trimSupportingContext(
       break;
     }
 
-    const trimmed = truncateTextToTokenBudget(item.content, remaining);
+    if (remaining <= SUPPORTING_CONTEXT_ITEM_OVERHEAD_TOKENS) {
+      truncated = true;
+      break;
+    }
+    const trimmed = truncateTextToTokenBudget(item.content, remaining - SUPPORTING_CONTEXT_ITEM_OVERHEAD_TOKENS);
     const content = trimmed.text.trim();
     if (content) {
       result.push({
         ...item,
         content
       });
-      remaining -= estimateTextTokens(content);
+      remaining -= estimateTextTokens(content) + SUPPORTING_CONTEXT_ITEM_OVERHEAD_TOKENS;
     }
     truncated = truncated || trimmed.truncated;
   }
@@ -269,12 +280,15 @@ function trimSupportingContext(
 
 export function planWritingOperationContext(input: PlanWritingOperationContextInput): WritingContextPlan {
   const targetText = resolveTargetText(input.projectId, input.target, input.chapterRepo);
-  assertTargetFits(targetText, input.tokenBudget);
+  const reservedInputTokens = resolveInputReserve(input);
+  assertTargetFits(targetText, input.tokenBudget, reservedInputTokens);
 
   const rawSupportingContext = buildSelectionContext(input, targetText);
-  const supportingContext = trimSupportingContext(rawSupportingContext, targetText, input.tokenBudget);
+  const supportingContext = trimSupportingContext(rawSupportingContext, targetText, input.tokenBudget, reservedInputTokens);
   const estimatedInputTokens =
-    estimateTextTokens([targetText, ...supportingContext.items.map((item) => item.content)].join("\n\n")) + TARGET_TEXT_RESERVE_TOKENS;
+    estimateTextTokens([targetText, ...supportingContext.items.map((item) => item.content)].join("\n\n"))
+      + reservedInputTokens
+      + supportingContext.items.length * SUPPORTING_CONTEXT_ITEM_OVERHEAD_TOKENS;
 
   return {
     targetText,

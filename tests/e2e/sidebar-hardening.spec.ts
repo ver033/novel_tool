@@ -62,7 +62,8 @@ test.describe("Phase 11 sidebar hardening", () => {
 
       await page.getByRole("button", { name: "当前任务" }).click();
       await expect(page.getByText("等待选区")).toBeVisible();
-      await expect(page.getByText("尚未生成预览。")).toBeVisible();
+      await expect(page.getByText("尚未生成预览。")).toHaveCount(0);
+      await expect(page.getByRole("button", { name: /开始润色/ })).toBeDisabled();
 
       await page.getByRole("button", { name: "草稿纸", exact: true }).click();
       await expect(page.getByText(/正在读取草稿纸|暂无草稿/)).toBeVisible();

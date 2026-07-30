@@ -48,7 +48,6 @@ export function App() {
   const [taskType, setTaskType] = useState<TaskType>("polish");
   const [taskPromptPreset, setTaskPromptPreset] = useState<TaskPromptPreset | null>(null);
   const [taskRunId, setTaskRunId] = useState<number | null>(null);
-  const [taskAutoStartId, setTaskAutoStartId] = useState<number | null>(null);
   const [selectionSnapshot, setSelectionSnapshot] = useState<SelectionSnapshot | null>(null);
   const [aiChatDraftSeed, setAiChatDraftSeed] = useState<AiChatDraftSeed | null>(null);
   const [settingsCategory, setSettingsCategory] = useState<SettingsCategory>("ai");
@@ -62,16 +61,9 @@ export function App() {
   const usageStartedAtRef = useRef<number | null>(null);
   const nextTaskRunIdRef = useRef(0);
 
-  const beginTaskRun = useCallback((): number => {
+  const beginTaskConfiguration = useCallback(() => {
     nextTaskRunIdRef.current += 1;
-    const nextTaskRunId = nextTaskRunIdRef.current;
-    setTaskRunId(nextTaskRunId);
-    setTaskAutoStartId(nextTaskRunId);
-    return nextTaskRunId;
-  }, []);
-
-  const consumeTaskAutoStart = useCallback((consumedTaskRunId: number) => {
-    setTaskAutoStartId((current) => current === consumedTaskRunId ? null : current);
+    setTaskRunId(nextTaskRunIdRef.current);
   }, []);
 
   const recordUsageEvent = useCallback((input: UsageAnalyticsRecordEventInput) => {
@@ -300,14 +292,13 @@ export function App() {
     setScratchpadRefreshToken((current) => current + 1);
   }, []);
   const runTask = useCallback((task: TaskType, snapshot?: SelectionSnapshot | null, preset?: TaskPromptPreset | null) => {
-    recordUsageEvent({ eventType: "feature_used", feature: "ai_task", occurredAt: new Date().toISOString() });
-    beginTaskRun();
+    beginTaskConfiguration();
     setTaskType(task);
     setTaskPromptPreset(preset ?? null);
     setSelectionSnapshot(snapshot ?? null);
     setSidebarOpen(true);
     setSidebarTab("task");
-  }, [beginTaskRun, recordUsageEvent]);
+  }, [beginTaskConfiguration]);
   const openFloatingPanel = useCallback(
     (kind: FloatingPanelKind, chapterId: string | null = appStore.activeChapterId, scratchNoteId: string | null = null, outlineTab: OutlineFloatingTab = "chapter") => {
       setFloatingPanels((current) => openOrRaiseFloatingPanel(current, kind, chapterId, floatingViewport(), scratchNoteId, outlineTab));
@@ -328,14 +319,13 @@ export function App() {
   );
   const runFloatingTask = useCallback(
     (task: TaskType, snapshot?: SelectionSnapshot | null, preset?: TaskPromptPreset | null) => {
-      recordUsageEvent({ eventType: "feature_used", feature: "ai_task", occurredAt: new Date().toISOString() });
-      beginTaskRun();
+      beginTaskConfiguration();
       setTaskType(task);
       setTaskPromptPreset(preset ?? null);
       setSelectionSnapshot(snapshot ?? null);
       openFloatingPanel("task", snapshot?.chapterId ?? appStore.activeChapterId);
     },
-    [appStore.activeChapterId, beginTaskRun, openFloatingPanel, recordUsageEvent]
+    [appStore.activeChapterId, beginTaskConfiguration, openFloatingPanel]
   );
   const closeFloatingPanel = useCallback((panelId: string) => {
     setFloatingPanels((current) => current.filter((panel) => panel.id !== panelId));
@@ -576,7 +566,6 @@ export function App() {
           scratchpadRefreshToken={scratchpadRefreshToken}
           selectionSnapshot={selectionSnapshot}
           taskPromptPreset={taskPromptPreset}
-          taskAutoStartId={taskAutoStartId}
           taskRunId={taskRunId}
           taskType={taskType}
           onCreateChapter={createChapter}
@@ -612,7 +601,6 @@ export function App() {
           onSettings={openSettings}
           onSidebarTabChange={setSidebarTab}
           onTask={runTask}
-          onTaskAutoStartConsumed={consumeTaskAutoStart}
           onWelcome={openWelcome}
         />
       </AppShell>

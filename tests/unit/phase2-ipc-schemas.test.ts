@@ -126,6 +126,18 @@ describe("phase 2 ipc schemas", () => {
       taskId: "task_1"
     });
     expect(
+      parseIpcPayload(aiUpdateTaskInputSchema, {
+        taskId: "task_1",
+        patch: { instruction: "长".repeat(12_000) }
+      })
+    ).toMatchObject({ taskId: "task_1" });
+    expect(() =>
+      parseIpcPayload(aiUpdateTaskInputSchema, {
+        taskId: "task_1",
+        patch: { instruction: "长".repeat(20_001) }
+      })
+    ).toThrow();
+    expect(
       parseIpcPayload(aiApplyCandidateInputSchema, {
         projectId: "project_1",
         candidateId: "candidate_1",

@@ -133,6 +133,11 @@ function createE2eTaskGenerator(): AiTaskGenerator {
   return {
     async generateStream(task, handlers) {
       const generatedText = e2eTextFor(task.taskType, task.inputText);
+      const requestedDelayMs = Number.parseInt(process.env.NOVEL_TOOL_E2E_TASK_DELAY_MS ?? "0", 10);
+      const delayMs = Number.isFinite(requestedDelayMs) ? Math.min(Math.max(0, requestedDelayMs), 5_000) : 0;
+      if (delayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
       if (task.taskType === "proofread") {
         return {
           generatedText: "",
@@ -518,10 +523,7 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
           return aiTaskService.createChatSession(input);
         },
         async sendChatMessage(input) {
-          await aiTaskService.sendChatMessageStream(input, {}, {
-            allowActions: false,
-            allowTools: false,
-            allowAutoChapterContext: false,
+          await aiTaskService.sendDirectChatMessageStream(input, {}, {
             includeHistory: false
           });
         }

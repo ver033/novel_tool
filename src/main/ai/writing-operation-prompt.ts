@@ -3,6 +3,7 @@ import type { TaskPromptPreset } from "../shared/types";
 import type { ContentLanguage } from "../shared/language";
 import type { OpenRouterMessage, OpenRouterResponseFormat } from "./openrouter-client";
 import { buildReasoningConfig } from "./reasoning-budget";
+import { estimateMessagesTokens } from "./token-estimator";
 import type { TokenBudget } from "./token-budget";
 import type {
   BuiltWritingOperationPrompt,
@@ -178,6 +179,23 @@ export function buildWritingOperationPrompt(input: BuildWritingOperationPromptIn
       : buildReasoningConfig(input.tokenBudget, { exclude: input.source !== "chat_tool", fallbackEffort: "medium" }),
     tokenBudget: input.tokenBudget
   };
+}
+
+export function estimateWritingOperationFixedInputTokens(
+  input: Omit<BuildWritingOperationPromptInput, "contextPlan">
+): number {
+  const emptyContextPlan: WritingContextPlan = {
+    targetText: "",
+    supportingContext: [],
+    mode: "direct",
+    estimatedInputTokens: 0,
+    maxInputTokens: input.tokenBudget.maxInputTokens,
+    reason: ""
+  };
+  return estimateMessagesTokens(buildMessages({
+    ...input,
+    contextPlan: emptyContextPlan
+  }));
 }
 
 function looksAdviceOnly(content: string): boolean {

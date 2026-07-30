@@ -1,5 +1,6 @@
+import { useEffect, useState } from "react";
 import { ChatCircleDots, NotePencil, Sparkle, X } from "@phosphor-icons/react";
-import type { ChapterSummary, SelectionSnapshot, TaskPromptPreset } from "../../main/shared/types";
+import type { ChapterSummary, SelectionSnapshot, SettingsState, TaskPromptPreset } from "../../main/shared/types";
 import { IconButton } from "../components/IconButton";
 import { AiChatTab } from "../sidebar/AiChatTab";
 import type { AiChatDraftSeed } from "../sidebar/chat-draft";
@@ -8,6 +9,7 @@ import { CurrentTaskTab } from "../sidebar/CurrentTaskTab";
 import type { SettingsCategory } from "../routes/SettingsPage";
 import type { ChatStore } from "../state/chat-store";
 import type { TaskStore } from "../state/task-store";
+import { getNovelToolApi } from "../state/app-store";
 import { useI18n } from "../i18n";
 
 export type SidebarTab = "chat" | "task" | "scratch";
@@ -58,6 +60,24 @@ export function RightUtilitySidebar({
 }: RightUtilitySidebarProps) {
   const { locale, t } = useI18n();
   const japanese = locale === "ja-JP";
+  const [configuredModelName, setConfiguredModelName] = useState<string | null>(null);
+  useEffect(() => {
+    let disposed = false;
+    void (getNovelToolApi().settings.get() as Promise<SettingsState>)
+      .then((settings) => {
+        if (!disposed) {
+          setConfiguredModelName(settings.aiProvider?.modelName.trim() || null);
+        }
+      })
+      .catch(() => {
+        if (!disposed) {
+          setConfiguredModelName(null);
+        }
+      });
+    return () => {
+      disposed = true;
+    };
+  }, []);
   const tabLabels: Array<[SidebarTab, string]> = [
     ["chat", t("aiChat")],
     ["task", t("currentTask")],
@@ -69,12 +89,17 @@ export function RightUtilitySidebar({
     scratch: <NotePencil size={17} />
   } as const;
   const assistantTitle = japanese ? "執筆アシスタント" : "写作助手";
+  const modelName = configuredModelName || chatStore.contextUsage?.modelName.trim() || (japanese ? "モデル未設定" : "模型未配置");
   return (
     <aside className="right-sidebar">
       <header className="sidebar-heading">
         <div>
           <h2>{assistantTitle}</h2>
-          <span>Pi Agent</span>
+          <p className="sidebar-runtime-line" title={`Pi Agent · ${modelName}`}>
+            <span>Pi Agent</span>
+            <i aria-hidden="true">·</i>
+            <span className="sidebar-model-name">{modelName}</span>
+          </p>
         </div>
         <IconButton className="sidebar-close" label={t("closeRightSidebar")} onClick={onClose}>
           <X size={18} />
@@ -88,7 +113,7 @@ export function RightUtilitySidebar({
           </button>
         ))}
       </nav>
-      <div className="sidebar-content">
+      <div className={`sidebar-content sidebar-content-${activeTab}`}>
         {activeTab === "chat" ? (
           <AiChatTab
             chapters={chapters}

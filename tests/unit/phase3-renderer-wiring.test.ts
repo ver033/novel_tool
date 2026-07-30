@@ -68,7 +68,7 @@ describe("phase 3 renderer project and chapter wiring", () => {
     expect(writingPage).toContain("PanelResizeHandle");
     expect(writingPage).toContain('id="moshu-writing-sidebar-v3"');
     expect(writingPage).toContain("useDefaultLayout");
-    expect(writingPage).toContain('defaultSize="400px"');
+    expect(writingPage).toContain('defaultSize="420px"');
     expect(writingPage).toContain('minSize="360px"');
     expect(writingPage).toContain('maxSize="520px"');
     expect(writingPage).not.toContain("defaultSize={34}");

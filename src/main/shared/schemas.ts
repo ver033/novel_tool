@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { AI_TASK_INSTRUCTION_MAX_CHARACTERS } from "./ai-task-limits";
 import {
   relationshipEntityImportanceSchema,
   relationshipEntityKindSchema,
@@ -401,7 +402,7 @@ export const aiCreateTaskInputSchema = z
     chapterId: optionalIdSchema,
     taskType: taskTypeSchema,
     inputText: nonEmptyString,
-    instruction: z.string().max(4000).optional(),
+    instruction: z.string().max(AI_TASK_INSTRUCTION_MAX_CHARACTERS).optional(),
     presetId: optionalIdSchema,
     selection: selectionSnapshotSchema.optional()
   })
@@ -415,7 +416,7 @@ export const aiUpdateTaskInputSchema = z
     patch: z
       .object({
         status: aiTaskStatusSchema.optional(),
-        instruction: z.string().max(4000).optional(),
+        instruction: z.string().max(AI_TASK_INSTRUCTION_MAX_CHARACTERS).optional(),
         presetId: optionalIdSchema,
         error: z.string().max(4000).optional()
       })

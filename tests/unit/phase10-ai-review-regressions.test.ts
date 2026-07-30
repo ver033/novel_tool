@@ -18,20 +18,24 @@ describe("phase 10 AI review regressions", () => {
     expect(taskStore.indexOf("api.ai.updateTask")).toBeLessThan(taskStore.indexOf("api.ai.generatePreview"));
   });
 
-  it("resets configured task identity when the active selection context changes", () => {
+  it("resets task execution state without starting a request when the selection context changes", () => {
     const taskStore = readSource("src/renderer/state/task-store.ts");
 
     expect(taskStore).toMatch(
-      /useEffect\(\(\) => \{[\s\S]*setTask\(null\);[\s\S]*setCandidate\(null\);[\s\S]*setError\(null\);[\s\S]*configuredKey\.current = null;[\s\S]*\}, \[[\s\S]*projectId[\s\S]*chapterId[\s\S]*taskType[\s\S]*presetId[\s\S]*selectionSnapshot\?\.selectionHash[\s\S]*\]\);/
+      /useEffect\(\(\) => \{[\s\S]*setTask\(null\);[\s\S]*setCandidate\(null\);[\s\S]*setError\(null\);[\s\S]*setTaskExecutionPhase\(projectId && selectionSnapshot \? "ready" : "idle"\);[\s\S]*\}, \[[\s\S]*projectId[\s\S]*chapterId[\s\S]*taskType[\s\S]*presetId[\s\S]*selectionSnapshot\?\.selectionHash[\s\S]*\]\);/
     );
+    const resetEffect = taskStore.slice(taskStore.indexOf("useEffect(() => {"), taskStore.indexOf("useEffect(() => () =>"));
+    expect(resetEffect).not.toContain("api.ai.createTask");
   });
 
   it("resets the default task instruction when task type or selection changes", () => {
     const writingPage = readSource("src/renderer/routes/WritingPage.tsx");
+    const currentTask = readSource("src/renderer/sidebar/CurrentTaskTab.tsx");
 
     expect(writingPage).toContain("useEffect");
     expect(writingPage).toContain('initialInstructionForTask(taskType, taskPromptPreset, locale === "ja-JP")');
     expect(writingPage).toMatch(/\[locale, selectionSnapshot\?\.selectionHash, taskPromptPreset\?\.id, taskRunId, taskType\]/);
+    expect(currentTask).toMatch(/initialInstructionForTask\([\s\S]*return "";/);
   });
 
   it("does not expose incomplete scratchpad task insertion affordances", () => {

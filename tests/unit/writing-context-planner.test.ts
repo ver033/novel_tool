@@ -213,7 +213,28 @@ describe("writing context planner", () => {
         chapterRepo,
         tokenBudget: getTokenBudget("polish")
       })
-    ).toThrow("目标文本太长");
+    ).toThrow("本次要求与目标文本合计过长");
+
+    db.close();
+  });
+
+  it("reserves room for a long user instruction before adding target text", () => {
+    const projectId = "project_long_instruction";
+    const { db, chapterRepo } = createRepo(projectId);
+
+    expect(() =>
+      planWritingOperationContext({
+        projectId,
+        operation: getWritingOperationDefinition("polish"),
+        target: {
+          kind: "inline_text",
+          text: "这是一段较短的正文。"
+        },
+        chapterRepo,
+        tokenBudget: getTokenBudget("polish"),
+        reservedInputTokens: 8_000
+      })
+    ).toThrow("本次要求与目标文本合计过长");
 
     db.close();
   });

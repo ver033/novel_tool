@@ -157,6 +157,7 @@ export function SelectionBubbleMenu({ chapterId, editor, taskPromptPresets, onSe
     }
 
     setActiveMenu(null);
+    editor.commands.blur();
     onTask(task, snapshot, null);
   }
 
@@ -167,6 +168,7 @@ export function SelectionBubbleMenu({ chapterId, editor, taskPromptPresets, onSe
     }
 
     setActiveMenu(null);
+    editor.commands.blur();
     onTask(taskPromptPreset.taskType, snapshot, taskPromptPreset);
   }
 

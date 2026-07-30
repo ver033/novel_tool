@@ -14,8 +14,13 @@ import {
 import { getTokenBudget } from "./token-budget";
 import { planWritingOperationContext } from "./writing-context-planner";
 import { getWritingOperationDefinition } from "./writing-operation-registry";
-import { buildWritingOperationPrompt, parseWritingOperationResponse } from "./writing-operation-prompt";
+import {
+  buildWritingOperationPrompt,
+  estimateWritingOperationFixedInputTokens,
+  parseWritingOperationResponse
+} from "./writing-operation-prompt";
 import { loadWritingSkill } from "./writing-skill-loader";
+import { estimateMessagesTokens } from "./token-estimator";
 import type { WritingOperationOutputKind, WritingOperationRequest, WritingOperationResult, WritingOperationTarget } from "./writing-operation-types";
 
 type OpenRouterClientLike = {
@@ -248,17 +253,28 @@ export class WritingOperationRunner {
       : "";
     const contentLanguage = targetText ? resolveInlineContentLanguage(targetText, projectLanguage) : projectLanguage;
     const tokenBudget = getTokenBudget(operation.tokenBudgetTaskType, config.contextLength);
+    const skill = loadWritingSkill(operation.skillId);
+    const fixedInputTokens = estimateWritingOperationFixedInputTokens({
+      operation,
+      skill,
+      userInstruction: request.userInstruction,
+      preset: request.preset ?? null,
+      tokenBudget,
+      source: request.source,
+      contentLanguage
+    });
     const contextPlan = planWritingOperationContext({
       projectId: request.projectId,
       operation,
       target: request.target,
       chapterRepo: this.options.resolveChapterRepo(request.projectId),
       summaryRepo: this.options.resolveSummaryRepo?.(request.projectId),
-      tokenBudget
+      tokenBudget,
+      reservedInputTokens: fixedInputTokens
     });
     const prompt = buildWritingOperationPrompt({
       operation,
-      skill: loadWritingSkill(operation.skillId),
+      skill,
       contextPlan,
       userInstruction: request.userInstruction,
       preset: request.preset ?? null,
@@ -266,8 +282,18 @@ export class WritingOperationRunner {
       source: request.source,
       contentLanguage
     });
+    const estimatedInputTokens = estimateMessagesTokens(prompt.messages);
+    if (estimatedInputTokens > tokenBudget.maxInputTokens) {
+      throw new Error(contentLanguage === "ja-JP"
+        ? "今回の要望と対象本文が長すぎるため、一度に安定して処理できません。選択範囲または今回の要望を短くして、もう一度お試しください。"
+        : "本次要求与目标文本合计过长，无法一次可靠处理。请缩短选区或本次要求后重试。");
+    }
+    const measuredContextPlan = {
+      ...contextPlan,
+      estimatedInputTokens
+    };
 
-    return { config, contentLanguage, contextPlan, operation, prompt };
+    return { config, contentLanguage, contextPlan: measuredContextPlan, operation, prompt };
   }
 
   private async buildPromptForTask(task: AiTaskRecord) {

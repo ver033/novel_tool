@@ -11,77 +11,54 @@ export type TaskExecutionPhase =
   | "canceled"
   | "error";
 
-export type TaskExecutionStepStatus = "pending" | "active" | "complete" | "error" | "stopped";
+export type TaskExecutionActivityStatus = "active" | "complete" | "error" | "stopped";
 
-export type TaskExecutionStep = {
-  readonly id: "selection" | "setup" | "generation" | "result";
-  readonly status: TaskExecutionStepStatus;
+export type TaskExecutionActivity = {
+  readonly id: "context" | "generation" | "result";
+  readonly status: TaskExecutionActivityStatus;
 };
 
-const completeSteps: readonly TaskExecutionStep[] = [
-  { id: "selection", status: "complete" },
-  { id: "setup", status: "complete" },
-  { id: "generation", status: "complete" },
-  { id: "result", status: "complete" }
-];
-
-export function buildTaskExecutionSteps(
+export function buildTaskExecutionActivities(
   phase: TaskExecutionPhase,
-  hasSelection: boolean
-): readonly TaskExecutionStep[] {
-  if (!hasSelection) {
-    return [
-      { id: "selection", status: "active" },
-      { id: "setup", status: "pending" },
-      { id: "generation", status: "pending" },
-      { id: "result", status: "pending" }
-    ];
+  hasTask: boolean
+): readonly TaskExecutionActivity[] {
+  if (phase === "idle" || phase === "ready") {
+    return [];
   }
 
-  if (phase === "complete") {
-    return completeSteps;
-  }
-
-  if (phase === "idle" || phase === "creating" || phase === "preparing") {
-    return [
-      { id: "selection", status: "complete" },
-      { id: "setup", status: "active" },
-      { id: "generation", status: "pending" },
-      { id: "result", status: "pending" }
-    ];
-  }
-
-  if (phase === "ready") {
-    return [
-      { id: "selection", status: "complete" },
-      { id: "setup", status: "complete" },
-      { id: "generation", status: "pending" },
-      { id: "result", status: "pending" }
-    ];
+  if (phase === "creating" || phase === "preparing") {
+    return [{ id: "context", status: "active" }];
   }
 
   if (phase === "requesting" || phase === "streaming" || phase === "canceling") {
     return [
-      { id: "selection", status: "complete" },
-      { id: "setup", status: "complete" },
-      { id: "generation", status: "active" },
-      { id: "result", status: "pending" }
+      { id: "context", status: "complete" },
+      { id: "generation", status: "active" }
     ];
   }
 
   if (phase === "finalizing") {
     return [
-      { id: "selection", status: "complete" },
-      { id: "setup", status: "complete" },
+      { id: "context", status: "complete" },
       { id: "generation", status: "complete" },
       { id: "result", status: "active" }
     ];
   }
 
+  if (phase === "complete") {
+    return [
+      { id: "context", status: "complete" },
+      { id: "generation", status: "complete" },
+      { id: "result", status: "complete" }
+    ];
+  }
+
+  if (phase === "error" && !hasTask) {
+    return [{ id: "context", status: "error" }];
+  }
+
   return [
-    { id: "selection", status: "complete" },
-    { id: "setup", status: "complete" },
-    { id: "generation", status: phase === "error" ? "error" : "stopped" },
-    { id: "result", status: "pending" }
+    { id: "context", status: "complete" },
+    { id: "generation", status: phase === "error" ? "error" : "stopped" }
   ];
 }

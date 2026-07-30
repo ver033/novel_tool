@@ -1393,16 +1393,23 @@ describe("AI chat flow", () => {
     db.close();
   });
 
-  it("can send external Book sync messages without local chapter tools or inferred chapter context", async () => {
+  it("sends external Book sync messages through one direct generation without entering the agent runtime", async () => {
     let capturedInput: unknown = null;
+    let directGenerationCount = 0;
+    let agentGenerationCount = 0;
     const chatGenerator: AiChatGenerator = {
-      async sendAgentMessageStream(input) {
+      async sendMessageStream(input) {
+        directGenerationCount += 1;
         capturedInput = input;
         return {
           role: "assistant",
           content: "已收到外部同步内容。",
           createdAt: "2026-05-21T00:00:00.000Z"
         };
+      },
+      async sendAgentMessageStream() {
+        agentGenerationCount += 1;
+        throw new Error("外部同步不应进入 Agent Runtime。");
       }
     };
     const { aiTaskRepo, chapterRepo, chatRepo, db, projectService, scratchRepo } = createServices();
@@ -1419,13 +1426,7 @@ describe("AI chat flow", () => {
       content: "最近对话原文不应进入同步请求。",
       action: null
     });
-    const sendWithoutLocalTools = aiTaskService.sendChatMessageStream.bind(aiTaskService) as unknown as (
-      input: Parameters<AiTaskService["sendChatMessageStream"]>[0],
-      handlers: Parameters<AiTaskService["sendChatMessageStream"]>[1],
-      options: { readonly allowTools: false; readonly allowAutoChapterContext: false; readonly allowActions: false; readonly includeHistory: false }
-    ) => ReturnType<AiTaskService["sendChatMessageStream"]>;
-
-    await sendWithoutLocalTools(
+    await aiTaskService.sendDirectChatMessageStream(
       {
         requestId: "external_book_sync_no_local_read",
         projectId: project.id,
@@ -1445,15 +1446,88 @@ describe("AI chat flow", () => {
         ].join("\n")
       },
       {},
-      { allowTools: false, allowAutoChapterContext: false, allowActions: false, includeHistory: false }
+      { includeHistory: false }
     );
 
     expect(capturedInput).toMatchObject({
-      history: [],
-      tools: []
+      history: []
     });
     expect(JSON.stringify(capturedInput)).not.toContain("本地第48章正文");
     expect(JSON.stringify(capturedInput)).not.toContain("最近对话原文");
+    expect(directGenerationCount).toBe(1);
+    expect(agentGenerationCount).toBe(0);
+
+    db.close();
+  });
+
+  it("persists a direct sync failure without manufacturing an assistant reply", async () => {
+    let agentGenerationCount = 0;
+    const chatGenerator: AiChatGenerator = {
+      async sendMessageStream() {
+        throw new Error("OpenRouter 请求失败：timeout of 30000ms exceeded");
+      },
+      async sendAgentMessageStream() {
+        agentGenerationCount += 1;
+        throw new Error("外部同步不应进入 Agent Runtime。");
+      }
+    };
+    const { aiTaskRepo, chapterRepo, chatRepo, db, projectService, scratchRepo } = createServices();
+    const { project } = projectService.createProject({ name: "举足无措" });
+    const aiTaskService = new AiTaskService(aiTaskRepo, undefined, chatGenerator, chatRepo, scratchRepo, chapterRepo);
+    const session = aiTaskService.createChatSession({ projectId: project.id, title: "外部同步检查" });
+
+    await expect(aiTaskService.sendDirectChatMessageStream(
+      {
+        requestId: "external_book_sync_failure",
+        projectId: project.id,
+        sessionId: session.id,
+        message: "【外部写作软件同步检查】\n## 缺失章节：第二章\n第二章正文。"
+      },
+      {},
+      { includeHistory: false }
+    )).rejects.toThrow("timeout of 30000ms exceeded");
+
+    expect(agentGenerationCount).toBe(0);
+    expect(aiTaskService.listChatMessages({ projectId: project.id, sessionId: session.id }).map((message) => message.role)).toEqual([
+      "user",
+      "error"
+    ]);
+
+    db.close();
+  });
+
+  it("treats a canceled direct sync as a failure instead of reporting it as sent", async () => {
+    const chatGenerator: AiChatGenerator = {
+      async sendMessageStream(_input, _handlers, options) {
+        await new Promise<void>((_resolve, reject) => {
+          options?.signal?.addEventListener("abort", () => reject(new Error("canceled")), { once: true });
+        });
+        throw new Error("unreachable");
+      }
+    };
+    const { aiTaskRepo, chapterRepo, chatRepo, db, projectService, scratchRepo } = createServices();
+    const { project } = projectService.createProject({ name: "举足无措" });
+    const aiTaskService = new AiTaskService(aiTaskRepo, undefined, chatGenerator, chatRepo, scratchRepo, chapterRepo);
+    const session = aiTaskService.createChatSession({ projectId: project.id, title: "外部同步检查" });
+    const requestId = "external_book_sync_canceled";
+
+    const pending = aiTaskService.sendDirectChatMessageStream(
+      {
+        requestId,
+        projectId: project.id,
+        sessionId: session.id,
+        message: "【外部写作软件同步检查】\n## 缺失章节：第二章\n第二章正文。"
+      },
+      {},
+      { includeHistory: false }
+    );
+    aiTaskService.cancelStream({ requestId });
+
+    await expect(pending).rejects.toThrow("AI 对话已取消");
+    expect(aiTaskService.listChatMessages({ projectId: project.id, sessionId: session.id }).map((message) => message.role)).toEqual([
+      "user",
+      "error"
+    ]);
 
     db.close();
   });

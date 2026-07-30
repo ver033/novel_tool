@@ -117,6 +117,10 @@ export type AiChatStreamExecutionOptions = {
   readonly includeHistory?: boolean;
 };
 
+export type AiDirectChatStreamExecutionOptions = {
+  readonly includeHistory?: boolean;
+};
+
 export type AiChatGenerationInput = AiSendChatMessageStreamInput & {
   readonly history: readonly AiChatMessageRecord[];
   readonly agentContext?: ChatAgentContext;
@@ -424,6 +428,51 @@ export class AiTaskService {
     }
 
     return this.resolveAiChatRepo(projectId);
+  }
+
+  private prepareChatMessageStream(
+    input: AiSendChatMessageStreamInput,
+    handlers: AiChatStreamHandlers
+  ): {
+    readonly chatRepo: AiChatRepository;
+    readonly history: readonly AiChatMessageRecord[];
+    readonly userMessage: AiChatMessageRecord;
+    readonly fail: (error: string) => never;
+  } {
+    const chatRepo = this.getAiChatRepo(input.projectId);
+    const history = chatRepo.listMessages({
+      projectId: input.projectId,
+      sessionId: input.sessionId
+    });
+    const userMessage = chatRepo.createMessage({
+      projectId: input.projectId,
+      sessionId: input.sessionId,
+      role: "user",
+      content: input.message,
+      action: null
+    });
+    chatRepo.renameSessionFromFirstMessage({
+      projectId: input.projectId,
+      sessionId: input.sessionId,
+      message: input.message
+    });
+
+    return {
+      chatRepo,
+      history,
+      userMessage,
+      fail(error: string): never {
+        chatRepo.createMessage({
+          projectId: input.projectId,
+          sessionId: input.sessionId,
+          role: "error",
+          content: error,
+          action: null
+        });
+        handlers.onError?.({ requestId: input.requestId, error });
+        throw new Error(error);
+      }
+    };
   }
 
   private resolveReferencedChapterInput<T extends AiSendChatMessageStreamInput>(input: T): T {
@@ -1245,35 +1294,7 @@ export class AiTaskService {
     handlers: AiChatStreamHandlers = {},
     options: AiChatStreamExecutionOptions = {}
   ): Promise<AiChatStreamResult> {
-    const chatRepo = this.getAiChatRepo(input.projectId);
-    const history = chatRepo.listMessages({
-      projectId: input.projectId,
-      sessionId: input.sessionId
-    });
-    const userMessage = chatRepo.createMessage({
-      projectId: input.projectId,
-      sessionId: input.sessionId,
-      role: "user",
-      content: input.message,
-      action: null
-    });
-    chatRepo.renameSessionFromFirstMessage({
-      projectId: input.projectId,
-      sessionId: input.sessionId,
-      message: input.message
-    });
-
-    const fail = (error: string): never => {
-      chatRepo.createMessage({
-        projectId: input.projectId,
-        sessionId: input.sessionId,
-        role: "error",
-        content: error,
-        action: null
-      });
-      handlers.onError?.({ requestId: input.requestId, error });
-      throw new Error(error);
-    };
+    const { chatRepo, history, userMessage, fail } = this.prepareChatMessageStream(input, handlers);
 
     if (!this.agentRuntime) {
       return fail("OpenRouter 对话工具调用服务未初始化。");
@@ -1313,6 +1334,54 @@ export class AiTaskService {
           messages: [userMessage],
           action: null
         };
+      }
+      return fail(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      this.unregisterStreamIfCurrent(input.requestId, abortController);
+    }
+  }
+
+  async sendDirectChatMessageStream(
+    input: AiSendChatMessageStreamInput,
+    handlers: AiChatStreamHandlers = {},
+    options: AiDirectChatStreamExecutionOptions = {}
+  ): Promise<AiChatStreamResult> {
+    const { chatRepo, history, userMessage, fail } = this.prepareChatMessageStream(input, handlers);
+
+    if (!this.chatGenerator?.sendMessageStream) {
+      return fail("OpenRouter 单轮对话服务未初始化。");
+    }
+
+    const abortController = this.registerStream(input.requestId);
+
+    try {
+      const generated = await this.chatGenerator.sendMessageStream(
+        {
+          ...input,
+          history: options.includeHistory === false ? [] : history
+        },
+        handlers,
+        { signal: abortController.signal }
+      );
+      const assistantMessage = chatRepo.createMessage({
+        projectId: input.projectId,
+        sessionId: input.sessionId,
+        role: "assistant",
+        content: generated.content,
+        action: {
+          type: "none"
+        },
+        activities: []
+      });
+      const result = {
+        messages: [userMessage, assistantMessage],
+        action: null
+      };
+      handlers.onDone?.({ requestId: input.requestId, payload: result });
+      return result;
+    } catch (reason) {
+      if (abortController.signal.aborted || isCancellationReason(reason)) {
+        return fail("AI 对话已取消。");
       }
       return fail(reason instanceof Error ? reason.message : String(reason));
     } finally {

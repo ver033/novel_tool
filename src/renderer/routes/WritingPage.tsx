@@ -235,7 +235,6 @@ type WritingPageProps = {
   readonly scratchpadRefreshToken: number;
   readonly selectionSnapshot: SelectionSnapshot | null;
   readonly taskPromptPreset: TaskPromptPreset | null;
-  readonly taskAutoStartId: number | null;
   readonly taskRunId: number | null;
   readonly taskType: TaskType;
   readonly onCreateChapter: (options?: { readonly afterChapterId?: string }) => void;
@@ -270,7 +269,6 @@ type WritingPageProps = {
   readonly onExport: () => void;
   readonly onImport: () => void;
   readonly onTask: (task: TaskType, snapshot?: SelectionSnapshot | null, preset?: TaskPromptPreset | null) => void;
-  readonly onTaskAutoStartConsumed: (taskRunId: number) => void;
   readonly onWelcome: () => void;
   readonly onSettings: (category?: SettingsCategory) => void;
 };
@@ -288,7 +286,6 @@ export function WritingPage({
   scratchpadRefreshToken,
   selectionSnapshot,
   taskPromptPreset,
-  taskAutoStartId,
   taskRunId,
   taskType,
   onCreateChapter,
@@ -323,7 +320,6 @@ export function WritingPage({
   onExport,
   onImport,
   onTask,
-  onTaskAutoStartConsumed,
   onWelcome,
   onSettings
 }: WritingPageProps) {
@@ -371,12 +367,23 @@ export function WritingPage({
     selectionSnapshot,
     instruction: taskInstruction,
     taskRunId,
-    autoStartId: taskAutoStartId,
-    onAutoStartConsumed: onTaskAutoStartConsumed,
     editor,
     flushPendingSave: editorStore.flushPendingSave,
     onContentSaved: editorStore.markContentSaved
   });
+  const taskPanelVisible =
+    (!focusMode && sidebarOpen && sidebarTab === "task")
+    || floatingPanels.some((panel) => panel.kind === "task");
+  const taskSelectionResolved =
+    taskStore.candidate?.status === "applied"
+    || taskStore.candidate?.status === "inserted"
+    || taskStore.candidate?.status === "inserted_to_scratchpad";
+  const lockedTaskSelection =
+    taskPanelVisible
+    && !taskSelectionResolved
+    && selectionSnapshot?.chapterId === activeChapter?.id
+      ? selectionSnapshot
+      : null;
   const chatPanelVisible = (!focusMode && sidebarOpen && sidebarTab === "chat") || floatingPanels.some((panel) => panel.kind === "chat");
   const chatStore = useChatStore({
     projectId: chatPanelVisible ? currentProject?.id ?? null : null,
@@ -995,7 +1002,12 @@ export function WritingPage({
               onLayoutChanged={sidebarLayout.onLayoutChanged}
               orientation="horizontal"
             >
-          <Panel className="editor-panel" defaultSize="100%" id="editor" minSize={!focusMode && sidebarOpen ? "360px" : "100%"}>
+          <Panel
+            className="editor-panel"
+            defaultSize={!focusMode && sidebarOpen ? undefined : "100%"}
+            id="editor"
+            minSize={!focusMode && sidebarOpen ? "360px" : "100%"}
+          >
             <section className="editor-wrap" onContextMenu={handleEditorContextMenu}>
               <div className="editor-scroll" style={editorScrollStyle}>
                 <div className="editor-inner" style={editorInnerStyle}>
@@ -1041,6 +1053,7 @@ export function WritingPage({
                         contentVersion={editorStore.contentVersion}
                         editorSettings={editorStore.editorSettings}
                         key={`${activeChapter.id}:${editorStore.contentVersion}`}
+                        lockedSelectionSnapshot={lockedTaskSelection}
                         taskPromptPresets={taskPromptPresets}
                         onContentChange={editorStore.handleContentChange}
                         onEditorReady={setEditor}
@@ -1166,7 +1179,7 @@ export function WritingPage({
           {!focusMode && sidebarOpen ? (
             <>
               <PanelResizeHandle className="sidebar-resize-handle" />
-              <Panel className="right-sidebar-panel" defaultSize="400px" groupResizeBehavior="preserve-pixel-size" id="right-sidebar" maxSize="520px" minSize="360px">
+              <Panel className="right-sidebar-panel" defaultSize="420px" groupResizeBehavior="preserve-pixel-size" id="right-sidebar" maxSize="520px" minSize="360px">
                 <RightUtilitySidebar
                   activeTab={sidebarTab}
                   aiChatDraftSeed={aiChatDraftSeed}

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildArcIndexSummaryMessages,
   buildBookIndexSummaryMessages,
@@ -8,6 +8,7 @@ import {
   buildContinuityCheckMessages
 } from "../../src/main/ai/summary-prompts";
 import { buildChatCompletionMessages, OpenRouterChatGenerator } from "../../src/main/ai/openrouter-chat-generator";
+import { OpenRouterClient } from "../../src/main/ai/openrouter-client";
 import { estimateMessagesTokens } from "../../src/main/ai/token-estimator";
 import { getTokenBudget } from "../../src/main/ai/token-budget";
 import type { AiChatGenerationInput } from "../../src/main/ai/ai-task-service";
@@ -35,6 +36,48 @@ function createInput(patch: Partial<AiChatGenerationInput> = {}): AiChatGenerati
 }
 
 describe("OpenRouter chat generator prompt assembly", () => {
+  it("sends direct chat without requiring or submitting tool support", async () => {
+    const configOptions: unknown[] = [];
+    const requests: unknown[] = [];
+    const settingsService = {
+      async getOpenRouterConfigWithModelMetadata(_override: unknown, options: unknown) {
+        configOptions.push(options);
+        return {
+          apiKey: "test-key",
+          baseUrl: "https://openrouter.ai/api/v1",
+          modelName: "tool-less/model",
+          contextLength: 16_384,
+          supportsTools: false
+        };
+      }
+    };
+    const streamSpy = vi.spyOn(OpenRouterClient.prototype, "streamChatCompletion").mockImplementation(async (request) => {
+      requests.push(request);
+      return {
+        content: "已收到外部同步内容。",
+        reasoning: "",
+        truncated: false,
+        toolCalls: []
+      };
+    });
+
+    try {
+      const generator = new OpenRouterChatGenerator(settingsService as never);
+      const result = await generator.sendMessageStream(createInput({
+        message: "【外部写作软件同步检查】\n第二章正文。",
+        history: []
+      }), {});
+
+      expect(result.content).toBe("已收到外部同步内容。");
+      expect(configOptions).toEqual([{ requireTools: false }]);
+      expect(requests).toHaveLength(1);
+      expect(requests[0]).not.toHaveProperty("tools");
+      expect(requests[0]).not.toHaveProperty("toolChoice");
+    } finally {
+      streamSpy.mockRestore();
+    }
+  });
+
   it("uses compacted memory and recent raw history in the chat input budget", () => {
     const oldHugeMessage = "旧历史".repeat(20000);
     const recentMessage = "最近讨论：主角需要更清晰的动机。";

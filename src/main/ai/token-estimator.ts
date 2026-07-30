@@ -1,27 +1,9 @@
 import type { OpenRouterMessage, OpenRouterToolDefinition } from "./openrouter-client";
+import { estimateTextTokens } from "../shared/text-token-estimate";
+
+export { estimateTextTokens } from "../shared/text-token-estimate";
 
 const MESSAGE_OVERHEAD_TOKENS = 4;
-
-function countCjk(value: string): number {
-  return Array.from(value.matchAll(/[\u3400-\u9fff\uf900-\ufaff]/g)).length;
-}
-
-function countNonWhitespace(value: string): number {
-  return value.replace(/\s+/g, "").length;
-}
-
-export function estimateTextTokens(text: string): number {
-  const normalized = text.trim();
-  if (!normalized) {
-    return 0;
-  }
-
-  const cjkCount = countCjk(normalized);
-  const nonWhitespaceCount = countNonWhitespace(normalized);
-  const nonCjkCount = Math.max(0, nonWhitespaceCount - cjkCount);
-
-  return Math.ceil(cjkCount * 1.1 + nonCjkCount / 3);
-}
 
 function estimateJsonTokens(value: unknown): number {
   try {

@@ -28,8 +28,6 @@ type UseTaskStoreOptions = {
   readonly selectionSnapshot: SelectionSnapshot | null;
   readonly instruction: string;
   readonly taskRunId: number | null;
-  readonly autoStartId: number | null;
-  readonly onAutoStartConsumed: (taskRunId: number) => void;
   readonly editor: Editor | null;
   readonly flushPendingSave: () => Promise<SavedChapterVersion | null>;
   readonly onContentSaved: (content: ChapterContent) => void;
@@ -49,8 +47,6 @@ export function useTaskStore({
   selectionSnapshot,
   instruction,
   taskRunId,
-  autoStartId,
-  onAutoStartConsumed,
   editor,
   flushPendingSave,
   onContentSaved
@@ -62,41 +58,51 @@ export function useTaskStore({
   const [error, setError] = useState<string | null>(null);
   const [streamingText, setStreamingText] = useState("");
   const [taskExecutionPhase, setTaskExecutionPhase] = useState<TaskExecutionPhase>("idle");
-  const configuredKey = useRef<string | null>(null);
   const activeTaskIdRef = useRef<string | null>(null);
   const activeRequestId = useRef<string | null>(null);
   const canceledRequestIds = useRef<Set<string>>(new Set());
+  const localRunCanceledRef = useRef(false);
+  const draftIdentity = `${projectId ?? "none"}:${chapterId ?? "none"}:${taskType}:${presetId ?? "none"}:${selectionSnapshot?.selectionHash ?? "none"}:${taskRunId ?? "manual"}`;
+  const draftIdentityRef = useRef(draftIdentity);
+  draftIdentityRef.current = draftIdentity;
 
-  const cancelActiveStream = useCallback((options: { readonly detach?: boolean } = {}) => {
+  const cancelActiveStream = useCallback((options: { readonly detach?: boolean; readonly silent?: boolean } = {}) => {
+    if (!options.silent) {
+      localRunCanceledRef.current = true;
+      setTaskExecutionPhase("canceling");
+    }
     const requestId = activeRequestId.current;
-    if (!requestId) {
-      return;
+    if (requestId) {
+      canceledRequestIds.current.add(requestId);
+      if (options.detach) {
+        activeRequestId.current = null;
+      }
+      void api.ai.cancelStream({ requestId });
     }
-    canceledRequestIds.current.add(requestId);
-    if (options.detach) {
-      activeRequestId.current = null;
+    if (!options.silent) {
+      setBusy(false);
+      setTaskExecutionPhase("canceled");
     }
-    setTaskExecutionPhase("canceling");
-    void api.ai.cancelStream({ requestId });
-    setBusy(false);
-    setTaskExecutionPhase("canceled");
   }, [api]);
 
   useEffect(() => {
     activeTaskIdRef.current = null;
-    cancelActiveStream({ detach: true });
+    localRunCanceledRef.current = false;
+    cancelActiveStream({ detach: true, silent: true });
     setTask(null);
     setCandidate(null);
     setError(null);
     setStreamingText("");
-    setTaskExecutionPhase("idle");
-    configuredKey.current = null;
+    setTaskExecutionPhase(projectId && selectionSnapshot ? "ready" : "idle");
   }, [cancelActiveStream, projectId, chapterId, taskType, presetId, selectionSnapshot?.selectionHash, taskRunId]);
 
-  useEffect(() => () => cancelActiveStream({ detach: true }), [cancelActiveStream]);
+  useEffect(() => () => cancelActiveStream({ detach: true, silent: true }), [cancelActiveStream]);
 
-  const generatePreviewForTask = useCallback(async (sourceTask: AiTaskRecord) => {
-    const isCurrentTask = (): boolean => activeTaskIdRef.current === sourceTask.id;
+  const generatePreviewForTask = useCallback(async (
+    sourceTask: AiTaskRecord,
+    options: { readonly skipFlush?: boolean } = {}
+  ) => {
+    const isCurrentTask = (): boolean => activeTaskIdRef.current === sourceTask.id && !localRunCanceledRef.current;
     setBusy(true);
     setError(null);
     setStreamingText("");
@@ -114,7 +120,9 @@ export function useTaskStore({
       setStreamingText("");
     };
     try {
-      await flushPendingSave();
+      if (!options.skipFlush) {
+        await flushPendingSave();
+      }
       if (!isCurrentTask()) {
         return;
       }
@@ -132,7 +140,7 @@ export function useTaskStore({
       setTask(updatedTask);
       requestId = `task_stream_${Date.now()}_${Math.random().toString(16).slice(2)}`;
       const currentRequestId = requestId;
-      cancelActiveStream({ detach: true });
+      cancelActiveStream({ detach: true, silent: true });
       activeRequestId.current = currentRequestId;
       unsubscribe = api.ai.subscribeAiStream(currentRequestId, {
         onChunk(event) {
@@ -188,73 +196,83 @@ export function useTaskStore({
   }, [api, cancelActiveStream, flushPendingSave, instruction, presetId]);
 
   const generatePreview = useCallback(async () => {
-    if (task) {
-      await generatePreviewForTask(task);
+    if (busy) {
+      return;
     }
-  }, [generatePreviewForTask, task]);
-
-  useEffect(() => {
+    if (!task && (!projectId || !selectionSnapshot)) {
+      return;
+    }
+    localRunCanceledRef.current = false;
+    if (task) {
+      void api.usageAnalytics.recordEvent({
+        eventType: "feature_used",
+        feature: "ai_task",
+        occurredAt: new Date().toISOString()
+      }).catch(() => undefined);
+      await generatePreviewForTask(task);
+      return;
+    }
     if (!projectId || !selectionSnapshot) {
       return;
     }
+    void api.usageAnalytics.recordEvent({
+      eventType: "feature_used",
+      feature: "ai_task",
+      occurredAt: new Date().toISOString()
+    }).catch(() => undefined);
 
-    const nextKey = `${projectId}:${chapterId ?? "none"}:${taskType}:${presetId ?? "none"}:${selectionSnapshot.selectionHash}:${taskRunId ?? "manual"}`;
-    if (configuredKey.current === nextKey) {
-      return;
-    }
-    configuredKey.current = nextKey;
-
+    const sourceDraftIdentity = draftIdentityRef.current;
     setBusy(true);
     setError(null);
+    setStreamingText("");
     setTaskExecutionPhase("creating");
-    void (async () => {
-      try {
-        const createdTask = (await api.ai.createTask({
-          projectId,
-          chapterId: chapterId ?? undefined,
-          taskType,
-          inputText: selectionSnapshot.text,
-          instruction,
-          ...(presetId ? { presetId } : {}),
-          selection: {
-            ...selectionSnapshot,
-            paragraphIds: [...selectionSnapshot.paragraphIds]
-          }
-        })) as AiTaskRecord;
-        if (configuredKey.current !== nextKey) {
-          return;
-        }
-        activeTaskIdRef.current = createdTask.id;
-        setTask(createdTask);
-        if (taskRunId !== null && autoStartId === taskRunId) {
-          onAutoStartConsumed(taskRunId);
-          await generatePreviewForTask(createdTask);
-        } else {
-          setTaskExecutionPhase("ready");
-        }
-      } catch (reason) {
-        if (configuredKey.current === nextKey) {
-          configuredKey.current = null;
-          setError(formatIpcErrorMessage(reason, "创建 AI 任务失败"));
-          setTaskExecutionPhase("error");
-        }
-      } finally {
-        if (configuredKey.current === nextKey) {
-          setBusy(false);
-        }
+    try {
+      await flushPendingSave();
+      if (draftIdentityRef.current !== sourceDraftIdentity || localRunCanceledRef.current) {
+        return;
       }
-    })();
+      const createdTask = (await api.ai.createTask({
+        projectId,
+        chapterId: chapterId ?? undefined,
+        taskType,
+        inputText: selectionSnapshot.text,
+        instruction,
+        ...(presetId ? { presetId } : {}),
+        selection: {
+          ...selectionSnapshot,
+          paragraphIds: [...selectionSnapshot.paragraphIds]
+        }
+      })) as AiTaskRecord;
+      if (draftIdentityRef.current !== sourceDraftIdentity) {
+        return;
+      }
+      activeTaskIdRef.current = createdTask.id;
+      setTask(createdTask);
+      if (localRunCanceledRef.current) {
+        return;
+      }
+      await generatePreviewForTask(createdTask, { skipFlush: true });
+    } catch (reason) {
+      if (draftIdentityRef.current === sourceDraftIdentity) {
+        setError(formatIpcErrorMessage(reason, "创建 AI 任务失败"));
+        setTaskExecutionPhase("error");
+      }
+    } finally {
+      if (draftIdentityRef.current === sourceDraftIdentity && activeRequestId.current === null) {
+        setBusy(false);
+      }
+    }
   }, [
     api,
-    autoStartId,
+    busy,
     chapterId,
+    flushPendingSave,
     generatePreviewForTask,
     instruction,
-    onAutoStartConsumed,
     presetId,
     projectId,
     selectionSnapshot,
-    taskRunId,
+    task,
     taskType
   ]);
 
@@ -264,6 +282,7 @@ export function useTaskStore({
     }
 
     const sourceTaskId = task.id;
+    localRunCanceledRef.current = false;
     const isCurrentTask = (): boolean => activeTaskIdRef.current === sourceTaskId;
     setBusy(true);
     setError(null);
@@ -274,7 +293,7 @@ export function useTaskStore({
     try {
       requestId = `task_continue_stream_${Date.now()}_${Math.random().toString(16).slice(2)}`;
       const currentRequestId = requestId;
-      cancelActiveStream({ detach: true });
+      cancelActiveStream({ detach: true, silent: true });
       activeRequestId.current = currentRequestId;
       unsubscribe = api.ai.subscribeAiStream(currentRequestId, {
         onChunk(event) {
@@ -342,8 +361,10 @@ export function useTaskStore({
     setBusy(true);
     setError(null);
     try {
-      const rejected = (await api.ai.rejectCandidate({ projectId, candidateId: candidate.id })) as AiTaskCandidateRecord;
-      setCandidate(rejected);
+      await api.ai.rejectCandidate({ projectId, candidateId: candidate.id });
+      setCandidate(null);
+      setStreamingText("");
+      setTaskExecutionPhase("ready");
     } catch (reason) {
       setError(formatIpcErrorMessage(reason, "拒绝候选失败"));
     } finally {
