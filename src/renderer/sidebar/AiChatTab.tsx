@@ -60,7 +60,9 @@ function getChatSkillSuggestions(japanese: boolean): readonly ChatCommandSuggest
 
 const aiSettingsErrorMarkers = [
   "OpenRouter API Key 未配置",
+  "DeepSeek API Key 未配置",
   "OpenRouter 模型名称未配置",
+  "DeepSeek 模型名称未配置",
   "OpenRouter 对话服务未初始化",
   "OpenRouter 连接测试未初始化",
   "安全存储未初始化",
@@ -84,9 +86,9 @@ function isAiSettingsError(error: string): boolean {
   return aiSettingsErrorMarkers.some((marker) => error.includes(marker));
 }
 
-function isOpenRouterRateLimitError(error: string): boolean {
+function isAiProviderRateLimitError(error: string): boolean {
   return (
-    error.includes("OpenRouter 请求失败 (429)") ||
+    error.includes("请求失败 (429)") ||
     error.includes("rate limited") ||
     error.includes("Rate limit") ||
     error.includes("Resource has been exhausted") ||
@@ -106,8 +108,8 @@ function chatErrorTitle(error: string, japanese: boolean): string {
   if (isAiSettingsError(error)) {
     return japanese ? "AI サービスが未設定です" : "AI 服务未配置";
   }
-  if (isOpenRouterRateLimitError(error)) {
-    return japanese ? "OpenRouter のレート制限に達しました" : "OpenRouter 请求被限流";
+  if (isAiProviderRateLimitError(error)) {
+    return japanese ? "AI プロバイダーのレート制限に達しました" : "AI Provider 请求被限流";
   }
   if (isMissingChapterError(error)) {
     return japanese ? "章が見つかりません" : "找不到章节";
@@ -120,9 +122,9 @@ function chatErrorTitle(error: string, japanese: boolean): string {
 
 function chatErrorHint(error: string, japanese: boolean): string | null {
   if (isAiSettingsError(error)) {
-    return japanese ? "OpenRouter API キーとモデル名を入力し、接続テスト後に保存してください。" : "请先填写 OpenRouter API Key 和模型名称，并测试保存。";
+    return japanese ? "AI プロバイダーの API キーとモデル名を入力し、接続テスト後に保存してください。" : "请先填写当前 AI Provider 的 API Key 和模型名称，并测试保存。";
   }
-  if (isOpenRouterRateLimitError(error)) {
+  if (isAiProviderRateLimitError(error)) {
     return japanese ? "現在のモデルまたは上流プロバイダーが制限中です。しばらく待つか、AI サービス設定で別のモデルを選んでください。" : "当前模型或上游 Provider 正在限流。可以稍后重试，或在 AI 服务设置中换用其他模型。";
   }
   if (isMissingChapterError(error)) {
@@ -188,7 +190,7 @@ function buildSummaryIndexBanner(
   if (status.pausedReason === "ai_not_configured") {
     return {
       title: japanese ? "AI サービスが未設定のため、索引を停止しています" : "AI 服务未配置，索引暂停",
-      detail: japanese ? `全文インデックス：${indexedCount} / ${status.totalChapterCount} 章。OpenRouter の設定後にバックグラウンド処理を再開します。` : `全书索引：${indexedCount} / ${status.totalChapterCount} 章。配置 OpenRouter 后会继续后台建立。`,
+        detail: japanese ? `全文インデックス：${indexedCount} / ${status.totalChapterCount} 章。AI サービスの設定後にバックグラウンド処理を再開します。` : `全书索引：${indexedCount} / ${status.totalChapterCount} 章。配置 AI 服务后会继续后台建立。`,
       variant: "paused",
       action: "ai_settings"
     };
@@ -513,7 +515,7 @@ export function AiChatTab({
 
   const lastUserMessage = getLastUserMessage(chatStore.messages);
   const errorHint = chatStore.error ? chatErrorHint(chatStore.error, japanese) : null;
-  const showSettingsAction = Boolean(chatStore.error && (isAiSettingsError(chatStore.error) || isOpenRouterRateLimitError(chatStore.error)));
+  const showSettingsAction = Boolean(chatStore.error && (isAiSettingsError(chatStore.error) || isAiProviderRateLimitError(chatStore.error)));
   const contextDisplay = chatStore.contextUsage ? buildChatContextUsageDisplay(chatStore.contextUsage, locale) : null;
   const summaryBanner = buildSummaryIndexBanner(chatStore.summaryIndexStatus, chatStore.summaryIndexLoading, chatStore.summaryIndexError, japanese);
   const summaryActionLabels = japanese

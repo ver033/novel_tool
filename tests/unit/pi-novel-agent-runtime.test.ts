@@ -7,6 +7,7 @@ import { PiNovelAgentRuntime } from "../../src/main/ai/agent-runtime/pi-novel-ag
 import type { NovelAgentRunInput } from "../../src/main/ai/agent-runtime/novel-agent-runtime";
 
 const runtimeConfig = {
+  providerType: "openrouter",
   apiKey: "test-key",
   baseUrl: "https://openrouter.ai/api/v1",
   modelName: "test/model",
@@ -46,7 +47,7 @@ function createRuntime(responses: Parameters<ReturnType<typeof createFauxCore>["
 describe("PiNovelAgentRuntime", () => {
   it("uses the fetch installed by the main process for its production OpenAI-compatible stream", async () => {
     const originalFetch = globalThis.fetch;
-    const installedFetch = vi.fn(async () => new Response([
+    const installedFetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response([
       'data: {"id":"chatcmpl_test","object":"chat.completion.chunk","created":0,"model":"test/model","choices":[{"index":0,"delta":{"role":"assistant","content":"共享网络已生效。"},"finish_reason":null}]}',
       "",
       'data: {"id":"chatcmpl_test","object":"chat.completion.chunk","created":0,"model":"test/model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}',
@@ -71,6 +72,134 @@ describe("PiNovelAgentRuntime", () => {
         content: "共享网络已生效。"
       });
       expect(installedFetch).toHaveBeenCalledTimes(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("uses DeepSeek V4 request semantics for Pi Agent runs", async () => {
+    const originalFetch = globalThis.fetch;
+    const installedFetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response([
+      'data: {"id":"chatcmpl_deepseek","object":"chat.completion.chunk","created":0,"model":"deepseek-v4-flash","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"检查上下文"},"finish_reason":null}]}',
+      "",
+      'data: {"id":"chatcmpl_deepseek","object":"chat.completion.chunk","created":0,"model":"deepseek-v4-flash","choices":[{"index":0,"delta":{"content":"已完成。"},"finish_reason":null}]}',
+      "",
+      'data: {"id":"chatcmpl_deepseek","object":"chat.completion.chunk","created":0,"model":"deepseek-v4-flash","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}',
+      "",
+      "data: [DONE]",
+      "",
+      ""
+    ].join("\n"), {
+      status: 200,
+      headers: { "Content-Type": "text/event-stream" }
+    }));
+    globalThis.fetch = installedFetch as typeof globalThis.fetch;
+
+    try {
+      const runtime = new PiNovelAgentRuntime({
+        settingsService: {
+          getOpenRouterConfigWithModelMetadata: vi.fn(async () => ({
+            providerType: "deepseek" as const,
+            apiKey: "deepseek-secret",
+            baseUrl: "https://api.deepseek.com",
+            modelName: "deepseek-v4-flash",
+            contextLength: 1_000_000,
+            supportsTools: true
+          }))
+        }
+      });
+
+      await expect(runtime.run(createInput(), {})).resolves.toMatchObject({
+        content: "已完成。"
+      });
+      expect(installedFetch).toHaveBeenCalledTimes(1);
+      const requestInit = installedFetch.mock.calls[0]?.[1] as RequestInit | undefined;
+      expect(requestInit).toBeDefined();
+      const body = JSON.parse(String(requestInit?.body)) as Record<string, unknown>;
+      expect(body).toMatchObject({
+        model: "deepseek-v4-flash",
+        max_tokens: expect.any(Number),
+        thinking: { type: "enabled" },
+        reasoning_effort: "high"
+      });
+      expect(body).not.toHaveProperty("parallel_tool_calls");
+      expect(new Headers(requestInit?.headers).has("X-OpenRouter-Title")).toBe(false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("uses Tencent Cloud TokenHub DeepSeek semantics for Pi Agent runs with tools", async () => {
+    const originalFetch = globalThis.fetch;
+    const installedFetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response([
+      'data: {"id":"chatcmpl_tokenhub","object":"chat.completion.chunk","created":0,"model":"deepseek-v4-flash","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"检查上下文"},"finish_reason":null}]}',
+      "",
+      'data: {"id":"chatcmpl_tokenhub","object":"chat.completion.chunk","created":0,"model":"deepseek-v4-flash","choices":[{"index":0,"delta":{"content":"已完成。"},"finish_reason":null}]}',
+      "",
+      'data: {"id":"chatcmpl_tokenhub","object":"chat.completion.chunk","created":0,"model":"deepseek-v4-flash","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}',
+      "",
+      "data: [DONE]",
+      "",
+      ""
+    ].join("\n"), {
+      status: 200,
+      headers: { "Content-Type": "text/event-stream" }
+    }));
+    globalThis.fetch = installedFetch as typeof globalThis.fetch;
+
+    try {
+      const runtime = new PiNovelAgentRuntime({
+        settingsService: {
+          getOpenRouterConfigWithModelMetadata: vi.fn(async () => ({
+            providerType: "tencent-tokenhub" as const,
+            apiKey: "tencent-tokenhub-secret",
+            baseUrl: "https://tokenhub.tencentmaas.com/v1",
+            modelName: "deepseek-v4-flash",
+            contextLength: 1_000_000,
+            supportsTools: true
+          }))
+        }
+      });
+
+      await expect(runtime.run(createInput({
+        tools: [{
+          name: "read_chapter",
+          description: "读取章节",
+          parameters: {
+            type: "object",
+            properties: {
+              chapterId: { type: "string" }
+            },
+            required: ["chapterId"]
+          }
+        }]
+      }), {})).resolves.toMatchObject({
+        content: "已完成。"
+      });
+      expect(installedFetch).toHaveBeenCalledTimes(1);
+      expect(String(installedFetch.mock.calls[0]?.[0])).toBe("https://tokenhub.tencentmaas.com/v1/chat/completions");
+      const requestInit = installedFetch.mock.calls[0]?.[1] as RequestInit | undefined;
+      const body = JSON.parse(String(requestInit?.body)) as Record<string, unknown>;
+      expect(body).toMatchObject({
+        model: "deepseek-v4-flash",
+        max_tokens: expect.any(Number),
+        thinking: {
+          type: "enabled",
+          reasoning_effort: "high"
+        },
+        tools: expect.arrayContaining([expect.objectContaining({
+          type: "function",
+          function: expect.objectContaining({ name: "read_chapter" })
+        })])
+      });
+      expect(body).not.toHaveProperty("reasoning");
+      expect(body).not.toHaveProperty("reasoning_effort");
+      expect(body).not.toHaveProperty("max_completion_tokens");
+      expect(body).not.toHaveProperty("provider");
+      expect(body).not.toHaveProperty("parallel_tool_calls");
+      const headers = new Headers(requestInit?.headers);
+      expect(headers.get("Authorization")).toBe("Bearer tencent-tokenhub-secret");
+      expect(headers.has("X-OpenRouter-Title")).toBe(false);
     } finally {
       globalThis.fetch = originalFetch;
     }

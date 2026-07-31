@@ -85,6 +85,7 @@ function isReviewCanceledReason(error: unknown): boolean {
     record.name === "CanceledError" ||
     record.message === "canceled" ||
     record.message === "OpenRouter 请求已取消。" ||
+    record.message === "DeepSeek 请求已取消。" ||
     record.message === REVIEW_CANCELLED_MESSAGE
   );
 }
@@ -171,6 +172,7 @@ export async function createOpenRouterChapterReviewClient(settingsService: Setti
   const config = await settingsService.getOpenRouterConfigWithModelMetadata();
   const budget = getTokenBudget("proofread", config.contextLength);
   const client = new OpenRouterClient({
+    providerType: config.providerType,
     apiKey: config.apiKey,
     baseUrl: config.baseUrl,
     modelName: config.modelName

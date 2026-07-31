@@ -1393,7 +1393,7 @@ describe("summary index status and rebuild controls", () => {
           label: "全书摘要",
           error: "上游限流",
           failureCategory: "上游限流",
-          actionHint: "OpenRouter 或模型供应商暂时限流。系统只会延迟自动重试一次；如果反复失败，请稍后重试或换用更稳定的模型。",
+          actionHint: "当前 AI Provider 或上游模型暂时限流。系统只会延迟自动重试一次；如果反复失败，请稍后重试或换用更稳定的模型。",
           attemptCount: 1,
           nextRunAt: null
         }

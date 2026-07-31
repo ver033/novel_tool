@@ -2,6 +2,7 @@ import type { ChapterRepository } from "../db/repositories/chapter-repo";
 import type { SummaryRepository } from "../db/repositories/summary-repo";
 import type { SettingsService } from "../settings/settings-service";
 import type { AiTaskRecord, TaskPromptPreset } from "../shared/types";
+import type { AiProviderType } from "../shared/ai-provider";
 import { DEFAULT_CONTENT_LANGUAGE, needsJapaneseResponseCorrection, resolveInlineContentLanguage, type ContentLanguage } from "../shared/language";
 import type { AiGenerationOptions, AiTaskStreamHandlers } from "./ai-task-service";
 import { logDevLlmPrompt } from "./dev-prompt-logger";
@@ -36,12 +37,18 @@ type WritingOperationRunnerOptions = {
   readonly resolveSummaryRepo?: (projectId: string) => SummaryRepository;
   readonly resolveTaskPreset: (presetId: string | null | undefined, taskType: AiTaskRecord["taskType"]) => TaskPromptPreset | null;
   readonly resolveModelConfig: () => Promise<{
+    readonly providerType?: AiProviderType;
     readonly apiKey: string;
     readonly baseUrl?: string;
     readonly modelName: string;
     readonly contextLength: number | null;
   }>;
-  readonly createClient?: (config: { readonly apiKey: string; readonly baseUrl?: string; readonly modelName: string }) => OpenRouterClientLike;
+  readonly createClient?: (config: {
+    readonly providerType?: AiProviderType;
+    readonly apiKey: string;
+    readonly baseUrl?: string;
+    readonly modelName: string;
+  }) => OpenRouterClientLike;
   readonly resolveContentLanguage?: (projectId: string) => ContentLanguage;
 };
 
@@ -66,7 +73,7 @@ function taskTarget(task: AiTaskRecord): WritingOperationTarget {
 function buildTruncatedResult(taskType: AiTaskRecord["taskType"], content: string): Omit<WritingOperationResult, "contextPlan"> {
   return {
     generatedText: content.trim(),
-    changeSummary: `OpenRouter ${taskType} candidate（结果已截断）`,
+    changeSummary: `AI ${taskType} candidate（结果已截断）`,
     proofreadIssues: null,
     truncated: true
   };
@@ -142,6 +149,7 @@ export class WritingOperationRunner {
       resolveModelConfig: async () => {
         const config = await settingsService.getOpenRouterConfigWithModelMetadata();
         return {
+          providerType: config.providerType,
           apiKey: config.apiKey,
           baseUrl: config.baseUrl,
           modelName: config.modelName,
@@ -151,7 +159,12 @@ export class WritingOperationRunner {
     });
   }
 
-  private createClient(config: { readonly apiKey: string; readonly baseUrl?: string; readonly modelName: string }): OpenRouterClientLike {
+  private createClient(config: {
+    readonly providerType?: AiProviderType;
+    readonly apiKey: string;
+    readonly baseUrl?: string;
+    readonly modelName: string;
+  }): OpenRouterClientLike {
     return this.options.createClient?.(config) ?? new OpenRouterClient(config);
   }
 
@@ -415,12 +428,12 @@ export class WritingOperationRunner {
     );
     const continuedText = stripContinuationDraftLabel(response.content);
     if (!continuedText) {
-      throw new Error("OpenRouter 返回了空内容。");
+      throw new Error("AI Provider 返回了空内容。");
     }
 
     return {
       generatedText: `${partialText}${continuedText}`,
-      changeSummary: response.truncated ? `OpenRouter ${operation.id} continuation（结果已截断）` : `OpenRouter ${operation.id} continuation`,
+      changeSummary: response.truncated ? `AI ${operation.id} continuation（结果已截断）` : `AI ${operation.id} continuation`,
       proofreadIssues: null,
       contextPlan,
       truncated: response.truncated

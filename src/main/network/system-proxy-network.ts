@@ -80,17 +80,25 @@ export function isLoopbackHttpsConnectionRefused(reason: unknown): boolean {
   return false;
 }
 
-function isOpenRouterRequest(input: RequestInfo | URL): boolean {
+function isSupportedAiProviderRequest(input: RequestInfo | URL): boolean {
   try {
     const url = input instanceof Request ? new URL(input.url) : new URL(String(input));
-    return url.protocol === "https:" && url.hostname.toLowerCase() === "openrouter.ai";
+    return url.protocol === "https:"
+      && [
+        "openrouter.ai",
+        "api.deepseek.com",
+        "tokenhub.tencentmaas.com",
+        "tokenhub-intl.tencentmaas.com",
+        "tokenhub.tencentmaas.cn",
+        "tokenhub-intl.tencentmaas.cn"
+      ].includes(url.hostname.toLowerCase());
   } catch {
     return false;
   }
 }
 
-function isChromiumOpenRouterConnectionRefused(input: RequestInfo | URL, reason: unknown): boolean {
-  if (!isOpenRouterRequest(input)) {
+function isChromiumAiProviderConnectionRefused(input: RequestInfo | URL, reason: unknown): boolean {
+  if (!isSupportedAiProviderRequest(input)) {
     return false;
   }
 
@@ -145,7 +153,7 @@ export function createSystemProxyNetwork(options: SystemProxyNetworkOptions): Sy
       return recoveryInFlight;
     }
 
-    options.log?.("warn", "OpenRouter loopback refusal detected; refreshing the system proxy");
+    options.log?.("warn", "AI provider loopback refusal detected; refreshing the system proxy");
     recoveryInFlight = applySystemProxy()
       .then(() => {
         options.log?.("info", "System proxy refresh completed");
@@ -162,7 +170,7 @@ export function createSystemProxyNetwork(options: SystemProxyNetworkOptions): Sy
     } catch (error) {
       const signal = getRequestSignal(input, init);
       const recoverable = isLoopbackHttpsConnectionRefused(error)
-        || isChromiumOpenRouterConnectionRefused(input, error);
+        || isChromiumAiProviderConnectionRefused(input, error);
       if (!recoverable || signal?.aborted) {
         throw error;
       }

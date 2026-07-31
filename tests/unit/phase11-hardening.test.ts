@@ -220,8 +220,8 @@ describe("phase 11 V1 hardening", () => {
   it("classifies OpenRouter rate limits separately from generic task failures", () => {
     const currentTask = readSource("src/renderer/sidebar/CurrentTaskTab.tsx");
 
-    expect(currentTask).toContain("isOpenRouterRateLimitError");
-    expect(currentTask).toContain("OpenRouter 请求被限流");
+    expect(currentTask).toContain("isAiProviderRateLimitError");
+    expect(currentTask).toContain("AI Provider 请求被限流");
     expect(currentTask).toContain("换用其他模型");
   });
 

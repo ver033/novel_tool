@@ -90,7 +90,7 @@ describe("project and chapter lifecycle", () => {
     expect(settingsPage).not.toMatch(/const testConnection = async \(\) => \{[\s\S]*api\.settings\.save\(buildSaveInput\(form\)\)/);
     expect(settingsPage).toContain("model-suggestion-list");
     expect(settingsPage).toContain("selectModel(model.id)");
-    expect(settingsIpc).toContain("settingsService.listOpenRouterModels");
+    expect(settingsIpc).toContain("settingsService.listAiModels");
     expect(preloadApi).toContain("listModels");
   });
 

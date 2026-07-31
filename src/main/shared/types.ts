@@ -715,6 +715,8 @@ export type CacheSettings = {
 export type ExperimentalSettings = {
   readonly externalBookSyncAutomaticEnabled: boolean;
 };
+export type { AiProviderType } from "./ai-provider";
+export type AiProviderKeyStatus = Record<import("./ai-provider").AiProviderType, boolean>;
 export type AiProviderSettingsState = Omit<z.output<typeof aiProviderSettingsSchema>, "apiKey"> & {
   readonly apiKeyConfigured: boolean;
 };
@@ -722,6 +724,7 @@ export type SettingsState = {
   readonly appLocale: import("./language").AppLocale;
   readonly editor: EditorSettings;
   readonly aiProvider: AiProviderSettingsState | null;
+  readonly aiProviderKeyStatus: AiProviderKeyStatus;
   readonly projectPath: string | null;
   readonly taskPromptPresets: readonly TaskPromptPreset[];
   readonly cache: CacheSettings;

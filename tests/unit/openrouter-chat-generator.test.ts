@@ -36,6 +36,42 @@ function createInput(patch: Partial<AiChatGenerationInput> = {}): AiChatGenerati
 }
 
 describe("OpenRouter chat generator prompt assembly", () => {
+  it("can pin a background workflow to Tencent TokenHub independently of the active provider", async () => {
+    const requestedProviders: string[] = [];
+    const settingsService = {
+      async getAiConfigWithModelMetadataForProvider(providerType: string, options: unknown) {
+        requestedProviders.push(`${providerType}:${JSON.stringify(options)}`);
+        return {
+          providerType: "tencent-tokenhub",
+          apiKey: "tokenhub-key",
+          baseUrl: "https://tokenhub.tencentmaas.com/v1",
+          modelName: "deepseek-v4-flash",
+          contextLength: 1_000_000,
+          supportsTools: true
+        };
+      },
+      async getOpenRouterConfigWithModelMetadata() {
+        throw new Error("active provider config must not be used");
+      }
+    };
+    const streamSpy = vi.spyOn(OpenRouterClient.prototype, "streamChatCompletion").mockResolvedValue({
+      content: "已收到外部同步内容。",
+      reasoning: "",
+      truncated: false,
+      toolCalls: []
+    });
+
+    try {
+      const generator = new OpenRouterChatGenerator(settingsService as never, { providerType: "tencent-tokenhub" });
+      await expect(generator.sendMessageStream(createInput(), {})).resolves.toMatchObject({
+        content: "已收到外部同步内容。"
+      });
+      expect(requestedProviders).toEqual(['tencent-tokenhub:{"requireTools":false}']);
+    } finally {
+      streamSpy.mockRestore();
+    }
+  });
+
   it("sends direct chat without requiring or submitting tool support", async () => {
     const configOptions: unknown[] = [];
     const requests: unknown[] = [];

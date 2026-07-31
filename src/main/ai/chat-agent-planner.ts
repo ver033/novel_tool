@@ -162,6 +162,7 @@ export class OpenRouterChatPlanner implements ChatPlanner {
   async plan(input: ChatPlannerInput, options: ChatPlannerOptions = {}): Promise<ChatAgentPlan> {
     const config = this.settingsService.getOpenRouterConfig();
     const client = new OpenRouterClient({
+      providerType: config.providerType,
       apiKey: config.apiKey,
       baseUrl: config.baseUrl,
       modelName: config.modelName

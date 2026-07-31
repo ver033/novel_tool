@@ -9,13 +9,22 @@ import type {
   UsageReportRunRecord
 } from "../db/repositories/usage-analytics-repo";
 import type { SettingsService } from "../settings/settings-service";
+import { BACKGROUND_AUTOMATION_PROVIDER_TYPE } from "../shared/ai-provider";
 import type { ProcessWatchdogRuntimeStatus } from "../startup/process-watchdog";
 
-const DEFAULT_SCHEDULE_LOCAL_TIMES = Array.from({ length: 24 }, (_, hour) => `${String(hour).padStart(2, "0")}:00`);
+const PREVIOUS_HOURLY_SCHEDULE_LOCAL_TIMES = Array.from(
+  { length: 24 },
+  (_, hour) => `${String(hour).padStart(2, "0")}:00`
+);
+const DEFAULT_SCHEDULE_LOCAL_TIMES = Array.from({ length: 48 }, (_, index) => {
+  const minutes = index * 30;
+  return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+});
 const PREVIOUS_DEFAULT_SCHEDULE_LOCAL_TIME_SETS = [
   ["00:00", "09:00"],
-  ["00:00", "09:00", "12:00"]
-] as const;
+  ["00:00", "09:00", "12:00"],
+  PREVIOUS_HOURLY_SCHEDULE_LOCAL_TIMES
+] as readonly (readonly string[])[];
 const DEFAULT_RANGE_DAYS = 14;
 const MAX_CHAPTER_UPDATES_PER_REPORT = 120;
 
@@ -128,7 +137,7 @@ export type UsageAnalyticsServiceDeps = {
   readonly getProcessWatchdogStatus?: () => ProcessWatchdogRuntimeStatus;
 };
 
-export type OpenRouterUsageAnalyticsReporterDeps = {
+export type TencentTokenHubUsageAnalyticsReporterDeps = {
   readonly settingsService: SettingsService;
 };
 
@@ -280,12 +289,15 @@ export function buildUsageAnalyticsMessages(snapshot: UsageAnalyticsSnapshot): O
   ];
 }
 
-export class OpenRouterUsageAnalyticsReporter implements UsageAnalyticsReporter {
-  constructor(private readonly deps: OpenRouterUsageAnalyticsReporterDeps) {}
+export class TencentTokenHubUsageAnalyticsReporter implements UsageAnalyticsReporter {
+  constructor(private readonly deps: TencentTokenHubUsageAnalyticsReporterDeps) {}
 
   async generateReport(snapshot: UsageAnalyticsSnapshot): Promise<string> {
-    const config = this.deps.settingsService.getOpenRouterConfig();
+    const config = this.deps.settingsService.getAiConfigForProvider(
+      BACKGROUND_AUTOMATION_PROVIDER_TYPE
+    );
     const client = new OpenRouterClient({
+      providerType: config.providerType,
       apiKey: config.apiKey,
       baseUrl: config.baseUrl,
       modelName: config.modelName

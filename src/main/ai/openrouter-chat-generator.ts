@@ -52,6 +52,7 @@ import {
 import { getTokenBudget, type TokenBudget } from "./token-budget";
 import { estimateMessagesTokens, estimateTextTokens, truncateTextToTokenBudget } from "./token-estimator";
 import type { SettingsService } from "../settings/settings-service";
+import type { AiProviderType } from "../shared/ai-provider";
 import type { z } from "zod";
 
 function hasAgentContext(input: AiChatGenerationInput): input is AiChatGenerationInput & { readonly agentContext: ChatAgentContext } {
@@ -555,7 +556,10 @@ export function buildChatCompletionMessages(input: AiChatGenerationInput, chatBu
 }
 
 export class OpenRouterChatGenerator implements AiChatGenerator {
-  constructor(private readonly settingsService: SettingsService) {}
+  constructor(
+    private readonly settingsService: SettingsService,
+    private readonly options: { readonly providerType?: AiProviderType } = {}
+  ) {}
 
   private async createClient(options: { readonly requireTools?: boolean } = { requireTools: true }): Promise<{
     readonly client: OpenRouterClient;
@@ -563,12 +567,15 @@ export class OpenRouterChatGenerator implements AiChatGenerator {
     readonly contextLength: number | null;
     readonly chatBudget: TokenBudget;
   }> {
-    const config = await this.settingsService.getOpenRouterConfigWithModelMetadata(undefined, options);
+    const config = this.options.providerType
+      ? await this.settingsService.getAiConfigWithModelMetadataForProvider(this.options.providerType, options)
+      : await this.settingsService.getOpenRouterConfigWithModelMetadata(undefined, options);
     return {
       modelName: config.modelName,
       contextLength: config.contextLength,
       chatBudget: getTokenBudget("chat", config.contextLength),
       client: new OpenRouterClient({
+        providerType: config.providerType,
         apiKey: config.apiKey,
         baseUrl: config.baseUrl,
         modelName: config.modelName
@@ -642,7 +649,7 @@ export class OpenRouterChatGenerator implements AiChatGenerator {
     );
     const content = result.content.trim();
     if (!content) {
-      throw new Error("OpenRouter 返回了空对话内容。");
+      throw new Error("AI Provider 返回了空对话内容。");
     }
 
     return {

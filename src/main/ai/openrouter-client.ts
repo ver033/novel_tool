@@ -1,6 +1,8 @@
 import axios from "axios";
 import { StringDecoder } from "node:string_decoder";
 import type { OpenRouterModelSummary } from "../shared/types";
+import type { AiProviderType } from "../shared/ai-provider";
+import { getAiProviderDisplayName } from "../shared/ai-provider";
 import { OpenRouterError, type OpenRouterErrorCode } from "./openrouter-error";
 import { parseOpenRouterSsePayload, type OpenRouterStreamEvent } from "./openrouter-stream-parser";
 
@@ -78,11 +80,13 @@ export type OpenRouterHttpRequest = {
 
 export type OpenRouterHttpGetRequest = {
   readonly url: string;
+  readonly headers?: Record<string, string>;
 };
 
 export type OpenRouterHttpStream = AsyncIterable<string | Buffer> | Iterable<string | Buffer>;
 
 export type OpenRouterClientOptions = {
+  readonly providerType?: AiProviderType;
   readonly apiKey: string;
   readonly baseUrl?: string;
   readonly modelName: string;
@@ -274,14 +278,19 @@ function withProviderMetadata(message: string, metadata: unknown): string {
   return details.length > 0 ? `${message}；${details.join("；")}` : message;
 }
 
-function formatOpenRouterRequestError(provider: { readonly status?: number; readonly message: string }, apiKey: string): string {
+function formatOpenRouterRequestError(
+  provider: { readonly status?: number; readonly message: string },
+  apiKey: string,
+  providerType: AiProviderType
+): string {
+  const providerName = getAiProviderDisplayName(providerType);
   const suffix = provider.status ? ` (${provider.status})` : "";
   const message = redactSecrets(provider.message, apiKey);
   if (provider.status === 429) {
-    return `OpenRouter 请求失败${suffix}：上游 Provider 限流或暂时不可用。请稍后重试，或在设置中换用其他模型。原始错误：${message}`;
+    return `${providerName} 请求失败${suffix}：上游 Provider 限流或暂时不可用。请稍后重试，或在设置中换用其他模型。原始错误：${message}`;
   }
 
-  return `OpenRouter 请求失败${suffix}：${message}`;
+  return `${providerName} 请求失败${suffix}：${message}`;
 }
 
 function classifyOpenRouterError(error: unknown, provider: { readonly status?: number; readonly message: string }): OpenRouterErrorCode {
@@ -322,33 +331,44 @@ function isCancellationReason(reason: unknown): boolean {
   );
 }
 
-function toOpenRouterError(error: unknown, apiKey: string): OpenRouterError {
+function toOpenRouterError(error: unknown, apiKey: string, providerType: AiProviderType): OpenRouterError {
   if (error instanceof OpenRouterError) {
     return error;
   }
   if (isCancellationReason(error)) {
     return new OpenRouterError({
       code: "canceled",
-      message: "OpenRouter 请求已取消。",
+      message: `${getAiProviderDisplayName(providerType)} 请求已取消。`,
       isCanceled: true,
       cause: error
     });
   }
 
   const provider = extractProviderMessage(error);
+  const displayProvider = providerType !== "openrouter"
+    ? {
+        ...provider,
+        message: provider.message.replaceAll("OpenRouter", getAiProviderDisplayName(providerType))
+      }
+    : provider;
   return new OpenRouterError({
     code: classifyOpenRouterError(error, provider),
     status: provider.status,
-    message: formatOpenRouterRequestError(provider, apiKey),
+    message: formatOpenRouterRequestError(displayProvider, apiKey, providerType),
     cause: error
   });
 }
 
-function toOpenRouterStreamError(error: unknown, apiKey: string): OpenRouterError | Promise<OpenRouterError> {
+function toOpenRouterStreamError(
+  error: unknown,
+  apiKey: string,
+  providerType: AiProviderType
+): OpenRouterError | Promise<OpenRouterError> {
   if (!isCancellationReason(error)) {
-    return Promise.resolve(normalizeStreamTransportError(error)).then((normalizedError) => toOpenRouterError(normalizedError, apiKey));
+    return Promise.resolve(normalizeStreamTransportError(error))
+      .then((normalizedError) => toOpenRouterError(normalizedError, apiKey, providerType));
   }
-  return toOpenRouterError(error, apiKey);
+  return toOpenRouterError(error, apiKey, providerType);
 }
 
 function getChoiceError(choice: Record<string, unknown>): string | null {
@@ -586,18 +606,19 @@ async function defaultHttpGet(request: OpenRouterHttpGetRequest): Promise<unknow
   const response = await axios.get(request.url, {
     adapter: "fetch",
     env: OPENROUTER_AXIOS_ENV,
+    headers: request.headers,
     timeout: OPENROUTER_REQUEST_TIMEOUT_MS
   });
   return response.data;
 }
 
-function parseModelList(response: unknown): OpenRouterModelSummary[] {
+function parseModelList(response: unknown, providerType: AiProviderType): OpenRouterModelSummary[] {
   if (!isObject(response) || !Array.isArray(response.data)) {
-    throw new Error("OpenRouter 模型列表响应缺少 data。");
+    throw new Error(`${getAiProviderDisplayName(providerType)} 模型列表响应缺少 data。`);
   }
 
   return response.data.flatMap((item): OpenRouterModelSummary[] => {
-    if (!isObject(item) || typeof item.id !== "string" || typeof item.name !== "string") {
+    if (!isObject(item) || typeof item.id !== "string") {
       return [];
     }
 
@@ -610,9 +631,11 @@ function parseModelList(response: unknown): OpenRouterModelSummary[] {
     return [
       {
         id: item.id,
-        name: item.name,
+        name: typeof item.name === "string" ? item.name : item.id,
         contextLength: typeof item.context_length === "number" ? item.context_length : topProviderContextLength,
-        supportsTools: supportedParameters.length === 0 ? true : supportedParameters.includes("tools")
+        supportsTools: supportedParameters.length === 0
+          ? (providerType === "openrouter" ? true : null)
+          : supportedParameters.includes("tools")
       }
     ];
   });
@@ -628,25 +651,70 @@ export class OpenRouterClient {
   }
 
   private buildChatCompletionRequest(input: OpenRouterChatCompletionInput, stream: boolean): OpenRouterHttpRequest {
+    const providerType = this.options.providerType ?? "openrouter";
+    const openRouter = providerType === "openrouter";
+    const directDeepSeek = providerType === "deepseek";
+    const tencentTokenHub = providerType === "tencent-tokenhub";
+    const deepSeekCompatible = directDeepSeek || tencentTokenHub;
+    const deepSeekThinkingEnabled = input.reasoning?.enabled !== false && input.reasoning?.effort !== "none";
     const body: Record<string, unknown> = {
       model: this.options.modelName,
-      messages: input.messages,
+      messages: deepSeekCompatible
+        ? input.messages.map((message) => {
+            if (message.role === "tool") {
+              return {
+                role: message.role,
+                content: message.content,
+                tool_call_id: message.tool_call_id
+              };
+            }
+            if (message.role === "assistant" && directDeepSeek && deepSeekThinkingEnabled) {
+              return {
+                ...message,
+                reasoning_content: ""
+              };
+            }
+            return message;
+          })
+        : input.messages,
       stream
     };
 
     if (input.maxCompletionTokens !== undefined) {
-      body.max_completion_tokens = input.maxCompletionTokens;
+      body[deepSeekCompatible ? "max_tokens" : "max_completion_tokens"] = input.maxCompletionTokens;
     }
     if (input.temperature !== undefined) {
       body.temperature = input.temperature;
     }
     if (input.responseFormat) {
-      body.response_format = input.responseFormat;
+      body.response_format = deepSeekCompatible && input.responseFormat.type === "json_schema"
+        ? { type: "json_object" }
+        : input.responseFormat;
     }
     if (input.reasoning) {
-      body.reasoning = input.reasoning;
+      if (directDeepSeek) {
+        const disabled = input.reasoning.enabled === false || input.reasoning.effort === "none";
+        body.thinking = { type: disabled ? "disabled" : "enabled" };
+        if (!disabled && input.reasoning.effort) {
+          body.reasoning_effort = input.reasoning.effort === "xhigh" ? "max" : "high";
+        }
+      } else if (tencentTokenHub) {
+        const disabled = input.reasoning.enabled === false || input.reasoning.effort === "none";
+        body.thinking = {
+          type: disabled ? "disabled" : "enabled",
+          ...(!disabled && input.reasoning.effort
+            ? {
+                reasoning_effort: input.reasoning.effort === "xhigh"
+                  ? "max"
+                  : "high"
+              }
+            : {})
+        };
+      } else {
+        body.reasoning = input.reasoning;
+      }
     }
-    if (input.provider) {
+    if (input.provider && openRouter) {
       body.provider = input.provider;
     }
     if (input.tools) {
@@ -655,17 +723,21 @@ export class OpenRouterClient {
     if (input.toolChoice) {
       body.tool_choice = input.toolChoice;
     }
-    if (input.parallelToolCalls !== undefined) {
+    if (input.parallelToolCalls !== undefined && openRouter) {
       body.parallel_tool_calls = input.parallelToolCalls;
+    }
+
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${this.options.apiKey}`,
+      "Content-Type": "application/json"
+    };
+    if (openRouter) {
+      headers["X-OpenRouter-Title"] = "MoShu";
     }
 
     return {
       url: buildOpenRouterUrl(this.options.baseUrl, OPENROUTER_CHAT_COMPLETIONS_PATH),
-      headers: {
-        Authorization: `Bearer ${this.options.apiKey}`,
-        "Content-Type": "application/json",
-        "X-OpenRouter-Title": "MoShu"
-      },
+      headers,
       body,
       signal: input.signal
     };
@@ -676,7 +748,7 @@ export class OpenRouterClient {
     try {
       return parseCompletionResponse(await this.httpPost(request), Boolean(input.allowEmptyContent));
     } catch (error) {
-      throw toOpenRouterError(error, this.options.apiKey);
+      throw toOpenRouterError(error, this.options.apiKey, this.options.providerType ?? "openrouter");
     }
   }
 
@@ -733,7 +805,7 @@ export class OpenRouterClient {
 
       return buildCompletionResult(content, truncated, reasoning, toolCallAccumulator.toToolCalls());
     } catch (error) {
-      throw await toOpenRouterStreamError(error, this.options.apiKey);
+      throw await toOpenRouterStreamError(error, this.options.apiKey, this.options.providerType ?? "openrouter");
     }
   }
 }
@@ -747,7 +819,26 @@ export class OpenRouterModelCatalogClient {
     this.httpGet = options.httpGet ?? defaultHttpGet;
   }
 
-  async listModels(): Promise<OpenRouterModelSummary[]> {
-    return parseModelList(await this.httpGet({ url: buildOpenRouterUrl(this.baseUrl, OPENROUTER_MODELS_PATH) }));
+  async listModels(input: {
+    readonly providerType?: AiProviderType;
+    readonly baseUrl?: string;
+    readonly apiKey?: string;
+  } = {}): Promise<OpenRouterModelSummary[]> {
+    const providerType = input.providerType ?? "openrouter";
+    const tokenHub = providerType === "tencent-tokenhub";
+    const response = await this.httpGet({
+      url: buildOpenRouterUrl(
+        input.baseUrl ?? this.baseUrl,
+        tokenHub ? "models" : OPENROUTER_MODELS_PATH
+      ),
+      ...(tokenHub && input.apiKey
+        ? {
+            headers: {
+              Authorization: `Bearer ${input.apiKey}`
+            }
+          }
+        : {})
+    });
+    return parseModelList(response, providerType);
   }
 }

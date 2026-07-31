@@ -13,6 +13,10 @@ import { SummaryRepository } from "../../src/main/db/repositories/summary-repo";
 import { ExternalBookSyncAutomationStore } from "../../src/main/external-book-sync/book-automation-store";
 import { ExternalBookSentChapterStore } from "../../src/main/external-book-sync/book-send-history-store";
 import { ExternalBookSourceStore } from "../../src/main/external-book-sync/book-source-store";
+import {
+  decryptExternalBookSyncMessage,
+  encryptExternalBookSyncMessage
+} from "../../src/main/external-book-sync/book-sync-crypto";
 import { ExternalBookSyncService, type ExternalBookAiSender, type ExternalBookSyncServiceDeps } from "../../src/main/external-book-sync/external-book-sync-service";
 import { createId } from "../../src/main/shared/ids";
 import { countWritingUnits } from "../../src/main/shared/text";
@@ -35,6 +39,7 @@ function createFixture(options: {
   readonly createChatSession?: ExternalBookAiSender["createChatSession"];
   readonly sendChatMessage?: ExternalBookAiSender["sendChatMessage"];
   readonly searchBookFilesInWindowsIndex?: ExternalBookSyncServiceDeps["searchBookFilesInWindowsIndex"];
+  readonly encryptBookSyncMessage?: ExternalBookSyncServiceDeps["encryptBookSyncMessage"];
 } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "external-book-sync-"));
   tempDirs.push(dir);
@@ -87,7 +92,8 @@ function createFixture(options: {
     searchBookFilesInWindowsIndex: options.searchBookFilesInWindowsIndex,
     resolveChapterRepo: () => chapterRepo,
     projectRepo,
-    aiSender
+    aiSender,
+    encryptBookSyncMessage: options.encryptBookSyncMessage ?? ((plaintext) => plaintext)
   });
   return {
     db,
@@ -114,6 +120,7 @@ function createReopenedService(input: {
     sentChapterStore: new ExternalBookSentChapterStore(new SettingsRepository(input.db)),
     resolveChapterRepo: () => chapterRepo,
     projectRepo: input.projectRepo,
+    encryptBookSyncMessage: (plaintext) => plaintext,
     aiSender: {
       createChatSession: () => ({ id: "session_external_reopened", title: "外部同步检查" }),
       sendChatMessage: input.sendChatMessage
@@ -254,6 +261,87 @@ describe("ExternalBookSyncService", () => {
     expect(statSync(secondBookFilePath).mtimeMs).toBe(before.mtimeMs);
     expect(statSync(secondBookFilePath).size).toBe(before.size);
     expect(readdirSync(projectBookDir)).toEqual(beforeFiles);
+  });
+
+  it("sends only AES ciphertext and lets a user with tongbu recover Chinese content exactly", async () => {
+    const { dir, project, service, sentMessages } = createFixture({
+      encryptBookSyncMessage: encryptExternalBookSyncMessage
+    });
+    const projectBookDir = join(dir, "举足无措");
+    mkdirSync(projectBookDir, { recursive: true });
+    writeFileSync(
+      join(projectBookDir, "chinese.Book"),
+      "第二章　雨夜归人\r\n𠮷野撑着油纸伞，说：“山河無恙🌙。”",
+      "utf8"
+    );
+
+    const scan = await service.scanProject({
+      projectId: project.id,
+      mode: "directory",
+      directoryPath: projectBookDir,
+      roots: [projectBookDir],
+      timeBudgetMs: 10_000
+    });
+    const candidate = scan.candidates[0];
+    await service.sendMissingChaptersToAi({
+      projectId: project.id,
+      candidateId: candidate.id,
+      chapterKeys: candidate.comparison.missingChapters.map((chapter) => chapter.key)
+    });
+
+    expect(sentMessages).toHaveLength(1);
+    expect(sentMessages[0]).not.toContain("雨夜归人");
+    expect(sentMessages[0]).not.toContain("𠮷野");
+    expect(sentMessages[0]).not.toContain("tongbu");
+    const decrypted = decryptExternalBookSyncMessage(sentMessages[0], "tongbu");
+    expect(decrypted).toContain("第二章 雨夜归人");
+    expect(decrypted).toContain("𠮷野撑着油纸伞，说：“山河無恙🌙。”");
+  });
+
+  it("encrypts every message in an automatic external Book sync before the TokenHub sender receives it", async () => {
+    const { dir, project, sourceStore, service, sentMessages } = createFixture({
+      encryptBookSyncMessage: encryptExternalBookSyncMessage
+    });
+    const projectBookDir = join(dir, "举足无措");
+    mkdirSync(projectBookDir, { recursive: true });
+    writeFileSync(
+      join(projectBookDir, "latest.Book"),
+      "第一章\r\n项目最新章的外部修订：长街灯影。",
+      "utf8"
+    );
+    writeFileSync(
+      join(projectBookDir, "missing.Book"),
+      "第二章\r\n自动同步新增正文：雨落青瓦。",
+      "utf8"
+    );
+    sourceStore.upsertSource({
+      projectId: project.id,
+      bookFolderPath: realpathSync(projectBookDir),
+      displayName: "外部 .Book",
+      lastKnownSize: 0,
+      lastModifiedAt: null,
+      lastContentHash: null,
+      lastScanAt: "2026-05-19T07:00:00.000Z",
+      confirmedAt: "2026-05-19T07:00:00.000Z"
+    });
+
+    const run = await service.runStartupCatchUpSync(
+      project.id,
+      new Date(2026, 4, 19, 7, 10)
+    );
+
+    expect(run).toMatchObject({
+      status: "completed",
+      sentChapterCount: 2
+    });
+    expect(sentMessages).toHaveLength(2);
+    expect(sentMessages.every((message) => !message.includes("外部修订"))).toBe(true);
+    expect(sentMessages.every((message) => !message.includes("自动同步新增正文"))).toBe(true);
+    const decryptedMessages = sentMessages.map((message) =>
+      decryptExternalBookSyncMessage(message, "tongbu")
+    );
+    expect(decryptedMessages.join("\n")).toContain("项目最新章的外部修订：长街灯影。");
+    expect(decryptedMessages.join("\n")).toContain("自动同步新增正文：雨落青瓦。");
   });
 
   it("automatically discovers and saves a .Book source on the first startup sync", async () => {
@@ -859,6 +947,49 @@ describe("ExternalBookSyncService", () => {
     expect(sentMessages.join("\n")).toContain("当前项目最新章在 .Book 中的对应内容");
   });
 
+  it("serializes concurrent automatic runs so one sync slot cannot send chapters twice", async () => {
+    let releaseFirstSend!: () => void;
+    let markFirstSendStarted!: () => void;
+    const firstSendStarted = new Promise<void>((resolve) => {
+      markFirstSendStarted = resolve;
+    });
+    const firstSendGate = new Promise<void>((resolve) => {
+      releaseFirstSend = resolve;
+    });
+    let sendAttempts = 0;
+    const { dir, project, service } = createFixture({
+      async sendChatMessage() {
+        sendAttempts += 1;
+        if (sendAttempts === 1) {
+          markFirstSendStarted();
+          await firstSendGate;
+        }
+      }
+    });
+    const projectBookDir = join(dir, "举足无措");
+    mkdirSync(projectBookDir, { recursive: true });
+    writeFirstAndSecondBookFiles(projectBookDir);
+    const now = new Date(2026, 4, 19, 7, 0);
+
+    const firstRunPromise = service.runDueAutomaticSync({
+      projectId: project.id,
+      trigger: "scheduled",
+      now
+    });
+    await firstSendStarted;
+    const duplicateRunPromise = service.runDueAutomaticSync({
+      projectId: project.id,
+      trigger: "scheduled",
+      now
+    });
+    releaseFirstSend();
+    const [firstRun, duplicateRun] = await Promise.all([firstRunPromise, duplicateRunPromise]);
+
+    expect(firstRun).toMatchObject({ status: "completed", sentChapterCount: 2 });
+    expect(duplicateRun).toBeNull();
+    expect(sendAttempts).toBe(2);
+  });
+
   it("sends a previously sent .Book chapter again when the chapter payload hash changes", async () => {
     const { dir, project, service, sentMessages } = createFixture();
     const projectBookDir = join(dir, "举足无措");
@@ -1262,6 +1393,7 @@ describe("ExternalBookSyncService", () => {
 
   it.each([
     ["429 rate limit", "OpenRouter 请求失败 (429)：上游 Provider 限流或暂时不可用。"],
+    ["503 provider outage", "OpenRouter 请求失败 (503)：Service Unavailable"],
     ["network timeout", "OpenRouter 请求失败：timeout of 30000ms exceeded"]
   ])("retries retryable automatic send failures after five minutes (%s)", async (_caseName, errorMessage) => {
     const sentMessages: string[] = [];

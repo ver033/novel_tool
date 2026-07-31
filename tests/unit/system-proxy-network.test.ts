@@ -147,7 +147,7 @@ describe("system proxy network", () => {
     expect(repeatedSetProxy).toHaveBeenCalledTimes(2);
   });
 
-  it("recovers Chromium's generic refusal only for OpenRouter", async () => {
+  it("recovers Chromium's generic refusal for supported AI providers only", async () => {
     const openRouterResponse = new Response("ok", { status: 200 });
     const openRouterFetch = vi.fn()
       .mockRejectedValueOnce(new TypeError("Error invoking remote method: net::ERR_CONNECTION_REFUSED"))
@@ -169,6 +169,50 @@ describe("system proxy network", () => {
     await expect(openRouterInstalledFetch("https://openrouter.ai/api/v1/models")).resolves.toBe(openRouterResponse);
     expect(openRouterFetch).toHaveBeenCalledTimes(2);
     expect(openRouterSetProxy).toHaveBeenCalledTimes(2);
+
+    const deepSeekResponse = new Response("ok", { status: 200 });
+    const deepSeekFetch = vi.fn()
+      .mockRejectedValueOnce(new TypeError("Error invoking remote method: net::ERR_CONNECTION_REFUSED"))
+      .mockResolvedValueOnce(deepSeekResponse);
+    const deepSeekSetGlobalFetch = vi.fn();
+    const deepSeekSetProxy = vi.fn(async () => undefined);
+    const deepSeekNetwork = createSystemProxyNetwork({
+      fetchImpl: deepSeekFetch,
+      session: {
+        setProxy: deepSeekSetProxy,
+        clearHostResolverCache: vi.fn(async () => undefined),
+        closeAllConnections: vi.fn(async () => undefined)
+      },
+      setGlobalFetch: deepSeekSetGlobalFetch
+    });
+
+    await deepSeekNetwork.install();
+    const deepSeekInstalledFetch = deepSeekSetGlobalFetch.mock.calls[0]?.[0] as typeof globalThis.fetch;
+    await expect(deepSeekInstalledFetch("https://api.deepseek.com/chat/completions")).resolves.toBe(deepSeekResponse);
+    expect(deepSeekFetch).toHaveBeenCalledTimes(2);
+    expect(deepSeekSetProxy).toHaveBeenCalledTimes(2);
+
+    const tokenHubResponse = new Response("ok", { status: 200 });
+    const tokenHubFetch = vi.fn()
+      .mockRejectedValueOnce(new TypeError("Error invoking remote method: net::ERR_CONNECTION_REFUSED"))
+      .mockResolvedValueOnce(tokenHubResponse);
+    const tokenHubSetGlobalFetch = vi.fn();
+    const tokenHubSetProxy = vi.fn(async () => undefined);
+    const tokenHubNetwork = createSystemProxyNetwork({
+      fetchImpl: tokenHubFetch,
+      session: {
+        setProxy: tokenHubSetProxy,
+        clearHostResolverCache: vi.fn(async () => undefined),
+        closeAllConnections: vi.fn(async () => undefined)
+      },
+      setGlobalFetch: tokenHubSetGlobalFetch
+    });
+
+    await tokenHubNetwork.install();
+    const tokenHubInstalledFetch = tokenHubSetGlobalFetch.mock.calls[0]?.[0] as typeof globalThis.fetch;
+    await expect(tokenHubInstalledFetch("https://tokenhub.tencentmaas.com/v1/models")).resolves.toBe(tokenHubResponse);
+    expect(tokenHubFetch).toHaveBeenCalledTimes(2);
+    expect(tokenHubSetProxy).toHaveBeenCalledTimes(2);
 
     const unrelatedFetch = vi.fn(async () => {
       throw new TypeError("net::ERR_CONNECTION_REFUSED");

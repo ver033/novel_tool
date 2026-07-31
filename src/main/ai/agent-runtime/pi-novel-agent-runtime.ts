@@ -38,11 +38,13 @@ export type PiNovelAgentRuntimeDependencies = {
 };
 
 function createModel(config: OpenRouterRuntimeConfig, maxOutputTokens: number): Model<"openai-completions"> {
+  const directDeepSeek = config.providerType === "deepseek";
+  const tencentTokenHub = config.providerType === "tencent-tokenhub";
   return {
     id: config.modelName,
     name: config.modelName,
     api: "openai-completions",
-    provider: "openrouter",
+    provider: config.providerType,
     baseUrl: config.baseUrl.replace(/\/+$/u, ""),
     reasoning: true,
     input: ["text"],
@@ -54,11 +56,55 @@ function createModel(config: OpenRouterRuntimeConfig, maxOutputTokens: number): 
     },
     contextWindow: config.contextLength ?? 128_000,
     maxTokens: maxOutputTokens,
-    compat: {
-      thinkingFormat: "openrouter",
-      sessionAffinityFormat: "openrouter",
-      supportsUsageInStreaming: true
-    }
+    ...(directDeepSeek
+      ? {
+          thinkingLevelMap: {
+            minimal: null,
+            low: null,
+            medium: null,
+            high: "high",
+            xhigh: "max",
+            max: "max"
+          },
+          compat: {
+            supportsStore: false,
+            supportsDeveloperRole: false,
+            maxTokensField: "max_tokens" as const,
+            requiresReasoningContentOnAssistantMessages: true,
+            thinkingFormat: "deepseek" as const,
+            sessionAffinityFormat: "openai" as const,
+            supportsUsageInStreaming: true
+          }
+        }
+      : tencentTokenHub
+        ? {
+            thinkingLevelMap: {
+              minimal: "high",
+              low: "high",
+              medium: "high",
+              high: "high",
+              xhigh: "max",
+              max: "max"
+            },
+            compat: {
+              supportsStore: false,
+              supportsDeveloperRole: false,
+              supportsReasoningEffort: true,
+              maxTokensField: "max_tokens" as const,
+              requiresReasoningContentOnAssistantMessages: false,
+              thinkingFormat: "deepseek" as const,
+              sessionAffinityFormat: "openai" as const,
+              supportsUsageInStreaming: true,
+              supportsLongCacheRetention: false
+            }
+          }
+        : {
+          compat: {
+            thinkingFormat: "openrouter" as const,
+            sessionAffinityFormat: "openrouter" as const,
+            supportsUsageInStreaming: true
+          }
+        })
   };
 }
 
@@ -157,7 +203,7 @@ function toTaskAgentTools(input: {
   }));
 }
 
-function createRunStreamFn(base: StreamFn): StreamFn {
+function createRunStreamFn(base: StreamFn, providerType: OpenRouterRuntimeConfig["providerType"]): StreamFn {
   return (model, context, options = {}) => {
     const callerPayloadTransform = options.onPayload;
     return base(model, context, {
@@ -168,10 +214,29 @@ function createRunStreamFn(base: StreamFn): StreamFn {
         if (!nextPayload || typeof nextPayload !== "object" || Array.isArray(nextPayload)) {
           return nextPayload;
         }
-        return {
-          ...nextPayload,
-          parallel_tool_calls: false
-        };
+        if (providerType === "openrouter") {
+          return {
+            ...nextPayload,
+            parallel_tool_calls: false
+          };
+        }
+        if (providerType === "tencent-tokenhub") {
+          const payloadRecord = nextPayload as Record<string, unknown>;
+          const { reasoning_effort: reasoningEffort, ...payloadWithoutTopLevelEffort } = payloadRecord;
+          const thinking = payloadRecord.thinking;
+          return {
+            ...payloadWithoutTopLevelEffort,
+            ...(thinking && typeof thinking === "object" && !Array.isArray(thinking)
+              ? {
+                  thinking: {
+                    ...thinking,
+                    ...(typeof reasoningEffort === "string" ? { reasoning_effort: reasoningEffort } : {})
+                  }
+                }
+              : {})
+          };
+        }
+        return nextPayload;
       }
     });
   };
@@ -276,12 +341,16 @@ export class PiNovelAgentRuntime implements NovelAgentRuntime {
       {
         model: createModel(config, budget.maxOutputTokens),
         apiKey: config.apiKey,
-        headers: {
-          "X-OpenRouter-Title": "MoShu"
-        },
+        ...(config.providerType === "openrouter"
+          ? {
+              headers: {
+                "X-OpenRouter-Title": "MoShu"
+              }
+            }
+          : {}),
         maxTokens: budget.maxOutputTokens,
         temperature: isProofreadRequest(input.message) ? 0.2 : 0.55,
-        reasoning: "medium",
+        reasoning: config.providerType === "deepseek" ? "high" : "medium",
         toolExecution: "sequential",
         convertToLlm: (messages) => messages as Message[],
         shouldStopAfterTurn({ message }) {
@@ -327,7 +396,7 @@ export class PiNovelAgentRuntime implements NovelAgentRuntime {
         }
       },
       options.signal,
-      createRunStreamFn(this.streamFn)
+      createRunStreamFn(this.streamFn, config.providerType)
     );
 
     try {

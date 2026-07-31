@@ -90,6 +90,8 @@ describe("summary index preload and IPC wiring", () => {
     expect(preload).toContain("clearSentHistory: (input: ExternalBookSyncClearSentHistoryInput)");
     expect(registerIpc).toContain("registerExternalBookSyncIpc(externalBookSyncService)");
     expect(registerIpc).toContain("new ExternalBookSyncService");
+    expect(registerIpc).toContain("providerType: BACKGROUND_AUTOMATION_PROVIDER_TYPE");
+    expect(registerIpc).toContain("chatGenerator: externalBookSyncChatGenerator");
     expect(registerIpc).toContain('runDueExternalBookSync("startup")');
     expect(externalConfig).toContain("EXTERNAL_BOOK_SYNC_CHECK_INTERVAL_MINUTES = 10");
     expect(externalConfig).toContain("EXTERNAL_BOOK_SYNC_CHECK_INTERVAL_MINUTES * 60_000");

@@ -444,4 +444,315 @@ describe("settings flow", () => {
 
     db.close();
   });
+
+  it("uses DeepSeek V4 Flash as the direct-provider default and exposes its static model capabilities", async () => {
+    const testedConfigs: Array<{
+      readonly providerType: string;
+      readonly baseUrl: string;
+      readonly modelName: string;
+    }> = [];
+    const { db, settingsService } = createSettingsService({
+      async testConnection(config) {
+        testedConfigs.push(config);
+        return { ok: true, modelName: config.modelName };
+      }
+    }, {
+      async listModels() {
+        throw new Error("DeepSeek model listing must not call the OpenRouter catalog");
+      }
+    });
+
+    await expect(settingsService.testConnection({
+      aiProvider: {
+        providerType: "deepseek",
+        baseUrl: "https://api.deepseek.com",
+        apiKey: "deepseek-secret"
+      }
+    })).resolves.toEqual({
+      ok: true,
+      modelName: "deepseek-v4-flash"
+    });
+    expect(testedConfigs).toEqual([{
+      providerType: "deepseek",
+      baseUrl: "https://api.deepseek.com",
+      modelName: "deepseek-v4-flash",
+      apiKey: "deepseek-secret",
+      contextLength: null,
+      supportsTools: null
+    }]);
+    await expect(settingsService.listAiModels({ providerType: "deepseek" })).resolves.toEqual([
+      {
+        id: "deepseek-v4-flash",
+        name: "DeepSeek V4 Flash",
+        contextLength: 1_000_000,
+        supportsTools: true
+      },
+      {
+        id: "deepseek-v4-pro",
+        name: "DeepSeek V4 Pro",
+        contextLength: 1_000_000,
+        supportsTools: true
+      }
+    ]);
+
+    db.close();
+  });
+
+  it("keeps OpenRouter, DeepSeek, and Tencent Cloud TokenHub API keys isolated when switching providers", async () => {
+    const { db, settingsService } = createSettingsService();
+
+    settingsService.saveSettings({
+      aiProvider: {
+        providerType: "openrouter",
+        baseUrl: "https://openrouter.ai/api/v1",
+        modelName: "openai/gpt-5.2",
+        apiKey: "openrouter-secret"
+      }
+    });
+    expect(() => settingsService.getAiConfig({
+      providerType: "deepseek",
+      baseUrl: "https://api.deepseek.com",
+      modelName: "deepseek-v4-flash"
+    })).toThrow("DeepSeek API Key 未配置");
+
+    settingsService.saveSettings({
+      aiProvider: {
+        providerType: "deepseek",
+        baseUrl: "https://api.deepseek.com",
+        modelName: "deepseek-v4-flash",
+        apiKey: "deepseek-secret"
+      }
+    });
+    expect(() => settingsService.getAiConfig({
+      providerType: "tencent-tokenhub",
+      baseUrl: "https://tokenhub.tencentmaas.com/v1",
+      modelName: "deepseek-v4-flash"
+    })).toThrow("腾讯云 TokenHub API Key 未配置");
+
+    settingsService.saveSettings({
+      aiProvider: {
+        providerType: "tencent-tokenhub",
+        baseUrl: "https://tokenhub.tencentmaas.com/v1",
+        modelName: "deepseek-v4-flash",
+        apiKey: "tencent-tokenhub-secret"
+      }
+    });
+    expect(settingsService.getSettings().aiProviderKeyStatus).toEqual({
+      openrouter: true,
+      deepseek: true,
+      "tencent-tokenhub": true
+    });
+    expect(settingsService.getAiConfig()).toMatchObject({
+      providerType: "tencent-tokenhub",
+      apiKey: "tencent-tokenhub-secret",
+      modelName: "deepseek-v4-flash"
+    });
+
+    settingsService.saveSettings({
+      aiProvider: {
+        providerType: "openrouter",
+        baseUrl: "https://openrouter.ai/api/v1",
+        modelName: "openai/gpt-5.2"
+      }
+    });
+    expect(settingsService.getAiConfig()).toMatchObject({
+      providerType: "openrouter",
+      apiKey: "openrouter-secret",
+      modelName: "openai/gpt-5.2"
+    });
+    expect(settingsService.getAiConfigForProvider("deepseek")).toMatchObject({
+      providerType: "deepseek",
+      apiKey: "deepseek-secret",
+      baseUrl: "https://api.deepseek.com",
+      modelName: "deepseek-v4-flash"
+    });
+    expect(settingsService.getAiConfigForProvider("tencent-tokenhub")).toMatchObject({
+      providerType: "tencent-tokenhub",
+      apiKey: "tencent-tokenhub-secret",
+      baseUrl: "https://tokenhub.tencentmaas.com/v1",
+      modelName: "deepseek-v4-flash"
+    });
+    await expect(settingsService.getAiConfigWithModelMetadataForProvider("deepseek")).resolves.toMatchObject({
+      providerType: "deepseek",
+      contextLength: 1_000_000,
+      supportsTools: true
+    });
+    expect(JSON.stringify(settingsService.getSettings())).not.toContain("secret");
+
+    db.close();
+  });
+
+  it("migrates the legacy single encrypted OpenRouter key into provider-scoped storage", () => {
+    const { db, settingsService } = createSettingsService();
+    new SettingsRepository(db).setJson("aiProvider", {
+      providerType: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      modelName: "openai/gpt-5.2",
+      contextLength: 400_000,
+      supportsTools: true,
+      encryptedApiKey: memorySecretStore.encrypt("legacy-openrouter-secret")
+    });
+
+    expect(settingsService.getAiConfig()).toMatchObject({
+      providerType: "openrouter",
+      apiKey: "legacy-openrouter-secret"
+    });
+    expect(settingsService.getSettings().aiProviderKeyStatus).toEqual({
+      openrouter: true,
+      deepseek: false,
+      "tencent-tokenhub": false
+    });
+    const stored = new SettingsRepository(db).getJson<Record<string, unknown>>("aiProvider");
+    expect(stored).toHaveProperty("encryptedApiKeys.openrouter");
+    expect(stored).not.toHaveProperty("encryptedApiKey");
+
+    db.close();
+  });
+
+  it("uses Tencent Cloud TokenHub defaults and forwards its temporary key to the authenticated model catalog", async () => {
+    const testedConfigs: unknown[] = [];
+    const catalogInputs: unknown[] = [];
+    const { db, settingsService } = createSettingsService({
+      async testConnection(config) {
+        testedConfigs.push(config);
+        return { ok: true, modelName: config.modelName };
+      }
+    }, {
+      async listModels(input) {
+        catalogInputs.push(input);
+        return [{
+          id: "deepseek-v4-flash",
+          name: "deepseek-v4-flash",
+          contextLength: null,
+          supportsTools: null
+        }];
+      }
+    });
+
+    await expect(settingsService.testConnection({
+      aiProvider: {
+        providerType: "tencent-tokenhub",
+        baseUrl: "https://tokenhub.tencentmaas.com/v1",
+        apiKey: "temporary-tencent-tokenhub-secret"
+      }
+    })).resolves.toEqual({
+      ok: true,
+      modelName: "deepseek-v4-flash"
+    });
+    await expect(settingsService.listAiModels({
+      providerType: "tencent-tokenhub",
+      baseUrl: "https://tokenhub.tencentmaas.com/v1",
+      apiKey: "temporary-tencent-tokenhub-secret"
+    })).resolves.toEqual([{
+      id: "deepseek-v4-flash",
+      name: "DeepSeek V4 Flash",
+      contextLength: 1_000_000,
+      supportsTools: true
+    }]);
+
+    expect(testedConfigs).toEqual([{
+      providerType: "tencent-tokenhub",
+      apiKey: "temporary-tencent-tokenhub-secret",
+      baseUrl: "https://tokenhub.tencentmaas.com/v1",
+      modelName: "deepseek-v4-flash",
+      contextLength: null,
+      supportsTools: null
+    }]);
+    expect(catalogInputs).toEqual([{
+      providerType: "tencent-tokenhub",
+      baseUrl: "https://tokenhub.tencentmaas.com/v1",
+      apiKey: "temporary-tencent-tokenhub-secret"
+    }]);
+
+    db.close();
+  });
+
+  it("allows a manually selected Tencent Cloud TokenHub model when the official catalog has no capability metadata", async () => {
+    const { db, settingsService } = createSettingsService(undefined, {
+      async listModels() {
+        throw new Error("runtime metadata lookup should use only locally verified Tencent Cloud TokenHub overrides");
+      }
+    });
+    settingsService.saveSettings({
+      aiProvider: {
+        providerType: "tencent-tokenhub",
+        baseUrl: "https://tokenhub.tencentmaas.com/v1",
+        modelName: "another-tencent-tokenhub-chat-model",
+        apiKey: "tencent-tokenhub-secret"
+      }
+    });
+
+    await expect(settingsService.getAiConfigWithModelMetadata(undefined, { requireTools: true })).resolves.toMatchObject({
+      providerType: "tencent-tokenhub",
+      modelName: "another-tencent-tokenhub-chat-model",
+      contextLength: null,
+      supportsTools: null
+    });
+
+    db.close();
+  });
+
+  it("removes the old tokenhub.com key and resets an active legacy TokenHub provider to Tencent Cloud defaults", () => {
+    const { db, settingsService } = createSettingsService();
+    new SettingsRepository(db).setJson("aiProvider", {
+      providerType: "tokenhub",
+      baseUrl: "https://us-api.tokenhub.com/v1",
+      modelName: "deepseek-v4-flash",
+      contextLength: 1_000_000,
+      supportsTools: true,
+      encryptedApiKeys: {
+        openrouter: memorySecretStore.encrypt("openrouter-secret"),
+        tokenhub: memorySecretStore.encrypt("removed-tokenhub-com-secret")
+      }
+    });
+
+    expect(settingsService.getSettings().aiProvider).toMatchObject({
+      providerType: "tencent-tokenhub",
+      baseUrl: "https://tokenhub.tencentmaas.com/v1",
+      modelName: "deepseek-v4-flash",
+      apiKeyConfigured: false
+    });
+    expect(settingsService.getSettings().aiProviderKeyStatus).toEqual({
+      openrouter: true,
+      deepseek: false,
+      "tencent-tokenhub": false
+    });
+    expect(() => settingsService.getAiConfig()).toThrow("腾讯云 TokenHub API Key 未配置");
+    const stored = new SettingsRepository(db).getJson<Record<string, unknown>>("aiProvider");
+    expect(stored).not.toHaveProperty("encryptedApiKeys.tokenhub");
+    expect(JSON.stringify(stored)).not.toContain("removed-tokenhub-com-secret");
+
+    db.close();
+  });
+
+  it("hydrates DeepSeek runtime metadata without querying OpenRouter", async () => {
+    const { db, settingsService } = createSettingsService(undefined, {
+      async listModels() {
+        throw new Error("OpenRouter catalog should not be used for DeepSeek");
+      }
+    });
+    settingsService.saveSettings({
+      aiProvider: {
+        providerType: "deepseek",
+        baseUrl: "https://api.deepseek.com",
+        modelName: "deepseek-v4-flash",
+        apiKey: "deepseek-secret"
+      }
+    });
+
+    await expect(settingsService.getAiConfigWithModelMetadata(undefined, { requireTools: true })).resolves.toMatchObject({
+      providerType: "deepseek",
+      modelName: "deepseek-v4-flash",
+      contextLength: 1_000_000,
+      supportsTools: true
+    });
+    expect(settingsService.getSettings().aiProvider).toMatchObject({
+      providerType: "deepseek",
+      contextLength: 1_000_000,
+      supportsTools: true,
+      apiKeyConfigured: true
+    });
+
+    db.close();
+  });
 });

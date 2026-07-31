@@ -754,7 +754,7 @@ export async function runChatAgentLoop(input: ChatAgentLoopInput, handlers: Chat
         messages.push(buildEmptyFinalAnswerRetryPrompt());
         continue;
       }
-      throw new Error("OpenRouter 返回了空对话内容。");
+      throw new Error("AI Provider 返回了空对话内容。");
     }
     if (!cleanProofreadAnswerRetryUsed && shouldRetryCleanProofreadAnswer(input.userMessage, content, result.reasoning)) {
       cleanProofreadAnswerRetryUsed = true;

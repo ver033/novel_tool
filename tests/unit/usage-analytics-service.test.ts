@@ -1,13 +1,15 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDatabase, type SqliteDatabase } from "../../src/main/db/database";
 import { runMigrations } from "../../src/main/db/migrations";
 import { UsageAnalyticsRepository } from "../../src/main/db/repositories/usage-analytics-repo";
 import type { ProcessWatchdogRuntimeStatus } from "../../src/main/startup/process-watchdog";
+import { OpenRouterClient } from "../../src/main/ai/openrouter-client";
 import {
   buildUsageAnalyticsMessages,
+  TencentTokenHubUsageAnalyticsReporter,
   UsageAnalyticsService,
   type UsageAnalyticsProjectContext,
   type UsageAnalyticsReporter,
@@ -17,6 +19,10 @@ import {
 const tempDirs: string[] = [];
 const databases: SqliteDatabase[] = [];
 const HOURLY_SCHEDULE = Array.from({ length: 24 }, (_, hour) => `${String(hour).padStart(2, "0")}:00`);
+const HALF_HOURLY_SCHEDULE = Array.from({ length: 48 }, (_, index) => {
+  const minutes = index * 30;
+  return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+});
 
 afterEach(() => {
   for (const db of databases.splice(0)) {
@@ -147,7 +153,7 @@ describe("UsageAnalyticsService", () => {
     expect(userContent.length).toBeLessThan(fullSnapshotJson.length / 2);
   });
 
-  it("includes the watchdog runtime status in each hourly product analysis payload", async () => {
+  it("includes the watchdog runtime status in each half-hourly product analysis payload", async () => {
     const watchdogStatus: ProcessWatchdogRuntimeStatus = {
       supported: true,
       registrationState: "installed",
@@ -247,21 +253,21 @@ describe("UsageAnalyticsService", () => {
     service.recordEvent({ eventType: "page_active", feature: "writing", durationMs: 60_000, occurredAt: new Date(2026, 4, 19, 8, 58) });
 
     const first = await service.runDueAutomaticReport(new Date(2026, 4, 19, 9, 0));
-    const duplicate = await service.runDueAutomaticReport(new Date(2026, 4, 19, 9, 30));
-    const status = service.getStatus(new Date(2026, 4, 19, 9, 31));
-    const ten = await service.runDueAutomaticReport(new Date(2026, 4, 19, 10, 0));
+    const duplicate = await service.runDueAutomaticReport(new Date(2026, 4, 19, 9, 20));
+    const status = service.getStatus(new Date(2026, 4, 19, 9, 21));
+    const halfPast = await service.runDueAutomaticReport(new Date(2026, 4, 19, 9, 30));
 
     expect(first).toMatchObject({ status: "completed", trigger: "automatic", scheduledLocalTime: "09:00" });
     expect(duplicate).toBeNull();
-    expect(ten).toMatchObject({ status: "completed", trigger: "automatic", scheduledLocalTime: "10:00" });
+    expect(halfPast).toMatchObject({ status: "completed", trigger: "automatic", scheduledLocalTime: "09:30" });
     expect(snapshots).toHaveLength(2);
-    expect(status.scheduleLocalTimes).toEqual(HOURLY_SCHEDULE);
-    expect(status.nextScheduledAt).toBe(new Date(2026, 4, 19, 10, 0).toISOString());
+    expect(status.scheduleLocalTimes).toEqual(HALF_HOURLY_SCHEDULE);
+    expect(status.nextScheduledAt).toBe(new Date(2026, 4, 19, 9, 30).toISOString());
     expect(status.lastSuccessAt).toBe(first?.completedAt);
     expect(status.latestReportText).toBe("产品使用分析报告");
   });
 
-  it("runs the first hourly report after midnight without colliding with the previous day", async () => {
+  it("runs the first half-hourly report after midnight without colliding with the previous day", async () => {
     const { service, snapshots } = createHarness();
 
     const beforeMidnight = await service.runDueAutomaticReport(new Date(2026, 4, 19, 23, 0));
@@ -276,10 +282,10 @@ describe("UsageAnalyticsService", () => {
     const { service, snapshots } = createHarness();
     service.updateSettings({ automaticReportsEnabled: true });
 
-    const catchUp = await service.runStartupCatchUpReport(new Date(2026, 4, 19, 10, 30));
-    const duplicateOpen = await service.runStartupCatchUpReport(new Date(2026, 4, 19, 10, 30));
+    const catchUp = await service.runStartupCatchUpReport(new Date(2026, 4, 19, 10, 45));
+    const duplicateOpen = await service.runStartupCatchUpReport(new Date(2026, 4, 19, 10, 45));
 
-    expect(catchUp).toMatchObject({ status: "completed", trigger: "automatic", scheduledLocalTime: "10:00" });
+    expect(catchUp).toMatchObject({ status: "completed", trigger: "automatic", scheduledLocalTime: "10:30" });
     expect(duplicateOpen).toBeNull();
     expect(snapshots).toHaveLength(1);
   });
@@ -293,24 +299,24 @@ describe("UsageAnalyticsService", () => {
     expect(catchUp).toMatchObject({ scheduledLocalTime: "10:00" });
   });
 
-  it("uses the latest hourly slot when the app opens after that schedule was missed", async () => {
+  it("uses the latest half-hourly slot when the app opens after that schedule was missed", async () => {
     const { service } = createHarness();
     service.updateSettings({ automaticReportsEnabled: true });
 
-    const catchUp = await service.runStartupCatchUpReport(new Date(2026, 4, 19, 13, 0));
+    const catchUp = await service.runStartupCatchUpReport(new Date(2026, 4, 19, 13, 40));
 
-    expect(catchUp).toMatchObject({ scheduledLocalTime: "13:00" });
+    expect(catchUp).toMatchObject({ scheduledLocalTime: "13:30" });
   });
 
-  it("upgrades the previous default schedule with the hourly schedule", async () => {
+  it("upgrades the previous hourly default schedule to every half hour", async () => {
     const { service } = createHarness();
 
-    service.updateSettings({ automaticReportsEnabled: true, scheduleLocalTimes: ["00:00", "09:00"] });
+    service.updateSettings({ automaticReportsEnabled: true, scheduleLocalTimes: HOURLY_SCHEDULE });
     const status = service.getStatus(new Date(2026, 4, 19, 10, 0));
-    const ten = await service.runDueAutomaticReport(new Date(2026, 4, 19, 10, 0));
+    const halfPast = await service.runDueAutomaticReport(new Date(2026, 4, 19, 10, 30));
 
-    expect(status.scheduleLocalTimes).toEqual(HOURLY_SCHEDULE);
-    expect(ten).toMatchObject({ scheduledLocalTime: "10:00" });
+    expect(status.scheduleLocalTimes).toEqual(HALF_HOURLY_SCHEDULE);
+    expect(halfPast).toMatchObject({ scheduledLocalTime: "10:30" });
   });
 
   it("does not send a startup catch-up report before the first configured schedule", async () => {
@@ -333,11 +339,11 @@ describe("UsageAnalyticsService", () => {
 
     const first = await service.runDueAutomaticReport(new Date(2026, 4, 19, 9, 0));
     const duplicate = await service.runDueAutomaticReport(new Date(2026, 4, 19, 9, 20));
-    const nextSlot = await service.runDueAutomaticReport(new Date(2026, 4, 19, 10, 0));
+    const nextSlot = await service.runDueAutomaticReport(new Date(2026, 4, 19, 9, 30));
 
     expect(first).toMatchObject({ status: "failed", scheduledLocalTime: "09:00" });
     expect(duplicate).toBeNull();
-    expect(nextSlot).toMatchObject({ status: "failed", scheduledLocalTime: "10:00" });
+    expect(nextSlot).toMatchObject({ status: "failed", scheduledLocalTime: "09:30" });
   });
 
   it("keeps automatic reports forced on while manual reports remain available", async () => {
@@ -350,5 +356,42 @@ describe("UsageAnalyticsService", () => {
     });
     await expect(service.sendReportNow(new Date(2026, 4, 19, 9, 1))).resolves.toMatchObject({ status: "completed", trigger: "manual" });
     expect(snapshots).toHaveLength(2);
+  });
+});
+
+describe("TencentTokenHubUsageAnalyticsReporter", () => {
+  it("forces product analysis through the Tencent TokenHub provider configuration", async () => {
+    const createCompletion = vi.spyOn(OpenRouterClient.prototype, "createChatCompletion").mockResolvedValue({
+      content: "DeepSeek 产品分析",
+      truncated: false
+    });
+    const requestedProviders: string[] = [];
+    const reporter = new TencentTokenHubUsageAnalyticsReporter({
+      settingsService: {
+        getAiConfigForProvider(providerType: string) {
+          requestedProviders.push(providerType);
+          return {
+            providerType: "tencent-tokenhub",
+            apiKey: "tokenhub-key",
+            baseUrl: "https://tokenhub.tencentmaas.com/v1",
+            modelName: "deepseek-v4-flash",
+            contextLength: 1_000_000,
+            supportsTools: true
+          };
+        }
+      } as never
+    });
+
+    try {
+      const { service } = createHarness(reporter);
+      await expect(service.sendReportNow(new Date(2026, 4, 19, 9, 1))).resolves.toMatchObject({
+        status: "completed",
+        reportText: "DeepSeek 产品分析"
+      });
+      expect(requestedProviders).toEqual(["tencent-tokenhub"]);
+      expect(createCompletion).toHaveBeenCalledOnce();
+    } finally {
+      createCompletion.mockRestore();
+    }
   });
 });

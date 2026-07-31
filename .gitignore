@@ -33,6 +33,10 @@ docs/*
 /docs/implementation/novel-knowledge-workspace.md
 /artifacts/
 
+# Local-only utilities and Pencil design files
+/tools/tokenhub-sync-decryptor/
+*.pen
+
 # Local app data and user project files
 *.noveltool
 *.sqlite3

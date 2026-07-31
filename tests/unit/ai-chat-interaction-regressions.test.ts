@@ -15,7 +15,7 @@ describe("AI chat author interaction regressions", () => {
 
     expect(chat).toContain("chat-error-panel");
     expect(chat).toContain("chatErrorTitle");
-    expect(chat).toContain("OpenRouter 请求被限流");
+    expect(chat).toContain("AI Provider 请求被限流");
     expect(chat).toContain("重试上一条");
     expect(chat).toContain("打开 AI 服务设置");
     expect(sidebar).toContain("onOpenSettings={onOpenSettings}");

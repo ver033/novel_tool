@@ -1,6 +1,8 @@
 import { SettingsRepository } from "../db/repositories/settings-repo";
 import type {
   AiProviderSettingsState,
+  AiProviderKeyStatus,
+  AiProviderType,
   CacheSettings,
   EditorSettings,
   ExperimentalSettings,
@@ -14,6 +16,13 @@ import type {
 } from "../shared/types";
 import { appLocaleSchema, DEFAULT_APP_LOCALE } from "../shared/language";
 import { DEFAULT_EDITOR_SETTINGS } from "../shared/editor-settings";
+import {
+  DEEPSEEK_MODEL_SUMMARIES,
+  getAiProviderDefaults,
+  getAiProviderDisplayName,
+  isAiProviderType,
+  TENCENT_TOKENHUB_KNOWN_MODEL_SUMMARIES
+} from "../shared/ai-provider";
 
 const EDITOR_SETTINGS_KEY = "editor";
 const AI_PROVIDER_SETTINGS_KEY = "aiProvider";
@@ -22,8 +31,12 @@ const TASK_PROMPT_PRESETS_SETTINGS_KEY = "taskPromptPresets";
 const CACHE_SETTINGS_KEY = "cache";
 const APP_LOCALE_SETTINGS_KEY = "appLocale";
 const EXPERIMENTAL_SETTINGS_KEY = "experimental";
-export const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
-export const OPENROUTER_CONNECTION_TEST_MODEL = "openrouter/auto";
+export const OPENROUTER_BASE_URL = getAiProviderDefaults("openrouter").baseUrl;
+export const OPENROUTER_CONNECTION_TEST_MODEL = getAiProviderDefaults("openrouter").connectionTestModel;
+export const DEEPSEEK_BASE_URL = getAiProviderDefaults("deepseek").baseUrl;
+export const DEEPSEEK_DEFAULT_MODEL = getAiProviderDefaults("deepseek").modelName;
+export const TENCENT_TOKENHUB_BASE_URL = getAiProviderDefaults("tencent-tokenhub").baseUrl;
+export const TENCENT_TOKENHUB_DEFAULT_MODEL = getAiProviderDefaults("tencent-tokenhub").modelName;
 
 const DEFAULT_CACHE_SETTINGS: CacheSettings = {
   chapterCacheBuildOrder: "latest_first"
@@ -38,7 +51,8 @@ export type SecretStore = {
   readonly decrypt: (value: string) => string;
 };
 
-export type OpenRouterRuntimeConfig = {
+export type AiRuntimeConfig = {
+  readonly providerType: AiProviderType;
   readonly apiKey: string;
   readonly baseUrl: string;
   readonly modelName: string;
@@ -46,26 +60,44 @@ export type OpenRouterRuntimeConfig = {
   readonly supportsTools?: boolean | null;
 };
 
-export type OpenRouterConnectionTestResult = {
+/** @deprecated Use AiRuntimeConfig. Kept for compatibility with existing callers. */
+export type OpenRouterRuntimeConfig = AiRuntimeConfig;
+
+export type AiConnectionTestResult = {
   readonly ok: true;
   readonly modelName: string;
 };
 
-export type OpenRouterConnectionTester = {
-  readonly testConnection: (config: OpenRouterRuntimeConfig) => Promise<OpenRouterConnectionTestResult>;
+/** @deprecated Use AiConnectionTestResult. */
+export type OpenRouterConnectionTestResult = AiConnectionTestResult;
+
+export type AiConnectionTester = {
+  readonly testConnection: (config: AiRuntimeConfig) => Promise<AiConnectionTestResult>;
 };
 
+/** @deprecated Use AiConnectionTester. */
+export type OpenRouterConnectionTester = AiConnectionTester;
+
 export type OpenRouterModelCatalog = {
-  readonly listModels: () => Promise<readonly OpenRouterModelSummary[]>;
+  readonly listModels: (input?: {
+    readonly providerType?: AiProviderType;
+    readonly baseUrl?: string;
+    readonly apiKey?: string;
+  }) => Promise<readonly OpenRouterModelSummary[]>;
 };
 
 export type SettingsServiceDeps = {
   readonly secretStore?: SecretStore;
-  readonly connectionTester?: OpenRouterConnectionTester;
+  readonly connectionTester?: AiConnectionTester;
   readonly modelCatalog?: OpenRouterModelCatalog;
 };
 
-type StoredAiProviderSettings = Omit<AiProviderSettingsState, "apiKeyConfigured"> & {
+type RemovedAiProviderType = "tokenhub";
+
+type StoredAiProviderSettings = Omit<AiProviderSettingsState, "providerType" | "apiKeyConfigured"> & {
+  readonly providerType: AiProviderType | RemovedAiProviderType;
+  readonly encryptedApiKeys?: Partial<Record<AiProviderType | RemovedAiProviderType, string>>;
+  /** Legacy single-provider ciphertext. Migrated to encryptedApiKeys on read. */
   readonly encryptedApiKey?: string;
   /** Legacy plaintext key from early development builds. Re-encrypted on next save. */
   readonly apiKey?: string;
@@ -73,16 +105,16 @@ type StoredAiProviderSettings = Omit<AiProviderSettingsState, "apiKeyConfigured"
 
 const unavailableSecretStore: SecretStore = {
   encrypt() {
-    throw new Error("安全存储未初始化，不能保存 OpenRouter API Key。");
+    throw new Error("安全存储未初始化，不能保存 AI Provider API Key。");
   },
   decrypt() {
-    throw new Error("安全存储未初始化，不能读取 OpenRouter API Key。");
+    throw new Error("安全存储未初始化，不能读取 AI Provider API Key。");
   }
 };
 
-const unavailableConnectionTester: OpenRouterConnectionTester = {
+const unavailableConnectionTester: AiConnectionTester = {
   async testConnection() {
-    throw new Error("OpenRouter 连接测试未初始化。");
+    throw new Error("AI Provider 连接测试未初始化。");
   }
 };
 
@@ -97,14 +129,45 @@ function sanitizeAiProvider(settings: StoredAiProviderSettings | null): AiProvid
     return null;
   }
 
+  const providerType = normalizeProviderType(settings.providerType);
+  const defaults = getAiProviderDefaults(providerType);
   return {
-    providerType: "openrouter",
-    baseUrl: settings.baseUrl || OPENROUTER_BASE_URL,
-    modelName: settings.modelName,
+    providerType,
+    baseUrl: settings.baseUrl || defaults.baseUrl,
+    modelName: settings.modelName || defaults.modelName,
     contextLength: settings.contextLength ?? null,
     supportsTools: settings.supportsTools ?? null,
-    apiKeyConfigured: Boolean(settings.encryptedApiKey ?? settings.apiKey)
+    apiKeyConfigured: Boolean(settings.encryptedApiKeys?.[providerType] ?? settings.encryptedApiKey ?? settings.apiKey)
   };
+}
+
+function normalizeProviderType(value: unknown): AiProviderType {
+  return isAiProviderType(value) ? value : "openrouter";
+}
+
+function emptyAiProviderKeyStatus(): AiProviderKeyStatus {
+  return {
+    openrouter: false,
+    deepseek: false,
+    "tencent-tokenhub": false
+  };
+}
+
+function enrichTencentTokenHubModels(models: readonly OpenRouterModelSummary[]): OpenRouterModelSummary[] {
+  const knownById = new Map<string, OpenRouterModelSummary>(
+    TENCENT_TOKENHUB_KNOWN_MODEL_SUMMARIES.map((model) => [model.id, model])
+  );
+  return models.map((model) => {
+    const known = knownById.get(model.id);
+    return known
+      ? {
+          ...model,
+          name: known.name,
+          contextLength: known.contextLength,
+          supportsTools: known.supportsTools
+        }
+      : model;
+  });
 }
 
 function normalizeTaskPromptPresets(presets: readonly TaskPromptPreset[]): TaskPromptPreset[] {
@@ -157,7 +220,7 @@ function taskTypeLabel(taskType: TaskType): string {
 
 export class SettingsService {
   private readonly secretStore: SecretStore;
-  private readonly connectionTester: OpenRouterConnectionTester;
+  private readonly connectionTester: AiConnectionTester;
   private readonly modelCatalog: OpenRouterModelCatalog;
 
   constructor(
@@ -173,13 +236,15 @@ export class SettingsService {
     const savedEditor = this.settingsRepo.getJson<Partial<EditorSettings>>(EDITOR_SETTINGS_KEY);
     const savedCache = this.settingsRepo.getJson<Partial<CacheSettings>>(CACHE_SETTINGS_KEY);
     const savedExperimental = this.settingsRepo.getJson<Partial<ExperimentalSettings>>(EXPERIMENTAL_SETTINGS_KEY);
+    const storedAiProvider = this.getStoredAiProviderSettings();
     return {
       appLocale: appLocaleSchema.catch(DEFAULT_APP_LOCALE).parse(this.settingsRepo.getJson<unknown>(APP_LOCALE_SETTINGS_KEY)),
       editor: {
         ...DEFAULT_EDITOR_SETTINGS,
         ...savedEditor
       },
-      aiProvider: sanitizeAiProvider(this.getStoredAiProviderSettings()),
+      aiProvider: sanitizeAiProvider(storedAiProvider),
+      aiProviderKeyStatus: this.getAiProviderKeyStatus(storedAiProvider),
       projectPath: this.settingsRepo.getJson<string>(PROJECT_PATH_SETTINGS_KEY),
       taskPromptPresets: this.listTaskPromptPresets(),
       cache: normalizeCacheSettings(savedCache),
@@ -205,16 +270,28 @@ export class SettingsService {
 
     if (input.aiProvider) {
       const current = this.getStoredAiProviderSettings();
-      const encryptedApiKey = input.aiProvider.apiKey
-        ? this.secretStore.encrypt(input.aiProvider.apiKey)
-        : current?.encryptedApiKey ?? (current?.apiKey ? this.secretStore.encrypt(current.apiKey) : undefined);
+      const providerType = input.aiProvider.providerType;
+      const defaults = getAiProviderDefaults(providerType);
+      const currentProviderType = current ? normalizeProviderType(current.providerType) : null;
+      const encryptedApiKeys = {
+        ...(current?.encryptedApiKeys ?? {})
+      };
+      if (input.aiProvider.apiKey) {
+        encryptedApiKeys[providerType] = this.secretStore.encrypt(input.aiProvider.apiKey);
+      }
       this.settingsRepo.setJson(AI_PROVIDER_SETTINGS_KEY, {
-        providerType: "openrouter",
-        baseUrl: input.aiProvider.baseUrl?.trim() || current?.baseUrl || OPENROUTER_BASE_URL,
-        modelName: input.aiProvider.modelName,
+        providerType,
+        baseUrl: input.aiProvider.baseUrl?.trim()
+          || (currentProviderType === providerType ? current?.baseUrl : undefined)
+          || defaults.baseUrl,
+        modelName: input.aiProvider.modelName?.trim()
+          || (currentProviderType === providerType ? current?.modelName : undefined)
+          || defaults.modelName,
         contextLength: input.aiProvider.contextLength ?? null,
-        supportsTools: input.aiProvider.supportsTools ?? current?.supportsTools ?? null,
-        ...(encryptedApiKey ? { encryptedApiKey } : {})
+        supportsTools: input.aiProvider.supportsTools
+          ?? (currentProviderType === providerType ? current?.supportsTools : undefined)
+          ?? null,
+        ...(Object.keys(encryptedApiKeys).length > 0 ? { encryptedApiKeys } : {})
       } satisfies StoredAiProviderSettings);
     }
 
@@ -264,42 +341,74 @@ export class SettingsService {
     return preset;
   }
 
-  getOpenRouterConfig(override?: SettingsSaveInput["aiProvider"]): OpenRouterRuntimeConfig {
+  getAiConfig(override?: SettingsSaveInput["aiProvider"]): AiRuntimeConfig {
     const settings = this.getStoredAiProviderSettings();
-    const modelName = override?.modelName?.trim() || settings?.modelName;
-    const apiKey = override?.apiKey?.trim() || this.getStoredApiKey(settings);
+    const providerType = override?.providerType ?? (settings ? normalizeProviderType(settings.providerType) : "openrouter");
+    const defaults = getAiProviderDefaults(providerType);
+    const usesStoredProviderSettings = settings ? normalizeProviderType(settings.providerType) === providerType : false;
+    const modelName = override?.modelName?.trim()
+      || (usesStoredProviderSettings ? settings?.modelName : undefined)
+      || defaults.modelName;
+    const apiKey = override?.apiKey?.trim() || this.getStoredApiKey(settings, providerType);
+    const providerName = getAiProviderDisplayName(providerType);
 
     if (!modelName) {
-      throw new Error("OpenRouter 模型名称未配置。");
+      throw new Error(`${providerName} 模型名称未配置。`);
     }
     if (!apiKey) {
-      throw new Error("OpenRouter API Key 未配置。");
+      throw new Error(`${providerName} API Key 未配置。`);
     }
 
     return {
+      providerType,
       apiKey,
-      baseUrl: override?.baseUrl?.trim() || settings?.baseUrl || OPENROUTER_BASE_URL,
+      baseUrl: override?.baseUrl?.trim()
+        || (usesStoredProviderSettings ? settings?.baseUrl : undefined)
+        || defaults.baseUrl,
       modelName,
-      contextLength: override?.contextLength ?? settings?.contextLength ?? null,
-      supportsTools: override?.supportsTools ?? settings?.supportsTools ?? null
+      contextLength: override?.contextLength
+        ?? (usesStoredProviderSettings ? settings?.contextLength : undefined)
+        ?? null,
+      supportsTools: override?.supportsTools
+        ?? (usesStoredProviderSettings ? settings?.supportsTools : undefined)
+        ?? null
     };
   }
 
-  async getOpenRouterConfigWithModelMetadata(
+  getAiConfigForProvider(providerType: AiProviderType): AiRuntimeConfig {
+    const defaults = getAiProviderDefaults(providerType);
+    return this.getAiConfig({
+      providerType,
+      baseUrl: defaults.baseUrl,
+      modelName: defaults.modelName,
+      contextLength: null,
+      supportsTools: null
+    });
+  }
+
+  /** @deprecated Use getAiConfig. */
+  getOpenRouterConfig(override?: SettingsSaveInput["aiProvider"]): OpenRouterRuntimeConfig {
+    return this.getAiConfig(override);
+  }
+
+  async getAiConfigWithModelMetadata(
     override?: SettingsSaveInput["aiProvider"],
     options: { readonly requireTools?: boolean } = {}
-  ): Promise<OpenRouterRuntimeConfig> {
-    const config = this.getOpenRouterConfig(override);
+  ): Promise<AiRuntimeConfig> {
+    const config = this.getAiConfig(override);
     if (options.requireTools && config.supportsTools === false) {
-      throw new Error(this.unsupportedToolsModelMessage(config.modelName));
+      throw new Error(this.unsupportedToolsModelMessage(config.providerType, config.modelName));
     }
     if (config.contextLength !== null && (!options.requireTools || config.supportsTools === true)) {
       return config;
     }
 
-    const metadata = await this.findModelMetadata(config.modelName);
-    if (options.requireTools && (!metadata || metadata.supportsTools === false)) {
-      throw new Error(this.unsupportedToolsModelMessage(config.modelName));
+    const metadata = await this.findModelMetadata(config);
+    if (
+      options.requireTools
+      && (metadata?.supportsTools === false || (!metadata && config.providerType !== "tencent-tokenhub"))
+    ) {
+      throw new Error(this.unsupportedToolsModelMessage(config.providerType, config.modelName));
     }
     if (!metadata) {
       return config;
@@ -308,7 +417,7 @@ export class SettingsService {
     if (!override?.modelName && !override?.contextLength && override?.supportsTools === undefined) {
       this.saveSettings({
         aiProvider: {
-          providerType: "openrouter",
+          providerType: config.providerType,
           baseUrl: config.baseUrl,
           modelName: config.modelName,
           contextLength: metadata.contextLength,
@@ -324,17 +433,42 @@ export class SettingsService {
     };
   }
 
-  async testConnection(input?: SettingsTestConnectionInput): Promise<OpenRouterConnectionTestResult> {
+  getAiConfigWithModelMetadataForProvider(
+    providerType: AiProviderType,
+    options: { readonly requireTools?: boolean } = {}
+  ): Promise<AiRuntimeConfig> {
+    const defaults = getAiProviderDefaults(providerType);
+    return this.getAiConfigWithModelMetadata(
+      {
+        providerType,
+        baseUrl: defaults.baseUrl,
+        modelName: defaults.modelName,
+        contextLength: null,
+        supportsTools: null
+      },
+      options
+    );
+  }
+
+  /** @deprecated Use getAiConfigWithModelMetadata. */
+  async getOpenRouterConfigWithModelMetadata(
+    override?: SettingsSaveInput["aiProvider"],
+    options: { readonly requireTools?: boolean } = {}
+  ): Promise<OpenRouterRuntimeConfig> {
+    return this.getAiConfigWithModelMetadata(override, options);
+  }
+
+  async testConnection(input?: SettingsTestConnectionInput): Promise<AiConnectionTestResult> {
     const override = input?.aiProvider;
     if (!override) {
-      return this.connectionTester.testConnection(await this.getOpenRouterConfigWithModelMetadata(undefined, { requireTools: true }));
+      return this.connectionTester.testConnection(await this.getAiConfigWithModelMetadata(undefined, { requireTools: true }));
     }
     if (!override.modelName?.trim()) {
-      return this.connectionTester.testConnection(this.getOpenRouterConnectionTestConfig(override));
+      return this.connectionTester.testConnection(this.getConnectionTestConfig(override));
     }
 
     return this.connectionTester.testConnection(
-      await this.getOpenRouterConfigWithModelMetadata(
+      await this.getAiConfigWithModelMetadata(
         {
           providerType: override.providerType,
           baseUrl: override.baseUrl,
@@ -348,9 +482,21 @@ export class SettingsService {
     );
   }
 
-  async listOpenRouterModels(input?: SettingsListModelsInput): Promise<OpenRouterModelSummary[]> {
+  async listAiModels(input?: SettingsListModelsInput): Promise<OpenRouterModelSummary[]> {
+    const stored = this.getStoredAiProviderSettings();
+    const providerType = input?.providerType ?? (stored ? normalizeProviderType(stored.providerType) : "openrouter");
     const query = input?.query?.trim().toLocaleLowerCase("zh-CN") ?? "";
-    const models = await this.modelCatalog.listModels();
+    const models = providerType === "deepseek"
+      ? DEEPSEEK_MODEL_SUMMARIES
+      : providerType === "tencent-tokenhub"
+        ? enrichTencentTokenHubModels(await this.modelCatalog.listModels({
+            providerType,
+            baseUrl: input?.baseUrl?.trim()
+              || (stored && normalizeProviderType(stored.providerType) === providerType ? stored.baseUrl : undefined)
+              || getAiProviderDefaults(providerType).baseUrl,
+            apiKey: input?.apiKey?.trim() || this.getStoredApiKey(stored, providerType) || undefined
+          }))
+        : await this.modelCatalog.listModels({ providerType });
     const filtered = query
       ? models.filter((model) => `${model.id} ${model.name}`.toLocaleLowerCase("zh-CN").includes(query))
       : models;
@@ -362,29 +508,53 @@ export class SettingsService {
     }));
   }
 
-  private getStoredApiKey(settings: StoredAiProviderSettings | null): string | null {
+  /** @deprecated Use listAiModels. */
+  async listOpenRouterModels(input?: SettingsListModelsInput): Promise<OpenRouterModelSummary[]> {
+    return this.listAiModels(input);
+  }
+
+  private getStoredApiKey(settings: StoredAiProviderSettings | null, providerType: AiProviderType): string | null {
     if (!settings) {
       return null;
     }
-    if (settings.encryptedApiKey) {
-      return this.secretStore.decrypt(settings.encryptedApiKey);
+    const encryptedApiKey = settings.encryptedApiKeys?.[providerType];
+    if (encryptedApiKey) {
+      return this.secretStore.decrypt(encryptedApiKey);
     }
-    return settings.apiKey ?? null;
+    return null;
   }
 
-  private getOpenRouterConnectionTestConfig(
+  private getAiProviderKeyStatus(settings: StoredAiProviderSettings | null): AiProviderKeyStatus {
+    const status = emptyAiProviderKeyStatus();
+    if (!settings) {
+      return status;
+    }
+    for (const providerType of ["openrouter", "deepseek", "tencent-tokenhub"] as const) {
+      status[providerType] = Boolean(settings.encryptedApiKeys?.[providerType]);
+    }
+    return status;
+  }
+
+  private getConnectionTestConfig(
     override: NonNullable<NonNullable<SettingsTestConnectionInput>["aiProvider"]>
-  ): OpenRouterRuntimeConfig {
+  ): AiRuntimeConfig {
     const settings = this.getStoredAiProviderSettings();
-    const apiKey = override.apiKey?.trim() || this.getStoredApiKey(settings);
+    const providerType = override.providerType;
+    const providerName = getAiProviderDisplayName(providerType);
+    const defaults = getAiProviderDefaults(providerType);
+    const settingsMatchProvider = settings ? normalizeProviderType(settings.providerType) === providerType : false;
+    const apiKey = override.apiKey?.trim() || this.getStoredApiKey(settings, providerType);
     if (!apiKey) {
-      throw new Error("OpenRouter API Key 未配置。");
+      throw new Error(`${providerName} API Key 未配置。`);
     }
 
     return {
+      providerType,
       apiKey,
-      baseUrl: override.baseUrl?.trim() || settings?.baseUrl || OPENROUTER_BASE_URL,
-      modelName: OPENROUTER_CONNECTION_TEST_MODEL,
+      baseUrl: override.baseUrl?.trim()
+        || (settingsMatchProvider ? settings?.baseUrl : undefined)
+        || defaults.baseUrl,
+      modelName: defaults.connectionTestModel,
       contextLength: null,
       supportsTools: null
     };
@@ -392,33 +562,75 @@ export class SettingsService {
 
   private getStoredAiProviderSettings(): StoredAiProviderSettings | null {
     const settings = this.settingsRepo.getJson<StoredAiProviderSettings>(AI_PROVIDER_SETTINGS_KEY);
-    if (!settings?.apiKey || settings.encryptedApiKey) {
-      return settings;
+    if (!settings) {
+      return null;
     }
 
-    const encryptedApiKey = this.secretStore.encrypt(settings.apiKey);
+    const removedTokenHubWasActive = settings.providerType === "tokenhub";
+    const providerType: AiProviderType = removedTokenHubWasActive
+      ? "tencent-tokenhub"
+      : normalizeProviderType(settings.providerType);
+    const defaults = getAiProviderDefaults(providerType);
+    const {
+      tokenhub: removedTokenHubEncryptedKey,
+      ...retainedEncryptedApiKeys
+    } = settings.encryptedApiKeys ?? {};
+    const legacyEncryptedApiKey = removedTokenHubWasActive
+      ? undefined
+      : settings.encryptedApiKey
+        ?? (settings.apiKey ? this.secretStore.encrypt(settings.apiKey) : undefined);
+    const encryptedApiKeys = {
+      ...retainedEncryptedApiKeys,
+      ...(legacyEncryptedApiKey ? { [providerType]: legacyEncryptedApiKey } : {})
+    };
+    const requiresMigration = removedTokenHubWasActive
+      || Boolean(removedTokenHubEncryptedKey)
+      || Boolean(settings.encryptedApiKey)
+      || Boolean(settings.apiKey);
+    if (!requiresMigration) {
+      return settings as StoredAiProviderSettings;
+    }
     const migrated = {
-      providerType: "openrouter",
-      baseUrl: settings.baseUrl || OPENROUTER_BASE_URL,
-      modelName: settings.modelName,
-      contextLength: settings.contextLength ?? null,
-      supportsTools: settings.supportsTools ?? null,
-      encryptedApiKey
+      providerType,
+      baseUrl: removedTokenHubWasActive ? defaults.baseUrl : settings.baseUrl || defaults.baseUrl,
+      modelName: removedTokenHubWasActive ? defaults.modelName : settings.modelName || defaults.modelName,
+      contextLength: removedTokenHubWasActive ? 1_000_000 : settings.contextLength ?? null,
+      supportsTools: removedTokenHubWasActive ? true : settings.supportsTools ?? null,
+      ...(Object.keys(encryptedApiKeys).length > 0 ? { encryptedApiKeys } : {})
     } satisfies StoredAiProviderSettings;
     this.settingsRepo.setJson(AI_PROVIDER_SETTINGS_KEY, migrated);
     return migrated;
   }
 
-  private unsupportedToolsModelMessage(modelName: string): string {
-    return `当前模型不支持 OpenRouter tools：${modelName}。AI 对话需要工具调用能力，请在设置中选择支持工具调用的模型，例如 deepseek/deepseek-v3.2。`;
+  private unsupportedToolsModelMessage(providerType: AiProviderType, modelName: string): string {
+    const providerName = getAiProviderDisplayName(providerType);
+    const example = providerType === "openrouter"
+      ? "deepseek/deepseek-v3.2"
+      : providerType === "tencent-tokenhub"
+        ? TENCENT_TOKENHUB_DEFAULT_MODEL
+        : DEEPSEEK_DEFAULT_MODEL;
+    return `当前模型不支持 ${providerName} tools：${modelName}。AI 对话需要工具调用能力，请在设置中选择支持工具调用的模型，例如 ${example}。`;
   }
 
-  private async findModelMetadata(modelName: string): Promise<OpenRouterModelSummary | null> {
-    const normalizedModelName = modelName.trim().toLocaleLowerCase("zh-CN");
+  private async findModelMetadata(config: AiRuntimeConfig): Promise<OpenRouterModelSummary | null> {
+    const normalizedModelName = config.modelName.trim().toLocaleLowerCase("zh-CN");
     if (!normalizedModelName) {
       return null;
     }
 
-    return (await this.modelCatalog.listModels()).find((item) => item.id.toLocaleLowerCase("zh-CN") === normalizedModelName) ?? null;
+    if (config.providerType === "tencent-tokenhub") {
+      return TENCENT_TOKENHUB_KNOWN_MODEL_SUMMARIES.find(
+        (item) => item.id.toLocaleLowerCase("zh-CN") === normalizedModelName
+      ) ?? null;
+    }
+
+    const models = config.providerType === "deepseek"
+      ? DEEPSEEK_MODEL_SUMMARIES
+      : await this.modelCatalog.listModels({
+          providerType: config.providerType,
+          baseUrl: config.baseUrl,
+          apiKey: undefined
+        });
+    return models.find((item) => item.id.toLocaleLowerCase("zh-CN") === normalizedModelName) ?? null;
   }
 }

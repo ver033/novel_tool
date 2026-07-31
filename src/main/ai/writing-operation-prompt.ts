@@ -223,14 +223,14 @@ export function parseWritingOperationResponse(
     try {
       parsed = JSON.parse(content);
     } catch {
-      throw new Error("OpenRouter 校对结果不是合法 JSON。");
+      throw new Error("AI Provider 校对结果不是合法 JSON。");
     }
 
     let result;
     try {
       result = proofreadResultSchema.parse(parsed);
     } catch (error) {
-      throw new Error(`OpenRouter 校对结果结构无效：${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(`AI Provider 校对结果结构无效：${error instanceof Error ? error.message : String(error)}`);
     }
     const proofreadIssues = result.issues;
     return {
@@ -247,7 +247,7 @@ export function parseWritingOperationResponse(
 
   return {
     generatedText,
-    changeSummary: `OpenRouter ${operation.id} candidate`,
+    changeSummary: `AI ${operation.id} candidate`,
     proofreadIssues: null
   };
 }

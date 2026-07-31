@@ -66,7 +66,9 @@ function applyModeForTask(taskType: TaskType) {
 
 const aiSettingsErrorMarkers = [
   "OpenRouter API Key 未配置",
+  "DeepSeek API Key 未配置",
   "OpenRouter 模型名称未配置",
+  "DeepSeek 模型名称未配置",
   "OpenRouter 服务未初始化",
   "OpenRouter 对话服务未初始化",
   "OpenRouter 连接测试未初始化",
@@ -83,8 +85,8 @@ function isTruncatedAiOutputError(error: string): boolean {
   return error.includes("finish_reason: length") || error.includes("被截断") || error.includes("结果已截断");
 }
 
-function isOpenRouterRateLimitError(error: string): boolean {
-  return error.includes("OpenRouter 请求失败 (429)") || error.includes("rate limited") || error.includes("Rate limit");
+function isAiProviderRateLimitError(error: string): boolean {
+  return error.includes("请求失败 (429)") || error.includes("rate limited") || error.includes("Rate limit");
 }
 
 function isTaskInputTooLongError(error: string): boolean {
@@ -109,8 +111,8 @@ function taskErrorTitle(error: string, taskType: TaskType, japanese: boolean): s
   if (isAiSettingsError(error)) {
     return japanese ? "AI サービスが未設定です" : "AI 服务未配置";
   }
-  if (isOpenRouterRateLimitError(error)) {
-    return japanese ? "OpenRouter のレート制限に達しました" : "OpenRouter 请求被限流";
+  if (isAiProviderRateLimitError(error)) {
+    return japanese ? "AI プロバイダーのレート制限に達しました" : "AI Provider 请求被限流";
   }
   if (isTruncatedAiOutputError(error)) {
     return japanese ? (taskType === "proofread" ? "校正結果が途中で切れました" : "AI の出力が途中で切れました") : taskType === "proofread" ? "校对结果被截断" : "AI 输出被截断";
@@ -125,9 +127,9 @@ function taskErrorHint(error: string, taskType: TaskType, japanese: boolean): st
       : "系统没有截断本次要求。请缩短选区，或把要求拆成两次任务执行。";
   }
   if (isAiSettingsError(error)) {
-    return japanese ? "OpenRouter API キーとモデル名を入力し、接続テスト後に保存してください。" : "请先填写 OpenRouter API Key 和模型名称，并测试保存。";
+    return japanese ? "AI プロバイダーの API キーとモデル名を入力し、接続テスト後に保存してください。" : "请先填写当前 AI Provider 的 API Key 和模型名称，并测试保存。";
   }
-  if (isOpenRouterRateLimitError(error)) {
+  if (isAiProviderRateLimitError(error)) {
     return japanese ? "現在のモデルまたは上流プロバイダーが制限中です。しばらく待つか、AI サービス設定で別のモデルを選んでください。" : "当前模型或上游 Provider 正在限流。请稍后重试，或在 AI 服务设置中换用其他模型。";
   }
   if (isTruncatedAiOutputError(error)) {

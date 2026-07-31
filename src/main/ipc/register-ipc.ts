@@ -55,11 +55,12 @@ import { SummaryRelationshipGraphAggregator } from "../relationships/relationshi
 import { logMainError } from "../logger";
 import { createElectronSecretStore } from "../settings/electron-secret-store";
 import { SettingsService } from "../settings/settings-service";
+import { BACKGROUND_AUTOMATION_PROVIDER_TYPE } from "../shared/ai-provider";
 import { ipcChannels } from "../shared/types";
 import type { TaskType } from "../shared/types";
 import { SettingsStartupLaunchPreferenceStore, StartupLaunchService } from "../startup/startup-launch-service";
 import type { ProcessWatchdogRuntimeStatus } from "../startup/process-watchdog";
-import { OpenRouterUsageAnalyticsReporter, UsageAnalyticsService, type UsageAnalyticsProjectContext } from "../usage/usage-analytics-service";
+import { TencentTokenHubUsageAnalyticsReporter, UsageAnalyticsService, type UsageAnalyticsProjectContext } from "../usage/usage-analytics-service";
 import { WritingGoalService } from "../writing-goals/writing-goal-service";
 import {
   IpcPayloadValidationError,
@@ -398,7 +399,7 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
     };
     const usageAnalyticsService = new UsageAnalyticsService({
       repo: new UsageAnalyticsRepository(db),
-      reporter: new OpenRouterUsageAnalyticsReporter({ settingsService }),
+      reporter: new TencentTokenHubUsageAnalyticsReporter({ settingsService }),
       appVersion: app.getVersion(),
       platform: process.platform,
       getProjectContext: getUsageAnalyticsProjectContext,
@@ -465,6 +466,11 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
         : createOpenRouterChapterReviewClient(settingsService)
     });
     const chatGenerator = useE2eAiGenerators() ? createE2eChatGenerator() : new OpenRouterChatGenerator(settingsService);
+    const externalBookSyncChatGenerator = useE2eAiGenerators()
+      ? chatGenerator
+      : new OpenRouterChatGenerator(settingsService, {
+          providerType: BACKGROUND_AUTOMATION_PROVIDER_TYPE
+        });
     const useLegacyAgentRuntime = useE2eAiGenerators() || process.env.NOVEL_TOOL_AGENT_RUNTIME === "legacy";
     if (useLegacyAgentRuntime && !chatGenerator.sendAgentMessageStream) {
       throw new Error("AI Agent Runtime 未初始化。");
@@ -524,7 +530,8 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
         },
         async sendChatMessage(input) {
           await aiTaskService.sendDirectChatMessageStream(input, {}, {
-            includeHistory: false
+            includeHistory: false,
+            chatGenerator: externalBookSyncChatGenerator
           });
         }
       }

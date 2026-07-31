@@ -200,12 +200,12 @@ export function parseChapterReviewModelResponse(content: string): ChapterReviewM
   try {
     parsed = JSON.parse(content);
   } catch {
-    throw new Error("OpenRouter 审稿结果不是合法 JSON。");
+    throw new Error("AI Provider 审稿结果不是合法 JSON。");
   }
 
   try {
     return chapterReviewModelResponseSchema.parse(parsed);
   } catch (error) {
-    throw new Error(`OpenRouter 审稿结果结构无效：${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`AI Provider 审稿结果结构无效：${error instanceof Error ? error.message : String(error)}`);
   }
 }

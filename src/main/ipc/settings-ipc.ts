@@ -14,7 +14,7 @@ export function registerSettingsIpc(settingsService: SettingsService, startupLau
   );
   ipcMain.handle(
     ipcChannels.settings.listModels,
-    createValidatedIpcHandler(settingsListModelsInputSchema, (input) => settingsService.listOpenRouterModels(input))
+    createValidatedIpcHandler(settingsListModelsInputSchema, (input) => settingsService.listAiModels(input))
   );
   ipcMain.handle(ipcChannels.startupLaunch.getStatus, createIpcHandler(() => startupLaunchService.getStatus()));
   ipcMain.handle(

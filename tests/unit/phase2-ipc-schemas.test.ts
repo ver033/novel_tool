@@ -63,6 +63,32 @@ describe("phase 2 ipc schemas", () => {
     expect(parseIpcPayload(settingsSaveInputSchema, { editor: { fontSize: 18, lineHeight: 2, autosaveMs: 1000 } })).toMatchObject({
       editor: { fontSize: 18, lineHeight: 2, autosaveMs: 1000 }
     });
+    expect(parseIpcPayload(settingsSaveInputSchema, {
+      aiProvider: {
+        providerType: "deepseek",
+        baseUrl: "https://api.deepseek.com",
+        modelName: "deepseek-v4-flash",
+        apiKey: "deepseek-secret"
+      }
+    })).toMatchObject({
+      aiProvider: {
+        providerType: "deepseek",
+        modelName: "deepseek-v4-flash"
+      }
+    });
+    expect(parseIpcPayload(settingsSaveInputSchema, {
+      aiProvider: {
+        providerType: "tencent-tokenhub",
+        baseUrl: "https://tokenhub.tencentmaas.com/v1",
+        modelName: "deepseek-v4-flash",
+        apiKey: "tencent-tokenhub-secret"
+      }
+    })).toMatchObject({
+      aiProvider: {
+        providerType: "tencent-tokenhub",
+        modelName: "deepseek-v4-flash"
+      }
+    });
     expect(parseIpcPayload(usageAnalyticsRecordEventInputSchema, { eventType: "page_active", feature: "writing", durationMs: 60000 })).toEqual({
       eventType: "page_active",
       feature: "writing",

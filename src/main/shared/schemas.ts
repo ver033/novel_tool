@@ -6,6 +6,7 @@ import {
   relationshipGraphGetInputSchema as relationshipGraphGetInputBaseSchema
 } from "./relationship-graph";
 import { appLocaleSchema, contentLanguageSchema } from "./language";
+import { AI_PROVIDER_TYPES } from "./ai-provider";
 
 export { appLocaleSchema, contentLanguageSchema } from "./language";
 
@@ -274,7 +275,7 @@ export const editorSettingsSchema = z
 
 export const aiProviderSettingsSchema = z
   .object({
-    providerType: z.enum(["openrouter"]),
+    providerType: z.enum(AI_PROVIDER_TYPES),
     baseUrl: nonEmptyString.max(2048),
     modelName: nonEmptyString.max(160),
     contextLength: z.number().int().positive().nullable().optional(),
@@ -285,7 +286,7 @@ export const aiProviderSettingsSchema = z
 
 export const aiProviderConnectionTestSchema = z
   .object({
-    providerType: z.enum(["openrouter"]),
+    providerType: z.enum(AI_PROVIDER_TYPES),
     baseUrl: nonEmptyString.max(2048),
     modelName: nonEmptyString.max(160).optional(),
     contextLength: z.number().int().positive().nullable().optional(),
@@ -391,6 +392,9 @@ export const settingsTestConnectionInputSchema = z
 
 export const settingsListModelsInputSchema = z
   .object({
+    providerType: z.enum(AI_PROVIDER_TYPES).optional(),
+    baseUrl: nonEmptyString.max(2048).optional(),
+    apiKey: z.string().min(1).max(4096).optional(),
     query: z.string().trim().max(160).optional()
   })
   .strict()

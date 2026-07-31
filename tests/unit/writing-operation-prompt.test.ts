@@ -284,7 +284,7 @@ describe("writing operation prompt", () => {
           ]
         })
       )
-    ).toThrow("OpenRouter 校对结果结构无效");
+    ).toThrow("AI Provider 校对结果结构无效");
   });
 
   it("accepts proofread issues without confidence fields", () => {

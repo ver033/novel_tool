@@ -213,7 +213,7 @@ function classifySummaryJobError(error: string | null, jobType?: SummaryJobType)
   ) {
     return {
       failureCategory: "上游限流",
-      actionHint: "OpenRouter 或模型供应商暂时限流。系统只会延迟自动重试一次；如果反复失败，请稍后重试或换用更稳定的模型。"
+      actionHint: "当前 AI Provider 或上游模型暂时限流。系统只会延迟自动重试一次；如果反复失败，请稍后重试或换用更稳定的模型。"
     };
   }
   if (normalizedError.includes("finish_reason: length") || normalizedError.includes("被截断") || /truncated/i.test(normalizedError)) {
@@ -242,7 +242,7 @@ function classifySummaryJobError(error: string | null, jobType?: SummaryJobType)
   if (normalizedError.includes("API Key") || normalizedError.includes("模型名称") || normalizedError.includes("未配置")) {
     return {
       failureCategory: "AI 配置不可用",
-      actionHint: "请先在 AI 服务设置中测试并保存 OpenRouter API Key 和模型。"
+      actionHint: "请先在 AI 服务设置中测试并保存当前 Provider 的 API Key 和模型。"
     };
   }
   return {

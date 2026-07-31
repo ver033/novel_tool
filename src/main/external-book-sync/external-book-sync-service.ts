@@ -16,6 +16,7 @@ import {
   type ExternalBookReferenceChapter
 } from "./book-chapter-compare";
 import { buildExternalBookSyncChatMessages } from "./book-prompt-builder";
+import { encryptExternalBookSyncMessage } from "./book-sync-crypto";
 import {
   ExternalBookSyncAutomationStore,
   type ExternalBookSyncAutomaticRunRecord,
@@ -132,6 +133,7 @@ export type ExternalBookSyncServiceDeps = {
   readonly resolveChapterRepo: (projectId: string) => ChapterRepository;
   readonly projectRepo: ProjectRepository;
   readonly aiSender: ExternalBookAiSender;
+  readonly encryptBookSyncMessage?: (plaintext: string) => string | Promise<string>;
 };
 
 export type ExternalBookSyncHandlers = {
@@ -201,6 +203,7 @@ function isRetryableAutomaticSyncError(error: string | null): boolean {
     normalized.includes("rate-limit") ||
     normalized.includes("rate_limited") ||
     normalized.includes("too many requests") ||
+    /openrouter 请求失败 \((?:408|425|500|502|503|504)\)/u.test(normalized) ||
     normalized.includes("timeout") ||
     normalized.includes("timed out") ||
     normalized.includes("超时") ||
@@ -458,8 +461,20 @@ function detectExternalBookChapters(content: string): ImportPreviewChapter[] {
 export class ExternalBookSyncService {
   private readonly candidatesById = new Map<string, ExternalBookSyncCandidate>();
   private readonly activeSearchesById = new Map<string, ActiveExternalBookSearch>();
+  private readonly projectSendOperations = new Map<string, Promise<unknown>>();
 
   constructor(private readonly deps: ExternalBookSyncServiceDeps) {}
+
+  private runProjectSendOperation<T>(projectId: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.projectSendOperations.get(projectId) ?? Promise.resolve();
+    const current = previous.catch(() => undefined).then(operation);
+    this.projectSendOperations.set(projectId, current);
+    return current.finally(() => {
+      if (this.projectSendOperations.get(projectId) === current) {
+        this.projectSendOperations.delete(projectId);
+      }
+    });
+  }
 
   getStatus(projectId: string): ExternalBookSyncStatus {
     return {
@@ -576,7 +591,11 @@ export class ExternalBookSyncService {
     return this.runDueAutomaticSync({ projectId, trigger: "startup", now });
   }
 
-  async runDueAutomaticSync(input: ExternalBookSyncAutomaticInput): Promise<ExternalBookSyncAutomaticRunRecord | null> {
+  runDueAutomaticSync(input: ExternalBookSyncAutomaticInput): Promise<ExternalBookSyncAutomaticRunRecord | null> {
+    return this.runProjectSendOperation(input.projectId, () => this.runDueAutomaticSyncUnlocked(input));
+  }
+
+  private async runDueAutomaticSyncUnlocked(input: ExternalBookSyncAutomaticInput): Promise<ExternalBookSyncAutomaticRunRecord | null> {
     const now = input.now ?? new Date();
     const dueSlot = latestDueSyncSlot(now);
     const slotKey = scheduledSyncSlotKey(dueSlot.slotDate, dueSlot.localTime);
@@ -782,7 +801,7 @@ export class ExternalBookSyncService {
           requestId: createId("external_book_sync_chat"),
           projectId: input.projectId,
           sessionId: session.id,
-          message
+          message: await (this.deps.encryptBookSyncMessage ?? encryptExternalBookSyncMessage)(message)
         });
         sentMessageCount += 1;
       }
@@ -920,7 +939,15 @@ export class ExternalBookSyncService {
     }
   }
 
-  async sendMissingChaptersToAi(input: {
+  sendMissingChaptersToAi(input: {
+    readonly projectId: string;
+    readonly candidateId: string;
+    readonly chapterKeys: readonly string[];
+  }): Promise<ExternalBookSyncSendResult> {
+    return this.runProjectSendOperation(input.projectId, () => this.sendMissingChaptersToAiUnlocked(input));
+  }
+
+  private async sendMissingChaptersToAiUnlocked(input: {
     readonly projectId: string;
     readonly candidateId: string;
     readonly chapterKeys: readonly string[];
@@ -998,7 +1025,7 @@ export class ExternalBookSyncService {
           requestId: createId("external_book_sync_chat"),
           projectId: input.projectId,
           sessionId: session.id,
-          message
+          message: await (this.deps.encryptBookSyncMessage ?? encryptExternalBookSyncMessage)(message)
         });
         sentMessageCount += 1;
       }
@@ -1034,11 +1061,17 @@ export class ExternalBookSyncService {
     if (!isBookFilePath(realFilePath) || !isProjectBookFolderPath(path.dirname(realFilePath), input.projectName)) {
       return null;
     }
-    const info = statSync(realFilePath);
-    if (!info.isFile() || info.size > MAX_BOOK_BYTES) {
+    let info: ReturnType<typeof statSync>;
+    let read: ReturnType<typeof readTextFile>;
+    try {
+      info = statSync(realFilePath);
+      if (!info.isFile() || info.size > MAX_BOOK_BYTES) {
+        return null;
+      }
+      read = readTextFile(realFilePath, { label: ".Book 文件", maxBytes: MAX_BOOK_BYTES });
+    } catch {
       return null;
     }
-    const read = readTextFile(realFilePath, { label: ".Book 文件", maxBytes: MAX_BOOK_BYTES });
     const chapters = detectExternalBookChapters(read.text).filter((chapter: ImportPreviewChapter) => chapter.title.trim() || chapter.text.trim());
     if (chapters.length === 0) {
       return null;

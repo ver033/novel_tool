@@ -73,13 +73,23 @@ describe("settings page scope", () => {
     expect(settings).toContain("请选择模型后保存");
   });
 
-  it("keeps product analysis status and OpenRouter rate-limit errors readable", () => {
+  it("exposes Tencent Cloud TokenHub with regional endpoints and an honest model-capability boundary", () => {
+    const settings = readSource("src/renderer/routes/SettingsPage.tsx");
+
+    expect(settings).toContain('<option value="tencent-tokenhub">');
+    expect(settings).not.toContain('<option value="tokenhub">');
+    expect(settings).toContain("请选择与 TokenHub 服务开通地域一致的地址");
+    expect(settings).toContain("TENCENT_TOKENHUB_ENDPOINTS.map");
+    expect(settings).toContain("deepseek-v4-flash");
+  });
+
+  it("keeps product analysis status and AI-provider rate-limit errors readable", () => {
     const settings = readSource("src/renderer/routes/SettingsPage.tsx");
     const styles = readSource("src/renderer/styles/globals.css");
 
     expect(settings).toContain('className="summary-cache-status-grid usage-analytics-status-grid"');
     expect(settings).toContain("UsageAnalyticsErrorNotice");
-    expect(settings).toContain("OpenRouter 请求被限流");
+    expect(settings).toContain("AI Provider 请求被限流");
     expect(settings).toContain("查看原始错误");
     expect(settings).not.toContain("自动把聚合使用统计");
     expect(settings).not.toContain("生成产品优化报告");

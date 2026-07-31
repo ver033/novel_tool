@@ -119,6 +119,7 @@ export type AiChatStreamExecutionOptions = {
 
 export type AiDirectChatStreamExecutionOptions = {
   readonly includeHistory?: boolean;
+  readonly chatGenerator?: Pick<AiChatGenerator, "sendMessageStream">;
 };
 
 export type AiChatGenerationInput = AiSendChatMessageStreamInput & {
@@ -1347,15 +1348,16 @@ export class AiTaskService {
     options: AiDirectChatStreamExecutionOptions = {}
   ): Promise<AiChatStreamResult> {
     const { chatRepo, history, userMessage, fail } = this.prepareChatMessageStream(input, handlers);
+    const chatGenerator = options.chatGenerator ?? this.chatGenerator;
 
-    if (!this.chatGenerator?.sendMessageStream) {
-      return fail("OpenRouter 单轮对话服务未初始化。");
+    if (!chatGenerator?.sendMessageStream) {
+      return fail("AI Provider 单轮对话服务未初始化。");
     }
 
     const abortController = this.registerStream(input.requestId);
 
     try {
-      const generated = await this.chatGenerator.sendMessageStream(
+      const generated = await chatGenerator.sendMessageStream(
         {
           ...input,
           history: options.includeHistory === false ? [] : history

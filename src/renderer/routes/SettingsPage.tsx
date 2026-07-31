@@ -12,6 +12,8 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { RelationshipGraphResult, RelationshipGraphSourceStatus } from "../../main/shared/relationship-graph";
 import type {
   AiProviderSettingsState,
+  AiProviderKeyStatus,
+  AiProviderType,
   CacheSettings,
   ChapterCacheBuildOrder,
   EditorSettings,
@@ -33,6 +35,7 @@ import type {
   UsageAnalyticsStatus
 } from "../../main/shared/types";
 import type { AppLocale } from "../../main/shared/language";
+import { getAiProviderDefaults, TENCENT_TOKENHUB_ENDPOINTS } from "../../main/shared/ai-provider";
 import { DEFAULT_EDITOR_SETTINGS } from "../../main/shared/editor-settings";
 import { DEFAULT_BACKGROUND_INDEX_ENABLED } from "../../main/shared/summary-index-settings";
 import { Button } from "../components/Button";
@@ -98,8 +101,6 @@ type SettingsContentProps = {
 };
 
 const visibleCategories = ["language", "ai", "prompts", "chapter-cache", "import-export", "experimental"] as const satisfies readonly SettingsCategory[];
-const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
-
 const taskPromptPresetLabels: Record<TaskPromptPreset["taskType"], string> = {
   polish: "润色",
   expand: "扩写",
@@ -132,8 +133,8 @@ const defaultForm: SettingsFormState = {
   editor: DEFAULT_EDITOR_SETTINGS,
   aiProvider: {
     providerType: "openrouter",
-    baseUrl: OPENROUTER_BASE_URL,
-    modelName: "openai/gpt-5.2",
+    baseUrl: getAiProviderDefaults("openrouter").baseUrl,
+    modelName: getAiProviderDefaults("openrouter").modelName,
     contextLength: null,
     supportsTools: null,
     apiKey: ""
@@ -407,18 +408,27 @@ export function SettingsPage({ activeCategory, currentProject, onCategoryChange,
   const api = useMemo(getNovelToolApi, []);
   const { locale, setLocale, t } = useI18n();
   const [form, setForm] = useState<SettingsFormState>(defaultForm);
-  const [apiKeyConfigured, setApiKeyConfigured] = useState(false);
+  const [apiProviderKeyStatus, setApiProviderKeyStatus] = useState<AiProviderKeyStatus>({
+    openrouter: false,
+    deepseek: false,
+    "tencent-tokenhub": false
+  });
   const [modelOptions, setModelOptions] = useState<OpenRouterModelSummary[]>([]);
   const [modelListLoaded, setModelListLoaded] = useState(false);
   const [status, setStatus] = useState<StatusState>({ kind: "loading", message: t("loadingSettings") });
   const activeVisibleCategory = isVisibleCategory(activeCategory) ? activeCategory : "ai";
+  const apiKeyConfigured = apiProviderKeyStatus[form.aiProvider.providerType];
 
   const isBusy = status.kind === "loading" || status.kind === "saving" || status.kind === "testing";
 
   const applySettings = (settings: SettingsState) => {
     setForm(formFromSettings(settings));
     setLocale(settings.appLocale);
-    setApiKeyConfigured(Boolean(settings.aiProvider?.apiKeyConfigured));
+    setApiProviderKeyStatus(settings.aiProviderKeyStatus ?? {
+      openrouter: settings.aiProvider?.providerType === "openrouter" && Boolean(settings.aiProvider.apiKeyConfigured),
+      deepseek: settings.aiProvider?.providerType === "deepseek" && Boolean(settings.aiProvider.apiKeyConfigured),
+      "tencent-tokenhub": settings.aiProvider?.providerType === "tencent-tokenhub" && Boolean(settings.aiProvider.apiKeyConfigured)
+    });
   };
 
   useEffect(() => {
@@ -485,7 +495,11 @@ export function SettingsPage({ activeCategory, currentProject, onCategoryChange,
 
     setStatus({ kind: "testing", message: locale === "ja-JP" ? "接続テストに成功しました。モデル一覧を取得しています" : "连接测试通过，正在获取模型列表" });
     try {
-      const models = (await api.settings.listModels({})) as OpenRouterModelSummary[];
+      const models = (await api.settings.listModels({
+        providerType: form.aiProvider.providerType,
+        baseUrl: form.aiProvider.baseUrl.trim(),
+        ...(form.aiProvider.apiKey.trim() ? { apiKey: form.aiProvider.apiKey.trim() } : {})
+      })) as OpenRouterModelSummary[];
       const matchedModel = findExactModel(models, form.aiProvider.modelName);
       setModelOptions([...models]);
       setModelListLoaded(true);
@@ -511,6 +525,10 @@ export function SettingsPage({ activeCategory, currentProject, onCategoryChange,
   };
 
   const updateAiProvider = (patch: Partial<EditableAiProviderSettings>) => {
+    if (patch.providerType !== undefined) {
+      setModelOptions([]);
+      setModelListLoaded(false);
+    }
     setForm((current) => ({
       ...current,
       aiProvider: {
@@ -714,12 +732,39 @@ function SettingsContent({
             <select
               className="input"
               value={form.aiProvider.providerType}
-              onChange={(event) => onAiProviderChange({ providerType: event.target.value as "openrouter" })}
+              onChange={(event) => {
+                const providerType = event.target.value as AiProviderType;
+                const defaults = getAiProviderDefaults(providerType);
+                onAiProviderChange({
+                  providerType,
+                  baseUrl: defaults.baseUrl,
+                  modelName: defaults.modelName,
+                  contextLength: null,
+                  supportsTools: null,
+                  apiKey: ""
+                });
+              }}
             >
               <option value="openrouter">OpenRouter</option>
+              <option value="deepseek">DeepSeek</option>
+              <option value="tencent-tokenhub">{japanese ? "Tencent Cloud TokenHub" : "腾讯云 TokenHub"}</option>
             </select>
             <label>{japanese ? "API エンドポイント" : "API 地址"}</label>
-            <Input value={form.aiProvider.baseUrl} disabled onChange={(event) => onAiProviderChange({ baseUrl: event.target.value })} />
+            {form.aiProvider.providerType === "tencent-tokenhub" ? (
+              <select
+                className="input"
+                value={form.aiProvider.baseUrl}
+                onChange={(event) => onAiProviderChange({ baseUrl: event.target.value })}
+              >
+                {TENCENT_TOKENHUB_ENDPOINTS.map((endpoint) => (
+                  <option key={endpoint.id} value={endpoint.baseUrl}>
+                    {japanese ? endpoint.labelJa : endpoint.labelZh}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <Input value={form.aiProvider.baseUrl} disabled onChange={(event) => onAiProviderChange({ baseUrl: event.target.value })} />
+            )}
             <label>API Key</label>
             <Input
               type="password"
@@ -731,7 +776,9 @@ function SettingsContent({
             <div className="model-picker">
               <Input
                 value={form.aiProvider.modelName}
-                placeholder={japanese ? "モデル ID を入力（例：google/gemini）" : "输入模型 ID，如 google/gemini"}
+                placeholder={form.aiProvider.providerType === "deepseek" || form.aiProvider.providerType === "tencent-tokenhub"
+                  ? "deepseek-v4-flash"
+                  : japanese ? "モデル ID を入力（例：google/gemini）" : "输入模型 ID，如 google/gemini"}
                 onChange={(event) => onAiProviderChange({ modelName: event.target.value })}
               />
               {modelListLoaded ? (
@@ -767,6 +814,13 @@ function SettingsContent({
                 <p className="model-picker-hint">{japanese ? "接続テストに成功すると、利用可能なモデル一覧を取得します。" : "测试连接成功后会获取可用模型列表。"}</p>
               )}
               <p className="model-picker-hint">{japanese ? "現在のモデルコンテキスト" : "当前模型上下文"}：{formatContextLength(form.aiProvider.contextLength ?? null, locale)}</p>
+              {form.aiProvider.providerType === "tencent-tokenhub" ? (
+                <p className="model-picker-hint">
+                  {japanese
+                    ? "サービスを開通した地域と同じ接続先を選んでください。Agent には既定の deepseek-v4-flash、または Tencent Cloud で関数呼び出し対応が明記された言語モデルを推奨します。"
+                    : "请选择与 TokenHub 服务开通地域一致的地址。Agent 建议使用默认的 deepseek-v4-flash，或腾讯云明确标注支持函数调用的语言模型。"}
+                </p>
+              ) : null}
             </div>
           </div>
           <div className="connection-row">
@@ -928,7 +982,7 @@ type UsageAnalyticsErrorNoticeProps = {
 
 function isUsageAnalyticsRateLimitError(error: string): boolean {
   return (
-    error.includes("OpenRouter 请求失败 (429)") ||
+    error.includes("请求失败 (429)") ||
     error.includes("rate limited") ||
     error.includes("Rate limit") ||
     error.includes("Resource has been exhausted") ||
@@ -940,7 +994,7 @@ function UsageAnalyticsErrorNotice({ label, error }: UsageAnalyticsErrorNoticePr
   const rateLimited = isUsageAnalyticsRateLimitError(error);
   return (
     <div className={rateLimited ? "usage-analytics-error-card rate-limited" : "usage-analytics-error-card"} role="status">
-      <b>{label}：{rateLimited ? "OpenRouter 请求被限流" : "产品使用分析失败"}</b>
+      <b>{label}：{rateLimited ? "AI Provider 请求被限流" : "产品使用分析失败"}</b>
       <p>
         {rateLimited
           ? "上游模型或 Provider 正在限流。自动分析会等下一个计划时间再尝试；也可以稍后手动重试，或在 AI 服务设置里换用更稳定的模型。"
@@ -984,7 +1038,7 @@ function UsageAnalyticsSettingsPane({ apiKeyConfigured }: UsageAnalyticsSettings
       const result = (await api.usageAnalytics.sendReportNow()) as UsageAnalyticsReportRun;
       await loadStatus();
       if (result.status === "completed") {
-        setMessage("已用当前 OpenRouter 配置生成产品使用分析。");
+        setMessage("已用当前 AI Provider 配置生成产品使用分析。");
       } else {
         setError(result.error ?? "产品使用分析生成失败。");
       }
@@ -1023,7 +1077,7 @@ function UsageAnalyticsSettingsPane({ apiKeyConfigured }: UsageAnalyticsSettings
           统计范围
         </span>
       </div>
-      {!apiKeyConfigured ? <p className="settings-message warning">未配置 OpenRouter API Key，自动分析会记录失败并等下一个计划时间再尝试。</p> : null}
+      {!apiKeyConfigured ? <p className="settings-message warning">未配置当前 AI Provider 的 API Key，自动分析会记录失败并等下一个计划时间再尝试。</p> : null}
       {status?.lastError ? <UsageAnalyticsErrorNotice label="上次失败" error={status.lastError} /> : null}
       {message ? <p className="settings-message success">{message}</p> : null}
       {currentError ? <UsageAnalyticsErrorNotice label="当前错误" error={currentError} /> : null}
