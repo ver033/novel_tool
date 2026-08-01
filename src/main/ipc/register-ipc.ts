@@ -43,6 +43,9 @@ import { WritingGoalRepository } from "../db/repositories/writing-goal-repo";
 import { ShareableProjectExporter } from "../export/shareable-project-exporter";
 import { ExternalBookSyncAutomationStore } from "../external-book-sync/book-automation-store";
 import { ExternalBookSentChapterStore } from "../external-book-sync/book-send-history-store";
+import { ExternalBookSyncDeliveryStore } from "../external-book-sync/book-sync-delivery-store";
+import { ExternalBookSyncFailoverSender } from "../external-book-sync/book-sync-provider-failover";
+import { SettingsExternalBookSyncProviderTransport } from "../external-book-sync/book-sync-provider-transport";
 import { ExternalBookSourceStore } from "../external-book-sync/book-source-store";
 import { EXTERNAL_BOOK_SYNC_CHECK_INTERVAL_MS } from "../external-book-sync/external-book-sync-config";
 import { ExternalBookSyncService } from "../external-book-sync/external-book-sync-service";
@@ -55,7 +58,7 @@ import { SummaryRelationshipGraphAggregator } from "../relationships/relationshi
 import { logMainError } from "../logger";
 import { createElectronSecretStore } from "../settings/electron-secret-store";
 import { SettingsService } from "../settings/settings-service";
-import { BACKGROUND_AUTOMATION_PROVIDER_TYPE } from "../shared/ai-provider";
+import { createId } from "../shared/ids";
 import { ipcChannels } from "../shared/types";
 import type { TaskType } from "../shared/types";
 import { SettingsStartupLaunchPreferenceStore, StartupLaunchService } from "../startup/startup-launch-service";
@@ -466,11 +469,6 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
         : createOpenRouterChapterReviewClient(settingsService)
     });
     const chatGenerator = useE2eAiGenerators() ? createE2eChatGenerator() : new OpenRouterChatGenerator(settingsService);
-    const externalBookSyncChatGenerator = useE2eAiGenerators()
-      ? chatGenerator
-      : new OpenRouterChatGenerator(settingsService, {
-          providerType: BACKGROUND_AUTOMATION_PROVIDER_TYPE
-        });
     const useLegacyAgentRuntime = useE2eAiGenerators() || process.env.NOVEL_TOOL_AGENT_RUNTIME === "legacy";
     if (useLegacyAgentRuntime && !chatGenerator.sendAgentMessageStream) {
       throw new Error("AI Agent Runtime 未初始化。");
@@ -518,20 +516,31 @@ export function registerIpcHandlers(options: RegisterIpcOptions = {}): SqliteDat
     const txtImporter = new TxtImporter(importJobRepo, projectRepo, projectService);
     const txtExporter = new TxtExporter(resolveChapterRepo);
     const shareableProjectExporter = new ShareableProjectExporter((projectId) => resolveProjectDb(projectId));
+    const externalBookSyncFailoverSender = useE2eAiGenerators()
+      ? null
+      : new ExternalBookSyncFailoverSender(new SettingsExternalBookSyncProviderTransport(settingsService));
     const externalBookSyncService = new ExternalBookSyncService({
       sourceStore: new ExternalBookSourceStore(settingsRepo),
       automationStore: new ExternalBookSyncAutomationStore(settingsRepo),
       sentChapterStore: new ExternalBookSentChapterStore(settingsRepo),
+      deliveryStore: new ExternalBookSyncDeliveryStore(settingsRepo),
       resolveChapterRepo,
       projectRepo,
       aiSender: {
         createChatSession(input) {
-          return aiTaskService.createChatSession(input);
+          return { id: createId("external_book_sync_session"), title: input.title };
         },
         async sendChatMessage(input) {
-          await aiTaskService.sendDirectChatMessageStream(input, {}, {
-            includeHistory: false,
-            chatGenerator: externalBookSyncChatGenerator
+          if (!externalBookSyncFailoverSender) {
+            return { provider: "tencent-tokenhub", completion: "observable" };
+          }
+          return externalBookSyncFailoverSender.send({
+            requestId: input.requestId,
+            projectId: input.projectId,
+            sessionId: input.sessionId,
+            plaintextMessage: input.plaintextMessage,
+            encryptedMessage: input.message,
+            allowEmergency: input.allowEmergency
           });
         }
       }

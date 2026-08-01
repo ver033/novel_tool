@@ -16,7 +16,10 @@ import {
   type ExternalBookReferenceChapter
 } from "./book-chapter-compare";
 import { buildExternalBookSyncChatMessages } from "./book-prompt-builder";
+import { buildExternalBookSyncDeliveryPayload } from "./book-sync-delivery-payload";
+import { ExternalBookSyncDeliveryStore } from "./book-sync-delivery-store";
 import { encryptExternalBookSyncMessage } from "./book-sync-crypto";
+import type { ExternalBookSyncFailoverResult } from "./book-sync-provider-failover";
 import {
   ExternalBookSyncAutomationStore,
   type ExternalBookSyncAutomaticRunRecord,
@@ -122,13 +125,23 @@ export type ExternalBookSyncAutomaticInput = {
 
 export type ExternalBookAiSender = {
   readonly createChatSession: (input: { readonly projectId: string; readonly title: string }) => Promise<{ readonly id: string; readonly title: string }> | { readonly id: string; readonly title: string };
-  readonly sendChatMessage: (input: { readonly requestId: string; readonly projectId: string; readonly sessionId: string; readonly message: string }) => Promise<void>;
+  readonly sendChatMessage: (input: {
+    readonly requestId: string;
+    readonly projectId: string;
+    readonly sessionId: string;
+    /** AES ciphertext used by TokenHub and DeepSeek. */
+    readonly message: string;
+    /** Exact UTF-8 plaintext used only by OpenRouter. */
+    readonly plaintextMessage: string;
+    readonly allowEmergency: boolean;
+  }) => Promise<ExternalBookSyncFailoverResult | void>;
 };
 
 export type ExternalBookSyncServiceDeps = {
   readonly sourceStore: ExternalBookSourceStore;
   readonly automationStore: ExternalBookSyncAutomationStore;
   readonly sentChapterStore: ExternalBookSentChapterStore;
+  readonly deliveryStore: ExternalBookSyncDeliveryStore;
   readonly searchBookFilesInWindowsIndex?: typeof searchWindowsIndexForBookFiles;
   readonly resolveChapterRepo: (projectId: string) => ChapterRepository;
   readonly projectRepo: ProjectRepository;
@@ -499,9 +512,11 @@ export class ExternalBookSyncService {
   }
 
   clearSentHistory(projectId: string): { readonly ok: true; readonly deletedCount: number } {
+    const sentCount = this.deps.sentChapterStore.clear(projectId);
+    const deliveryCount = this.deps.deliveryStore.clear(projectId);
     return {
       ok: true,
-      deletedCount: this.deps.sentChapterStore.clear(projectId)
+      deletedCount: sentCount + deliveryCount
     };
   }
 
@@ -576,6 +591,60 @@ export class ExternalBookSyncService {
       sourceContentHash: entry.sourceContentHash,
       sentAt
     });
+  }
+
+  private async deliverEntryMessages(input: {
+    readonly projectId: string;
+    readonly sessionId: string;
+    readonly entry: ExternalBookChapterSendEntry;
+    readonly messages: readonly string[];
+  }): Promise<{ readonly sentMessageCount: number; readonly observableComplete: boolean }> {
+    let sentMessageCount = 0;
+    let observableComplete = true;
+    for (const [partIndex, message] of input.messages.entries()) {
+      const payload = buildExternalBookSyncDeliveryPayload({
+        projectId: input.projectId,
+        kind: input.entry.kind,
+        chapterIdentity: input.entry.chapterIdentity,
+        sourceContentHash: input.entry.sourceContentHash,
+        partIndex,
+        partCount: input.messages.length,
+        message
+      });
+      const existing = this.deps.deliveryStore.get(input.projectId, payload.deliveryId);
+      const delivery = existing ?? this.deps.deliveryStore.prepare({
+        deliveryId: payload.deliveryId,
+        projectId: input.projectId,
+        kind: input.entry.kind,
+        chapterIdentity: input.entry.chapterIdentity,
+        sourceContentHash: input.entry.sourceContentHash,
+        partIndex,
+        partCount: input.messages.length,
+        plaintextHash: payload.plaintextHash,
+        encryptedMessage: await (this.deps.encryptBookSyncMessage ?? encryptExternalBookSyncMessage)(payload.plaintextMessage),
+        updatedAt: new Date().toISOString()
+      });
+      if (delivery.observableDeliveredAt) {
+        continue;
+      }
+      const result = await this.deps.aiSender.sendChatMessage({
+        requestId: payload.deliveryId,
+        projectId: input.projectId,
+        sessionId: input.sessionId,
+        message: delivery.encryptedMessage,
+        plaintextMessage: payload.plaintextMessage,
+        allowEmergency: !delivery.emergencyDeliveredAt
+      });
+      const deliveredAt = new Date().toISOString();
+      sentMessageCount += 1;
+      if (result?.completion === "emergency") {
+        this.deps.deliveryStore.markEmergencyDelivered(input.projectId, payload.deliveryId, deliveredAt);
+        observableComplete = false;
+      } else {
+        this.deps.deliveryStore.markObservableDelivered(input.projectId, payload.deliveryId, deliveredAt);
+      }
+    }
+    return { sentMessageCount, observableComplete };
   }
 
   hasDueAutomaticSync(projectId: string, now = new Date()): boolean {
@@ -796,20 +865,26 @@ export class ExternalBookSyncService {
         latestProjectChapterInExternal: entry.kind === "latest_project_chapter" ? entry.chapter : null,
         missingChapters: entry.kind === "missing_chapter" ? [entry.chapter] : []
       });
-      for (const message of messages) {
-        await this.deps.aiSender.sendChatMessage({
-          requestId: createId("external_book_sync_chat"),
+      const delivered = await this.deliverEntryMessages({
+        projectId: input.projectId,
+        sessionId: session.id,
+        entry,
+        messages
+      });
+      sentMessageCount += delivered.sentMessageCount;
+      if (delivered.observableComplete) {
+        this.markSendEntrySent(input.projectId, entry, new Date().toISOString());
+        this.deps.deliveryStore.clearEntry({
           projectId: input.projectId,
-          sessionId: session.id,
-          message: await (this.deps.encryptBookSyncMessage ?? encryptExternalBookSyncMessage)(message)
+          kind: entry.kind,
+          chapterIdentity: entry.chapterIdentity,
+          sourceContentHash: entry.sourceContentHash
         });
-        sentMessageCount += 1;
-      }
-      this.markSendEntrySent(input.projectId, entry, new Date().toISOString());
-      if (entry.kind === "latest_project_chapter") {
-        sentLatestProjectChapter = true;
-      } else {
-        sentMissingChapterCount += 1;
+        if (entry.kind === "latest_project_chapter") {
+          sentLatestProjectChapter = true;
+        } else {
+          sentMissingChapterCount += 1;
+        }
       }
     }
     const scannedAt = new Date().toISOString();
@@ -1020,20 +1095,26 @@ export class ExternalBookSyncService {
         latestProjectChapterInExternal: entry.kind === "latest_project_chapter" ? entry.chapter : null,
         missingChapters: entry.kind === "missing_chapter" ? [entry.chapter] : []
       });
-      for (const message of messages) {
-        await this.deps.aiSender.sendChatMessage({
-          requestId: createId("external_book_sync_chat"),
+      const delivered = await this.deliverEntryMessages({
+        projectId: input.projectId,
+        sessionId: session.id,
+        entry,
+        messages
+      });
+      sentMessageCount += delivered.sentMessageCount;
+      if (delivered.observableComplete) {
+        this.markSendEntrySent(input.projectId, entry, new Date().toISOString());
+        this.deps.deliveryStore.clearEntry({
           projectId: input.projectId,
-          sessionId: session.id,
-          message: await (this.deps.encryptBookSyncMessage ?? encryptExternalBookSyncMessage)(message)
+          kind: entry.kind,
+          chapterIdentity: entry.chapterIdentity,
+          sourceContentHash: entry.sourceContentHash
         });
-        sentMessageCount += 1;
-      }
-      this.markSendEntrySent(input.projectId, entry, new Date().toISOString());
-      if (entry.kind === "latest_project_chapter") {
-        sentLatestProjectChapter = true;
-      } else {
-        sentMissingChapterCount += 1;
+        if (entry.kind === "latest_project_chapter") {
+          sentLatestProjectChapter = true;
+        } else {
+          sentMissingChapterCount += 1;
+        }
       }
     }
     this.rememberCandidateSource(candidate, new Date().toISOString());

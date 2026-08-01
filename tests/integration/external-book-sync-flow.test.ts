@@ -12,6 +12,7 @@ import { SettingsRepository } from "../../src/main/db/repositories/settings-repo
 import { SummaryRepository } from "../../src/main/db/repositories/summary-repo";
 import { ExternalBookSyncAutomationStore } from "../../src/main/external-book-sync/book-automation-store";
 import { ExternalBookSentChapterStore } from "../../src/main/external-book-sync/book-send-history-store";
+import { ExternalBookSyncDeliveryStore } from "../../src/main/external-book-sync/book-sync-delivery-store";
 import { ExternalBookSourceStore } from "../../src/main/external-book-sync/book-source-store";
 import {
   decryptExternalBookSyncMessage,
@@ -85,10 +86,12 @@ function createFixture(options: {
   };
   const sourceStore = new ExternalBookSourceStore(new SettingsRepository(db));
   const automationStore = new ExternalBookSyncAutomationStore(new SettingsRepository(db));
+  const deliveryStore = new ExternalBookSyncDeliveryStore(new SettingsRepository(db));
   const service = new ExternalBookSyncService({
     sourceStore,
     automationStore,
     sentChapterStore: new ExternalBookSentChapterStore(new SettingsRepository(db)),
+    deliveryStore,
     searchBookFilesInWindowsIndex: options.searchBookFilesInWindowsIndex,
     resolveChapterRepo: () => chapterRepo,
     projectRepo,
@@ -103,6 +106,7 @@ function createFixture(options: {
     chapterRepo,
     summaryRepo,
     sourceStore,
+    deliveryStore,
     service,
     sentMessages
   };
@@ -118,6 +122,7 @@ function createReopenedService(input: {
     sourceStore: new ExternalBookSourceStore(new SettingsRepository(input.db)),
     automationStore: new ExternalBookSyncAutomationStore(new SettingsRepository(input.db)),
     sentChapterStore: new ExternalBookSentChapterStore(new SettingsRepository(input.db)),
+    deliveryStore: new ExternalBookSyncDeliveryStore(new SettingsRepository(input.db)),
     resolveChapterRepo: () => chapterRepo,
     projectRepo: input.projectRepo,
     encryptBookSyncMessage: (plaintext) => plaintext,
@@ -296,6 +301,161 @@ describe("ExternalBookSyncService", () => {
     const decrypted = decryptExternalBookSyncMessage(sentMessages[0], "tongbu");
     expect(decrypted).toContain("第二章 雨夜归人");
     expect(decrypted).toContain("𠮷野撑着油纸伞，说：“山河無恙🌙。”");
+  });
+
+  it("keeps an emergency-only DeepSeek delivery pending until an observable provider succeeds", async () => {
+    const attempts: Array<{ readonly allowEmergency: boolean | undefined; readonly message: string; readonly plaintextMessage: string | undefined }> = [];
+    let attempt = 0;
+    const { dir, project, service } = createFixture({
+      encryptBookSyncMessage: encryptExternalBookSyncMessage,
+      async sendChatMessage(input) {
+        attempt += 1;
+        attempts.push({
+          allowEmergency: input.allowEmergency,
+          message: input.message,
+          plaintextMessage: input.plaintextMessage
+        });
+        return attempt === 1
+          ? { provider: "deepseek", completion: "emergency" as const }
+          : { provider: "openrouter", completion: "observable" as const };
+      }
+    });
+    const projectBookDir = join(dir, "举足无措");
+    mkdirSync(projectBookDir, { recursive: true });
+    writeFileSync(join(projectBookDir, "second.Book"), "第二章\n雨落青瓦。", "utf8");
+
+    const scan = await service.scanProject({
+      projectId: project.id,
+      mode: "directory",
+      directoryPath: projectBookDir,
+      roots: [projectBookDir],
+      timeBudgetMs: 10_000
+    });
+    const candidate = scan.candidates[0];
+    const input = {
+      projectId: project.id,
+      candidateId: candidate.id,
+      chapterKeys: candidate.comparison.missingChapters.map((chapter) => chapter.key)
+    };
+
+    const emergency = await service.sendMissingChaptersToAi(input);
+    const observable = await service.sendMissingChaptersToAi(input);
+
+    expect(emergency.sentChapterCount).toBe(0);
+    expect(observable.sentChapterCount).toBe(1);
+    expect(attempts).toHaveLength(2);
+    expect(attempts[0]).toMatchObject({ allowEmergency: true });
+    expect(attempts[1]).toMatchObject({ allowEmergency: false });
+    expect(attempts[0].message).toBe(attempts[1].message);
+    expect(attempts[0].plaintextMessage).toContain("第二章\n雨落青瓦。");
+  });
+
+  it("resumes a split chapter without resending parts already delivered to an observable provider", async () => {
+    const attempts: Array<{ readonly requestId: string; readonly allowEmergency: boolean; readonly message: string }> = [];
+    let attempt = 0;
+    const { dir, project, service } = createFixture({
+      encryptBookSyncMessage: encryptExternalBookSyncMessage,
+      async sendChatMessage(input) {
+        attempt += 1;
+        attempts.push({ requestId: input.requestId, allowEmergency: input.allowEmergency, message: input.message });
+        if (attempt === 2) {
+          return { provider: "deepseek", completion: "emergency" as const };
+        }
+        return { provider: "openrouter", completion: "observable" as const };
+      }
+    });
+    const projectBookDir = join(dir, "举足无措");
+    mkdirSync(projectBookDir, { recursive: true });
+    const firstHalf = `上半段。${"山河无恙。".repeat(2_500)}`;
+    const secondHalf = `下半段。${"灯火可亲。".repeat(2_500)}`;
+    writeFileSync(join(projectBookDir, "long.Book"), `第二章\n${firstHalf}\n\n${secondHalf}`, "utf8");
+    const scan = await service.scanProject({
+      projectId: project.id,
+      mode: "directory",
+      directoryPath: projectBookDir,
+      roots: [projectBookDir],
+      timeBudgetMs: 10_000
+    });
+    const candidate = scan.candidates[0];
+    const input = {
+      projectId: project.id,
+      candidateId: candidate.id,
+      chapterKeys: candidate.comparison.missingChapters.map((chapter) => chapter.key)
+    };
+
+    const first = await service.sendMissingChaptersToAi(input);
+    const resumed = await service.sendMissingChaptersToAi(input);
+
+    expect(first.sentChapterCount).toBe(0);
+    expect(resumed.sentChapterCount).toBe(1);
+    expect(attempts).toHaveLength(3);
+    expect(attempts[0].requestId).not.toBe(attempts[1].requestId);
+    expect(attempts[2]).toMatchObject({
+      requestId: attempts[1].requestId,
+      allowEmergency: false,
+      message: attempts[1].message
+    });
+  });
+
+  it("resumes the same persisted split delivery after the app service is recreated", async () => {
+    const firstAttempts: Array<{ readonly requestId: string; readonly message: string }> = [];
+    let firstAttempt = 0;
+    const { db, dir, project, projectRepo, service } = createFixture({
+      encryptBookSyncMessage: encryptExternalBookSyncMessage,
+      async sendChatMessage(input) {
+        firstAttempt += 1;
+        firstAttempts.push({ requestId: input.requestId, message: input.message });
+        return firstAttempt === 2
+          ? { provider: "deepseek", completion: "emergency" as const }
+          : { provider: "openrouter", completion: "observable" as const };
+      }
+    });
+    const projectBookDir = join(dir, "举足无措");
+    mkdirSync(projectBookDir, { recursive: true });
+    writeFileSync(
+      join(projectBookDir, "restart-long.Book"),
+      `第二章\n${"重启前半段。".repeat(2_200)}\n\n${"重启后半段。".repeat(2_200)}`,
+      "utf8"
+    );
+    const scan = await service.scanProject({
+      projectId: project.id,
+      mode: "directory",
+      directoryPath: projectBookDir,
+      roots: [projectBookDir],
+      timeBudgetMs: 10_000
+    });
+    const candidate = scan.candidates[0];
+    const first = await service.sendMissingChaptersToAi({
+      projectId: project.id,
+      candidateId: candidate.id,
+      chapterKeys: candidate.comparison.missingChapters.map((chapter) => chapter.key)
+    });
+    const resumedAttempts: Array<{ readonly requestId: string; readonly allowEmergency: boolean; readonly message: string }> = [];
+    const reopened = createReopenedService({
+      db,
+      projectRepo,
+      async sendChatMessage(input) {
+        resumedAttempts.push({ requestId: input.requestId, allowEmergency: input.allowEmergency, message: input.message });
+        return { provider: "openrouter", completion: "observable" };
+      }
+    });
+
+    const resumed = await reopened.runDueAutomaticSync({
+      projectId: project.id,
+      trigger: "scheduled",
+      now: new Date(2026, 7, 1, 9, 0)
+    });
+
+    expect(first.sentChapterCount).toBe(0);
+    expect(firstAttempts).toHaveLength(2);
+    expect(resumed).toMatchObject({ status: "completed", sentChapterCount: 1 });
+    expect(resumedAttempts).toEqual([
+      {
+        requestId: firstAttempts[1].requestId,
+        allowEmergency: false,
+        message: firstAttempts[1].message
+      }
+    ]);
   });
 
   it("encrypts every message in an automatic external Book sync before the TokenHub sender receives it", async () => {
